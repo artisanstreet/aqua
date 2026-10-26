@@ -1,0 +1,15 @@
+[package]
+name = "aqua-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aqua retained UI tree: nodes, typed styles, Taffy layout, hit-testing and focus"
+rust-version.workspace = true
+
+[dependencies]
+aqua-core = { workspace = true }
+aqua-reactive = { workspace = true }
+aqua-text = { workspace = true }
+taffy = { workspace = true }
+
+[dev-dependencies]

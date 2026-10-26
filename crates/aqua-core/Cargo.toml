@@ -1,0 +1,10 @@
+[package]
+name = "aqua-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aqua shared contract types: IDs, geometry, color, events, scene data"
+
+[dependencies]
+
+[dev-dependencies]

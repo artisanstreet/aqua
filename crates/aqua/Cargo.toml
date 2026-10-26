@@ -1,0 +1,23 @@
+[package]
+name = "aqua"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aqua public facade: application runtime, event orchestration, showcase examples"
+rust-version.workspace = true
+
+[dependencies]
+aqua-core = { workspace = true }
+aqua-platform = { path = "../aqua-platform" }
+aqua-reactive = { path = "../aqua-reactive" }
+aqua-render = { path = "../aqua-render" }
+aqua-text = { path = "../aqua-text" }
+aqua-ui = { path = "../aqua-ui" }
+aqua-macros = { path = "../aqua-macros" }
+winit = { workspace = true }
+wgpu = { workspace = true }
+pollster = "0.4"
+
+[dev-dependencies]
+taffy = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }

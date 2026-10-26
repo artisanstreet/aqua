@@ -1,0 +1,10 @@
+NATIVE_EXIT=0
+
+aqua: clipboard backend: System
+aqua: time-bounded smoke - exiting at Instant { t: 4611783422.945046203s }
+aqua: window chrome installed: ChromeDiagnostic { subclass_active: true, hwnd: 73073994, dpi: 120, button_bounds: Some(RectI { left: 860, top: 64, right: 1006, bottom: 95 }), maximized: false, stats: ChromeStats { nc_calc_size: 1, nc_hit_test: 0, dwm_handled: 0, fallback_handled: 0, system_menus_shown: 0 } }
+aqua: material Acrylic: DWM system backdrop applied (verify visually: needs transparent window + alpha surface)
+aqua: transparent surface: Dx12, alpha=PreMultiplied, format=Bgra8UnormSrgb
+aqua: smoke report: wakeups=5 requested=4 produced=2 presented_frames=1 coalesced=2 deferred_backpressure=0 render_errors=0
+aqua: smoke report: wakeups=6 requested=4 produced=2 presented_frames=1 coalesced=2 deferred_backpressure=0 render_errors=0
+

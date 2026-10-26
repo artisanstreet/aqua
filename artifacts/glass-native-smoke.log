@@ -1,0 +1,9 @@
+Native .NET Process.ExitCode: 0
+aqua: material requires a transparent window — enabling window.transparent
+aqua: clipboard backend: System
+aqua: time-bounded smoke — exiting at Instant { t: 4611780292.404125503s }
+aqua: material Acrylic: DWM system backdrop applied (verify visually: needs transparent window + alpha surface)
+aqua: transparent surface: Dx12, alpha=PreMultiplied, format=Bgra8UnormSrgb
+aqua: smoke report: wakeups=5 requested=4 produced=2 presented_frames=1 coalesced=2 deferred_backpressure=0 render_errors=0
+aqua: smoke report: wakeups=6 requested=4 produced=2 presented_frames=1 coalesced=2 deferred_backpressure=0 render_errors=0
+

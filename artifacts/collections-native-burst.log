@@ -1,0 +1,21 @@
+aqua-factory-tasks NATIVE_EXIT=0
+aqua: clipboard backend: System
+aqua: time-bounded smoke — exiting at Instant { t: 4611839968.981346303s }
+aqua: window chrome installed: ChromeDiagnostic { subclass_active: true, hwnd: 75236682, dpi: 120, button_bounds: Some(RectI { left: 924, top: 128, right: 1070, bottom: 159 }), maximized: false, stats: ChromeStats { nc_calc_size: 1, nc_hit_test: 0, dwm_handled: 0, fallback_handled: 0, system_menus_shown: 0 } }
+aqua: material Acrylic: DWM system backdrop applied (verify visually: needs transparent window + alpha surface)
+aqua: transparent surface: Dx12, alpha=PreMultiplied, format=Bgra8UnormSrgb
+aqua: material Acrylic: DWM system backdrop applied (verify visually: needs transparent window + alpha surface)
+aqua: material Acrylic: DWM system backdrop applied (verify visually: needs transparent window + alpha surface)
+aqua: material Acrylic: DWM system backdrop applied (verify visually: needs transparent window + alpha surface)
+aqua: smoke report: wakeups=6 requested=7 produced=3 presented_frames=1 coalesced=4 deferred_backpressure=0 render_errors=0
+aqua: smoke report: wakeups=7 requested=7 produced=3 presented_frames=1 coalesced=4 deferred_backpressure=0 render_errors=0
+
+aqua-collections NATIVE_EXIT=0
+aqua: clipboard backend: System
+aqua: time-bounded smoke — exiting at Instant { t: 4611839970.932560103s }
+aqua: window chrome installed: ChromeDiagnostic { subclass_active: true, hwnd: 75302218, dpi: 120, button_bounds: Some(RectI { left: 1131, top: 160, right: 1277, bottom: 191 }), maximized: false, stats: ChromeStats { nc_calc_size: 1, nc_hit_test: 0, dwm_handled: 0, fallback_handled: 0, system_menus_shown: 0 } }
+aqua: material Acrylic: DWM system backdrop applied (verify visually: needs transparent window + alpha surface)
+aqua: transparent surface: Dx12, alpha=PreMultiplied, format=Bgra8UnormSrgb
+aqua: smoke report: wakeups=666 requested=663 produced=660 presented_frames=1 coalesced=2 deferred_backpressure=0 render_errors=0
+aqua: smoke report: wakeups=667 requested=663 produced=660 presented_frames=1 coalesced=2 deferred_backpressure=0 render_errors=0
+

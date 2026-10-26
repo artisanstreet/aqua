@@ -1,0 +1,40 @@
+[package]
+name = "aqua-platform"
+version = "0.1.0"
+edition = "2021"
+description = "Aqua platform adapter: Windows-first winit host, demand-driven scheduler, native materials"
+license = "BSD-3-Clause"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+winit = "0.30.12"
+bitflags = "2"
+# Native OS clipboard (Win32 clipboard on Windows, Wayland/X11 on Linux).
+arboard = "3"
+# Native file dialogs (Win32 / portal-based, no app-side toolkit needed).
+rfd = "0.17"
+# Native accessibility (UIA / AppKit / AT-SPI via winit adapter).
+# Split footprint: the portable `accesskit` schema (tree building) is
+# common so headless semantic conversion + tests compile everywhere;
+# the OS adapter `accesskit_winit` (AT-SPI/zbus/async stack on Linux,
+# ~150 packages) is Windows-only until other adapters land.
+accesskit = "0.25"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Registry",
+  "Win32_System_Threading",
+  "Win32_UI_Accessibility",
+  "Win32_UI_Controls",
+  "Win32_UI_HiDpi",
+  "Win32_UI_WindowsAndMessaging",
+] }
+raw-window-handle = "0.6"
+# OS a11y adapter (UIA). Gated here — not shipped on Linux, where it would
+# pull the AT-SPI/zbus/async stack for an adapter milestone that hasn't landed.
+accesskit_winit = "0.34"
+
+[dev-dependencies]

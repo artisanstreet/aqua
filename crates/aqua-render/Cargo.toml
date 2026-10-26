@@ -1,0 +1,22 @@
+[package]
+name = "aqua-render"
+version = "0.1.0"
+edition = "2021"
+description = "Aqua shared wgpu 2D renderer: retained scene, damage tracking, effects, bounded resources"
+license = "BSD-3-Clause"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-text = { path = "../aqua-text" }
+wgpu = "30"
+bytemuck = { version = "1", features = ["derive"] }
+glyphon = "0.12"
+cosmic-text = "0.19"
+pollster = "0.4"
+# media3d owner (parent-authorized 2026-10-25): maintained still-image
+# codecs. Selected formats only; webp/tiff/qoi/exr stay disabled until a
+# consumer needs them (keeps build time and attack surface bounded).
+image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif"] }
+
+[dev-dependencies]
+pollster = "0.4"

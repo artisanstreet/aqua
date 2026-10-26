@@ -1,0 +1,55 @@
+   Compiling aqua v0.1.0 (/home/sander/.local/share/artisan-street/forge/data/scratch/2026-10-24-i-want-to-create-cd3ef49dd14d/crates/aqua)
+   Compiling aqua-macros v0.1.0 (/home/sander/.local/share/artisan-street/forge/data/scratch/2026-10-24-i-want-to-create-cd3ef49dd14d/crates/aqua-macros)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.26s
+     Running unittests src/lib.rs (target/debug/deps/aqua_macros-c108e6dbe91250cf)
+
+running 8 tests
+test codegen::tests::builder_chain_and_crate_path ... ok
+test codegen::tests::default_crate_path_is_aqua_facade ... ok
+test codegen::tests::custom_component_uses_path_builder ... ok
+test parser::tests::rejects_empty_and_bad_for ... ok
+test parser::tests::parses_crate_preamble_forms ... ok
+test parser::tests::parses_todo_example_shape ... ok
+test codegen::tests::key_for_if_match_shapes ... ok
+test parser::tests::parses_for_key_if_match_let_block_expr ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/real_mount.rs (target/debug/deps/real_mount-04ae87deac5f7524)
+
+running 4 tests
+test bare_axis_constants_match_dsl ... ok
+test real_mount_counter_updates ... ok
+test real_keyed_list_reorders_with_identity ... ok
+test real_mount_errors_are_explicit ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ui_facade.rs (target/debug/deps/ui_facade-12c391d20dfcccc3)
+
+running 3 tests
+test facade_todo_smoke ... ok
+test facade_keyed_list ... ok
+test real_mount_counter ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ui_macro.rs (target/debug/deps/ui_macro-581593902415d0d1)
+
+running 6 tests
+test conditionals_branches_and_match ... ok
+test custom_component_and_equals_separator ... ok
+test dynamic_is_explicit_no_hidden_subscription ... ok
+test for_key_iteration_preserves_identity ... ok
+test lets_blocks_and_plain_exprs ... ok
+test todo_app_structure ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests aqua_macros
+
+running 1 test
+test crates/aqua-macros/src/lib.rs - ui (line 17) ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

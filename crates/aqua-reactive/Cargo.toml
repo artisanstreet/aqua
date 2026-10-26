@@ -1,0 +1,6 @@
+[package]
+name = "aqua-reactive"
+version = "0.1.0"
+edition = "2021"
+description = "Aqua explicit-dependency reactive graph: scopes, signals, derives, effects, batching"
+license = "BSD-3-Clause"

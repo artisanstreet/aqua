@@ -1,0 +1,20 @@
+aqua-factory-tasks NATIVE_EXIT=0
+aqua: clipboard backend: System
+aqua: time-bounded smoke — exiting at Instant { t: 4611840307.463632503s }
+aqua: window chrome installed: ChromeDiagnostic { subclass_active: true, hwnd: 263750, dpi: 120, button_bounds: Some(RectI { left: 1020, top: 224, right: 1166, bottom: 255 }), maximized: false, stats: ChromeStats { nc_calc_size: 1, nc_hit_test: 0, dwm_handled: 0, fallback_handled: 0, system_menus_shown: 0 } }
+aqua: material Acrylic: DWM system backdrop applied (verify visually: needs transparent window + alpha surface)
+aqua: transparent surface: Dx12, alpha=PreMultiplied, format=Bgra8UnormSrgb
+aqua: material Acrylic: DWM system backdrop applied (verify visually: needs transparent window + alpha surface)
+aqua: material Acrylic: DWM system backdrop applied (verify visually: needs transparent window + alpha surface)
+aqua: smoke report: wakeups=5 requested=6 produced=2 presented_frames=1 coalesced=4 deferred_backpressure=0 render_errors=0
+aqua: smoke report: wakeups=6 requested=6 produced=2 presented_frames=1 coalesced=4 deferred_backpressure=0 render_errors=0
+
+aqua-collections NATIVE_EXIT=0
+aqua: clipboard backend: System
+aqua: time-bounded smoke — exiting at Instant { t: 4611840309.407162303s }
+aqua: window chrome installed: ChromeDiagnostic { subclass_active: true, hwnd: 329286, dpi: 120, button_bounds: Some(RectI { left: 1227, top: 256, right: 1373, bottom: 287 }), maximized: false, stats: ChromeStats { nc_calc_size: 1, nc_hit_test: 0, dwm_handled: 0, fallback_handled: 0, system_menus_shown: 0 } }
+aqua: material Acrylic: DWM system backdrop applied (verify visually: needs transparent window + alpha surface)
+aqua: transparent surface: Dx12, alpha=PreMultiplied, format=Bgra8UnormSrgb
+aqua: smoke report: wakeups=5 requested=4 produced=2 presented_frames=1 coalesced=2 deferred_backpressure=0 render_errors=0
+aqua: smoke report: wakeups=6 requested=4 produced=2 presented_frames=1 coalesced=2 deferred_backpressure=0 render_errors=0
+

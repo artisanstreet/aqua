@@ -1,0 +1,13 @@
+[package]
+name = "aqua-text"
+version = "0.1.0"
+edition = "2021"
+description = "Aqua shared text infrastructure: font discovery, shaping/measurement, editing model, IME"
+license = "BSD-3-Clause"
+
+[dependencies]
+cosmic-text = "0.19"
+fontdb = "0.23"
+unicode-segmentation = "1.12"
+
+[dev-dependencies]

@@ -1,0 +1,13 @@
+FRAME outer=32,32,982,732 client=950x700 origin=32,32
+LIMITS min=600x450
+HIT drag=2 body=1 left_edge=10
+CAPTION bounds=757,0,942,37 hits=1,8,9,20
+MAXIMIZED client=0,0,2560,1380 work=0,0,2560,1380
+NATIVE_EXIT=0
+
+aqua: clipboard backend: System
+aqua: window chrome installed: ChromeDiagnostic { subclass_active: true, hwnd: 73008458, dpi: 120, button_bounds: Some(RectI { left: 828, top: 32, right: 974, bottom: 63 }), maximized: false, stats: ChromeStats { nc_calc_size: 1, nc_hit_test: 0, dwm_handled: 0, fallback_handled: 0, system_menus_shown: 0 } }
+aqua: material Acrylic: DWM system backdrop applied (verify visually: needs transparent window + alpha surface)
+aqua: transparent surface: Dx12, alpha=PreMultiplied, format=Bgra8UnormSrgb
+
+WINDOWS_CHROME_OK

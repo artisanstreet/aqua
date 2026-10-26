@@ -1,0 +1,18 @@
+== fmt ==
+[PASS] cargo fmt --check 
+== targeted tests (shared target lock; compile errors are FAIL, never SKIP) ==
+[PASS] cargo test -p aqua-core 
+[PASS] cargo test -p aqua-reactive 
+[PASS] cargo test -p aqua-platform 
+[PASS] cargo test -p aqua-text 
+[PASS] cargo test -p aqua-macros 
+[PASS] cargo test -p aqua-ui 
+== render + facade verification (GPU serial; --nocapture so SKIP lines are visible) ==
+[PASS] cargo test -p aqua-render 
+[PASS] cargo test -p aqua 
+== clippy (all targets: lib + examples + tests + all crates) ==
+[PASS] cargo clippy --workspace --all-targets 
+== windows cross-check (whole workspace, all targets) ==
+[PASS] windows-gnu check --workspace --all-targets 
+
+validate: 11 passed, 0 failed, 0 skipped

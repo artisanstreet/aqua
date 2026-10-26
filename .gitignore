@@ -1,0 +1,8 @@
+# Shared build outputs (workspace root and any nested pre-workspace crate dirs).
+target/
+/dist/
+**/*.rs.bk
+*.orig
+.DS_Store
+.idea/
+.vscode/

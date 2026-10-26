@@ -1,0 +1,39 @@
+name: ci
+on:
+  push:
+  pull_request:
+defaults:
+  run:
+    shell: bash
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - name: fmt
+        run: cargo fmt --check
+      - name: targeted tests (shared target lock)
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: cargo test -p aqua-core -p aqua-reactive -p aqua-platform -p aqua-text -p aqua-macros -p aqua-ui -- --nocapture
+      - name: render tests (GPU serial, honest skip on no adapter)
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: cargo test -p aqua-render -- --nocapture --test-threads=1
+      - name: facade + verification suite
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: cargo test -p aqua -- --nocapture --test-threads=1
+      - name: clippy (all targets)
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: windows cross-check (whole workspace, all targets)
+        run: cargo check --workspace --all-targets --target x86_64-pc-windows-gnu

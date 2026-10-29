@@ -22,9 +22,6 @@ use aqua::config::{Material, Theme, Titlebar};
 use aqua::prelude::*;
 use aqua::{px, Aqua, Context, IntoView, Style, UiApp};
 use aqua_core::Oklch;
-use aqua_platform::geometry::{AquaWindowId, LogicalSize};
-use aqua_platform::ObservedWindowState;
-use aqua_render::Scene;
 use taffy::style::{AlignItems, JustifyContent};
 
 const TOTAL_ROWS: usize = 100_000;
@@ -184,18 +181,6 @@ fn table_element(
         .build()
 }
 
-fn observed(w: f64, h: f64) -> ObservedWindowState {
-    ObservedWindowState {
-        id: AquaWindowId::new(1).expect("window id"),
-        title: "collections".to_string(),
-        inner_size: LogicalSize::new(w, h),
-        scale_factor: 1.0,
-        focused: true,
-        visible: true,
-        occluded: false,
-    }
-}
-
 fn page_element(
     rows: &[Row],
     ascending: bool,
@@ -253,10 +238,9 @@ fn headless_demo() -> Result<(), String> {
     app.mount(|_| element)
         .map_err(|e| format!("mount failed: {e}"))?;
     app.set_viewport(900.0, 700.0, 1.0);
-    let mut scene = Scene::new();
     app.sync().map_err(|e| e.to_string())?;
-    app.build_scene_into(&mut scene, &observed(900.0, 700.0))
-        .map(|_| ())?;
+    app.build_frame().map_err(|e| e.to_string())?;
+    let scene = app.scene();
     let mounted = mounted_rows(&app);
     println!(
         "mounted: logical={TOTAL_ROWS} mounted_rows={mounted} scene_ops={} text_runs={} build_error={:?}",
@@ -287,8 +271,8 @@ fn preview(path: &str) -> Result<(), String> {
     let mut app = UiApp::new(fonts.clone(), runs.clone());
     app.mount(|_| page_element(&rows, true, None))
         .map_err(|e| e.to_string())?;
-    let mut scene = Scene::new();
-    app.build_scene_into(&mut scene, &observed(900.0, 700.0))?;
+    app.set_viewport(900.0, 700.0, 1.0);
+    app.build_frame().map_err(|e| e.to_string())?;
     let mounted = mounted_rows(&app);
     println!("preview: logical={TOTAL_ROWS} mounted_rows={mounted}");
     assert!(
@@ -303,7 +287,7 @@ fn preview(path: &str) -> Result<(), String> {
         renderer.format(),
         aqua_render::TextBackend::new(fonts, runs),
     )));
-    let plan = renderer.prepare(&mut scene);
+    let plan = renderer.prepare(app.scene_mut());
     renderer.draw(&plan).map_err(|e| e.to_string())?;
     let mut pixels = renderer.readback().map_err(|e| e.to_string())?;
     for rgba in pixels.as_chunks_mut::<4>().0 {

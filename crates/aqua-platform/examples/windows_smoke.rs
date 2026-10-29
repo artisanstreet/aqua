@@ -11,13 +11,15 @@
 //! `AQUA_SMOKE_FRAMES=N` (default 120).
 
 use std::num::NonZeroU32;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant as WallInstant};
 
 #[cfg(windows)]
 use aqua_platform::material;
 #[cfg(not(windows))]
 use aqua_platform::{a11y, dialogs};
-use aqua_platform::{host, prefs, scheduler, window, AquaWindowId};
+use aqua_platform::{host, prefs, window, AquaWindowId, FrameReason};
+use aqua_protocol::Instant;
+use aqua_runtime::Scheduler;
 
 #[cfg(windows)]
 fn parse_material() -> material::WindowMaterial {
@@ -38,7 +40,8 @@ struct Smoke {
     window: Option<std::sync::Arc<winit::window::Window>>,
     #[cfg(windows)]
     proxy: winit::event_loop::EventLoopProxy<()>,
-    scheduler: scheduler::Scheduler,
+    scheduler: Scheduler,
+    epoch: WallInstant,
     frames: u32,
     budget: u32,
     #[cfg(windows)]
@@ -46,21 +49,26 @@ struct Smoke {
 }
 
 impl Smoke {
+    fn now(&self) -> Instant {
+        Instant::from_nanos(u64::try_from(self.epoch.elapsed().as_nanos()).unwrap_or(u64::MAX))
+    }
+
+    fn wall(&self, at: Instant) -> WallInstant {
+        self.epoch + at.since_origin()
+    }
+
     fn draw(&mut self) {
-        let now = Instant::now();
+        let now = self.now();
         let ready = self.scheduler.ready_windows(now);
         if ready.is_empty() {
             return;
         }
         let ids: Vec<AquaWindowId> = ready.into_iter().map(|(id, _)| id).collect();
         self.scheduler.mark_produced(&ids, now);
-        // No renderer here: this smoke validates windowing/material/a11y
-        // integration. Present completion is immediate (nothing submitted).
         for id in &ids {
             self.scheduler.mark_presented(*id);
         }
         self.frames += ids.len() as u32;
-        // Keep motion alive until the budget runs out.
         self.scheduler
             .request_animation_deadline(self.id, now + Duration::from_millis(16));
     }
@@ -122,8 +130,8 @@ impl winit::application::ApplicationHandler for Smoke {
 
         window.set_visible(true);
         window.request_redraw();
-        self.scheduler
-            .request_animation_deadline(self.id, Instant::now());
+        let now = self.now();
+        self.scheduler.request_animation_deadline(self.id, now);
         self.window = Some(window);
     }
 
@@ -169,9 +177,11 @@ impl winit::application::ApplicationHandler for Smoke {
                 w.request_redraw();
             }
         }
-        event_loop.set_control_flow(host::control_flow_for_next_wakeup(
-            self.scheduler.next_wakeup(Instant::now()),
-        ));
+        let next = self
+            .scheduler
+            .next_wakeup(self.now())
+            .map(|at| self.wall(at));
+        event_loop.set_control_flow(host::control_flow_for_next_wakeup(next));
     }
 
     fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, _event: ()) {
@@ -181,8 +191,7 @@ impl winit::application::ApplicationHandler for Smoke {
         if let Some(a) = self.a11y.as_mut() {
             let _ = a.drain_actions();
         }
-        self.scheduler
-            .request_frame(self.id, scheduler::FrameReason::EXPLICIT);
+        self.scheduler.request_frame(self.id, FrameReason::EXPLICIT);
     }
 }
 
@@ -194,7 +203,7 @@ fn main() {
     let event_loop = winit::event_loop::EventLoop::new().expect("smoke: event loop");
     #[cfg(windows)]
     let proxy = event_loop.create_proxy();
-    let mut scheduler = scheduler::Scheduler::new();
+    let mut scheduler = Scheduler::new();
     scheduler.set_fps_target(NonZeroU32::new(60));
     let mut app = Smoke {
         id: AquaWindowId::new(1).unwrap(),
@@ -202,6 +211,7 @@ fn main() {
         #[cfg(windows)]
         proxy,
         scheduler,
+        epoch: WallInstant::now(),
         frames: 0,
         budget,
         #[cfg(windows)]

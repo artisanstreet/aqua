@@ -6,11 +6,12 @@
 //! restoration, and demand-driven animation deadlines (idle UI schedules no
 //! frames; settled motion requests none).
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use aqua::{Instant, Scheduler};
 use aqua_core::id::RawId;
 use aqua_core::{NodeId, Point, Rect, Size};
-use aqua_platform::{AquaWindowId, FrameReason, Scheduler};
+use aqua_platform::{AquaWindowId, FrameReason};
 use aqua_ui::motion::{
     Animated, Completion, Easing, MotionController, MotionKind, MotionValue, ReducedMotion,
 };
@@ -288,20 +289,17 @@ fn tween(secs: f64) -> MotionKind {
 
 #[test]
 fn motion_deadline_drives_scheduler_wakeup_then_goes_idle() {
-    // Demand-driven: motion publishes its next deadline to the platform
-    // scheduler; settled motion requests nothing (idle UI sleeps).
     let mut ctl = MotionController::new(ReducedMotion::Full);
     let h = ctl.spawn(None, MotionValue::Scalar(0.0), tween(0.2), 0.0);
     ctl.set_target(h, MotionValue::Scalar(1.0), 0.0).unwrap();
 
     let mut sched = Scheduler::new();
     let win = AquaWindowId::new(1).unwrap();
-    let now = Instant::now();
+    let now = Instant::from_nanos(1_000_000_000);
     let deadline_secs = ctl.next_deadline(0.0).expect("unsettled needs a frame");
     let deadline = now + Duration::from_secs_f64(deadline_secs.max(0.0));
     sched.request_animation_deadline(win, deadline);
     assert_eq!(sched.next_wakeup(now), Some(deadline));
-    // Step the motion clock; completions arrive via advance().
     let mut t = 0.0;
     while ctl.next_deadline(t).is_some() && t < 5.0 {
         ctl.advance(t);
@@ -364,11 +362,9 @@ fn motion_completion_fires_once_and_supersede_is_silent() {
 
 #[test]
 fn animation_only_reason_does_not_draw_before_deadline() {
-    // Pure animation work waits for its deadline; damage draws immediately.
-    // (Mirrors the platform contract from the scheduler side.)
     let mut sched = Scheduler::new();
     let win = AquaWindowId::new(7).unwrap();
-    let now = Instant::now();
+    let now = Instant::from_nanos(1_000_000_000);
     sched.request_animation_deadline(win, now + Duration::from_millis(100));
     assert!(sched.ready_windows(now).is_empty());
     assert_eq!(

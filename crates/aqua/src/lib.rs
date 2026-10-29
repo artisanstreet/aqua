@@ -16,6 +16,9 @@ pub use factory::{fr, Column, ColumnBuilder, ColumnWidth, List, Table};
 pub use runtime::{AppCtx, Application, Aqua, AquaUserEvent, ExternalFrame};
 pub use ui_app::{UiApp, UiAppError};
 
+pub use aqua_protocol::{Input, Instant, Output};
+pub use aqua_runtime::Scheduler;
+
 pub use aqua_ui::element::ui;
 pub use aqua_ui::style::{auto, pct, px, Style, Typography};
 pub use aqua_ui::style::{Border, Length, Paint, Shadow};
@@ -41,10 +44,12 @@ pub mod prelude {
         services::{Clipboard, ClipboardBackend},
     };
     pub use aqua_platform::{
-        AquaWindowId, FrameReason, ObservedWindowState, Scheduler, WindowEvent, WindowRequest,
+        AquaWindowId, FrameReason, ObservedWindowState, WindowEvent, WindowRequest,
     };
+    pub use aqua_protocol::{Input, Instant, Output};
     pub use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
     pub use aqua_render::{Scene, SurfaceFacade};
+    pub use aqua_runtime::Scheduler;
     pub use aqua_text::{SharedFonts, SharedRuns, TextEditor, TextLayout};
     pub use aqua_ui::element::ui as ui_builders;
 }

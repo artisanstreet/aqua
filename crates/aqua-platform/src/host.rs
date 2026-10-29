@@ -259,7 +259,7 @@ mod tests {
         let fw = ev.unwrap();
         assert_eq!(
             window_event_frame_reason(&fw),
-            Some(crate::scheduler::FrameReason::MATERIAL)
+            Some(aqua_protocol::FrameReason::MATERIAL)
         );
         let sig = surface_signal(&fw);
         assert!(sig.material_recheck);
@@ -269,7 +269,7 @@ mod tests {
         assert!(surface_signal(&unfocus).material_recheck);
         assert_eq!(
             window_event_frame_reason(&unfocus),
-            Some(crate::scheduler::FrameReason::INPUT)
+            Some(aqua_protocol::FrameReason::INPUT)
         );
     }
 

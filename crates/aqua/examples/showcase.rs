@@ -24,7 +24,7 @@
 //! `AQUA_SMOKE_MS=2000 cargo run -p aqua --example showcase`
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant as WallInstant};
 
 use aqua::prelude::*;
 use aqua::Application;
@@ -116,8 +116,9 @@ struct Showcase {
     motion: MotionController,
     pulse_row: Option<u64>,
     pulse_handle: MotionHandle,
-    motion_start: Instant,
+    motion_start: WallInstant,
     scene_ids: Vec<NodeId>,
+    scene: Scene,
     cursor: (f32, f32),
     width: f32,
     // Text state (aqua-text v1).
@@ -174,7 +175,7 @@ impl Showcase {
             ReducedMotion::Full
         };
         let mut motion = MotionController::new(reduced);
-        let motion_start = Instant::now();
+        let motion_start = WallInstant::now();
         let pulse_handle = motion.spawn(
             None,
             MotionValue::Scalar(0.0),
@@ -204,6 +205,7 @@ impl Showcase {
             pulse_handle,
             motion_start,
             scene_ids: Vec::new(),
+            scene: Scene::new(),
             cursor: (0.0, 0.0),
             width: 960.0,
             fonts,
@@ -432,7 +434,8 @@ impl Showcase {
         }
     }
 
-    fn sync_items(&mut self, scene: &mut Scene, items: Vec<DisplayItem>) {
+    fn sync_items(&mut self, items: Vec<DisplayItem>) {
+        let scene = &mut self.scene;
         if self.scene_ids.len() != items.len() {
             for id in self.scene_ids.drain(..) {
                 scene.remove(id);
@@ -743,10 +746,7 @@ impl Application for Showcase {
                         self.remove_todo(todo_id);
                     } else {
                         self.toggle_todo(todo_id);
-                        ctx.request_animation_deadline(
-                            id,
-                            Instant::now() + Duration::from_millis(16),
-                        );
+                        ctx.request_animation_deadline(id, ctx.now() + Duration::from_millis(16));
                     }
                 }
             }
@@ -845,7 +845,8 @@ impl Application for Showcase {
                 let i = (n - 10) as usize;
                 if let Some(todo) = self.visible.get().get(i).cloned() {
                     self.toggle_todo(todo.id);
-                    ctx.request_animation_deadline(id, Instant::now());
+                    let now = ctx.now();
+                    ctx.request_animation_deadline(id, now);
                 }
             }
             (A::Focus, 2) => {
@@ -979,7 +980,7 @@ impl Application for Showcase {
     /// Procedural gradient through the real codec path: encode PNG
     /// in-memory (`image`), decode via `decode_bytes`, retain in the CPU
     /// cache, upload to the GPU cache. No fixture files, no fake pixels.
-    fn build_scene(&mut self, scene: &mut Scene, window: &ObservedWindowState) -> Option<Instant> {
+    fn build_scene(&mut self, window: &ObservedWindowState, now: Instant) -> Option<Instant> {
         let w = window.inner_size.width as f32;
         let h = window.inner_size.height as f32;
         self.width = w;
@@ -1178,23 +1179,22 @@ impl Application for Showcase {
             }
         }
 
-        // GPU extension layers (media + 3D viewport) committed last so UI
-        // chrome draws above them in painter order.
         items.extend(self.ext_items.iter().cloned());
-        self.sync_items(scene, items);
+        self.sync_items(items);
 
-        // Canonical motion drives pacing: the controller's next deadline
-        // feeds the platform scheduler; settled motion schedules nothing.
-        // Elapsed `Duration` clock keeps the controller headless-testable.
         let elapsed = self.motion_start.elapsed();
         if !self.motion.is_settled(self.pulse_handle) {
             if let Some(deadline) = self.motion.next_deadline_duration(elapsed) {
-                return Some(Instant::now() + deadline.saturating_sub(elapsed));
+                return Some(now + deadline.saturating_sub(elapsed));
             }
-            return Some(Instant::now() + Duration::from_millis(16));
+            return Some(now + Duration::from_millis(16));
         }
         self.pulse_row = None;
         None
+    }
+
+    fn scene_mut(&mut self, _id: AquaWindowId) -> Option<&mut Scene> {
+        Some(&mut self.scene)
     }
 }
 

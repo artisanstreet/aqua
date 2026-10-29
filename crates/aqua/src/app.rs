@@ -30,12 +30,9 @@
 //! Result<ResolvedConfig, ConfigError>` with `ResolvedConfig { runtime:
 //! AquaConfig, material: ResolvedMaterial }`.
 
-use aqua_platform::{
-    prefs::{query_preferences, OsPreferences},
-    AquaWindowId, ObservedWindowState,
-};
+use aqua_platform::prefs::{query_preferences, OsPreferences};
+use aqua_protocol::{Input, Instant};
 use aqua_reactive::{DepTuple, Scope};
-use aqua_render::Scene;
 use aqua_ui::element::Element;
 
 use crate::config::{Config, ResolvedConfig, ResolvedMaterial};
@@ -243,26 +240,15 @@ impl Prepared {
     }
 }
 
-/// Canonical headless one-frame lifecycle: the mounted UI builds exactly one
-/// frame (flush → layout → scene emission) against the configured window
-/// size at scale 1.0, then the host is disposed.
-///
-/// This is a deterministic smoke snapshot, NOT a full long-running headless
-/// app: no event loop runs, no worker-thread wake pump, no animation
-/// deadlines advance. It exists so `.run(...)` is black-box testable with a
-/// headless [`Config`] (unlike legacy [`Aqua::run`](Aqua::run), which
-/// rejects headless configs because there is no event loop to enter).
 fn run_headless_one_frame(ui: &mut UiApp, resolved: &ResolvedConfig) -> Result<(), Error> {
-    let observed = ObservedWindowState::new(
-        AquaWindowId::new(1).expect("headless window id"),
-        resolved.runtime.window.title.clone(),
-        resolved.runtime.window.inner_size,
-    );
-    let mut scene = Scene::new();
+    let viewport = Input::Viewport {
+        size: resolved.runtime.window.inner_size.as_core_size(),
+        scale: 1.0,
+    };
     let result = ui
-        .build_scene_into(&mut scene, &observed)
+        .step(viewport)
+        .and_then(|_| ui.step(Input::Frame(Instant::ZERO)))
         .map(|_| ())
-        .map_err(UiAppError::Build)
         .map_err(Error::Mount);
     ui.dispose();
     result
@@ -331,12 +317,10 @@ mod tests {
             .collect()
     }
 
-    fn observed_for(resolved: &ResolvedConfig) -> ObservedWindowState {
-        ObservedWindowState::new(
-            AquaWindowId::new(1).expect("test window id"),
-            resolved.runtime.window.title.clone(),
-            resolved.runtime.window.inner_size,
-        )
+    fn build_window_frame(ui: &mut UiApp, resolved: &ResolvedConfig) -> Result<(), UiAppError> {
+        let size = resolved.runtime.window.inner_size;
+        ui.set_viewport(size.width as f32, size.height as f32, 1.0);
+        ui.build_frame().map(|_| ())
     }
 
     #[test]
@@ -358,14 +342,9 @@ mod tests {
         .expect("valid config prepares");
         assert_eq!(prepared.resolved.material.requested(), Material::Glass);
         assert!(!prepared.resolved.material.reason().is_empty());
-        let observed = observed_for(&prepared.resolved);
-        let mut scene = Scene::new();
-        prepared
-            .ui
-            .build_scene_into(&mut scene, &observed)
-            .expect("one frame builds");
+        build_window_frame(&mut prepared.ui, &prepared.resolved).expect("one frame builds");
         assert!(
-            scene.ordered().count() > 0,
+            prepared.ui.scene().ordered().count() > 0,
             "static content emits scene ops"
         );
         assert_eq!(prepared.ui.build_error(), None);
@@ -387,14 +366,8 @@ mod tests {
             })
         })
         .expect("reactive config prepares");
-        let observed = observed_for(&prepared.resolved);
-        let mut scene = Scene::new();
-        prepared
-            .ui
-            .build_scene_into(&mut scene, &observed)
-            .expect("initial frame builds");
+        build_window_frame(&mut prepared.ui, &prepared.resolved).expect("initial frame builds");
         assert!(texts(&prepared.ui).iter().any(|t| t == "flag-off"));
-        // Dependency write flows through the same sync + frame seam.
         slot.borrow()
             .as_ref()
             .expect("setup stashed the writer")
@@ -403,10 +376,7 @@ mod tests {
             .ui
             .sync()
             .expect("sync drains the structural render");
-        prepared
-            .ui
-            .build_scene_into(&mut scene, &observed)
-            .expect("updated frame builds");
+        build_window_frame(&mut prepared.ui, &prepared.resolved).expect("updated frame builds");
         let labels = texts(&prepared.ui);
         assert!(
             labels.iter().any(|t| t == "flag-on"),
@@ -419,8 +389,6 @@ mod tests {
 
     #[test]
     fn resolved_material_reaches_setup_for_ui_branching() {
-        // Opaque policy forces solid even when glass is requested:
-        // platform-independent, no capability polling in UI code.
         let mut prefs = OsPreferences::fallback();
         prefs.high_contrast = PrefState::On;
         let mut prepared = App::prepare(Config::new().window(test_window()), &prefs, |cx| {
@@ -434,12 +402,7 @@ mod tests {
         assert_eq!(prepared.resolved.material.requested(), Material::Glass);
         assert_eq!(prepared.resolved.material.resolved(), WindowMaterial::None);
         assert!(!prepared.resolved.material.is_glass());
-        let observed = observed_for(&prepared.resolved);
-        let mut scene = Scene::new();
-        prepared
-            .ui
-            .build_scene_into(&mut scene, &observed)
-            .expect("frame builds");
+        build_window_frame(&mut prepared.ui, &prepared.resolved).expect("frame builds");
         assert!(texts(&prepared.ui).iter().any(|t| t == "solid-ui"));
         prepared.ui.dispose();
     }
@@ -508,10 +471,7 @@ mod tests {
             cx.view((cx.scope().signal(0u32).0,), move |_| hello_box("bye"))
         })
         .expect("config prepares");
-        let observed = observed_for(&prepared.resolved);
-        prepared
-            .ui
-            .build_scene_into(&mut Scene::new(), &observed)
+        build_window_frame(&mut prepared.ui, &prepared.resolved)
             .expect("frame builds and mints runs");
         assert!(
             prepared.ui.text_run_count() > 0,

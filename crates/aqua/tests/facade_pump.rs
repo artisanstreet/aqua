@@ -9,9 +9,7 @@
 //! `aqua-render` types directly (compile-time proof: these tests name the
 //! peer types through facade calls).
 
-use std::time::Instant;
-
-use aqua::{AppCtx, Application, Aqua, AquaConfig};
+use aqua::{AppCtx, Application, Aqua, AquaConfig, Instant};
 use aqua_core::{
     InputEvent, Key, KeyEvent, Modifiers, NamedKey, Oklch, Point, PointerButton, PointerEvent,
     PointerKind, Rect,
@@ -37,6 +35,7 @@ struct Probe {
     inputs: Vec<String>,
     scenes_built: u64,
     quit_after: Option<u64>,
+    scene: Scene,
 }
 
 impl Probe {
@@ -46,6 +45,7 @@ impl Probe {
             inputs: Vec::new(),
             scenes_built: 0,
             quit_after: None,
+            scene: Scene::new(),
         }
     }
 }
@@ -62,10 +62,10 @@ impl Application for Probe {
             }
         }
     }
-    fn build_scene(&mut self, scene: &mut Scene, _window: &ObservedWindowState) -> Option<Instant> {
+    fn build_scene(&mut self, _window: &ObservedWindowState, _now: Instant) -> Option<Instant> {
         self.scenes_built += 1;
         let fill = Oklch::from_hex("#ff0000").unwrap();
-        scene.insert(aqua_core::DisplayItem::Rect {
+        self.scene.insert(aqua_core::DisplayItem::Rect {
             bounds: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -78,7 +78,10 @@ impl Application for Probe {
             border_color: fill,
             shadow: None,
         });
-        None // settled: no animation deadline, idle UI schedules nothing
+        None
+    }
+    fn scene_mut(&mut self, _id: AquaWindowId) -> Option<&mut Scene> {
+        Some(&mut self.scene)
     }
 }
 
@@ -134,19 +137,15 @@ fn close_requested_removes_window() {
 
 #[test]
 fn app_builds_scene_into_render_owned_store() {
-    // The facade owns no scene vocabulary: content commits into the
-    // render-owned `Scene`, and identical rebuilds are free no-ops.
     let mut app = Probe::new();
-    let mut scene = Scene::new();
     let obs = observed(3);
-    let deadline = app.build_scene(&mut scene, &obs);
+    let deadline = app.build_scene(&obs, Instant::ZERO);
     assert_eq!(deadline, None, "settled app requests no deadline");
     assert_eq!(app.scenes_built, 1);
-    assert_eq!(scene.len(), 1);
-    let rev = scene.revision();
-    let _ = app.build_scene(&mut scene, &obs);
-    // Second build inserts a duplicate item (new node); drain both, then a
-    // no-op update on the same node must not bump the revision.
+    assert_eq!(app.scene.len(), 1);
+    let rev = app.scene.revision();
+    let _ = app.build_scene(&obs, Instant::ZERO);
+    let scene = &mut app.scene;
     let _ = scene.drain_changes();
     let target = scene.ordered().next().unwrap().0;
     let item = scene.get(target).unwrap().clone();

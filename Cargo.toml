@@ -15,6 +15,8 @@ aqua-ui = { path = "crates/aqua-ui" }
 aqua-text = { path = "crates/aqua-text" }
 aqua-render = { path = "crates/aqua-render" }
 aqua-scene = { path = "crates/aqua-scene" }
+aqua-protocol = { path = "crates/aqua-protocol" }
+aqua-runtime = { path = "crates/aqua-runtime" }
 aqua-platform = { path = "crates/aqua-platform" }
 wgpu = "30"
 glyphon = "0.12"

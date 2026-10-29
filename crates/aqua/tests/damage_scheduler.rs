@@ -9,14 +9,15 @@
 //! - texture residency is capped in BYTES (live + cached), not object count.
 
 use std::num::NonZeroU32;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use aqua::{Instant, Scheduler};
 use aqua_core::{Oklch, Rect};
-use aqua_platform::scheduler::MIN_FRAME_INTERVAL;
-use aqua_platform::{AquaWindowId, FrameReason, Scheduler};
+use aqua_platform::{AquaWindowId, FrameReason};
 use aqua_render::damage::{DamageTracker, InvalidationReason};
 use aqua_render::resource::{ResourceBudget, TextureDesc, TexturePoolModel};
 use aqua_render::{DisplayItem, Scene};
+use aqua_runtime::scheduler::MIN_FRAME_INTERVAL;
 
 fn red() -> Oklch {
     Oklch::from_hex("#ff0000").unwrap()
@@ -206,13 +207,13 @@ fn backdrop_dependency_recomputes_on_backdrop_damage() {
 fn idle_scheduler_sleeps_with_no_ticks() {
     let s = Scheduler::new();
     assert!(!s.has_pending());
-    assert_eq!(s.next_wakeup(Instant::now()), None);
+    assert_eq!(s.next_wakeup(Instant::from_nanos(1_000_000_000)), None);
 }
 
 #[test]
 fn reasons_merge_and_repeat_requests_coalesce() {
     let mut s = Scheduler::new();
-    let now = Instant::now();
+    let now = Instant::from_nanos(1_000_000_000);
     s.request_frame(id(1), FrameReason::INPUT);
     s.request_frame(id(1), FrameReason::DAMAGE);
     assert_eq!(
@@ -225,7 +226,6 @@ fn reasons_merge_and_repeat_requests_coalesce() {
     s.mark_produced(&[id(1)], now);
     assert_eq!(s.stats().produced, 1);
     assert!(!s.has_pending());
-    // After production with no pacing target, nothing sleeps pending.
     assert_eq!(s.next_wakeup(now), None);
 }
 
@@ -233,7 +233,7 @@ fn reasons_merge_and_repeat_requests_coalesce() {
 fn pacing_gate_blocks_then_runtime_target_change_releases() {
     let mut s = Scheduler::new();
     s.set_fps_target(Some(NonZeroU32::new(60).unwrap()));
-    let start = Instant::now();
+    let start = Instant::from_nanos(1_000_000_000);
     s.request_frame(id(4), FrameReason::DAMAGE);
     s.mark_produced(&[id(4)], start);
     s.request_frame(id(4), FrameReason::DAMAGE);
@@ -241,7 +241,6 @@ fn pacing_gate_blocks_then_runtime_target_change_releases() {
     let wake = s.next_wakeup(start).expect("gate must schedule a wakeup");
     assert!(wake > start);
     assert!(wake - start >= MIN_FRAME_INTERVAL);
-    // Runtime change to unpaced releases the stale gate immediately.
     s.clear_fps_target();
     assert_eq!(s.ready_windows(start).len(), 1);
     assert_eq!(s.next_wakeup(start), Some(start), "drawable right now");
@@ -251,7 +250,7 @@ fn pacing_gate_blocks_then_runtime_target_change_releases() {
 fn backpressure_defers_without_queue_growth() {
     let mut s = Scheduler::new();
     s.set_max_in_flight(1);
-    let now = Instant::now();
+    let now = Instant::from_nanos(1_000_000_000);
     s.request_frame(id(3), FrameReason::DAMAGE);
     s.mark_produced(&[id(3)], now);
     s.request_frame(id(3), FrameReason::DAMAGE);
@@ -271,7 +270,7 @@ fn backpressure_defers_without_queue_growth() {
 fn backpressure_wakeup_sleeps_until_present() {
     let mut s = Scheduler::new();
     s.set_max_in_flight(1);
-    let now = Instant::now();
+    let now = Instant::from_nanos(1_000_000_000);
     s.request_frame(id(9), FrameReason::DAMAGE);
     s.mark_produced(&[id(9)], now);
     s.request_frame(id(9), FrameReason::DAMAGE);

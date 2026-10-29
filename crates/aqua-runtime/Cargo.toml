@@ -1,0 +1,14 @@
+[package]
+name = "aqua-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aqua sans-IO runtime: frame pipeline and demand-driven scheduler"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-protocol = { path = "../aqua-protocol" }
+aqua-reactive = { path = "../aqua-reactive" }
+aqua-scene = { path = "../aqua-scene" }
+aqua-text = { path = "../aqua-text" }
+aqua-ui = { path = "../aqua-ui" }

@@ -4,8 +4,8 @@
 //! boundary; everything here is headless-testable (no windows needed).
 
 use crate::geometry::{LogicalPosition, LogicalSize};
-use crate::scheduler::FrameReason;
 use crate::window::WindowEvent;
+use aqua_protocol::FrameReason;
 
 /// Pressed / released, independent of `winit` types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

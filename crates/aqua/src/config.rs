@@ -87,7 +87,7 @@ impl AquaConfig {
 
     /// Apply the pacing target to a platform scheduler. The single pacing
     /// owner is the scheduler; this config holds no duplicate gate state.
-    pub fn apply_to_scheduler(&self, scheduler: &mut aqua_platform::Scheduler) {
+    pub fn apply_to_scheduler(&self, scheduler: &mut aqua_runtime::Scheduler) {
         scheduler.set_fps_target(self.fps_target);
     }
 }
@@ -677,7 +677,7 @@ mod tests {
         c.set_fps(900).unwrap();
         assert_eq!(c.fps_target.unwrap().get(), 900);
 
-        let mut s = aqua_platform::Scheduler::new();
+        let mut s = aqua_runtime::Scheduler::new();
         c.apply_to_scheduler(&mut s);
         assert_eq!(s.fps_target().unwrap().get(), 900);
     }

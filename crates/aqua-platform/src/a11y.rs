@@ -24,7 +24,8 @@ use accesskit::{
     Action, ActionData, Node, NodeId as AkNodeId, Rect as AkRect, Role as AkRole, TreeId, TreeInfo,
     TreeUpdate,
 };
-use aqua_core::{NodeId, Rect, Role as CoreRole, SemanticNode};
+use aqua_core::{NodeId, Rect, Role as CoreRole};
+pub use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest, A11yNode};
 
 /// Pack a generational core id into an AccessKit `u64` id.
 /// `index << 32 | generation`; core `INVALID` (index `u32::MAX`) can never
@@ -68,19 +69,6 @@ pub fn map_role(role: &CoreRole) -> AkRole {
         CoreRole::Menu => AkRole::Menu,
         CoreRole::MenuItem => AkRole::MenuItem,
     }
-}
-
-/// One positioned semantic node: the canonical record PLUS the layout data
-/// AccessKit requires. `bounds` is `None` only when layout hasn't run —
-/// screen readers need bounds, so the UI owner MUST supply them; `None`
-/// degrades to a zero rect and is reported by [`build_tree_update`] docs,
-/// not silently accepted as complete.
-#[derive(Debug, Clone)]
-pub struct A11yNode {
-    pub semantic: SemanticNode,
-    /// Window-local logical units; None = layout not yet run.
-    pub bounds: Option<Rect>,
-    pub children: Vec<NodeId>,
 }
 
 /// Build a full-tree [`TreeUpdate`] from positioned nodes.
@@ -151,63 +139,6 @@ pub fn build_tree_update(root: NodeId, focus: NodeId, items: &[A11yNode]) -> Tre
         tree_id: TreeId::ROOT,
         focus: focus_id,
     }
-}
-
-/// Framework action derived from an AccessKit [`ActionRequest`](accesskit::ActionRequest).
-#[derive(Debug, Clone, PartialEq)]
-pub struct A11yActionRequest {
-    pub node: NodeId,
-    pub action: A11yAction,
-    /// Preserved request payload. Actions carrying data (`SetValue`,
-    /// text selection, scroll targets, custom ids) MUST keep it: dropping
-    /// it would make the action unservable while still advertised.
-    pub data: A11yActionData,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum A11yAction {
-    Press,
-    Focus,
-    Expand,
-    Collapse,
-    Increment,
-    Decrement,
-    /// Actions with no framework behavior yet (tooltip, text replace,
-    /// custom). Carries the native name so UI code can extend handling
-    /// without a platform change. Payload (if any) is in
-    /// [`A11yActionRequest::data`].
-    Other(&'static str),
-}
-
-/// Preserved payload of an action request. Every `ActionData` variant maps
-/// to something lossless; UI behaviors that don't understand a payload must
-/// ignore that action explicitly, never execute it partially.
-#[derive(Debug, Clone, PartialEq)]
-pub enum A11yActionData {
-    None,
-    /// `SetValue` / `ReplaceSelectedText` text.
-    Value(String),
-    /// `SetValue` numeric form.
-    Numeric(f64),
-    /// `SetTextSelection`: caret/selection as (node, character index) pairs.
-    TextSelection {
-        anchor_node: NodeId,
-        anchor_index: usize,
-        focus_node: NodeId,
-        focus_index: usize,
-    },
-    /// `ScrollToPoint` target (tree-container coordinates).
-    Point {
-        x: f64,
-        y: f64,
-    },
-    /// `SetScrollOffset` target (target-node coordinates).
-    ScrollOffset {
-        x: f64,
-        y: f64,
-    },
-    /// `CustomAction` id.
-    Custom(i32),
 }
 
 fn map_action(action: &Action) -> A11yAction {

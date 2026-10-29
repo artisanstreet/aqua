@@ -7,22 +7,7 @@
 
 use aqua::{fr, px, Aqua, Style, UiApp};
 use aqua_core::Oklch;
-use aqua_platform::geometry::LogicalSize;
-use aqua_platform::{AquaWindowId, ObservedWindowState};
-use aqua_render::Scene;
 use aqua_ui::tree::NodeKind;
-
-fn observed() -> ObservedWindowState {
-    ObservedWindowState {
-        id: AquaWindowId::new(1).expect("window id"),
-        title: "factories".to_string(),
-        inner_size: LogicalSize::new(800.0, 600.0),
-        scale_factor: 1.0,
-        focused: true,
-        visible: true,
-        occluded: false,
-    }
-}
 
 fn host() -> UiApp {
     let fonts = aqua_text::SharedFonts::new();
@@ -30,10 +15,10 @@ fn host() -> UiApp {
     UiApp::new(fonts, runs)
 }
 
-fn frame(app: &mut UiApp, scene: &mut Scene) {
+fn frame(app: &mut UiApp) {
     app.sync().expect("sync drains");
-    app.build_scene_into(scene, &observed())
-        .expect("frame builds");
+    app.set_viewport(800.0, 600.0, 1.0);
+    app.build_frame().expect("frame builds");
     assert_eq!(app.build_error(), None);
 }
 
@@ -81,9 +66,8 @@ fn every_widget_factory_mounts() {
     })
     .expect("mount factories");
     app.set_viewport(800.0, 600.0, 1.0);
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene);
-    assert!(scene.ordered().count() > 0);
+    frame(&mut app);
+    assert!(app.scene().ordered().count() > 0);
     let labels = texts(&app);
     for want in ["hello", "go", "scroll", "check", "open", "frag", "dyn"] {
         assert!(
@@ -105,11 +89,10 @@ fn text_factory_takes_literals_and_signals() {
     })
     .unwrap();
     app.set_viewport(400.0, 300.0, 1.0);
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene);
+    frame(&mut app);
     assert!(texts(&app).iter().any(|t| t == "one"));
     set_sig.set("two".to_string());
-    frame(&mut app, &mut scene);
+    frame(&mut app);
     assert!(texts(&app).iter().any(|t| t == "two"));
 }
 
@@ -134,8 +117,7 @@ fn array_vec_and_lazy_iter_children_keep_order() {
     ] {
         let mut app = host();
         app.mount(|_| element).unwrap();
-        let mut scene = Scene::new();
-        frame(&mut app, &mut scene);
+        frame(&mut app);
         let labels = texts(&app);
         let positions: Vec<_> = expected
             .iter()
@@ -197,8 +179,7 @@ fn list_factory_builds_keyed_rows_through_ui_app() {
     })
     .unwrap();
     app.set_viewport(600.0, 800.0, 1.0);
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene);
+    frame(&mut app);
     let labels = texts(&app);
     assert_eq!(labels.iter().filter(|t| t.starts_with("item-")).count(), 32);
     assert_eq!(app.build_error(), None);
@@ -214,8 +195,7 @@ fn list_factory_builds_keyed_rows_through_ui_app() {
     })
     .unwrap();
     app.set_viewport(600.0, 800.0, 1.0);
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene);
+    frame(&mut app);
     assert_eq!(app.build_error(), None);
 }
 
@@ -250,8 +230,7 @@ fn table_factory_shares_one_width_plan_with_real_headers() {
     })
     .unwrap();
     app.set_viewport(700.0, 600.0, 1.0);
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene);
+    frame(&mut app);
     let labels = texts(&app);
     // Real header text (not fake controls) plus body cells.
     assert!(labels.iter().any(|t| t == "Name"), "{labels:?}");

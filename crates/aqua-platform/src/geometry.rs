@@ -11,26 +11,9 @@
 //!
 //! No `winit` dependency.
 
-use std::num::NonZeroU64;
-
 pub use aqua_core::geometry::{CornerRadii, Insets, Point, Rect, Size, Transform2D};
 
-/// Stable framework window identity (NOT a `winit::window::WindowId`).
-///
-/// The host layer maps these 1:1 to native windows. Never persisted across
-/// process restarts; the facade owns allocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct AquaWindowId(pub NonZeroU64);
-
-impl AquaWindowId {
-    pub fn new(raw: u64) -> Option<Self> {
-        NonZeroU64::new(raw).map(AquaWindowId)
-    }
-
-    pub fn raw(self) -> u64 {
-        self.0.get()
-    }
-}
+pub use aqua_protocol::WindowId as AquaWindowId;
 
 /// Logical (DIP) 2D size at the windowing boundary (`f64`).
 ///

@@ -10,9 +10,6 @@ use aqua::prelude::*;
 use aqua::ui::{Box as UiBox, Text as UiText};
 use aqua::{auto, pct, px, Style, UiApp};
 use aqua_core::{Insets, NodeId};
-use aqua_platform::geometry::LogicalSize;
-use aqua_platform::{AquaWindowId, ObservedWindowState};
-use aqua_render::Scene;
 use aqua_text::{SharedFonts, SharedRuns};
 
 // Shared const helpers: scalar const chains, const Oklch palette.
@@ -44,18 +41,6 @@ const PROOF: Style = Style::new()
 
 fn fonts_and_runs() -> (SharedFonts, SharedRuns) {
     (SharedFonts::new(), SharedRuns::new())
-}
-
-fn observed(w: f64, h: f64) -> ObservedWindowState {
-    ObservedWindowState {
-        id: AquaWindowId::new(1).unwrap(),
-        title: "style-builders-test".to_string(),
-        inner_size: LogicalSize::new(w, h),
-        scale_factor: 1.0,
-        focused: true,
-        visible: true,
-        occluded: false,
-    }
 }
 
 /// Every text node id in traversal order with its committed text.
@@ -271,7 +256,6 @@ fn keyed_refresh_retains_node_focus_and_input() {
     .unwrap();
     app.sync().unwrap();
 
-    // Focus the bound field and type through the real input path.
     let field = text_nodes(&app)
         .into_iter()
         .find(|(_, t)| t == "draft")
@@ -290,7 +274,6 @@ fn keyed_refresh_retains_node_focus_and_input() {
         .expect("field still mounted");
     assert_ne!(typed, "draft", "keystroke lands in the bound editor");
 
-    // Structural refresh: same keys (restyled), order changed, row added.
     app.refresh(vec![UiBox::builder()
         .child(UiText::builder().arg("row-a").build().with_key("a"))
         .child(UiText::builder().arg("row-b").build().with_key("b"))
@@ -306,9 +289,6 @@ fn keyed_refresh_retains_node_focus_and_input() {
     app.sync().unwrap();
     assert_eq!(app.build_error(), None);
 
-    // Identity: the keyed field is the same node, focus followed it, the
-    // typed input survived the refresh, and the new styles applied to the
-    // retained node (width now comes from OVERRIDE).
     assert_eq!(app.tree().focused(), Some(field));
     let after = text_nodes(&app);
     let field_text = after
@@ -322,8 +302,7 @@ fn keyed_refresh_retains_node_focus_and_input() {
         aqua::Length::Px(120.0),
         "restyle applies in place on the retained node"
     );
-    let mut scene = Scene::new();
-    app.build_scene_into(&mut scene, &observed(800.0, 600.0))
-        .unwrap();
-    assert!(!scene.is_empty());
+    app.set_viewport(800.0, 600.0, 1.0);
+    app.build_frame().unwrap();
+    assert!(!app.scene().is_empty());
 }

@@ -1,25 +1,16 @@
 use aqua::ui::{Box as UiBox, Text as UiText};
-use aqua::UiApp;
+use aqua::{UiApp, UiAppError};
 use aqua_core::{InputEvent, NodeId};
-use aqua_platform::geometry::LogicalSize;
-use aqua_platform::{AquaWindowId, ObservedWindowState};
-use aqua_render::{Renderer, Scene};
+use aqua_render::Renderer;
 use aqua_text::{SharedFonts, SharedRuns};
 
 fn fonts_and_runs() -> (SharedFonts, SharedRuns) {
     (SharedFonts::new(), SharedRuns::new())
 }
 
-fn observed(w: f64, h: f64) -> ObservedWindowState {
-    ObservedWindowState {
-        id: AquaWindowId::new(1).unwrap(),
-        title: "ui-app-test".to_string(),
-        inner_size: LogicalSize::new(w, h),
-        scale_factor: 1.0,
-        focused: true,
-        visible: true,
-        occluded: false,
-    }
+fn build_at(app: &mut UiApp, w: f32, h: f32, scale: f32) -> Result<Option<f64>, UiAppError> {
+    app.set_viewport(w, h, scale);
+    app.build_frame()
 }
 
 fn first_text_node(app: &UiApp) -> NodeId {
@@ -49,13 +40,10 @@ fn mount_renders_static_text_to_scene() {
             .build()
     })
     .unwrap();
-    let mut scene = Scene::new();
-    let deadline = app
-        .build_scene_into(&mut scene, &observed(800.0, 600.0))
-        .expect("build");
+    let deadline = build_at(&mut app, 800.0, 600.0, 1.0).expect("build");
     assert_eq!(deadline, None, "static content requests no deadline");
     assert_eq!(app.build_error(), None);
-    assert!(!scene.is_empty(), "static text emits scene ops");
+    assert!(!app.scene().is_empty(), "static text emits scene ops");
     assert!(app.frame_stats().scene_ops > 0);
 }
 
@@ -73,30 +61,19 @@ fn two_way_edit_binding_roundtrip() {
             .build()
     })
     .unwrap();
-    let mut scene = Scene::new();
-    app.build_scene_into(&mut scene, &observed(800.0, 600.0))
-        .unwrap();
-
-    // Host → app: focus the editable, route a keystroke through UiApp.
+    build_at(&mut app, 800.0, 600.0, 1.0).unwrap();
     let node = first_text_node(&app);
     app.tree_mut().set_focusable(node, true);
     app.tree_mut().set_focused(Some(node));
     assert!(app.handle_input(&InputEvent::TextInput {
         text: " there".to_string()
     }));
-    // TextChanged routes back through `write` (try_set, infallible).
     app.sync().unwrap();
-    let mut scene2 = Scene::new();
-    app.build_scene_into(&mut scene2, &observed(800.0, 600.0))
-        .unwrap();
+    build_at(&mut app, 800.0, 600.0, 1.0).unwrap();
     assert_eq!(app.build_error(), None);
-
-    // App → host: programmatic write flows through the binding to the tree.
     writer.set("programmatic".to_string());
     app.sync().unwrap();
-    let mut scene3 = Scene::new();
-    app.build_scene_into(&mut scene3, &observed(800.0, 600.0))
-        .unwrap();
+    build_at(&mut app, 800.0, 600.0, 1.0).unwrap();
     let text = match &app.tree().get(node).unwrap().kind {
         aqua_ui::NodeKind::Text(t) => t.text().to_string(),
         _ => panic!("expected text"),
@@ -116,22 +93,17 @@ fn keyed_structural_refresh_preserves_focus_and_edit() {
             .build()
     })
     .unwrap();
-    let mut scene = Scene::new();
-    app.build_scene_into(&mut scene, &observed(800.0, 600.0))
-        .unwrap();
+    build_at(&mut app, 800.0, 600.0, 1.0).unwrap();
     let node = first_text_node(&app);
     app.tree_mut().set_focusable(node, true);
     app.tree_mut().set_focused(Some(node));
-    // Structural refresh: same key (identity kept), new row added.
     app.refresh(vec![UiBox::builder()
         .child(UiText::builder().arg("row-b").build().with_key("b"))
         .child(UiText::builder().arg("row-a!").build().with_key("a"))
         .build()])
         .unwrap();
     app.sync().unwrap();
-    let mut scene2 = Scene::new();
-    app.build_scene_into(&mut scene2, &observed(800.0, 600.0))
-        .unwrap();
+    build_at(&mut app, 800.0, 600.0, 1.0).unwrap();
     assert_eq!(app.build_error(), None);
     assert_eq!(app.tree().focused(), Some(node), "focus follows the key");
 }
@@ -153,12 +125,9 @@ fn dispose_runs_cleanups_and_releases_runs() {
             .build()
     })
     .unwrap();
-    let mut scene = Scene::new();
-    app.build_scene_into(&mut scene, &observed(800.0, 600.0))
-        .unwrap();
+    build_at(&mut app, 800.0, 600.0, 1.0).unwrap();
     app.dispose();
     assert!(*cleaned.borrow(), "view cleanup ran exactly once");
-    // Second dispose is a no-op, never double-frees.
     app.dispose();
 }
 
@@ -185,8 +154,6 @@ fn ui_app_todo_artifact_real_text() {
         return;
     };
     let (fonts, runs) = fonts_and_runs();
-    // The renderer must shape with the SAME font system + run registry the
-    // UiApp measures with — otherwise pixels and layout disagree.
     let backend = aqua_render::TextBackend::new(fonts.clone(), runs.clone());
     let fmt = r.format();
     r.set_text_provider(Box::new(aqua_render::GlyphonProvider::new(
@@ -222,18 +189,14 @@ fn ui_app_todo_artifact_real_text() {
         )
         .build();
     app.mount(|_scope| el).unwrap();
-    let mut scene = Scene::new();
-    app.build_scene_into(&mut scene, &observed(480.0, 320.0))
-        .unwrap();
+    build_at(&mut app, 480.0, 320.0, 1.0).unwrap();
     assert_eq!(app.build_error(), None);
-    assert!(!scene.is_empty());
-    let plan = r.prepare(&mut scene);
+    assert!(!app.scene().is_empty());
+    let plan = r.prepare(app.scene_mut());
     assert!(!plan.is_clean(), "real UI content produces work");
     r.draw(&plan).expect("draw");
     let px = r.readback().expect("readback");
     assert_eq!(px.len(), 480 * 320 * 4);
-    // Glyph pixels vs transparent background: white antialiased text has
-    // high channels with significant alpha; background is (0,0,0,0).
     let glyph_px = px
         .as_chunks::<4>()
         .0
@@ -288,10 +251,7 @@ fn padded_single_line_field_keeps_caret_visible_at_multiple_scales() {
         let field = first_text_node(&app);
         app.tree_mut().set_focused(Some(field));
         assert!(focus.get());
-        let mut scene = Scene::new();
-        let mut window = observed(240.0, 120.0);
-        window.scale_factor = scale;
-        app.build_scene_into(&mut scene, &window).unwrap();
+        build_at(&mut app, 240.0, 120.0, scale).unwrap();
         let first = app.ime_anchor().unwrap();
         assert!(
             (first.x - 12.0).abs() < 0.1,
@@ -305,13 +265,14 @@ fn padded_single_line_field_keeps_caret_visible_at_multiple_scales() {
         app.handle_input(&InputEvent::TextInput {
             text: "This long task must scroll horizontally while I keep typing".into(),
         });
-        app.build_scene_into(&mut scene, &window).unwrap();
+        build_at(&mut app, 240.0, 120.0, scale).unwrap();
         let anchor = app.ime_anchor().unwrap();
         assert!(
             anchor.x >= 12.0 && anchor.x + anchor.w <= 168.5,
             "caret remains inside content: {anchor:?}"
         );
-        let text_x = scene
+        let text_x = app
+            .scene()
             .ordered()
             .find_map(|(_, item)| match item {
                 DisplayItem::Text { at, .. } => Some(at[0]),
@@ -327,7 +288,7 @@ fn padded_single_line_field_keeps_caret_visible_at_multiple_scales() {
             })
         };
         app.handle_input(&key(NamedKey::Home, false));
-        app.build_scene_into(&mut scene, &window).unwrap();
+        build_at(&mut app, 240.0, 120.0, scale).unwrap();
         assert!(
             (app.ime_anchor().unwrap().x - 12.0).abs() < 0.1,
             "Home scrolls back to the beginning"

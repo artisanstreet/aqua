@@ -7,6 +7,7 @@ license = "BSD-3-Clause"
 
 [dependencies]
 aqua-core = { path = "../aqua-core" }
+aqua-protocol = { path = "../aqua-protocol" }
 winit = "0.30.12"
 bitflags = "2"
 # Native OS clipboard (Win32 clipboard on Windows, Wayland/X11 on Linux).
@@ -38,3 +39,4 @@ raw-window-handle = "0.6"
 accesskit_winit = "0.34"
 
 [dev-dependencies]
+aqua-runtime = { path = "../aqua-runtime" }

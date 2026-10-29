@@ -9,6 +9,8 @@ rust-version.workspace = true
 [dependencies]
 aqua-core = { workspace = true }
 aqua-platform = { path = "../aqua-platform" }
+aqua-protocol = { path = "../aqua-protocol" }
+aqua-runtime = { path = "../aqua-runtime" }
 aqua-reactive = { path = "../aqua-reactive" }
 aqua-render = { path = "../aqua-render" }
 aqua-text = { path = "../aqua-text" }

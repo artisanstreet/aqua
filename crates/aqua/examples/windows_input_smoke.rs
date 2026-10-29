@@ -54,12 +54,14 @@ impl Application for KeyboardProbe {
             ctx.quit();
         }
     }
-    fn build_scene(
-        &mut self,
-        scene: &mut Scene,
-        window: &ObservedWindowState,
-    ) -> Option<std::time::Instant> {
-        self.ui.build_scene(scene, window)
+    fn build_scene(&mut self, window: &ObservedWindowState, now: Instant) -> Option<Instant> {
+        self.ui.build_scene(window, now)
+    }
+    fn scene_mut(&mut self, id: AquaWindowId) -> Option<&mut Scene> {
+        Application::scene_mut(&mut self.ui, id)
+    }
+    fn reactive_runtime(&self) -> Option<&ReactiveRuntime> {
+        self.ui.reactive_runtime()
     }
     fn ime_cursor_area(&self) -> Option<Rect> {
         self.ui.ime_anchor()

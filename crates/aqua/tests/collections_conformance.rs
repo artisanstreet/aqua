@@ -3,7 +3,7 @@
 //! Ownership: this file is owned by the collections-conformance worker. It
 //! exercises ONLY the public `Aqua` factory APIs (`Aqua::List`, `Aqua::Table`,
 //! `Aqua::Column`, `fr`, `px`) through the real `UiApp` frame pipeline
-//! (`mount` / `refresh` / `sync` / `build_scene_into` / `handle_input`).
+//! (`mount` / `refresh` / `sync` / `build_frame` / `handle_input`).
 //! No production code or peer tests are touched here.
 //!
 //! API basis: `aqua_ui::collection` (builders + sources, single source) as
@@ -23,9 +23,6 @@ use std::rc::Rc;
 
 use aqua::{fr, px, Aqua, Style, UiApp};
 use aqua_core::{InputEvent, Key, KeyEvent, Modifiers, NamedKey, Oklch, Point, Role, ScrollDelta};
-use aqua_platform::geometry::LogicalSize;
-use aqua_platform::{AquaWindowId, ObservedWindowState};
-use aqua_render::Scene;
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::tree::NodeKind;
 
@@ -57,27 +54,15 @@ struct NameValue {
 // Harness helpers (real UiApp frame pipeline, headless).
 // ---------------------------------------------------------------------------
 
-fn observed(w: f64, h: f64) -> ObservedWindowState {
-    ObservedWindowState {
-        id: AquaWindowId::new(1).expect("window id"),
-        title: "collections-conformance".to_string(),
-        inner_size: LogicalSize::new(w, h),
-        scale_factor: 1.0,
-        focused: true,
-        visible: true,
-        occluded: false,
-    }
-}
-
 fn host() -> UiApp {
     UiApp::new(SharedFonts::new(), SharedRuns::new())
 }
 
 /// Flush effects and build one frame; valid content must stay error-free.
-fn frame(app: &mut UiApp, scene: &mut Scene, w: f64, h: f64) {
+fn frame(app: &mut UiApp, w: f32, h: f32) {
     app.sync().expect("sync drains");
-    app.build_scene_into(scene, &observed(w, h))
-        .expect("frame builds");
+    app.set_viewport(w, h, 1.0);
+    app.build_frame().expect("frame builds");
     assert_eq!(app.build_error(), None, "frame must stay error-free");
 }
 
@@ -246,8 +231,7 @@ fn unvirtualized_list_mounts_every_row() {
     app.mount(|_| list_element(items, calls.clone(), false))
         .unwrap();
     app.set_viewport(600.0, 800.0, 1.0);
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 600.0, 800.0);
+    frame(&mut app, 600.0, 800.0);
 
     let rows = row_texts(&app, "row-");
     assert_eq!(rows.len(), 32, "OFF mounts every item: {rows:?}");
@@ -256,7 +240,7 @@ fn unvirtualized_list_mounts_every_row() {
         32,
         "row factory runs once per mounted row, never in bulk at build"
     );
-    assert!(!scene.is_empty());
+    assert!(!app.scene().is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -306,8 +290,7 @@ fn unvirtualized_table_mounts_real_headers_and_all_cells() {
     })
     .unwrap();
     app.set_viewport(700.0, 600.0, 1.0);
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
 
     let labels = static_texts(&app);
     assert!(labels.iter().any(|t| t == "Name"), "{labels:?}");
@@ -365,9 +348,8 @@ fn virtualized_list_100k_bounds_factory_calls_and_mounted_nodes() {
     app.mount(|_| list_element(items, calls.clone(), true))
         .unwrap();
     app.set_viewport(600.0, 600.0, 1.0);
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 600.0, 600.0);
-    frame(&mut app, &mut scene, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
 
     let rows = row_texts(&app, "row-");
     assert!(
@@ -429,9 +411,8 @@ fn virtualized_table_bounds_cell_factories_and_keeps_headers() {
     })
     .unwrap();
     app.set_viewport(700.0, 600.0, 1.0);
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 700.0, 600.0);
-    frame(&mut app, &mut scene, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
 
     let labels = static_texts(&app);
     assert!(labels.iter().any(|t| t == "Name"), "{labels:?}");
@@ -458,9 +439,8 @@ fn scroll_and_resize_move_the_virtual_window() {
     let mut app = host();
     app.mount(|_| list_element(items, calls.clone(), true))
         .unwrap();
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 600.0, 600.0);
-    frame(&mut app, &mut scene, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
     let scroll = find_scroll(&app).expect("virtualized list lowers to a Scroll viewport");
 
     // Real scroll_to near the end: the window must follow through the real
@@ -468,8 +448,8 @@ fn scroll_and_resize_move_the_virtual_window() {
     assert!(app
         .tree_mut()
         .scroll_to(scroll, Point::new(0.0, 10_000_000.0)));
-    frame(&mut app, &mut scene, 600.0, 600.0);
-    frame(&mut app, &mut scene, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
     let bottom: Vec<usize> = row_texts(&app, "row-")
         .iter()
         .filter_map(|t| row_index_of(t))
@@ -490,8 +470,8 @@ fn scroll_and_resize_move_the_virtual_window() {
             y: -10_000_000.0
         },
     }));
-    frame(&mut app, &mut scene, 600.0, 600.0);
-    frame(&mut app, &mut scene, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
     let top: Vec<usize> = row_texts(&app, "row-")
         .iter()
         .filter_map(|t| row_index_of(t))
@@ -503,10 +483,10 @@ fn scroll_and_resize_move_the_virtual_window() {
     );
 
     // Resize changes the visible range (smaller viewport => fewer rows).
-    frame(&mut app, &mut scene, 600.0, 200.0);
+    frame(&mut app, 600.0, 200.0);
     let small = row_texts(&app, "row-").len();
-    frame(&mut app, &mut scene, 600.0, 1000.0);
-    frame(&mut app, &mut scene, 600.0, 1000.0);
+    frame(&mut app, 600.0, 1000.0);
+    frame(&mut app, 600.0, 1000.0);
     let large = row_texts(&app, "row-").len();
     assert!(
         small < large,
@@ -541,12 +521,11 @@ fn variable_heights_and_prepend_preserve_reading_anchor() {
             .build()
     })
     .unwrap();
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
     let scroll = find_scroll(&app).expect("virtualized list lowers to a Scroll viewport");
     assert!(app.tree_mut().scroll_to(scroll, Point::new(0.0, 30_000.0)));
-    frame(&mut app, &mut scene, 600.0, 400.0);
-    frame(&mut app, &mut scene, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
     snap_state(&app, scroll, "pre-prepend");
     /// Isolation snapshot for the driver: committed scroll offset, viewport rect,
     /// and content extent (distinguishes "scroll reset/clamped" from "anchor not
@@ -606,8 +585,8 @@ fn variable_heights_and_prepend_preserve_reading_anchor() {
             .build()
     }])
     .unwrap();
-    frame(&mut app, &mut scene, 600.0, 400.0);
-    frame(&mut app, &mut scene, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
     snap_state(&app, scroll, "post-prepend");
 
     let id = text_node(&app, &anchor).expect("anchor row still mounted after prepend");
@@ -653,8 +632,7 @@ fn keyed_reorder_preserves_identity_and_edit_focus() {
             .build()
     };
     app.mount(|_| build(&items, sigs.clone())).unwrap();
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 600.0, 800.0);
+    frame(&mut app, 600.0, 800.0);
 
     // Focus the editable row for item-5, move the caret to the end through
     // the real key path, then edit through the real input path.
@@ -669,14 +647,14 @@ fn keyed_reorder_preserves_identity_and_edit_focus() {
     assert!(app.handle_input(&InputEvent::TextInput {
         text: "!".to_string()
     }));
-    frame(&mut app, &mut scene, 600.0, 800.0);
+    frame(&mut app, 600.0, 800.0);
     assert_eq!(node_text(&app, target).as_deref(), Some("item-5!"));
 
     // Reorder (reverse): identity and edit focus must follow the key.
     let mut reversed = items.clone();
     reversed.reverse();
     app.refresh(vec![build(&reversed, sigs.clone())]).unwrap();
-    frame(&mut app, &mut scene, 600.0, 800.0);
+    frame(&mut app, 600.0, 800.0);
     assert_eq!(
         app.tree().focused(),
         Some(target),
@@ -700,14 +678,13 @@ fn focused_far_row_pinned_alone_not_entire_gap() {
     let mut app = host();
     app.mount(|_| list_element(items, calls.clone(), true))
         .unwrap();
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 600.0, 600.0);
-    frame(&mut app, &mut scene, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
     let scroll = find_scroll(&app).expect("virtualized list lowers to a Scroll viewport");
 
     assert!(app.tree_mut().scroll_to(scroll, Point::new(0.0, 200_000.0)));
-    frame(&mut app, &mut scene, 600.0, 600.0);
-    frame(&mut app, &mut scene, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
     let mut visible: Vec<(f32, String)> = row_texts(&app, "row-")
         .into_iter()
         .filter_map(|t| {
@@ -724,8 +701,8 @@ fn focused_far_row_pinned_alone_not_entire_gap() {
     // Scroll far away: the focused row stays mounted in isolation while the
     // gap between window and pin is NOT mounted.
     assert!(app.tree_mut().scroll_to(scroll, Point::new(0.0, 600_000.0)));
-    frame(&mut app, &mut scene, 600.0, 600.0);
-    frame(&mut app, &mut scene, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
     assert!(
         app.tree().get(pinned).is_some(),
         "focused row {pinned_label} stays mounted (pinned)"
@@ -749,9 +726,8 @@ fn scroll_churn_stays_bounded() {
     let mut app = host();
     app.mount(|_| list_element(items, calls.clone(), true))
         .unwrap();
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 600.0, 600.0);
-    frame(&mut app, &mut scene, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
+    frame(&mut app, 600.0, 600.0);
     let scroll = find_scroll(&app).expect("virtualized list lowers to a Scroll viewport");
 
     let mut max_nodes = 0usize;
@@ -759,8 +735,8 @@ fn scroll_churn_stays_bounded() {
     for y in [50_000.0, 200_000.0, 1_000_000.0, 3_000_000.0, 0.0] {
         let before = calls.get();
         assert!(app.tree_mut().scroll_to(scroll, Point::new(0.0, y)));
-        frame(&mut app, &mut scene, 600.0, 600.0);
-        frame(&mut app, &mut scene, 600.0, 600.0);
+        frame(&mut app, 600.0, 600.0);
+        frame(&mut app, 600.0, 600.0);
         let delta = calls.get() - before;
         assert!(
             delta < 500,
@@ -849,9 +825,8 @@ fn table_shares_one_width_plan_and_styles_merge() {
     })
     .unwrap();
     // Viewport narrower than the 800px plan forces horizontal scroll.
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 700.0, 600.0);
-    frame(&mut app, &mut scene, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
 
     // Header and body share one width plan: same column x positions.
     // Visual x: layout rects ignore scroll by design; joint scroll must be
@@ -873,7 +848,8 @@ fn table_shares_one_width_plan_and_styles_merge() {
     // cell_styles are normal merges on the shared outer cell box: the painted
     // background must appear in the real scene (arbitrary inner elements stay
     // styleable — body text above proves it).
-    let painted = scene
+    let painted = app
+        .scene()
         .ordered()
         .filter_map(|(_, item)| match item {
             aqua_core::DisplayItem::Rect { fill, .. } if *fill == CELL => Some(()),
@@ -905,8 +881,8 @@ fn table_shares_one_width_plan_and_styles_merge() {
         })
         .expect("body scroll viewport");
     assert!(app.tree_mut().scroll_to(body, Point::new(80.0, 0.0)));
-    frame(&mut app, &mut scene, 700.0, 600.0);
-    frame(&mut app, &mut scene, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
     let name_hx2 = x_of(&app, "Name");
     let name_bx2 = x_of(&app, "name-0");
     let value_hx2 = x_of(&app, "Value");
@@ -939,13 +915,9 @@ fn expect_surfaced(mount_result: Result<(), aqua::UiAppError>, app: &mut UiApp, 
     if mount_result.is_err() {
         return;
     }
-    let mut scene = Scene::new();
-    // sync and frame return different error types; evaluate both so a sync
-    // failure cannot mask a missing frame failure (or vice versa).
     let sync_err = app.sync().is_err();
-    let frame_err = app
-        .build_scene_into(&mut scene, &observed(600.0, 600.0))
-        .is_err();
+    app.set_viewport(600.0, 600.0, 1.0);
+    let frame_err = app.build_frame().is_err();
     assert!(
         sync_err || frame_err || app.build_error().is_some(),
         "{what} must fail at mount/layout, never mount silently"
@@ -1106,9 +1078,8 @@ fn semantics_carry_roles_totals_and_logical_indices() {
         )
     })
     .unwrap();
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 600.0, 400.0);
-    frame(&mut app, &mut scene, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
 
     let sem = app.tree().emit_semantics();
     let list_rows: Vec<_> = sem.iter().filter(|n| n.role == Role::ListItem).collect();
@@ -1170,8 +1141,8 @@ fn semantics_carry_roles_totals_and_logical_indices() {
             .build()
     })
     .unwrap();
-    frame(&mut app, &mut scene, 700.0, 600.0);
-    frame(&mut app, &mut scene, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
     let sem = app.tree().emit_semantics();
     let body_rows: Vec<_> = sem.iter().filter(|n| n.role == Role::Row).collect();
     assert!(!body_rows.is_empty(), "mounted table rows carry Row roles");
@@ -1270,13 +1241,12 @@ fn collections_paint_real_pixels_offscreen() {
         .build();
     let mut app = UiApp::new(fonts, runs);
     app.mount(|_| el).unwrap();
-    let mut scene = Scene::new();
-    app.build_scene_into(&mut scene, &observed(640.0, 480.0))
-        .unwrap();
+    app.set_viewport(640.0, 480.0, 1.0);
+    app.build_frame().unwrap();
     assert_eq!(app.build_error(), None);
-    assert!(!scene.is_empty(), "list + table emit scene ops");
+    assert!(!app.scene().is_empty(), "list + table emit scene ops");
 
-    let plan = r.prepare(&mut scene);
+    let plan = r.prepare(app.scene_mut());
     assert!(!plan.is_clean(), "real collection content produces work");
     r.draw(&plan).expect("draw");
     let px = r.readback().expect("readback");
@@ -1338,9 +1308,8 @@ fn live_signal_subscriptions_survive_window_updates_and_dispose_on_eviction() {
             .build()
     })
     .unwrap();
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 600.0, 400.0);
-    frame(&mut app, &mut scene, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
     let stats0 = app.runtime().stats();
     assert!(
         stats0.effects > 0,
@@ -1356,8 +1325,8 @@ fn live_signal_subscriptions_survive_window_updates_and_dispose_on_eviction() {
     // cached Element initial snapshot.
     let scroll = find_scroll(&app).expect("virtualized list lowers to a Scroll viewport");
     assert!(app.tree_mut().scroll_to(scroll, Point::new(0.0, 32.0)));
-    frame(&mut app, &mut scene, 600.0, 400.0);
-    frame(&mut app, &mut scene, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
     // Small scroll retaining the first key: subscription must stay live, and
     // the structural window change must not reset the current label from a
     // cached Element initial snapshot.
@@ -1368,7 +1337,7 @@ fn live_signal_subscriptions_survive_window_updates_and_dispose_on_eviction() {
         "current label intact after scroll, before any write"
     );
     writers[0].set("sig-0-live".to_string());
-    frame(&mut app, &mut scene, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
     let live = text_node(&app, "sig-0-live").expect(
         "signal write updates mounted text: cached bindings must re-subscribe, not dispose",
     );
@@ -1377,31 +1346,31 @@ fn live_signal_subscriptions_survive_window_updates_and_dispose_on_eviction() {
     // Resize retaining the first key: still live, and the updated text must
     // remain on the same node before the next write (no reset to the cached
     // initial snapshot, no silent remount).
-    frame(&mut app, &mut scene, 600.0, 300.0);
-    frame(&mut app, &mut scene, 600.0, 300.0);
+    frame(&mut app, 600.0, 300.0);
+    frame(&mut app, 600.0, 300.0);
     assert_eq!(
         node_text(&app, resident).as_deref(),
         Some("sig-0-live"),
         "updated label persists on the resident node across resize, before next write"
     );
     writers[0].set("sig-0-live2".to_string());
-    frame(&mut app, &mut scene, 600.0, 300.0);
+    frame(&mut app, 600.0, 300.0);
     assert!(
         text_node(&app, "sig-0-live2").is_some(),
         "subscription survives resize"
     );
 
     // Same-viewport effect count: the per-window subscription budget.
-    frame(&mut app, &mut scene, 600.0, 400.0);
-    frame(&mut app, &mut scene, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
     let stats_same = app.runtime().stats();
 
     // Scroll far: first row evicted, its scope/effect disposed.
     assert!(app
         .tree_mut()
         .scroll_to(scroll, Point::new(0.0, 10_000_000.0)));
-    frame(&mut app, &mut scene, 600.0, 400.0);
-    frame(&mut app, &mut scene, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
     assert!(
         row_texts(&app, "sig-0").is_empty(),
         "first key evicted from the far window"
@@ -1429,7 +1398,7 @@ fn live_signal_subscriptions_survive_window_updates_and_dispose_on_eviction() {
         0,
         "no effect queued for the evicted row"
     );
-    frame(&mut app, &mut scene, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
     assert!(
         row_texts(&app, "sig-0").is_empty(),
         "evicted row stays unmounted after its signal fires"
@@ -1485,8 +1454,7 @@ fn nested_rows_inherit_typography_and_header_button_activates_on_press() {
             .build()
     })
     .unwrap();
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 600.0, 400.0);
+    frame(&mut app, 600.0, 400.0);
 
     // Tree level: every row carries the inherited size and color.
     for i in 0..8u64 {
@@ -1500,7 +1468,8 @@ fn nested_rows_inherit_typography_and_header_button_activates_on_press() {
         }
     }
     // Scene level: painted glyph color matches the inherited color.
-    let colors: Vec<Oklch> = scene
+    let colors: Vec<Oklch> = app
+        .scene()
         .ordered()
         .filter_map(|(_, item)| match item {
             aqua_core::DisplayItem::Text { color, .. } => Some(*color),
@@ -1554,7 +1523,7 @@ fn nested_rows_inherit_typography_and_header_button_activates_on_press() {
             .build()
     })
     .unwrap();
-    frame(&mut app, &mut scene, 700.0, 400.0);
+    frame(&mut app, 700.0, 400.0);
 
     // Press in screen space (hit-testing consumes visual coords). Guard the
     // press point itself: it must sit on the header, above the body and
@@ -1592,7 +1561,7 @@ fn nested_rows_inherit_typography_and_header_button_activates_on_press() {
     );
     assert!(app.handle_input(&press), "press hits the header button");
     assert!(app.handle_input(&release), "release dispatches activation");
-    frame(&mut app, &mut scene, 700.0, 400.0);
+    frame(&mut app, 700.0, 400.0);
     assert_eq!(
         read.try_get(),
         Some(1),
@@ -1651,8 +1620,7 @@ fn table_plan_correct_on_first_frame_then_stable_without_refactory() {
     // ONE frame at the actual 700px width: the plan must already be the
     // 700px plan (col2 x = 700 - 90 = 610), not the 800px seed (710).
     // Screen space: at scroll 0 visual == layout, helper keeps it honest.
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
     assert!(header_calls.get() >= 1, "header realized on frame one");
     assert!(cell_calls.get() > 0, "body rows realized on frame one");
     let value_hx = text_node(&app, "Value")
@@ -1676,8 +1644,8 @@ fn table_plan_correct_on_first_frame_then_stable_without_refactory() {
 
     // Stable clean frames reinvoke nothing.
     let (h0, c0) = (header_calls.get(), cell_calls.get());
-    frame(&mut app, &mut scene, 700.0, 600.0);
-    frame(&mut app, &mut scene, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
     assert_eq!(
         header_calls.get(),
         h0,
@@ -1728,9 +1696,8 @@ fn virtualized_table_body_stacks_and_header_stays_fixed_on_vscroll() {
             .build()
     })
     .unwrap();
-    let mut scene = Scene::new();
-    frame(&mut app, &mut scene, 700.0, 600.0);
-    frame(&mut app, &mut scene, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
 
     // Stacking in the initial window: first 6 body rows strictly increasing
     // y with line-height steps (not side-by-side, not stretched).
@@ -1777,8 +1744,8 @@ fn virtualized_table_body_stacks_and_header_stays_fixed_on_vscroll() {
         .expect("header rect")
         .y;
     assert!(app.tree_mut().scroll_to(body, Point::new(0.0, 300.0)));
-    frame(&mut app, &mut scene, 700.0, 600.0);
-    frame(&mut app, &mut scene, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
+    frame(&mut app, 700.0, 600.0);
 
     let header_y1 = visual_rect(&app, text_node(&app, "Name").expect("header"))
         .expect("header rect")

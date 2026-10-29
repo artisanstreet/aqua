@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant as WallInstant};
 
 use aqua_core::InputEvent as CoreInputEvent;
 use aqua_core::{Modifiers as CoreModifiers, PointerKind};
@@ -35,10 +35,12 @@ use aqua_platform::{
     a11y::{A11yActionRequest, A11yNode},
     prefs::{prefers_opaque_frame, query_preferences, OsPreferences},
     services::{app_clipboard, Clipboard, ClipboardBackend},
-    AquaWindowId, FrameReason, ObservedWindowState, Scheduler, WindowEvent,
+    AquaWindowId, FrameReason, ObservedWindowState, WindowEvent,
 };
+use aqua_protocol::Instant;
 use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
 use aqua_render::{Renderer, Scene, SurfaceFacade};
+use aqua_runtime::Scheduler;
 
 use crate::config::AquaConfig;
 
@@ -131,7 +133,6 @@ struct WindowRecord {
 struct GpuWindow {
     surface: SurfaceFacade,
     renderer: Renderer,
-    scene: Scene,
     ledger: GpuLedger,
 }
 
@@ -162,6 +163,7 @@ struct SharedGpu {
 /// Handle handed to [`Application`] callbacks: frame demand, reactive binding,
 /// clipboard, and ordered shutdown.
 pub struct AppCtx<'a> {
+    now: Instant,
     scheduler: &'a mut Scheduler,
     quit_requested: &'a mut bool,
     proxy: Option<winit::event_loop::EventLoopProxy<AquaUserEvent>>,
@@ -170,6 +172,10 @@ pub struct AppCtx<'a> {
 }
 
 impl AppCtx<'_> {
+    pub fn now(&self) -> Instant {
+        self.now
+    }
+
     pub fn request_frame(&mut self, id: AquaWindowId, reason: FrameReason) {
         self.scheduler.request_frame(id, reason);
     }
@@ -264,11 +270,13 @@ pub trait Application {
     /// scheduler so motion progresses without input. Return `None` when
     /// settled (idle windows schedule nothing). Deadlines must be in the
     /// future; a perpetually-past deadline would keep the loop awake.
-    fn build_scene(
-        &mut self,
-        scene: &mut Scene,
-        window: &ObservedWindowState,
-    ) -> Option<std::time::Instant>;
+    fn build_scene(&mut self, window: &ObservedWindowState, now: Instant) -> Option<Instant>;
+    fn scene_mut(&mut self, _id: AquaWindowId) -> Option<&mut Scene> {
+        None
+    }
+    fn reactive_runtime(&self) -> Option<&ReactiveRuntime> {
+        None
+    }
     fn on_render_error(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _message: &str) {}
 }
 
@@ -368,7 +376,8 @@ pub struct Aqua {
     /// Wall-clock smoke budget from `AQUA_SMOKE_MS` (validation only):
     /// sleep normally until the deadline, then quit with a production
     /// report. Validates idle behavior (e.g. fps 900 must not loop).
-    smoke_deadline: Option<Instant>,
+    smoke_deadline: Option<WallInstant>,
+    epoch: WallInstant,
     /// Event-loop iterations, reported by time-bounded smoke runs.
     wakeups: u64,
 }
@@ -423,7 +432,7 @@ impl Aqua {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|&ms| ms > 0)
-            .map(|ms| Instant::now() + Duration::from_millis(ms));
+            .map(|ms| WallInstant::now() + Duration::from_millis(ms));
         if let Some(deadline) = smoke_deadline {
             eprintln!("aqua: time-bounded smoke — exiting at {deadline:?}");
         }
@@ -445,6 +454,7 @@ impl Aqua {
             clipboard,
             clipboard_backend,
             smoke_deadline,
+            epoch: WallInstant::now(),
             wakeups: 0,
             smoke_frames,
             frames_presented: 0,
@@ -474,6 +484,23 @@ impl Aqua {
             .is_some_and(|r| r.chrome.is_some() && r.chrome_overlay)
     }
 
+    pub fn clock(&self) -> Instant {
+        Instant::from_nanos(u64::try_from(self.epoch.elapsed().as_nanos()).unwrap_or(u64::MAX))
+    }
+
+    fn wall(&self, at: Instant) -> WallInstant {
+        self.epoch + at.since_origin()
+    }
+
+    fn bind_app_reactive(&mut self, app: &impl Application, id: AquaWindowId) {
+        if self.flushers.contains_key(&id) {
+            return;
+        }
+        if let Some(rt) = app.reactive_runtime() {
+            self.with_ctx(|ctx| ctx.bind_reactive(id, rt));
+        }
+    }
+
     fn alloc_id(&mut self) -> AquaWindowId {
         let id = AquaWindowId::new(self.next_id).expect("window id overflow");
         self.next_id += 1;
@@ -481,9 +508,11 @@ impl Aqua {
     }
 
     fn with_ctx<R>(&mut self, f: impl FnOnce(&mut AppCtx) -> R) -> R {
+        let now = self.clock();
         let quit = &mut self.quit_requested;
         let proxy = self.proxy.clone();
         let mut ctx = AppCtx {
+            now,
             scheduler: &mut self.scheduler,
             quit_requested: &mut *quit,
             proxy,
@@ -529,6 +558,7 @@ impl Aqua {
             self.scheduler.request_frame(id, reason);
         }
         let ev = event.clone();
+        self.bind_app_reactive(app, id);
         self.with_ctx(|ctx| app.on_window_event(ctx, id, &ev));
         if matches!(
             event,
@@ -796,7 +826,6 @@ impl<A: Application> Loop<A> {
             rec.gpu = Some(GpuWindow {
                 surface: facade,
                 renderer,
-                scene: Scene::new(),
                 ledger: GpuLedger::default(),
             });
         }
@@ -904,13 +933,8 @@ impl<A: Application> Loop<A> {
                 };
                 self.app.externals(&mut frame);
             }
-            {
-                let rec = self.aqua.windows.get_mut(&id).expect("window present");
-                let gpu = rec.gpu.as_mut().expect("gpu checked");
-                let deadline = self.app.build_scene(&mut gpu.scene, &observed);
-                if let Some(t) = deadline {
-                    self.aqua.scheduler.request_animation_deadline(id, t);
-                }
+            if let Some(t) = self.app.build_scene(&observed, now) {
+                self.aqua.scheduler.request_animation_deadline(id, t);
             }
             // Custom-titlebar drag regions: push the hook's explicit rects
             // after the scene/layout commit, converted with the current
@@ -1006,10 +1030,11 @@ impl<A: Application> Loop<A> {
                 /// Surface/device failure with message + held slot count.
                 Failed { message: String, held: u32 },
             }
-            let outcome = match gpu
-                .surface
-                .acquire_and_draw(&mut gpu.renderer, &mut gpu.scene)
-            {
+            let drawn = match self.app.scene_mut(id) {
+                Some(scene) => gpu.surface.acquire_and_draw(&mut gpu.renderer, scene),
+                None => Ok(false),
+            };
+            let outcome = match drawn {
                 Ok(true) => {
                     gpu.ledger.submitted += 1;
                     gpu.ledger.presented += 1;
@@ -1101,7 +1126,7 @@ impl<A: Application> Loop<A> {
         if let Some(framework) = translate_window_event(&event, id, scale) {
             if matches!(framework, WindowEvent::RedrawRequested(_)) {
                 self.aqua.scheduler.request_frame(id, FrameReason::EXPLICIT);
-                self.draw_ready(Instant::now());
+                self.draw_ready(self.aqua.clock());
                 return;
             }
             if let Some(reason) = window_event_frame_reason(&framework) {
@@ -1132,6 +1157,7 @@ impl<A: Application> Loop<A> {
             }
             let fw = framework.clone();
             self.aqua.apply_observed(id, &fw);
+            self.aqua.bind_app_reactive(&self.app, id);
             self.aqua
                 .with_ctx(|ctx| self.app.on_window_event(ctx, id, &fw));
             // Drain AT action requests into UI behaviors after app handling.
@@ -1331,6 +1357,7 @@ impl<A: Application> Loop<A> {
                 }
                 self.aqua.scheduler.request_frame(id, FrameReason::RESIZE);
                 let fw = WindowEvent::ScaleChanged(id, scale_factor);
+                self.aqua.bind_app_reactive(&self.app, id);
                 self.aqua
                     .with_ctx(|ctx| self.app.on_window_event(ctx, id, &fw));
                 None
@@ -1534,13 +1561,14 @@ impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for L
     }
 
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        let now = Instant::now();
+        let wall_now = WallInstant::now();
+        let now = self.aqua.clock();
         self.aqua.wakeups += 1;
         // Time-bounded smoke: report actual production, then quit. Wakeup vs
         // produced counts show whether an idle app slept (target 900 must
         // not loop).
         if let Some(deadline) = self.aqua.smoke_deadline {
-            if now >= deadline {
+            if wall_now >= deadline {
                 let stats = self.aqua.scheduler.stats();
                 eprintln!(
                     "aqua: smoke report: wakeups={} requested={} produced={} presented_frames={} coalesced={} deferred_backpressure={} render_errors={}",
@@ -1561,7 +1589,10 @@ impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for L
         // with no pending scheduler work must still wake for the smoke exit
         // instead of sleeping past it.
         let wake = match (
-            self.aqua.scheduler.next_wakeup(now),
+            self.aqua
+                .scheduler
+                .next_wakeup(now)
+                .map(|t| self.aqua.wall(t)),
             self.aqua.smoke_deadline,
         ) {
             (Some(a), Some(b)) => Some(a.min(b)),
@@ -1637,6 +1668,7 @@ mod tests {
         scenes_built: u64,
         errors: Vec<String>,
         cancels: u64,
+        scene: Scene,
     }
 
     impl Probe {
@@ -1647,6 +1679,7 @@ mod tests {
                 scenes_built: 0,
                 errors: Vec::new(),
                 cancels: 0,
+                scene: Scene::new(),
             }
         }
     }
@@ -1660,26 +1693,20 @@ mod tests {
         }
 
         fn on_input(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &CoreInputEvent) {
-            // Capture loss must arrive as cancel — never as a release that
-            // could mis-activate the press target.
             if matches!(event, CoreInputEvent::PointerCancel { .. }) {
                 self.cancels += 1;
             }
             self.inputs.push(event.clone());
-            // Demand-driven: input that changes state requests animation work.
             if matches!(event, CoreInputEvent::PointerDown(..)) {
-                ctx.request_animation_deadline(id, Instant::now());
+                let now = ctx.now();
+                ctx.request_animation_deadline(id, now);
             }
         }
 
-        fn build_scene(
-            &mut self,
-            scene: &mut Scene,
-            _window: &ObservedWindowState,
-        ) -> Option<std::time::Instant> {
+        fn build_scene(&mut self, _window: &ObservedWindowState, _now: Instant) -> Option<Instant> {
             use aqua_core::{Oklch, Rect};
             self.scenes_built += 1;
-            scene.insert(aqua_render::scene::DisplayItem::Rect {
+            self.scene.insert(aqua_render::scene::DisplayItem::Rect {
                 bounds: Rect::from_edges(0.0, 0.0, 100.0, 100.0),
                 radius: 8.0,
                 fill: Oklch::from_hex("#1d4ed8").unwrap(),
@@ -1688,6 +1715,10 @@ mod tests {
                 shadow: None,
             });
             None
+        }
+
+        fn scene_mut(&mut self, _id: AquaWindowId) -> Option<&mut Scene> {
+            Some(&mut self.scene)
         }
 
         fn on_render_error(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, message: &str) {
@@ -1726,8 +1757,7 @@ mod tests {
         assert!(aqua.scheduler.has_pending());
         let rec = aqua.windows.get(&id).unwrap();
         assert_eq!(rec.observed.inner_size, LogicalSize::new(1024.0, 768.0));
-        // Ready → produced → presented releases the slot, no GPU needed.
-        let now = Instant::now();
+        let now = aqua.clock();
         let ready = aqua.scheduler.ready_windows(now);
         assert_eq!(ready.len(), 1);
         aqua.scheduler.mark_produced(&[id], now);
@@ -1821,9 +1851,9 @@ mod tests {
             fn on_input(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _event: &CoreInputEvent) {}
             fn build_scene(
                 &mut self,
-                _scene: &mut Scene,
                 _window: &ObservedWindowState,
-            ) -> Option<std::time::Instant> {
+                _now: Instant,
+            ) -> Option<Instant> {
                 None
             }
             fn on_files_dropped(
@@ -1848,20 +1878,14 @@ mod tests {
     #[test]
     fn prefs_and_a11y_defaults_are_honest() {
         let (aqua, _, _) = headless();
-        // Unknown prefs behave as off (never guessed on).
         assert!(!aqua_platform::prefs::should_reduce_motion(
             aqua.preferences()
         ));
-        // No snapshot published by default; no actions observed.
         struct Bare;
         impl Application for Bare {
             fn on_window_event(&mut self, _c: &mut AppCtx, _: AquaWindowId, _: &WindowEvent) {}
             fn on_input(&mut self, _c: &mut AppCtx, _: AquaWindowId, _: &CoreInputEvent) {}
-            fn build_scene(
-                &mut self,
-                _: &mut Scene,
-                _: &ObservedWindowState,
-            ) -> Option<std::time::Instant> {
+            fn build_scene(&mut self, _: &ObservedWindowState, _: Instant) -> Option<Instant> {
                 None
             }
         }
@@ -1947,7 +1971,7 @@ mod tests {
         impl Application for Quiet {
             fn on_window_event(&mut self, _c: &mut AppCtx, _: AquaWindowId, _: &WindowEvent) {}
             fn on_input(&mut self, _c: &mut AppCtx, _: AquaWindowId, _: &CoreInputEvent) {}
-            fn build_scene(&mut self, _: &mut Scene, _: &ObservedWindowState) -> Option<Instant> {
+            fn build_scene(&mut self, _: &ObservedWindowState, _: Instant) -> Option<Instant> {
                 None
             }
         }
@@ -1983,7 +2007,6 @@ mod tests {
             position: at,
             buttons: 0,
         };
-        // Pointer move, press, release, cancel, then a text-producing key.
         for event in [
             CoreInputEvent::PointerMove(CorePointer {
                 contact: 0,
@@ -2005,11 +2028,9 @@ mod tests {
         assert_eq!(app.inputs.len(), 5);
         assert_eq!(app.cancels, 1);
         assert!(aqua.scheduler.has_pending());
-        // Scene builds headless through the app (no GPU presentation).
         let observed = aqua.windows.get(&id).unwrap().observed.clone();
-        let mut scene = Scene::new();
-        assert_eq!(app.build_scene(&mut scene, &observed), None);
+        assert_eq!(app.build_scene(&observed, aqua.clock()), None);
         assert_eq!(app.scenes_built, 1);
-        assert_eq!(scene.len(), 1);
+        assert_eq!(app.scene_mut(id).map(|scene| scene.len()), Some(1));
     }
 }

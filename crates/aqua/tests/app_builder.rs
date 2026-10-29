@@ -200,9 +200,9 @@ fn app_builder_and_application_trait_coexist() {
         }
         fn build_scene(
             &mut self,
-            _scene: &mut aqua_render::Scene,
             _window: &aqua_platform::ObservedWindowState,
-        ) -> Option<std::time::Instant> {
+            _now: aqua::Instant,
+        ) -> Option<aqua::Instant> {
             None
         }
     }

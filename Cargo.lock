@@ -191,8 +191,10 @@ version = "0.1.0"
 dependencies = [
  "aqua-core",
  "aqua-platform",
+ "aqua-protocol",
  "aqua-reactive",
  "aqua-render",
+ "aqua-runtime",
  "aqua-text",
  "aqua-ui",
  "image",
@@ -213,12 +215,22 @@ dependencies = [
  "accesskit",
  "accesskit_winit",
  "aqua-core",
+ "aqua-protocol",
+ "aqua-runtime",
  "arboard",
  "bitflags 2.13.2",
  "raw-window-handle",
  "rfd",
  "windows",
  "winit",
+]
+
+[[package]]
+name = "aqua-protocol"
+version = "0.1.0"
+dependencies = [
+ "aqua-core",
+ "bitflags 2.13.2",
 ]
 
 [[package]]
@@ -238,6 +250,18 @@ dependencies = [
  "image",
  "pollster",
  "wgpu",
+]
+
+[[package]]
+name = "aqua-runtime"
+version = "0.1.0"
+dependencies = [
+ "aqua-core",
+ "aqua-protocol",
+ "aqua-reactive",
+ "aqua-scene",
+ "aqua-text",
+ "aqua-ui",
 ]
 
 [[package]]

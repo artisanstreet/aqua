@@ -24,10 +24,7 @@ use aqua::config::{Material, Theme, Titlebar};
 use aqua::prelude::*;
 use aqua::{auto, pct, px, Aqua, Context, IntoView, Style, UiApp};
 use aqua_core::Insets;
-use aqua_platform::geometry::{AquaWindowId, LogicalSize};
-use aqua_platform::ObservedWindowState;
 use aqua_reactive::{ReadSignal, Scope};
-use aqua_render::Scene;
 use aqua_ui::element::Element;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -319,18 +316,6 @@ fn todo_app(cx: &Context) -> impl IntoView {
     cx.view(deps, render)
 }
 
-fn observed(w: f64, h: f64) -> ObservedWindowState {
-    ObservedWindowState {
-        id: AquaWindowId::new(1).expect("window id"),
-        title: "todo".to_string(),
-        inner_size: LogicalSize::new(w, h),
-        scale_factor: 1.0,
-        focused: true,
-        visible: true,
-        occluded: false,
-    }
-}
-
 /// Headless deterministic pump: mount → type → Add → toggle → remove,
 /// every step through the real input path (hit-test → arm on press,
 /// `Activate` on release inside bounds — the correct control contract).
@@ -346,11 +331,9 @@ fn headless_demo() -> Result<(), String> {
         .map_err(|e| format!("mount failed: {e}"))?;
     app.set_viewport(760.0, 560.0, 1.0);
 
-    let mut scene = Scene::new();
-    let build = |app: &mut UiApp, scene: &mut Scene| {
+    let build = |app: &mut UiApp| {
         app.sync().map_err(|e| e.to_string())?;
-        app.build_scene_into(scene, &observed(760.0, 560.0))
-            .map(|_| ())
+        app.build_frame().map(|_| ()).map_err(|e| e.to_string())
     };
     /// Real press: primary down arms the activatable ancestor, primary up
     /// inside its bounds fires `Activate` exactly once.
@@ -410,10 +393,10 @@ fn headless_demo() -> Result<(), String> {
             .collect()
     }
 
-    build(&mut app, &mut scene)?;
+    build(&mut app)?;
     println!(
         "mounted: scene ops={} text_runs={} build_error={:?}",
-        scene.ordered().count(),
+        app.scene().ordered().count(),
         app.text_run_count(),
         app.build_error()
     );
@@ -429,24 +412,24 @@ fn headless_demo() -> Result<(), String> {
     assert!(app.handle_input(&InputEvent::TextInput {
         text: "Buy milk".to_string()
     }));
-    build(&mut app, &mut scene)?;
+    build(&mut app)?;
     println!("typed: text_runs={}", app.text_run_count());
 
     // Add through the real pointer path (down arms, up fires).
     let at = center_of(&app, labeled(&app, "Add"));
     press(&mut app, at);
-    build(&mut app, &mut scene)?;
+    build(&mut app)?;
     let rows = row_titles(&app);
     println!(
         "after add: rows={rows:?} scene_ops={}",
-        scene.ordered().count()
+        app.scene().ordered().count()
     );
     assert!(rows.iter().any(|t| t == "Buy milk"), "added row renders");
 
     // Toggle the row through its checkbox (down+up on the control).
     let at = center_of(&app, labeled(&app, "Buy milk"));
     press(&mut app, at);
-    build(&mut app, &mut scene)?;
+    build(&mut app)?;
     let header = row_titles(&app);
     println!("after toggle: rows={header:?}");
     assert!(
@@ -457,11 +440,11 @@ fn headless_demo() -> Result<(), String> {
     // Remove through the row's Remove button (down+up).
     let at = center_of(&app, labeled(&app, "Remove"));
     press(&mut app, at);
-    build(&mut app, &mut scene)?;
+    build(&mut app)?;
     let rows = row_titles(&app);
     println!(
         "after remove: rows={rows:?} scene_ops={} text_runs={} build_error={:?}",
-        scene.ordered().count(),
+        app.scene().ordered().count(),
         app.text_run_count(),
         app.build_error()
     );
@@ -500,8 +483,8 @@ fn preview(path: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let input = app.tree().traverse().into_iter().find(|id| matches!(&app.tree().get(*id).unwrap().kind, aqua_ui::tree::NodeKind::Text(t) if t.is_editable())).unwrap();
     app.tree_mut().set_focused(Some(input));
-    let mut scene = Scene::new();
-    app.build_scene_into(&mut scene, &observed(760.0, 560.0))?;
+    app.set_viewport(760.0, 560.0, 1.0);
+    app.build_frame().map_err(|e| e.to_string())?;
     let mut renderer =
         pollster::block_on(aqua_render::Renderer::headless(760, 560)).map_err(|e| e.to_string())?;
     renderer.set_text_provider(Box::new(aqua_render::GlyphonProvider::new(
@@ -510,7 +493,7 @@ fn preview(path: &str) -> Result<(), String> {
         renderer.format(),
         aqua_render::TextBackend::new(fonts, runs),
     )));
-    let plan = renderer.prepare(&mut scene);
+    let plan = renderer.prepare(app.scene_mut());
     renderer.draw(&plan).map_err(|e| e.to_string())?;
     let mut pixels = renderer.readback().map_err(|e| e.to_string())?;
     // The offscreen working target is linear. PNG viewers expect sRGB.

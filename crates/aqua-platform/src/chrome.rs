@@ -24,6 +24,7 @@ use crate::window::{Titlebar, WindowOptions};
 /// use this one path on every target.
 #[cfg(windows)]
 pub use crate::chrome_winit::WindowsChrome;
+pub use aqua_protocol::DragRegions;
 
 /// Chrome failures. All are honest runtime results, never panics.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,21 +82,6 @@ impl RectI {
     pub fn width(self) -> i32 {
         (self.right - self.left).max(0)
     }
-}
-
-/// Canonical portable drag regions in LOGICAL px for the runtime's
-/// `Application::chrome_regions` hook: the app publishes these after
-/// layout/scene with the current scale, and the guard converts them.
-/// Tuples are `(left, top, right, bottom)`, client-local. No reactive graph
-/// involvement — plain data, applied imperatively via
-/// [`WindowsChrome::set_drag_regions`] (stub and live guard share the
-/// `set_drag_rects` tuple signature underneath).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct DragRegions {
-    /// Extra `HTCAPTION` regions beyond the drag band.
-    pub draggable: Vec<(f64, f64, f64, f64)>,
-    /// `HTCLIENT` holes inside caption regions.
-    pub no_drag: Vec<(f64, f64, f64, f64)>,
 }
 
 /// Draggable / non-draggable rectangles in CLIENT-LOCAL physical pixels

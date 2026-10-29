@@ -1,0 +1,9 @@
+[package]
+name = "aqua-scene"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aqua retained scene store and damage tracking"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }

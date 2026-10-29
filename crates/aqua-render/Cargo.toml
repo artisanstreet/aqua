@@ -7,6 +7,7 @@ license = "BSD-3-Clause"
 
 [dependencies]
 aqua-core = { path = "../aqua-core" }
+aqua-scene = { path = "../aqua-scene" }
 aqua-text = { path = "../aqua-text" }
 wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }

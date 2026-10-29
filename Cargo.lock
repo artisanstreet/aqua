@@ -230,6 +230,7 @@ name = "aqua-render"
 version = "0.1.0"
 dependencies = [
  "aqua-core",
+ "aqua-scene",
  "aqua-text",
  "bytemuck",
  "cosmic-text",
@@ -237,6 +238,13 @@ dependencies = [
  "image",
  "pollster",
  "wgpu",
+]
+
+[[package]]
+name = "aqua-scene"
+version = "0.1.0"
+dependencies = [
+ "aqua-core",
 ]
 
 [[package]]

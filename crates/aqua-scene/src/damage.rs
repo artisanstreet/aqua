@@ -1,18 +1,3 @@
-//! Damage tracking: content invalidation vs final-frame damage.
-//!
-//! Following Chromium's compositor distinction: moving existing content
-//! causes *damage* (re-composition) without changing rasterized contents
-//! (*invalidation*). This module tracks both so the renderer can skip
-//! raster work while still re-compositing, and skip frames entirely when
-//! neither is present.
-//!
-//! Correctness policy: damage is CONSERVATIVE first. Anything not precisely
-//! known (structural clip/opacity changes, scale changes, unmeasured text)
-//! sets [`DamageSet::full`], which the renderer treats as whole-frame
-//! repaint. Precise rects are an optimization that must never under-cover.
-//! There is no silent "looks clean" path: empty damage with no `full` flag
-//! is only produced when nothing changed.
-
 use crate::scene::{DisplayItem, Rect};
 
 /// Above this many precise regions, damage collapses to whole-frame.

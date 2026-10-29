@@ -1,18 +1,3 @@
-//! Compact retained scene store: stable IDs, per-node revisions,
-//! painter-ordered items, real dirty queue.
-//!
-//! Vocabulary (`DisplayItem`, `TextRun`, `Rect`, `NodeId`, `Oklch`) is
-//! canonical in `aqua-core` and RE-EXPORTED here — there is exactly one
-//! scene vocabulary. This module owns only the retained incremental STORE
-//! (`Scene::insert/update/remove`, dirty queues), which core deliberately
-//! does not duplicate.
-//!
-//! Group-opacity semantics are TRUE group opacity: the renderer composites
-//! the group to an isolated intermediate surface and applies the multiplier
-//! once, so overlapping translucent children blend correctly. Flattening
-//! per-item alpha would be wrong and is explicitly not done.
-
-// Canonical vocabulary, re-exported (contract §1, §4).
 pub use aqua_core::geometry::Rect;
 pub use aqua_core::id::{NodeId, RawId};
 pub use aqua_core::scene::{DisplayItem, TextRun};

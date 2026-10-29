@@ -192,7 +192,8 @@ pub struct UiApp {
     /// disposed explicitly here — dropping the [`Runtime`](aqua_reactive::Runtime)
     /// alone intentionally does NOT run user cleanups.
     disposed: bool,
-    t0: Instant,
+    clock: Seconds,
+    epoch: Option<Instant>,
 }
 
 impl UiApp {
@@ -222,7 +223,8 @@ impl UiApp {
             structural: Rc::new(RefCell::new(None)),
             last_build_error: None,
             disposed: false,
-            t0: Instant::now(),
+            clock: 0.0,
+            epoch: None,
         }
     }
 
@@ -256,12 +258,27 @@ impl UiApp {
         }
     }
 
-    /// Elapsed seconds since creation: the motion clock. Caller-supplied
-    /// (an `Instant` read here, never inside motion), so tests can drive
-    /// the same path with explicit timestamps.
     #[must_use]
     pub fn now_secs(&self) -> Seconds {
-        self.t0.elapsed().as_secs_f64()
+        self.clock
+    }
+
+    pub fn advance_clock(&mut self, now: Seconds) {
+        if now.is_finite() && now > self.clock {
+            self.clock = now;
+        }
+    }
+
+    fn tick_wall_clock(&mut self) {
+        let epoch = *self.epoch.get_or_insert_with(Instant::now);
+        self.advance_clock(epoch.elapsed().as_secs_f64());
+    }
+
+    fn wall_deadline(&self, deadline: Seconds) -> Option<Instant> {
+        let epoch = self.epoch?;
+        Duration::try_from_secs_f64(deadline.max(0.0))
+            .ok()
+            .map(|offset| epoch + offset)
     }
 
     /// Root reactive scope: create app signals from it, then pass them
@@ -514,18 +531,11 @@ impl UiApp {
         ))
     }
 
-    /// Build (or rebuild) window content into the retained [`Scene`]:
-    /// flush → lifecycle sync → layout → re-anchor → text runs → emit →
-    /// caret/selection/IME → reconcile → motion advance. Returns the next
-    /// animation deadline (`None` when idle), or the layout failure.
-    /// Failures are returned (not just logged) so headless pumps and the
-    /// facade can react; the [`Application`] impl records them for
-    /// [`build_error`](UiApp::build_error).
     pub fn build_scene_into(
         &mut self,
         scene: &mut Scene,
         window: &ObservedWindowState,
-    ) -> Result<Option<Instant>, String> {
+    ) -> Result<Option<Seconds>, String> {
         self.set_viewport(
             window.inner_size.width as f32,
             window.inner_size.height as f32,
@@ -534,18 +544,11 @@ impl UiApp {
         self.build_frame(scene).map_err(|e| {
             let msg = e.to_string();
             self.last_build_error = Some(msg.clone());
-            eprintln!("aqua: build failed: {msg}");
             msg
         })
     }
 
-    /// One headless frame against the already-set viewport: flush →
-    /// structural drain → lifecycle sync → layout → re-anchor → text runs
-    /// → emit → caret/selection/IME → reconcile → motion advance. Returns
-    /// the next animation deadline (`None` when idle), or the first
-    /// failure. The [`Application`] impl funnels here after applying the observed
-    /// window size.
-    pub fn build_frame(&mut self, scene: &mut Scene) -> Result<Option<Instant>, UiAppError> {
+    pub fn build_frame(&mut self, scene: &mut Scene) -> Result<Option<Seconds>, UiAppError> {
         self.runtime.flush();
         self.drain_structural()?;
         self.host.sync_lifecycle(&mut self.tree);
@@ -556,14 +559,9 @@ impl UiApp {
         let mut keyed = self.emit_keyed();
         keyed.extend(self.caret_selection_items());
         self.reconcile(scene, keyed);
-        let now_secs = self.now_secs();
-        self.host.advance_motion(now_secs);
-        // Relative deadline: `motion_deadline_duration` is already
-        // now-relative, so no elapsed-doubling (`Instant::now + d`).
-        Ok(self
-            .host
-            .motion_deadline_duration(Duration::from_secs_f64(now_secs))
-            .map(|d| Instant::now() + d))
+        let now = self.clock;
+        self.host.advance_motion(now);
+        Ok(self.host.motion_deadline(now))
     }
 
     /// Last build failure recorded by the [`Application`] impl (`None` when the
@@ -1224,12 +1222,11 @@ impl Application for UiApp {
     }
 
     fn on_input(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &CoreInputEvent) {
+        self.tick_wall_clock();
         if self.handle_input(event) {
             ctx.request_frame(id, FrameReason::INPUT);
         }
-        // Motion started by the input above needs a wake even when the
-        // tree is otherwise quiet.
-        if self.host.motion_deadline(self.now_secs()).is_some() {
+        if self.host.motion_deadline(self.clock).is_some() {
             ctx.request_frame(id, FrameReason::ANIMATION);
         }
         // Pointer caret placement follows focus changes from the press
@@ -1361,12 +1358,14 @@ impl Application for UiApp {
     }
 
     fn build_scene(&mut self, scene: &mut Scene, window: &ObservedWindowState) -> Option<Instant> {
+        self.tick_wall_clock();
         match self.build_scene_into(scene, window) {
             Ok(deadline) => {
                 self.last_build_error = None;
-                deadline
+                deadline.and_then(|at| self.wall_deadline(at))
             }
             Err(e) => {
+                eprintln!("aqua: build failed: {e}");
                 self.last_build_error = Some(e);
                 None
             }

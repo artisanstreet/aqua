@@ -3,7 +3,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 use aqua::prelude::*;
 use aqua::Application;
-use aqua::{ui, UiApp};
+use aqua::UiApp;
 use aqua_reactive::ReadSignal;
 
 struct KeyboardProbe {
@@ -74,11 +74,17 @@ fn main() -> Result<(), String> {
     let mut app = UiApp::new(aqua.fonts().clone(), aqua.runs().clone());
     let (read, write) = app.scope().signal("AB".to_owned());
     app.mount(|_| {
-        ui! {
-            Box(padding: 16, width: 360) {
-                Text(bind: (read.clone(), write), width: 320, height: 48)
-            }
-        }
+        aqua::ui::Box::new()
+            .padding(16)
+            .width(aqua::px(360.0))
+            .child(
+                aqua::ui::Text::builder()
+                    .bind((read.clone(), write))
+                    .width(aqua::px(320.0))
+                    .height(aqua::px(48.0))
+                    .build(),
+            )
+            .build()
     })
     .map_err(|e| e.to_string())?;
     let field = app.tree().traverse().into_iter().find(|id| matches!(&app.tree().get(*id).unwrap().kind, aqua_ui::NodeKind::Text(t) if t.is_editable())).unwrap();

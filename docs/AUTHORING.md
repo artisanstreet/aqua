@@ -45,10 +45,7 @@ let ui = Aqua::Box()
 | `Aqua::Style()` | empty partial style |
 
 Capitalized names are intentional (`#[allow(non_snake_case)]` on the
-impl). Every factory returns the same builder the `ui!` macro expands to,
-so macro output and direct use agree. Legacy construction and `ui!` stay
-compatible but are documented only in the appendix
-([`UI_MACRO.md`](UI_MACRO.md)).
+impl).
 
 ## Children: arrays, `Vec`s, lazy iterators
 

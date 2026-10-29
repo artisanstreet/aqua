@@ -99,8 +99,7 @@ fn main() -> Result<(), aqua::Error> {
 UI is authored with the `Aqua::*()` factories (`Aqua::Box()`,
 `Aqua::Text(..)`, `Aqua::Button()`, … — see [`AUTHORING.md`](AUTHORING.md));
 `Aqua::App()` / `Aqua::Config()` / `Aqua::Window()` / `Aqua::Style()` build
-the entry point. The low-level `ui!` macro stays compatible but is
-documented only in the appendix ([`UI_MACRO.md`](UI_MACRO.md)).
+the entry point.
 
 Overlay titlebar (`Titlebar::Overlay`, default height 40 logical px):
 full client area with native caption buttons top-right; the Todo view

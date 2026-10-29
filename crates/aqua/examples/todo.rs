@@ -13,8 +13,7 @@
 //!
 //! Styling is fully canonical (`aqua::Style` arrays via `.styles([...])`):
 //! no `LayoutStyle` literals, no separate paint props. Later entries win
-//! per field; see `docs/STYLING.md`. The low-level `ui!` macro stays
-//! compatible but is documented only in the appendix (`docs/UI_MACRO.md`).
+//! per field; see `docs/STYLING.md`.
 //!
 //! Run windowed (standard): `cargo run -p aqua --example todo`
 //! Run headless (CI, deterministic pump): `cargo run -p aqua --example todo -- --headless`

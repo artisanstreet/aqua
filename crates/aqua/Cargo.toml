@@ -13,7 +13,6 @@ aqua-reactive = { path = "../aqua-reactive" }
 aqua-render = { path = "../aqua-render" }
 aqua-text = { path = "../aqua-text" }
 aqua-ui = { path = "../aqua-ui" }
-aqua-macros = { path = "../aqua-macros" }
 winit = { workspace = true }
 wgpu = { workspace = true }
 pollster = "0.4"

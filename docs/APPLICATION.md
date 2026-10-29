@@ -37,8 +37,7 @@ UI content is authored with the same `Aqua::*()` factories
 (`Aqua::Box()`, `Aqua::Text(..)`, `Aqua::Button()`, … — see
 [`AUTHORING.md`](AUTHORING.md)). The bare `App` / `Config` / `Window`
 builders remain available for direct use; the factories are the canonical
-spelling. The low-level `ui!` macro stays compatible but is documented only
-in the appendix ([`UI_MACRO.md`](UI_MACRO.md)).
+spelling.
 
 Overlay titlebar (`Titlebar::Overlay`, default 40 logical px): full
 client area with native caption buttons top-right; the Todo view keeps

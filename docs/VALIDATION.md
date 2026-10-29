@@ -127,7 +127,6 @@ Actual package pass counts from the final logs:
 | `aqua-reactive` | 39 |
 | `aqua-platform` | 50 |
 | `aqua-text` | 56 |
-| `aqua-macros` | 18 |
 | `aqua-ui` | 167 |
 | `aqua-render` | 74 |
 | `aqua` | 101 |
@@ -187,7 +186,7 @@ Known limits (not pass/fail):
 | Windows target | `x86_64-pc-windows-gnu` **installed** — cross-check available |
 | `DISPLAY` / `WAYLAND_DISPLAY` | unset in agent shell; sockets exist: `/tmp/.X11-unix/X0`, `/run/user/1001/wayland-0` (+ `.lock`) → WSLg smoke possible with `DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1001` |
 | Vulkan ICDs | `lvp_icd.json` present (SoftwareVulkan lavapipe) + intel/nouveau/radeon/virtio/gfxstream; `vulkaninfo` not installed |
-| Workspace members | 8 crates (`aqua`, `aqua-core`, `aqua-reactive`, `aqua-ui`, `aqua-text`, `aqua-render`, `aqua-platform`, `aqua-macros`) |
+| Workspace members | 7 crates (`aqua`, `aqua-core`, `aqua-reactive`, `aqua-ui`, `aqua-text`, `aqua-render`, `aqua-platform`); `aqua-macros` removed 2026-10-29 |
 | Disk / RAM | 455 GB free disk, 15 GB RAM; shared `target/` 3.9 GB — sufficient; do not duplicate the workspace for isolated copies |
 | Agreed versions | `wgpu 30` / `glyphon 0.12` / `cosmic-text 0.19` / `winit 0.30` (stable, NOT 0.31 beta) / `taffy 0.15` — see `docs/IMPLEMENTATION_CONTRACT.md` |
 

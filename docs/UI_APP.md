@@ -11,7 +11,7 @@ end-to-end, native Win11 todo EXE smoke EXIT 0 — see Verification).
 `UiApp` is the single-window high-level host: one `UiTree`, one
 `ReactiveRuntime` + root `Scope`, one `View` mount, shared fonts/run
 registry, the `OverlayHost` (which owns motion), and the retained
-`Scene` reconciliation — implementing `App`, so a `ui!` factory becomes
+`Scene` reconciliation — implementing `App`, so an element factory becomes
 a runnable program via `Aqua::run_ui` / `Aqua::run_ui_reactive`.
 One window per `UiApp`; the runtime stays the multi-window low-level
 owner. No competing text, overlay, or graph logic.
@@ -65,9 +65,7 @@ Windowed by default (`cargo run -p aqua --example todo`);
 `--headless` runs the deterministic pump: mount → type into the bound
 field → Add (real down+up press) → toggle via checkbox → Remove via
 button → asserts each step (rows, header counts, scene ops, text runs,
-`build_error() == None`). Uses `ui::{column, row}` constants explicitly
-(prelude deliberately does NOT glob them — avoids `Some(row)` binding
-collisions).
+`build_error() == None`).
 
 ## Verification (final gates)
 

@@ -9,7 +9,6 @@ associated factories are the canonical entry point: `Aqua::Box()`,
 `Tabs()`, `Fragment()`, `Dynamic(source)`, `List<T>()`, `Table<T>()`,
 `Column<T>(id)`, `App()`, `Config()`, `Window()`, and `Style()`.
 No second Aqua struct, namespace alias, or reactive runtime is introduced.
-Legacy construction and `ui!` stay compatible but are not the primary docs.
 Container `.children(impl IntoIterator<Item = impl Into<Element>>)` appends
 in call order and works with arrays, Vecs, and lazy iterators. Existing
 single-child calls remain valid. Runtime construction does not imply an

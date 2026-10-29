@@ -22,7 +22,7 @@ echo "== fmt =="
 if cargo fmt --check >/tmp/opencode-fmt.log 2>&1; then report "cargo fmt --check" PASS; else report "cargo fmt --check" FAIL "(see /tmp/opencode-fmt.log)"; fi
 
 echo "== targeted tests (shared target lock; compile errors are FAIL, never SKIP) =="
-for p in aqua-core aqua-reactive aqua-platform aqua-text aqua-macros aqua-ui; do
+for p in aqua-core aqua-reactive aqua-platform aqua-text aqua-ui; do
   if CARGO_BUILD_JOBS="$JOBS" cargo test -p "$p" -- --nocapture >/tmp/opencode-test-$p.log 2>&1; then
     report "cargo test -p $p" PASS
   else

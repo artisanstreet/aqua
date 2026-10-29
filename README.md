@@ -58,7 +58,7 @@ Contracts: [`docs/APPLICATION.md`](docs/APPLICATION.md),
 [`docs/IMPLEMENTATION_CONTRACT.md`](docs/IMPLEMENTATION_CONTRACT.md),
 [`docs/PLATFORM.md`](docs/PLATFORM.md), [`docs/SCHEDULER.md`](docs/SCHEDULER.md),
 [`docs/REACTIVITY.md`](docs/REACTIVITY.md), [`docs/TEXT.md`](docs/TEXT.md),
-[`docs/UI_MACRO.md`](docs/UI_MACRO.md), [`docs/STYLING.md`](docs/STYLING.md),
+[`docs/STYLING.md`](docs/STYLING.md),
 [`docs/STYLE_CONTRACT.md`](docs/STYLE_CONTRACT.md),
 [`docs/COLLECTIONS.md`](docs/COLLECTIONS.md),
 [`docs/GPU_EXTENSIONS.md`](docs/GPU_EXTENSIONS.md),
@@ -69,17 +69,15 @@ Contracts: [`docs/APPLICATION.md`](docs/APPLICATION.md),
 
 | Crate | Owns |
 |---|---|
-| `aqua` (facade) | Event loop, `AquaConfig`, canonical `App` builder + `Context`/`IntoView`, `Aqua::*()` authoring factories, `Application` low-level endpoint, GPU completion worker, shared fonts/runs handles, `ui!` re-export, showcase |
+| `aqua` (facade) | Event loop, `AquaConfig`, canonical `App` builder + `Context`/`IntoView`, `Aqua::*()` authoring factories, `Application` low-level endpoint, GPU completion worker, shared fonts/runs handles, showcase |
 | `aqua-core` | IDs, geometry, color, scene vocabulary, input events, semantics |
 | `aqua-reactive` | Explicit-dependency graph, scopes, batching, flush boundary |
 | `aqua-text` | Shaping, editing model, shared fonts + run registry |
 | `aqua-render` | wgpu 2D renderer, scene store, surface, media + viewport passes |
 | `aqua-platform` | winit host, scheduler, materials, clipboard/dialogs/prefs, AccessKit bridge |
 | `aqua-ui` | Tree, layout, overlays, motion, element and collection builders, virtualized row realization |
-| `aqua-macros` | `ui!` parser + codegen |
 
-`aqua::ui` ≡ `aqua_ui::element::ui` (`column`/`row` constants included);
-`ui!` expands to builder calls against it.
+`aqua::ui` ≡ `aqua_ui::element::ui`.
 `UiApp` (`crates/aqua/src/ui_app.rs`, overlay-agent owned) is the
 high-level host over `View`/`UiTree`. New code uses the canonical root
 builder (`docs/APPLICATION.md`) and the `Aqua::*()` factories
@@ -88,7 +86,7 @@ Aqua::Window().title(..).size(..).min_size(..).theme(..).material(..))).run(todo
 with `fn todo_app(cx: &Context) -> impl IntoView` returning
 `cx.view(explicit deps, render)`; `Aqua::run_ui` / `run_ui_reactive` and the
 `Application` trait remain as the low-level escape. The `todo` example
-(`crates/aqua/examples/todo.rs`, builder-first, no `ui!`) opens a window by default
+(`crates/aqua/examples/todo.rs`) opens a window by default
 (`cargo run -p aqua --example todo`); `-- --headless` runs its deterministic
 input and state validation without a display. The `collections` example
 (`crates/aqua/examples/collections.rs`) demos a 100k-row virtualized `List`
@@ -123,10 +121,6 @@ No performance-superiority claim is made; no comparative measurements exist.
 
 - One shared workspace; targeted commands (`-p <owned-crate>`), one `target/` lock.
 - No duplicate engines: consume peer contracts, fix integration, relay gaps to the parent.
-- `ui!` layout values: `layout: column` / `layout: row` resolve via
-  `aqua::ui::{column, row}` (qualified import) or `"column"`/`"row"`
-  strings / `Axis`. The bare names are NOT in the prelude: glob-imported
-  lowercase consts would hijack user bindings (`Some(row)` → E0308).
 - Styling is canonical `aqua::Style` arrays (`styles: [BASE, override]`,
   later wins per field); see [`docs/STYLING.md`](docs/STYLING.md). Shared
   pieces can be `const` (`Oklch::new` is const); fixed arrays have a known

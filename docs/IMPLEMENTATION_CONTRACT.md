@@ -167,19 +167,6 @@ builders, reactive bindings, overlay host, and facade host:
 - No `RefCell` tree reentry: callbacks receive data only; effects run at the
   update boundary; `drain_commands` applies outside dispatch.
 
-## 7. Macro contract (`ui!` — macro owner, 14 tests)
-
-- Codegen targets `#crate_path::ui::{Box,Text,…}::builder()` with `.arg()`,
-  `.{prop}()`, `.child()`, `.build()`; `Fragment::builder/from_nodes`;
-  `Element.with_key`. Default crate path `::aqua` (facade re-exports
-  `aqua_ui` builders as `::aqua::ui`).
-- Builtins provided by UI today: `Box Text Media Scroll Canvas Viewport3D
-  Fragment`. `Button Checkbox Slider Dropdown Tabs Dynamic` have NO builder
-  yet — using them fails at the builder (honest, until owners land them).
-- Macro crate has no runtime dependency (no cycle). `element.rs`/`binding.rs`
-  exist in `aqua-ui/src` (macro-owned); their `pub mod` lines are added by
-  the macro agent and preserved by all other editors of `lib.rs`.
-
 ## 8. Input contract (binding, tested incl. press sequences)
 
 - Platform routes winit events → core types: `TextInput { text }` exactly

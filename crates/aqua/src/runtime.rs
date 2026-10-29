@@ -211,21 +211,6 @@ impl AppCtx<'_> {
     }
 }
 
-/// Low-level application endpoint (one callback object per event loop).
-/// The runtime delivers canonical [`aqua_core::event`] vocabulary: window
-/// events from the platform translation, input already converted to
-/// [`CoreInputEvent`] (including real capture-loss cancel, committed key
-/// text exactly once, and IME suppression — see `route_input`). Scene
-/// content is committed into the render-owned [`Scene`] (retained by the
-/// runtime per window — `update` with identical items is a free no-op, so
-/// rebuilding descriptors per frame is safe).
-///
-/// Most apps should use the root [`crate::App`] builder instead: it mounts a
-/// `ui!` [`Element`](aqua_ui::element::Element) (or an explicit
-/// [`crate::ReactiveView`]) through [`crate::UiApp`] and drives this trait
-/// for you. Implement `Application` directly only for custom low-level
-/// endpoints. Existing [`Aqua::run`] / [`Aqua::run_ui`] /
-/// [`Aqua::run_ui_reactive`] entry points are unchanged.
 pub trait Application {
     fn on_window_event(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &WindowEvent);
     fn on_input(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &CoreInputEvent);

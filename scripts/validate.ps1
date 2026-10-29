@@ -36,7 +36,7 @@ function Run-Test($crate, $extraArgs = @()) {
 Write-Output "== fmt =="
 & cargo fmt --check > (Join-Path $env:TEMP "aqua-fmt.log") 2>&1
 if ($LASTEXITCODE -eq 0) { Report "cargo fmt --check" "PASS" } else { Report "cargo fmt --check" "FAIL" }
-foreach ($p in @("aqua-core","aqua-reactive","aqua-platform","aqua-text","aqua-macros","aqua-ui")) { Run-Test $p }
+foreach ($p in @("aqua-core","aqua-reactive","aqua-platform","aqua-text","aqua-ui")) { Run-Test $p }
 Run-Test "aqua-render" @("--test-threads=1")
 Run-Test "aqua" @("--test-threads=1")
 Write-Output "== clippy (all targets) =="

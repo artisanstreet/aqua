@@ -190,7 +190,6 @@ name = "aqua"
 version = "0.1.0"
 dependencies = [
  "aqua-core",
- "aqua-macros",
  "aqua-platform",
  "aqua-reactive",
  "aqua-render",
@@ -206,19 +205,6 @@ dependencies = [
 [[package]]
 name = "aqua-core"
 version = "0.1.0"
-
-[[package]]
-name = "aqua-macros"
-version = "0.1.0"
-dependencies = [
- "aqua",
- "aqua-core",
- "aqua-reactive",
- "aqua-ui",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "aqua-platform"

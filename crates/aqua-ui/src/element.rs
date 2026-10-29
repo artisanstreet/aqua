@@ -1,16 +1,3 @@
-//! Element descriptors and component builders (macro-agent owned).
-//!
-//! `Element` is the macro-friendly authoring type: `ui!` expands to builder
-//! calls against [`ui`] (re-exported so the `aqua` facade can alias it as
-//! `aqua::ui`). Conversion into core-owned [`NodeSpec`] plus binding
-//! registration happens here; the tree never imports this module.
-//!
-//! Reactivity stance: builders take plain values and explicit
-//! [`aqua_reactive`] handles. Passing a [`ReadSignal`] declares the input;
-//! the corresponding effect is created at mount ([`binding::View`]) and
-//! pushes [`UiCommand::SetText`] through the shared [`CommandSink`]. The
-//! macro performs zero reads and creates zero subscriptions.
-
 use std::hash::Hash;
 
 use aqua_core::{
@@ -458,14 +445,6 @@ macro_rules! layout_sugar {
             self
         }
 
-        /// Apply a single style, in call order with every other setter.
-        ///
-        /// A [`Style`](crate::style::Style) merges only its explicitly-set
-        /// fields (later calls win per field; unset fields never clobber,
-        /// `clear_*` actively clears). A [`LayoutStyle`] replaces the whole
-        /// resolved layout (legacy theme-adapter behavior): set granular
-        /// props after this call. `ui!` `style:` / `styles:` map here, so
-        /// `Box(styles: [theme, override_])` naturally works.
         pub fn style(mut self, style: impl StyleArg) -> Self {
             style.apply(&mut self);
             self
@@ -1704,9 +1683,6 @@ impl Dynamic {
     }
 }
 
-/// Fragment builder: structural grouping with NO visual node. Fragments
-/// flatten into the parent's child list at conversion — never an artificial
-/// layout box. `ui!` roots and `for` bodies build fragments.
 pub struct Fragment {
     children: Vec<Element>,
 }
@@ -1840,8 +1816,6 @@ default_via_builder!(Button);
 default_via_builder!(Tabs);
 default_via_builder!(Fragment);
 
-/// The authoring element: `ui!` output, converted to [`NodeSpec`] plus
-/// mount-time bindings by [`crate::binding::View`].
 pub struct Element {
     kind: ElementKind,
     key: Option<Key>,
@@ -2820,9 +2794,6 @@ fn text_content(t: &Text, eff: &Typography) -> TextContent {
     tc
 }
 
-/// The macro-facing module: `ui!` generates `C::ui::N::builder()` paths.
-/// The `aqua` facade aliases this module as `aqua::ui`
-/// (`pub use aqua_ui::element::ui;`), so macro output and direct use agree.
 pub mod ui {
     pub use super::Box;
     pub use super::Button;
@@ -2840,18 +2811,7 @@ pub mod ui {
     pub use super::Text;
     pub use super::Viewport3D;
     pub use crate::style::Axis;
-    /// Canonical styling API, usable from `ui!` property expressions and
-    /// direct builder code alike (`ui::Style`, `ui::px`, ...).
     pub use crate::style::{auto, pct, px, Length, Style, Typography};
-
-    /// Canonical DSL axis: `Box(layout: column)`. Lowercase on purpose —
-    /// this is authoring vocabulary, not a type or constant convention.
-    #[allow(non_upper_case_globals)]
-    pub const column: Axis = Axis::Column;
-
-    /// Canonical DSL axis: `Box(layout: row)`.
-    #[allow(non_upper_case_globals)]
-    pub const row: Axis = Axis::Row;
 }
 
 #[cfg(test)]

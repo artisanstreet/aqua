@@ -22,7 +22,7 @@ The user authorized building Aqua from `GUI_FRAMEWORK_DESIGN.md`, using Artisan 
 
 ## Completion evidence
 
-- A Rust consumer can build and run an interactive Aqua demo using the facade and `ui!`.
+- A Rust consumer can build and run an interactive Aqua demo using the facade and the element builders.
 - Common logic is shared; Windows functionality is adapter code, not a forked framework.
 - Examples exercise editing, activation, scrolling, keyed updates, overlays, animation, media and GPU extension where implemented.
 - Idle scheduling and partial-update contracts have tests and observable diagnostics; no claim of beating Chromium without matched measurements.

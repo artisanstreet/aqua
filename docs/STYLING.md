@@ -135,9 +135,7 @@ sets text styles explicitly per node.
 Prefer `Style` for authoring. `LayoutStyle`, `Paint`, `Border`,
 `Shadow`, and `Length` remain exported (facade root) for theme adapters
 and tree-level code; `Style::apply_to(&self, &mut layout, &mut paint)`
-is the preferred tree-integration entry point. The bare `column`/`row`
-axis constants stay out of the prelude (import `aqua::ui::column`
-qualified) so lowercase consts never hijack user bindings.
+is the preferred tree-integration entry point.
 
 ## Table tracks: `fr` is not a `Length`
 

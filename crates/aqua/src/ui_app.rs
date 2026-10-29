@@ -1,22 +1,3 @@
-//! High-level single-window UI host: the first product path for `ui!` apps.
-//!
-//! [`UiApp`] owns one [`UiTree`], its reactive [`Runtime`](aqua_reactive::Runtime)
-//! and root [`Scope`], the [`View`] mount, shared fonts + run registry,
-//! the [`OverlayHost`], and the retained [`Scene`] reconciliation — and
-//! implements [`Application`](crate::runtime::Application), so a `ui!`
-//! factory becomes a runnable program via [`Aqua::run_ui`]. One window per `UiApp` (the runtime stays the
-//! multi-window low-level owner); no competing text, overlay, or graph
-//! logic lives here — everything delegates to the peer owners' contracts.
-//!
-//! Frame flow inside [`Application::build_scene`](crate::runtime::Application::build_scene):
-//! flush effects → [`OverlayHost::sync_lifecycle`] → `compute_layout` →
-//! re-anchor popups → sync text runs (mint/update [`RunRegistry`], GC
-//! removed runs) → [`UiTree::emit_scene`] with interim runs replaced by
-//! real ([`RunId`], revision) pairs → caret / selection / IME underline
-//! items from real [`TextLayout`] geometry → reconcile into the retained
-//! [`Scene`] by stable `(NodeId, op index)` keys → advance motion and
-//! return the next animation deadline.
-
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -190,10 +171,6 @@ pub struct UiApp {
     scene_order: Vec<SceneKey>,
     text_runs: HashMap<NodeId, TextEntry>,
     bound_windows: HashSet<AquaWindowId>,
-    /// Media/viewport provider for the GPU extension boundary (set via
-    /// [`set_externals`](UiApp::set_externals), called from
-    /// [`Application::externals`](Application::externals)). Lets `ui!` `Media` nodes show
-    /// actual registered assets through the one host — no second host.
     externals: Option<ExternalsProvider>,
     /// Fixed custom-titlebar drag regions served by the
     /// [`Application::chrome_regions`] hook (set via
@@ -1157,11 +1134,6 @@ impl Drop for UiApp {
 }
 
 impl UiApp {
-    /// Register the media/viewport provider for the GPU extension
-    /// boundary. Called from the [`Application::externals`] override before every
-    /// `build_scene`, so `ui!` `Media` nodes show actual registered assets
-    /// through the one host — no second host, no forked renderer path.
-    /// `None` clears it.
     pub fn set_externals(&mut self, provider: Option<ExternalsProvider>) {
         self.externals = provider;
     }
@@ -1407,9 +1379,6 @@ impl Application for UiApp {
 // ---------------------------------------------------------------------------
 
 impl Aqua {
-    /// Run a `ui!` application on one window: mount the factory's element,
-    /// then enter the GUI event loop with the [`UiApp`] endpoint. Uses the
-    /// shared [`Aqua::fonts`] / [`Aqua::runs`] so shaping and pixels agree.
     pub fn run_ui(self, factory: impl FnOnce(&Scope) -> Element) -> Result<(), String> {
         let mut app = UiApp::new(self.fonts().clone(), self.runs().clone());
         app.apply_startup_motion_policy(self.motion_reduced());
@@ -1418,11 +1387,6 @@ impl Aqua {
         self.run(app)
     }
 
-    /// Run a reactive `ui!` application on one window: `setup` builds
-    /// scope-owned signals and returns the explicit dependency tuple plus
-    /// the structural render closure; the host rebuilds (keyed) on every
-    /// dep change while bindings handle targeted updates. Same shared
-    /// fonts/runs contract as [`run_ui`](Aqua::run_ui).
     pub fn run_ui_reactive<D, F>(self, setup: impl FnOnce(&Scope) -> (D, F)) -> Result<(), String>
     where
         D: DepTuple,

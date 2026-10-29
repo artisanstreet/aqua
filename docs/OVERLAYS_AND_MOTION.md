@@ -231,8 +231,7 @@ fmt --check` clean.
    units for `reposition`; `FocusControl` impl over the focus scope
    (incl. Tab trap using `modal_blocker`); committing `render_plan`
    entries to the window-level host; per-node `dispose_owner` calls for
-   both services on node removal; `ui!` builder names when `element`
-   lands (no dependency taken here).
+   both services on node removal.
 2. **Facade owner**: wire `handle_input` + `render_plan` (overlays) and
    the §3.4 deadline loop (motion) into the event loop; feed
    `Scheduler::request_animation_deadline` from `next_deadline_duration`.

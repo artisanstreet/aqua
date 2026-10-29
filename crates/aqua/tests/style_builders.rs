@@ -2,14 +2,13 @@
 //!
 //! Covers: explicit unset vs override, later-wins merge, repeated builder
 //! `.styles` calls mixed with direct setters, helper `const` sharing,
-//! macro `styles: [...]` parity with direct builder calls, no wrapper
-//! nodes around painted buttons, child text inheriting parent typography
+//! no wrapper nodes around painted buttons, child text inheriting parent typography
 //! through a real mount, keyed refresh retaining node identity, focus,
 //! and input, and a `const`-position compile proof.
 
 use aqua::prelude::*;
 use aqua::ui::{Box as UiBox, Text as UiText};
-use aqua::{auto, pct, px, ui, Style, UiApp};
+use aqua::{auto, pct, px, Style, UiApp};
 use aqua_core::{Insets, NodeId};
 use aqua_platform::geometry::LogicalSize;
 use aqua_platform::{AquaWindowId, ObservedWindowState};
@@ -248,28 +247,6 @@ fn child_text_inherits_parent_typography_through_mount() {
     assert_eq!(content(plain.0), (MINT, 20.0));
     assert_eq!(content(own.0), (PAPER, 20.0));
     assert_eq!(app.build_error(), None);
-}
-
-#[test]
-fn macro_styles_array_matches_direct_builder_calls() {
-    let via_macro = ui! {
-        Box(styles: [BASE, OVERRIDE]) {
-            Text("row", styles: [BASE])
-        }
-    };
-    let direct = UiBox::builder()
-        .styles([BASE, OVERRIDE])
-        .child(UiText::builder().arg("row").styles([BASE]).build())
-        .build();
-    let (a, b) = (
-        aqua_ui::element::lower_specs(&via_macro).unwrap(),
-        aqua_ui::element::lower_specs(&direct).unwrap(),
-    );
-    assert_eq!(a.len(), 1);
-    assert_eq!(b.len(), 1);
-    assert_eq!(a[0].style, b[0].style);
-    assert_eq!(a[0].children.len(), b[0].children.len());
-    assert_eq!(a[0].children[0].style, b[0].children[0].style);
 }
 
 #[test]

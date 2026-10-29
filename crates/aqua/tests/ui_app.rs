@@ -1,11 +1,3 @@
-//! Verification: high-level `UiApp` host end-to-end (black-box).
-//!
-//! Mounts real `Element` builders (the same vocabulary `ui!` expands to),
-//! drives `sync` / `layout` / `handle_input` / `build_scene_into`, and
-//! checks the retained `Scene`: mount, two-way edit bindings, keyed
-//! structural refresh with focus/edit retention, scope disposal, and a
-//! strict real-pixels offscreen artifact (PNG iff `AQUA_PNG_OUT` is set).
-
 use aqua::ui::{Box as UiBox, Text as UiText};
 use aqua::UiApp;
 use aqua_core::{InputEvent, NodeId};
@@ -208,21 +200,27 @@ fn ui_app_todo_artifact_real_text() {
     let (read, write) = app.scope().signal("buy oat milk".to_string());
     let rows: Vec<(u64, String)> =
         vec![(1, "buy milk".to_string()), (2, "write report".to_string())];
-    let column = "column";
-    let el: Element = aqua::ui! {
-        Box(layout: column, gap: 8) {
-            Text("Todos")
-            for todo in rows.iter() {
-                key(todo.0) {
-                    Text(todo.1.as_str())
-                }
-            }
-            Text(bind: (read, write), placeholder: "New todo...")
-            Button(on_activate: || {}) {
-                Text("Add")
-            }
-        }
-    };
+    let el: Element = UiBox::builder()
+        .layout(aqua_ui::style::Axis::Column)
+        .gap(8)
+        .child(UiText::new("Todos").build())
+        .children(
+            rows.iter()
+                .map(|todo| UiText::new(todo.1.as_str()).build().with_key(todo.0)),
+        )
+        .child(
+            UiText::builder()
+                .bind((read, write))
+                .placeholder("New todo...")
+                .build(),
+        )
+        .child(
+            aqua::ui::Button::new()
+                .on_activate(|| {})
+                .child(UiText::new("Add").build())
+                .build(),
+        )
+        .build();
     app.mount(|_scope| el).unwrap();
     let mut scene = Scene::new();
     app.build_scene_into(&mut scene, &observed(480.0, 320.0))

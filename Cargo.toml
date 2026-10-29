@@ -1,9 +1,5 @@
 [workspace]
 resolver = "2"
-# Glob so peer crates (aqua, aqua-reactive, aqua-text, aqua-macros) join
-# automatically when they land, without core-owner edits or stub manifests.
-# Covers: aqua, aqua-core, aqua-reactive, aqua-ui, aqua-text, aqua-render,
-# aqua-platform, aqua-macros.
 members = ["crates/*"]
 
 [workspace.package]
@@ -19,14 +15,8 @@ aqua-ui = { path = "crates/aqua-ui" }
 aqua-text = { path = "crates/aqua-text" }
 aqua-render = { path = "crates/aqua-render" }
 aqua-platform = { path = "crates/aqua-platform" }
-aqua-macros = { path = "crates/aqua-macros" }
-# Agreed versions (core owner pins; peers confirmed by use):
-# wgpu 30 / glyphon 0.12 / cosmic-text 0.19 (render trio), winit 0.30 (platform).
 wgpu = "30"
 glyphon = "0.12"
 cosmic-text = "0.19"
 winit = "0.30"
 taffy = "0.15"
-syn = { version = "2", features = ["full", "extra-traits"] }
-quote = "1"
-proc-macro2 = "1"

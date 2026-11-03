@@ -26,7 +26,11 @@ existing facade call sites until the facade migrates (see relay note at the end)
 | `WindowMaterial`, `material_capability`, `material_needs_transparent_window`, `DWM_BACKDROP_MIN_BUILD` | `material` | Semantic intent → honest capability. |
 | `adapters::apply_material`, `windows::apply_titlebar_theme`, `windows::windows_build_number` | `adapters` | Windows: real DWM apply + dark-frame theming + build probe. Elsewhere: explicit fallback. |
 | `Clipboard`, `SystemClipboard`, `MemoryClipboard`, `app_clipboard`, `ClipboardBackend` | `services` | Native OS clipboard default; memory is fallback/test only. Fallible (`ClipboardError`). |
-| `DialogRequest`, `FileFilter`, `dialogs_capability` | `dialogs` | Native file dialogs (rfd, portal-based on Linux — no GTK). |
+| `DialogRequest`, `FileFilter`, `dialogs_capability` | `dialogs` | Native file dialogs, parented asynchronous results and explicit multi-file selection (rfd, portal-based on Linux — no GTK). |
+| `DisplayInfo` | `monitor` | Current monitor bounds, work area, scale and constrained centering. |
+| `OpenTarget` | `shell` | Validated URL, path and reveal actions with native error reporting. |
+| `NotificationCenter`, `AppIdentity`, `Notification` | `notifications` | Windows toasts, actions, replacement and withdrawal; explicit unsupported result elsewhere. |
+| `TaskbarBadge` | `badge` | Validated native Windows overlay rendering; the facade replays retained state after Explorer restarts. |
 | `OsPreferences`, `query_preferences`, `should_reduce_motion`, `prefers_opaque_frame` | `prefs` | Reduced motion/transparency, high contrast (Windows SPI+registry; env overrides; explicit Unknown elsewhere). |
 | `A11yNode`, `build_tree_update`, `map_role`, `pack/unpack_node_id`, `a11y_capability` | `a11y` | Portable AccessKit vocabulary (common dep). Action payloads preserved (`A11yActionData`: value/numeric/selection/point/offset/custom). |
 | `A11yBridge`, `Bridge*Handler`, `WakeFn` | `a11y` (common) | Wake contract: every bridge event (action, initial-tree request, deactivation) wakes EXACTLY once AFTER lock release — unit-tested (`bridge_wakes_once_per_event_without_lock_held`). |
@@ -82,55 +86,26 @@ existing facade call sites until the facade migrates (see relay note at the end)
 | `accesskit_winit 0.34` | **`cfg(windows)` only** | 0 on Linux (was ~150 AT-SPI/zbus/async pkgs) | UIA adapter; Linux tree 204 → 108 pkgs |
 | `windows 0.62`, `raw-window-handle` | `cfg(windows)` only | 0 on Linux | DWM/SPI/registry/HWND |
 
-## Explicitlyunsupported / deferred (honest)
+## Platform scope
 
-- Typed in-app MIME drag-and-drop (only OS file drops via `FileDrop` +
-  in-process `InProcessDnD` stub); notifications/taskbar/menus; global
-  window coordinates on Wayland; macOS `NSVisualEffectView`; Linux
-  compositor blur; software-rendering fallback policy; AT-SPI adapter
-  milestone (tree vocabulary ready, adapter `cfg(windows)`); screen-reader
-  end-to-end run (`end_to_end_verified: false`).
+The Windows Editor port has the platform contracts listed in
+[EDITOR_READINESS.md](EDITOR_READINESS.md). Typed in-app drag-and-drop and
+popup menus are implemented by `aqua-ui`; native file drops include their
+actual client coordinates. The facade drains bounded worker mailboxes and
+applies window commands, per-window frame targets and live vsync changes.
 
-## Tests
+Global window coordinates on Wayland, macOS `NSVisualEffectView`, Linux
+compositor blur, a software-rendering fallback policy and an AT-SPI adapter
+remain outside the Windows qualification. Native UIA tests establish API
+behavior; screen-reader speech quality and physical CJK candidate-window
+placement remain release qualification tasks.
 
-58 unit tests, all headless, run in the SHARED workspace (no exclusions):
-`scheduler` (18: pacing, merging, deadlines, fused gate+deadline wakeups,
-backpressure sleep + starvation-freedom, overload recovery, resize storms,
-remove-during-flight, present saturation, deadline supersede, multiwindow,
-runtime target change); canonical key (`classify_key`: Char identity,
-combining sequences, F-keys, repeat) / button / modifier / IME (multi-scalar
-preserved) / touch-contact / theme / file-drop translation; focus+theme →
-`surface_signal` material-recheck integration; material mapping +
-transparency requirement + prefs-driven fallback (`select_material`);
-clipboard backends; dialog builder + headless honesty; prefs overrides +
-opaque-frame policy; a11y id packing, full role table, pure tree build,
-action-data preservation, bridge wake-once-without-lock,
-windowless handler dispatch; chrome seam defaults, stub honesty, 8 CPU
-hit-test regressions (borders/corners, drag band + no-drag holes, reserved
-strip exclusion, maximized/unresizable, explicit draggables).
-`cargo test -p aqua-platform`: 58 passed.
-`cargo check/clippy -p aqua-platform --all-targets`: clean, 0 warnings.
-`cargo check -p aqua-platform --target x86_64-pc-windows-gnu --all-targets`:
-clean (includes `windows.rs`, `prefs.rs` Windows probes, `a11y_winit`,
-`chrome_winit` subclass + `windows_smoke` example). Example `windows_smoke` provided for the later
-PowerShell native run (not run here).
+## Validation
 
-## Relay note for parent → facade owner (cannot message from agent thread)
-
-1. Additive-only this pass EXCEPT `Clipboard` trait is now fallible
-   (`get/set/clear` → `Result`) — facade does not use it (verified by grep).
-2. Adopt when ready: `translate_*_core` (modifiers now carried — resolves
-   your `Modifiers::NONE` relay note), `surface_signal`, `ThemeChanged`,
-   `ObservedWindowState::new`, `docs/SCHEDULER.md` completion wiring
-   (`mark_presented` on next-acquire, not on submit).
-3. Materials: set `transparent: true` + alpha surface + transparent clear
-   or backdrops stay hidden; re-apply material on `surface_signal().material_recheck`.
-4. a11y attach needs invisible-first windows (`with_visible(false)`) +
-   a REQUIRED waker: `attach_with_waker(event_loop, window, waker)` where
-   the waker wakes the loop (proxy) and routes to `drain_actions`. Without
-   it AT actions stall while idle (fixed this pass; wake-once-without-lock
-   unit-tested). AT clicks arrive as action requests with preserved
-   payloads (`A11yActionData`) — never depend on mouse input for them.
-5. `translate_key_event` kept its signature; logic moved to testable
-   `classify_key` (winit `KeyEvent` has a private platform field and cannot
-   be struct-built — facade mock code must not construct it literally).
+`cargo test -p aqua-platform`, strict workspace all-target Clippy and the
+whole-workspace Windows GNU cross-check pass. Native Windows checks exercise
+window lifecycle, monitor information, taskbar badges, mailbox wakeups and UIA
+text geometry. Windows notification callback tests cover late activation,
+replacement, withdrawal and destructor reentrancy without displaying toasts.
+The full evidence and application migration boundary are recorded in
+[EDITOR_READINESS.md](EDITOR_READINESS.md).

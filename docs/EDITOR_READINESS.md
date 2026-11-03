@@ -1,102 +1,89 @@
 # Beginning the Artisan Editor port
 
-Status, 2026-11-03: **ready to begin the Windows conversation/composer port on
-the current backend**. This is a starting-port gate, not production-switch
-approval.
+Status, 2026-11-03: **ready to begin porting the entire Windows Editor app**. The target is
+starting the Windows port of the entire Editor through public Aqua APIs. It covers
+the shell and every Editor section, including rich blocks and native services.
+Replacing the production Editor remains a separate application migration and
+release decision.
 
-The readiness target is a Windows Editor port through Aqua's public application,
-text, collection and platform APIs. Replacing the existing Editor remains an
-application migration, with its own feature parity and release qualification.
+The inventory follows the actual GPUI consumers in `editor`, `editor-core`,
+`editor-ui`, `editor-composer`, `editor-conversation`, `editor-sidebar`,
+`editor-settings`, `editor-marketplace`, `editor-inspector`, and `editor-sources`.
+Editor audio, HTTP, storage, and provider engines retain their application-owned
+backends; typed worker delivery connects their results to Aqua's UI thread.
 
-## Required framework behavior
+## Required contracts and evidence
 
-- Text editing follows the existing Editor's Blink-derived Windows rules for
-  word movement, paragraph movement, selection extension and deletion. Shaped
-  visual navigation preserves horizontal position across short and wrapped
-  lines. Caret affinity distinguishes the two sides of soft wraps and bidi
-  boundaries. Undo records preserve grapheme clusters and composition state.
-- Pointer selection supports dragging, reversal, Shift-click, word and paragraph
-  click units, word/paragraph drag extension, cancellation and edge autoscroll.
-  A source document provides copy order and separators independently of mounted
-  text leaves, including virtualized gaps. Source bindings validate byte ranges
-  and the exact rendered source. Typed `Text::selection_source_in` declarations
-  bind and recycle automatically. Explicit document IDs isolate panes, and
-  validated copy substitutions handle decorative/alternate source text.
-  Selection respects modal and disabled scopes.
-- Native text clipboard commands copy, cut and paste through the application
-  adapter. Failed clipboard writes preserve the original selection and text.
-  AltGr remains available for text entry. Image and file clipboard payloads have
-  explicit validated platform APIs.
-- Rich static text carries inherited font families, weight, slant, size and
-  inline sRGB colors through measurement, shaping and rendering. Editable fields
-  support full font styling with plain source text. Selection uses source bytes.
-- Nested opacity groups retain painter order and isolate overlapping children.
-  Independent CPU compositing checks exercise actual GPU readback. Glyph colors
-  retain item and ancestor opacity.
-- Idle and selection-only frames reuse the base scene. Text changes compare
-  exact source and reshape changed runs; font revisions invalidate old metrics.
-  Scene reordering preserves live node identities.
-- Windows accessibility exposes control roles and actions through the same
-  bound field and button behavior as pointer and keyboard input. Native text
-  ranges carry shaped grapheme geometry and byte selections. Initial snapshots
-  are staged before visibility; inactive accessibility skips per-frame text
-  metadata generation.
+| Editor surface or dependency | Aqua contract | Behavioral evidence |
+|---|---|---|
+| Shell, home, sidebar, inspector | Bound state, action propagation, scoped shortcuts, pointer capture, hover/cursors, responsive layout, focus indicators | `aqua-ui/tests/input.rs`, `aqua-runtime/tests/routed-input.rs`, `aqua/tests/ui_app/editor-shell.rs` |
+| Settings | Stepped sliders, captured resizing, select options and disabled choices, roving tabs, numeric accessibility, live per-window frame pacing and vsync, text raster modes | `aqua-runtime/tests/runtime/controls.rs`, `aqua-runtime/tests/scheduler.rs`, `aqua-render/tests/vector/composition.rs` |
+| Marketplace and sources | Virtual lists/tables/trees, source actions, stable row identity, nested scrolling with edge chaining | `aqua/tests/collections_conformance.rs`, `aqua-ui/tests/input.rs`, `aqua/tests/ui_app/editor-shell.rs` |
+| Palette, menus, tooltips and dialogs | Bound Element portals, reactive filtered results, independent popup scopes, modal isolation, light dismiss, focus restoration, timed tooltips | `aqua-runtime/tests/runtime/controls.rs`, `aqua/tests/ui_app/editor-shell.rs` |
+| Conversation and composer | Source-backed selection across mounted and virtualized content, variable heights, reading anchors, streaming text, bound editor state | `aqua/tests/ui_app/editor-workload.rs`, `aqua-runtime/tests/text-interaction.rs` |
+| Browser-style text behavior | Blink-derived Windows word/paragraph keys, visual caret affinity, graphemes and dictionaries, multi-click gestures, reversal and autoscroll | `aqua-text/tests/navigation.rs`, `browser_editing.rs`, `browser_geometry.rs`, `aqua-runtime/tests/text-interaction.rs` |
+| Native text and focus | Structured text/image/file paste after routed interception, composition cancellation on blur, exact drop coordinates, transactional autocomplete and undo, shaped IME anchor geometry | `aqua/tests/clipboard.rs`, `aqua-runtime/tests/routed-input.rs`, `aqua/tests/windows_text.rs` |
+| Rich text and links | Font inheritance, inline colors and fixed-width mention cells, decoration geometry, range activation with modifiers and drag suppression, transformed geometry | `aqua-text/tests/decorations.rs`, `aqua-runtime/tests/typography.rs`, `routed-input.rs` |
+| Charts, diagrams, icons and themed chrome | Paths, SVG arcs, holes, stroke styles, multi-stop gradients, tinted/full-color SVG, rounded ancestor clips and painter order | `aqua-render/tests/vector/raster.rs`, `vector/composition.rs` |
+| Previews and attachments | Managed leased image assets, bounded asynchronous decode and GPU upload, animated image timelines, contain/cover/crop, content blur, subtree transforms | `aqua/tests/images/lifecycle.rs`, `images/composition.rs`, `aqua-render/tests/media.rs`, `vector/composition.rs` |
+| Theme changes and streaming highlights | Real captured-frame transition and alpha-preserving text recoloring; native DirectWrite and unhinted outline raster modes | `aqua-render/tests/vector/composition.rs`, `aqua/tests/windows_desktop.rs` |
+| Custom model/media renderers | Shared-device offscreen passes and registered external surfaces, including explicit removal | `aqua-render/tests/headless.rs`, `aqua/tests/images/composition.rs` |
+| Background results and window lifecycle | Bounded mailboxes, wake without polling, stale-window protection, close vetoes, native commands, monitor work areas | `aqua/tests/mailbox.rs`, `application_services.rs`, `windows_desktop.rs`, `aqua-platform/tests/monitor.rs` |
+| External actions and notifications | Validated URL/path launch, parented asynchronous dialogs, native toast actions/withdrawal, taskbar badge and Explorer-restart replay | `aqua-platform/tests/shell.rs`, `dialogs.rs`, `notifications.rs`, `notifications/native.rs`, `badge.rs`, `aqua/tests/windows_desktop.rs` |
+| Accessibility | Native roles/actions and range values, real TextPattern grapheme geometry and selection, transformed physical bounds, lazy snapshots | `aqua/tests/accessibility.rs`, `aqua-platform/tests/access-tree.rs`, `aqua/tests/windows_text.rs`, `scripts/windows-accessibility.ps1` |
 
-## Behavioral evidence
+The `editor_shell` example is a functional framework consumer spanning sidebar,
+conversation/composer, settings, marketplace, sources, inspector, palette,
+managed images, SVGs and vector charts. `scripts/windows-editor-shell.ps1`
+drives its native interactions. It is an integration fixture; application logic
+and Editor-specific rendering are still implemented in the Editor repository.
 
-The tests use the real runtime pipeline and public consumer APIs:
+## Qualification gate
 
-| Contract | Evidence |
-|---|---|
-| Blink word rules, Unicode editing, dictionary boundaries | `crates/aqua-text/tests/navigation.rs`, `browser_editing.rs` |
-| Shaped navigation, bidi, wraps and affinity | `crates/aqua-text/tests/browser_geometry.rs` |
-| Exact source order and offscreen copy | `crates/aqua-text/tests/document.rs` |
-| Pointer gestures, autoscroll, modal scopes and source lifecycle | `crates/aqua-runtime/tests/text-interaction.rs` |
-| Transcript work counts and cache invalidation | `crates/aqua-runtime/tests/frame-work.rs` |
-| Rich source measurement and restyling | `crates/aqua-runtime/tests/typography.rs` |
-| GPU composition and colored text | `crates/aqua-render/tests/conformance.rs` |
-| Transactional clipboard shortcuts | `crates/aqua/tests/clipboard.rs` |
-| Native action translation and protected values | `crates/aqua/tests/accessibility.rs` |
-| Combined virtualized conversation and composer | `crates/aqua/tests/ui_app/editor-workload.rs` |
-| Windows message translation | `scripts/windows-input-smoke.ps1` |
-| Native UI Automation behavior | `scripts/windows-accessibility.ps1` |
+The final implementation passed:
 
-Final validation on 2026-11-03:
+- `AQUA_REQUIRE_GPU=1 CARGO_BUILD_JOBS=2 bash scripts/validate.sh`: 13 gates,
+  zero failures and zero skips, including strict all-target Clippy and the
+  complete Windows cross-check.
+- Actual native Windows full-shell UI Automation and pointer interactions,
+  plus transformed TextPattern geometry and selection checks.
+- Actual native desktop mailbox wake, resize, taskbar badges, two-window
+  lifecycle, close veto, live presentation settings, both text raster modes
+  and snapshot animation scheduling without worker polling.
+- Native Windows AMD DX12: 45 renderer unit tests, 13 rendering regressions
+  and 10 managed-image tests. These cover depth-tested meshes, compute,
+  composition, clipping, vectors, images, blur, snapshot transitions, text
+  maps, native raster modes and text-buffer lifetime across ordered chunks.
+- The full Linux renderer suite: 82 tests. Native notification callback
+  tests also passed for replacement, withdrawal and single-use activation.
 
-- `AQUA_REQUIRE_GPU=1 CARGO_BUILD_JOBS=2 bash scripts/validate.sh`: 13 passed,
-  zero failed and zero skipped. This covers every workspace crate's tests,
-  strict GPU execution, formatting, all-target Clippy with warnings denied,
-  and the complete Windows GNU all-target check.
-- `bash scripts/build-windows.sh todo dev`: rebuilt the final Windows app.
-  `windows-accessibility.ps1` passed native roles, Unicode text retrieval,
-  emoji-grapheme selection, value changes, invocation, bound state and close.
-- Rebuilt `windows_input_smoke` in the Windows shell; the native message replay
-  exited zero with `WINDOWS_INPUT_OK`.
-- The new GPU conformance suite passed on Linux llvmpipe/Vulkan and native
-  Windows AMD/DX12 (three tests per backend). The native run used
-  `WGPU_BACKEND=dx12`, matching the application's graphics API.
+The final lifecycle review additionally verified removal clears retained
+pixels, resize repaints an unchanged scene, image replacement respects the
+cache budget, shared asset registries wake every subscribed window, and
+invisible animations remain idle.
 
-## Architecture and performance limits
+## Limits and application migration
 
-The working host still uses winit, wgpu, cosmic-text and glyphon. The native
-D3D12/Win32/TSF backend replacement, full reference backend, render-thread
-transport and DirectWrite pixel oracle in `ARCHITECTURE.md` remain separate
-architecture work. Current GPU conformance is a tested subset of composition,
-not a replacement for that complete reference backend.
+The host uses winit and wgpu; shaping uses cosmic-text and glyphon. Windows
+PlatformDefault glyph masks use DirectWrite, while Outline uses unhinted
+outlines; color glyphs retain their color-font raster path. This does not complete
+the separate native host rewrite, render-thread transport or full reference
+backend described in `ARCHITECTURE.md`.
 
 Changed-content frames still walk the mounted UI tree and emit its base scene.
-Virtualization bounds mounted rows; it does not remove dataset snapshots or
-application-owned source text. Work counters prove specific skipped operations,
-not superior latency, memory usage or performance compared with GPUI/Chromium.
+Virtualization bounds mounted rows; it does not remove application-owned source
+text or dataset snapshots. Work counters establish skipped operations, not a
+latency or memory advantage over GPUI or Chromium.
 
-Native UI Automation tests establish API behavior. They do not establish speech
-quality in Narrator/NVDA, all assistive-technology behavior, or pixel equivalence
-with Chromium. Native text patterns currently operate per text leaf; runtime
-source selection spans leaves independently. Physical native IME qualification
-remains necessary. Multi-click timing and distance currently use framework
-defaults rather than the user's OS preference. Unicode dictionaries and data
-versions can differ from Chromium, so bit-identical behavior is not claimed.
+Native UI Automation checks establish API behavior, not Narrator/NVDA speech
+quality or pixel equality with Chromium. TextPattern ranges operate per text
+leaf; runtime source selection spans leaves independently. The validation host
+has only a Norwegian keyboard and no composition IME installed. Physical CJK
+candidate-window qualification remains a release check; no language settings
+were changed. Unicode dictionary versions can differ from Chromium.
 
-The Editor port still needs its Markdown renderer, media and rich
-blocks, attachments, shortcuts, menus and settings connected to Aqua, followed
-by interactive Windows qualification before switching the production Editor.
+The actual migration still connects Editor's models, Markdown/rich-block
+renderers, mention overlays, commands, network/media ownership and persistence
+to these contracts, then qualifies feature parity before switching the shipping
+Editor. The framework gate covers the whole application rather than limiting
+the starting port to conversation/composer.

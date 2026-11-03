@@ -1,6 +1,7 @@
 pub mod document;
 pub mod editor;
 pub mod font;
+pub mod input_service;
 pub mod layout;
 pub mod model;
 pub mod navigation;

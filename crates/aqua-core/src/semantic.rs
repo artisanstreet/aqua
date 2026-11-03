@@ -10,6 +10,8 @@ use crate::id::NodeId;
 /// and are verified by tests, not by role assignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
+    Text,
+    PasswordField,
     /// Generic container.
     Group,
     /// Activatable control.

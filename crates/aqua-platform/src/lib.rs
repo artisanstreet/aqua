@@ -1,6 +1,7 @@
 pub mod a11y;
 #[cfg(windows)]
 pub mod a11y_winit;
+mod access_tree;
 pub mod adapters;
 pub mod chrome;
 #[cfg(windows)]

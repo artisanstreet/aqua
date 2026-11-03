@@ -189,6 +189,7 @@ dependencies = [
 name = "aqua"
 version = "0.1.0"
 dependencies = [
+ "accesskit",
  "aqua-core",
  "aqua-platform",
  "aqua-protocol",
@@ -262,6 +263,7 @@ dependencies = [
  "aqua-scene",
  "aqua-text",
  "aqua-ui",
+ "unicode-segmentation",
 ]
 
 [[package]]

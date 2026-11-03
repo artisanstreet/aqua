@@ -17,6 +17,7 @@
 //! end-to-end run: NOT done (no Windows host / no AT on CI) —
 //! [`a11y_capability`] reports `end_to_end_verified: false` until then.
 
+pub use crate::access_tree::A11yTree;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -49,6 +50,8 @@ pub fn unpack_node_id(id: AkNodeId) -> NodeId {
 /// (without bounds/hierarchy/focus/actions) is NOT native accessibility.
 pub fn map_role(role: &CoreRole) -> AkRole {
     match role {
+        CoreRole::Text => AkRole::Label,
+        CoreRole::PasswordField => AkRole::PasswordInput,
         CoreRole::Group => AkRole::Group,
         CoreRole::Button => AkRole::Button,
         CoreRole::Checkbox => AkRole::CheckBox,
@@ -75,6 +78,14 @@ pub fn map_role(role: &CoreRole) -> AkRole {
 /// `root` must be present in `items`; `focus` falls back to `root` when
 /// no item is focused. Pure + headless-testable (no window needed).
 pub fn build_tree_update(root: NodeId, focus: NodeId, items: &[A11yNode]) -> TreeUpdate {
+    A11yTree::default().build(root, focus, items)
+}
+
+pub(crate) fn build_base_tree_update(
+    root: NodeId,
+    focus: NodeId,
+    items: &[A11yNode],
+) -> TreeUpdate {
     let mut nodes = Vec::with_capacity(items.len());
     let mut focus_id = pack_node_id(root);
     for item in items {
@@ -83,6 +94,23 @@ pub fn build_tree_update(root: NodeId, focus: NodeId, items: &[A11yNode]) -> Tre
             focus_id = id;
         }
         let mut node = Node::new(map_role(&item.semantic.role));
+        if item.semantic.role == CoreRole::ScrollRegion {
+            node.set_clips_children();
+        }
+        if !item.semantic.disabled {
+            match item.semantic.role {
+                CoreRole::Button | CoreRole::Checkbox | CoreRole::Tab | CoreRole::MenuItem => {
+                    node.add_action(Action::Click);
+                    node.add_action(Action::Focus);
+                }
+                CoreRole::TextField | CoreRole::PasswordField => {
+                    node.add_action(Action::Focus);
+                    node.add_action(Action::SetValue);
+                    node.add_action(Action::ReplaceSelectedText);
+                }
+                _ => {}
+            }
+        }
         if !item.semantic.label.is_empty() {
             node.set_label(item.semantic.label.clone());
         }
@@ -153,7 +181,7 @@ fn map_action(action: &Action) -> A11yAction {
         Action::CustomAction => A11yAction::Other("custom"),
         Action::HideTooltip => A11yAction::Other("hide-tooltip"),
         Action::ShowTooltip => A11yAction::Other("show-tooltip"),
-        Action::ReplaceSelectedText => A11yAction::Other("replace-selected-text"),
+        Action::ReplaceSelectedText => A11yAction::ReplaceSelectedText,
         Action::ScrollDown
         | Action::ScrollLeft
         | Action::ScrollRight
@@ -165,7 +193,7 @@ fn map_action(action: &Action) -> A11yAction {
         Action::SetSequentialFocusNavigationStartingPoint => {
             A11yAction::Other("sequential-focus-start")
         }
-        Action::SetValue => A11yAction::Other("set-value"),
+        Action::SetValue => A11yAction::SetValue,
         Action::ShowContextMenu => A11yAction::Other("context-menu"),
     }
 }
@@ -229,6 +257,7 @@ pub struct A11yQueue {
 /// Handler bundle + queue + waker. The Windows adapter moves the handlers
 /// into `accesskit_winit`; tests drive them directly.
 pub struct A11yBridge {
+    tree: Mutex<A11yTree>,
     queue: Arc<Mutex<A11yQueue>>,
     waker: WakeFn,
 }
@@ -236,6 +265,7 @@ pub struct A11yBridge {
 impl A11yBridge {
     pub fn new(waker: WakeFn) -> Self {
         Self {
+            tree: Mutex::new(A11yTree::default()),
             queue: Arc::new(Mutex::new(A11yQueue::default())),
             waker,
         }
@@ -246,6 +276,40 @@ impl A11yBridge {
     /// real waker (see `a11y_winit::A11yAdapter::attach_with_waker`).
     pub fn without_waker() -> Self {
         Self::new(Arc::new(|| {}))
+    }
+
+    pub fn needs_snapshot(&self) -> bool {
+        self.queue
+            .lock()
+            .is_ok_and(|queue| queue.active || queue.initial.is_none())
+    }
+
+    fn activate(&self) {
+        if let Ok(mut queue) = self.queue.lock() {
+            queue.active = true;
+        }
+    }
+
+    pub fn build_snapshot(
+        &self,
+        root: NodeId,
+        focus: NodeId,
+        items: &[A11yNode],
+    ) -> Option<TreeUpdate> {
+        let update = self.tree.lock().ok()?.build(root, focus, items);
+        self.queue.lock().ok()?.initial = Some(update.clone());
+        Some(update)
+    }
+
+    pub fn push_native_action(&self, request: &accesskit::ActionRequest) {
+        let translated = self
+            .tree
+            .lock()
+            .ok()
+            .and_then(|tree| tree.translate(request));
+        if let Some(translated) = translated {
+            self.push_action(translated);
+        }
     }
 
     fn wake(&self) {
@@ -313,6 +377,7 @@ impl BridgeActivationHandler {
 
 impl accesskit::ActivationHandler for BridgeActivationHandler {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+        self.bridge.activate();
         let tree = self.bridge.take_staged();
         // Activation itself is an event: wake so the app refreshes the
         // snapshot even if it staged the tree long before AT attached.
@@ -334,7 +399,7 @@ impl BridgeActionHandler {
 
 impl accesskit::ActionHandler for BridgeActionHandler {
     fn do_action(&mut self, request: accesskit::ActionRequest) {
-        self.bridge.push_action(translate_action_request(&request));
+        self.bridge.push_native_action(&request);
     }
 }
 
@@ -469,11 +534,13 @@ mod tests {
         label.label = "Add".to_string();
         let items = vec![
             A11yNode {
+                text: None,
                 semantic: SemanticNode::new(root, aqua_core::Role::Group),
                 bounds: Some(Rect::from_edges(0.0, 0.0, 800.0, 600.0)),
                 children: vec![btn],
             },
             A11yNode {
+                text: None,
                 semantic: label,
                 bounds: Some(Rect::from_edges(8.0, 8.0, 72.0, 32.0)),
                 children: vec![],
@@ -507,11 +574,13 @@ mod tests {
             row,
             &[
                 A11yNode {
+                    text: None,
                     semantic: table,
                     bounds: Some(Rect::ZERO),
                     children: vec![row],
                 },
                 A11yNode {
+                    text: None,
                     semantic: item,
                     bounds: Some(Rect::ZERO),
                     children: vec![],
@@ -602,6 +671,7 @@ mod tests {
             })
         };
         let bridge = Arc::new(A11yBridge {
+            tree: Mutex::new(A11yTree::default()),
             queue: queue.clone(),
             waker: strict_waker,
         });
@@ -618,6 +688,7 @@ mod tests {
             root,
             root,
             &[A11yNode {
+                text: None,
                 semantic: SemanticNode::new(root, aqua_core::Role::Group),
                 bounds: None,
                 children: vec![],

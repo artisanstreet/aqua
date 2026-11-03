@@ -19,14 +19,14 @@ use std::time::{Duration, Instant as WallInstant};
 
 use aqua_core::InputEvent as CoreInputEvent;
 use aqua_core::{Modifiers as CoreModifiers, PointerKind};
-#[cfg(windows)]
-use aqua_platform::a11y::build_tree_update;
+
 #[cfg(windows)]
 use aqua_platform::a11y_winit::A11yAdapter;
 use aqua_platform::chrome::DragRegions;
 use aqua_platform::events::{
-    pointer_contact, to_core_point, translate_file_event, translate_ime_core, translate_key_event,
-    translate_modifiers, translate_mouse_button_core, window_event_frame_reason, FileDrop,
+    ime_is_composing, pointer_contact, to_core_point, translate_file_event, translate_ime_core,
+    translate_key_event, translate_modifiers, translate_mouse_button_core,
+    window_event_frame_reason, FileDrop,
 };
 use aqua_platform::host::{
     control_flow_for_next_wakeup, surface_signal, translate_window_event, window_attributes,
@@ -239,6 +239,14 @@ pub trait Application {
     }
     /// Semantic snapshot for the accessibility tree: root, focused node, and
     /// positioned nodes. `None` (default) publishes nothing.
+    fn prepare_accessibility(
+        &mut self,
+        _window: &ObservedWindowState,
+        _now: Instant,
+    ) -> Option<Instant> {
+        None
+    }
+
     fn a11y_nodes(&self) -> Option<(aqua_core::NodeId, aqua_core::NodeId, Vec<A11yNode>)> {
         None
     }
@@ -981,11 +989,17 @@ impl<A: Application> Loop<A> {
             // the app provides one (bounds come from committed layout).
             #[cfg(windows)]
             {
-                let snapshot = self.app.a11y_nodes();
+                let needed = self
+                    .aqua
+                    .windows
+                    .get(&id)
+                    .and_then(|window| window.a11y.as_ref())
+                    .is_some_and(|adapter| adapter.needs_snapshot());
+                let snapshot = if needed { self.app.a11y_nodes() } else { None };
                 if let Some((root, focus, items)) = snapshot {
                     if let Some(rec) = self.aqua.windows.get_mut(&id) {
                         if let Some(adapter) = rec.a11y.as_mut() {
-                            adapter.push_snapshot(build_tree_update(root, focus, &items));
+                            adapter.push_nodes(root, focus, &items);
                         }
                     }
                 }
@@ -1204,11 +1218,15 @@ impl<A: Application> Loop<A> {
             }
             return;
         }
-        // Modifiers are state, not events: store for key translation.
         if let W::ModifiersChanged(mods) = &event {
+            let modifiers = translate_modifiers(mods);
             if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                rec.modifiers = translate_modifiers(mods);
+                rec.modifiers = modifiers;
             }
+            self.aqua.with_ctx(|ctx| {
+                self.app
+                    .on_input(ctx, id, &CoreInputEvent::ModifiersChanged(modifiers))
+            });
             return;
         }
         let mut extra: Option<CoreInputEvent> = None;
@@ -1338,18 +1356,10 @@ impl<A: Application> Loop<A> {
                 }
             }
             W::Ime(ime) => {
-                let core = translate_ime_core(&ime);
-                // Track composition for key-text suppression.
                 if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                    match &core {
-                        CoreInputEvent::Ime(aqua_core::ImeEvent::Start)
-                        | CoreInputEvent::Ime(aqua_core::ImeEvent::Update { .. }) => {
-                            rec.ime_active = true;
-                        }
-                        _ => rec.ime_active = false,
-                    }
+                    rec.ime_active = ime_is_composing(&ime);
                 }
-                Some(core)
+                Some(translate_ime_core(&ime))
             }
             W::ScaleFactorChanged { scale_factor, .. } => {
                 if let Some(rec) = self.aqua.windows.get_mut(&id) {
@@ -1525,7 +1535,21 @@ impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for L
                 }
             });
             match A11yAdapter::attach_with_waker(event_loop, &window, waker) {
-                Ok(adapter) => {
+                Ok(mut adapter) => {
+                    let now = self.aqua.clock();
+                    if let Some(observed) = self
+                        .aqua
+                        .windows
+                        .get(&id)
+                        .map(|record| record.observed.clone())
+                    {
+                        if let Some(deadline) = self.app.prepare_accessibility(&observed, now) {
+                            self.aqua.scheduler.request_animation_deadline(id, deadline);
+                        }
+                    }
+                    if let Some((root, focus, items)) = self.app.a11y_nodes() {
+                        adapter.push_nodes(root, focus, &items);
+                    }
                     if let Some(rec) = self.aqua.windows.get_mut(&id) {
                         rec.a11y = Some(adapter);
                     }
@@ -1625,7 +1649,7 @@ impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for L
                 }
             }
             AquaUserEvent::A11yActions(id) => {
-                // Bridge waker fired: actions arrived while idle.
+                self.aqua.scheduler.request_frame(id, FrameReason::INPUT);
                 #[cfg(windows)]
                 Self::drain_a11y_actions(&mut self.aqua, &mut self.app, id);
                 #[cfg(not(windows))]

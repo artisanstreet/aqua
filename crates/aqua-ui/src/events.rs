@@ -1,24 +1,9 @@
-//! Input semantics: hit-testing, focus management, scrolling, and editing
-//! dispatch over the retained tree.
-//!
-//! These are free functions over [`UiTree`], not methods, so the dispatch
-//! layer stays separate from storage. All functions are synchronous and
-//! headless (pure [`aqua_core::event`] vocabulary in, tree mutations out).
-//! Platform adapters translate native events into core events and call these;
-//! the facade wires them to windows.
-//!
-//! No function here retains state between calls and none reenters the tree:
-//! callbacks fired during dispatch receive [`ActionEvent`] data only.
-
 use crate::tree::{ActionEvent, ActionKind, NodeKind, UiTree};
 use aqua_core::{
     ImeEvent, InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Point, PointerButton, Rect,
     ScrollDelta,
 };
 
-/// Topmost node at window-local logical `at`, respecting paint order
-/// (last child = topmost), ancestor clips, and scroll offsets.
-/// Returns `None` outside every node.
 #[must_use]
 pub fn hit_test(tree: &UiTree, at: Point) -> Option<NodeId> {
     let root = tree.root()?;
@@ -34,12 +19,10 @@ fn hit_node(
 ) -> Option<NodeId> {
     let rect = tree.rect(id)?.translate(offset.x, offset.y);
     let rec = tree.get(id)?;
-    // Scroll children live in content space: shift by -offset for descent.
     let child_offset = match rec.kind {
         NodeKind::Scroll(ref s) => Point::new(offset.x - s.offset.x, offset.y - s.offset.y),
         _ => offset,
     };
-    // Clips accumulate down the path (box clip or scroll viewport).
     let mut child_clip = clip;
     if let NodeKind::Box(ref b) = rec.kind {
         if b.paint.clip {
@@ -55,7 +38,6 @@ fn hit_node(
             None => rect,
         });
     }
-    // Topmost child first.
     for &c in rec.children.iter().rev() {
         if let Some(hit) = hit_node(tree, c, at, child_clip, child_offset) {
             return Some(hit);
@@ -68,8 +50,6 @@ fn hit_node(
     }
 }
 
-/// Focusable, enabled nodes in traversal (paint) order. Disabled nodes are
-/// skipped by Tab navigation.
 #[must_use]
 pub fn focusable_nodes(tree: &UiTree) -> Vec<NodeId> {
     tree.traverse()
@@ -81,8 +61,6 @@ pub fn focusable_nodes(tree: &UiTree) -> Vec<NodeId> {
         .collect()
 }
 
-/// Move focus to the next focusable node, wrapping around. Returns the newly
-/// focused node (`None` when the tree has no focusable nodes).
 pub fn focus_next(tree: &mut UiTree) -> Option<NodeId> {
     let order = focusable_nodes(tree);
     if order.is_empty() {
@@ -100,7 +78,6 @@ pub fn focus_next(tree: &mut UiTree) -> Option<NodeId> {
     Some(next)
 }
 
-/// Move focus to the previous focusable node, wrapping around.
 pub fn focus_prev(tree: &mut UiTree) -> Option<NodeId> {
     let order = focusable_nodes(tree);
     if order.is_empty() {
@@ -118,8 +95,6 @@ pub fn focus_prev(tree: &mut UiTree) -> Option<NodeId> {
     Some(prev)
 }
 
-/// Route a scroll gesture: hit-test, then scroll the innermost scrollable
-/// ancestor. Returns `true` when a scrollable consumed the gesture.
 pub fn dispatch_scroll(tree: &mut UiTree, at: Point, delta: ScrollDelta) -> bool {
     let mut target = hit_test(tree, at);
     while let Some(id) = target {
@@ -139,13 +114,10 @@ pub fn dispatch_scroll(tree: &mut UiTree, at: Point, delta: ScrollDelta) -> bool
     false
 }
 
-/// Insert committed text into the focused editable node (platform `TextInput`
-/// routing). Normalizes `\r\n`/`\r` to `\n`; the editor enforces single-line
-/// policy. Ordinary text travels ONLY through this path — `KeyDown` never
-/// inserts (it carries navigation/shortcut identity), and IME text travels
-/// via `ImeEvent::Commit`, so there is exactly one insertion per commit.
-/// Fires [`ActionKind::TextChanged`]. Returns `true` when handled.
 pub fn dispatch_text_input(tree: &mut UiTree, text: &str) -> bool {
+    if text_is_composing(tree) {
+        return true;
+    }
     let normalized: String = text
         .replace("\r\n", "\n")
         .replace('\r', "\n")
@@ -180,14 +152,13 @@ pub fn dispatch_text_input(tree: &mut UiTree, text: &str) -> bool {
     }
 }
 
-/// Route IME lifecycle events into the focused editable node's editor.
-/// Preedit state lives in the editor; candidate-window placement reads
-/// `layout.caret(editor.ime_caret())` on the text-provider side (platform
-/// owner). Returns `true` when handled.
 pub fn dispatch_ime(tree: &mut UiTree, event: &ImeEvent) -> bool {
     let Some(id) = tree.focused() else {
         return false;
     };
+    if tree.is_disabled(id) {
+        return false;
+    }
     let is_editable = tree
         .get(id)
         .map(|r| matches!(r.kind, NodeKind::Text(ref t) if t.is_editable()))
@@ -202,24 +173,25 @@ pub fn dispatch_ime(tree: &mut UiTree, event: &ImeEvent) -> bool {
             let marked = marked.clone();
             tree.edit_text(id, |tc| {
                 if let crate::tree::TextBacking::Editable(ref mut ed) = tc.backing {
-                    // Clamp the platform byte range into the preedit.
-                    let end = marked.len();
-                    let range = range.0.min(end)..range.1.min(end).max(range.0.min(end));
-                    ed.set_composition(&marked, range);
+                    if marked.is_empty() {
+                        ed.cancel_composition();
+                    } else {
+                        ed.break_typing_group();
+                        let end = marked.len();
+                        let range = range.0.min(end)..range.1.min(end).max(range.0.min(end));
+                        ed.set_composition(&marked, range);
+                    }
                 }
             });
             tree.sync_text_leaf(id);
             true
         }
         ImeEvent::Commit { text } => {
-            // commit_composition() folds the preedit (set by Update) into the
-            // model in one undo step: no separate insert, otherwise the text
-            // lands twice. Platforms that send Commit without Preedit carry
-            // the text here while the editor is not composing: insert it.
             let text = text.clone();
             let committed_done = tree.edit_text(id, |tc| {
                 if let crate::tree::TextBacking::Editable(ref mut ed) = tc.backing {
                     if ed.is_composing() {
+                        ed.set_composition(&text, text.len()..text.len());
                         ed.commit_composition();
                     } else if !text.is_empty() {
                         ed.insert(&text);
@@ -255,10 +227,16 @@ pub fn dispatch_ime(tree: &mut UiTree, event: &ImeEvent) -> bool {
     }
 }
 
-/// Route a key event: Tab/Shift-Tab moves focus; editing keys act on the
-/// focused editable node; anything else is unhandled (shortcuts belong to
-/// the host/facade). Returns `true` when consumed.
+pub fn text_is_composing(tree: &UiTree) -> bool {
+    tree.focused().is_some_and(|id| !tree.is_disabled(id) && tree.get(id).is_some_and(|record| {
+        matches!(&record.kind, NodeKind::Text(text) if matches!(&text.backing, crate::tree::TextBacking::Editable(editor) if editor.is_composing()))
+    }))
+}
+
 pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
+    if text_is_composing(tree) {
+        return true;
+    }
     if event.repeat && matches!(event.key, Key::Named(NamedKey::Tab)) {
         return false;
     }
@@ -275,14 +253,14 @@ pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
             let Some(id) = tree.focused() else {
                 return false;
             };
+            if tree.is_disabled(id) {
+                return false;
+            }
             let is_editable = tree
                 .get(id)
                 .map(|r| matches!(r.kind, NodeKind::Text(ref t) if t.is_editable()))
                 .unwrap_or(false);
             if !is_editable {
-                // Non-editable focus: Enter/Space raise activation for hosts
-                // that register `ActionKind::Activate` on the node. Disabled
-                // nodes never activate.
                 if tree.is_disabled(id) {
                     return false;
                 }
@@ -322,51 +300,100 @@ pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
                         return false;
                     }
                 }
-                Key::Named(NamedKey::Backspace) => tree
-                    .edit_text(id, |tc| tc.delete_backward())
-                    .unwrap_or(false),
-                Key::Named(NamedKey::Delete) => tree
-                    .edit_text(id, |tc| tc.delete_forward())
-                    .unwrap_or(false),
-                Key::Named(NamedKey::Left) => {
-                    tree.edit_text(id, |tc| {
-                        tc.move_caret(true, event.modifiers.contains(Modifiers::SHIFT))
-                    });
-                    false
+                key => {
+                    let extend = event.modifiers.contains(Modifiers::SHIFT);
+                    let control = event.modifiers.contains(Modifiers::CONTROL);
+                    let alt = event.modifiers.contains(Modifiers::ALT);
+                    if alt || event.modifiers.contains(Modifiers::LOGO) {
+                        return false;
+                    }
+                    let result = tree
+                        .edit_editor(id, |ed| {
+                            Some(match key {
+                                Key::Named(NamedKey::Backspace) => {
+                                    if control {
+                                        ed.delete_word_backward()
+                                    } else {
+                                        ed.delete_backward()
+                                    }
+                                }
+                                Key::Named(NamedKey::Delete) => {
+                                    if control {
+                                        ed.delete_word_forward()
+                                    } else {
+                                        ed.delete_forward()
+                                    }
+                                }
+                                Key::Named(NamedKey::Left) => {
+                                    if control {
+                                        ed.move_word_left(extend);
+                                    } else {
+                                        ed.move_left(extend);
+                                    }
+                                    false
+                                }
+                                Key::Named(NamedKey::Right) => {
+                                    if control {
+                                        ed.move_word_right(extend);
+                                    } else {
+                                        ed.move_right(extend);
+                                    }
+                                    false
+                                }
+                                Key::Named(NamedKey::Up) => {
+                                    if control {
+                                        ed.move_paragraph(false, extend);
+                                    } else {
+                                        ed.move_vertical(true, extend);
+                                    }
+                                    false
+                                }
+                                Key::Named(NamedKey::Down) => {
+                                    if control {
+                                        ed.move_paragraph(true, extend);
+                                    } else {
+                                        ed.move_vertical(false, extend);
+                                    }
+                                    false
+                                }
+                                Key::Named(NamedKey::Home) => {
+                                    if control {
+                                        ed.move_to_start(extend);
+                                    } else {
+                                        ed.move_line_boundary(false, extend);
+                                    }
+                                    false
+                                }
+                                Key::Named(NamedKey::End) => {
+                                    if control {
+                                        ed.move_to_end(extend);
+                                    } else {
+                                        ed.move_line_boundary(true, extend);
+                                    }
+                                    false
+                                }
+                                Key::Char('a' | 'A') if control => {
+                                    ed.select_all();
+                                    false
+                                }
+                                Key::Char('z' | 'Z') if control => {
+                                    if extend {
+                                        ed.redo()
+                                    } else {
+                                        ed.undo()
+                                    }
+                                }
+                                Key::Char('y' | 'Y') if control => ed.redo(),
+                                _ => return None,
+                            })
+                        })
+                        .flatten();
+                    let Some(changed) = result else {
+                        return false;
+                    };
+                    changed
                 }
-                Key::Named(NamedKey::Right) => {
-                    tree.edit_text(id, |tc| {
-                        tc.move_caret(false, event.modifiers.contains(Modifiers::SHIFT))
-                    });
-                    false
-                }
-                Key::Named(NamedKey::Home) => {
-                    tree.edit_text(id, |tc| {
-                        if let crate::tree::TextBacking::Editable(ref mut ed) = tc.backing {
-                            ed.move_to_start(event.modifiers.contains(Modifiers::SHIFT));
-                        }
-                    });
-                    false
-                }
-                Key::Named(NamedKey::End) => {
-                    tree.edit_text(id, |tc| {
-                        if let crate::tree::TextBacking::Editable(ref mut ed) = tc.backing {
-                            ed.move_to_end(event.modifiers.contains(Modifiers::SHIFT));
-                        }
-                    });
-                    false
-                }
-                Key::Char('a') if event.modifiers.contains(Modifiers::CONTROL) => {
-                    tree.edit_text(id, |tc| {
-                        if let crate::tree::TextBacking::Editable(ref mut ed) = tc.backing {
-                            ed.select_all();
-                        }
-                    });
-                    false
-                }
-                _ => return false,
             };
-            tree.sync_text_leaf(id);
             if changed {
                 let committed = tree.get(id).and_then(|r| match r.kind {
                     NodeKind::Text(ref t) => Some(t.text().to_string()),
@@ -384,9 +411,6 @@ pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
     }
 }
 
-/// Nearest ancestor (or self) with an `Activate` action, bubbling label
-/// hits up to their owning control. A disabled node or ancestor blocks the
-/// whole chain: no activation, no focus, no text.
 fn activatable_ancestor(tree: &UiTree, mut id: NodeId) -> Option<NodeId> {
     loop {
         let rec = tree.get(id)?;
@@ -400,14 +424,6 @@ fn activatable_ancestor(tree: &UiTree, mut id: NodeId) -> Option<NodeId> {
     }
 }
 
-/// Route one framework input event. Returns `true` when consumed.
-///
-/// Press semantics (correct control behavior, not press-to-fire):
-/// primary down arms the nearest activatable ancestor with a per-contact
-/// capture; primary up inside its bounds fires `Activate` exactly once;
-/// release outside, cancellation, focus loss, or node removal clears the
-/// arm without firing. Non-primary buttons never arm or fire. A disabled
-/// node or ancestor blocks the gesture entirely.
 pub fn dispatch_input(tree: &mut UiTree, event: &InputEvent) -> bool {
     match event {
         InputEvent::PointerDown(pe, btn) => {
@@ -421,8 +437,6 @@ pub fn dispatch_input(tree: &mut UiTree, event: &InputEvent) -> bool {
                 return false;
             }
             let Some(target) = activatable_ancestor(tree, hit) else {
-                // No activatable owner, but still grant focus to a focusable
-                // node under the pointer (e.g. an editable field).
                 if tree
                     .get(hit)
                     .is_some_and(|r| r.focusable && !r.semantics.disabled)
@@ -432,7 +446,6 @@ pub fn dispatch_input(tree: &mut UiTree, event: &InputEvent) -> bool {
                 }
                 return false;
             };
-            // Prefer focusing the control itself; fall back to the hit node.
             if tree
                 .get(target)
                 .is_some_and(|r| r.focusable && !r.semantics.disabled)
@@ -454,7 +467,6 @@ pub fn dispatch_input(tree: &mut UiTree, event: &InputEvent) -> bool {
             let Some(armed) = tree.take_press(pe.contact) else {
                 return false;
             };
-            // Node removed mid-press: swallow, never fire on a dead node.
             let Some(rect) = tree.rect(armed) else {
                 return true;
             };
@@ -471,7 +483,7 @@ pub fn dispatch_input(tree: &mut UiTree, event: &InputEvent) -> bool {
             }
             true
         }
-        InputEvent::PointerMove(_) => false, // hover unimplemented; drag-out is decided at release
+        InputEvent::PointerMove(_) => false,
         InputEvent::PointerCancel { contact } => {
             tree.take_press(*contact);
             true
@@ -576,10 +588,8 @@ mod tests {
     #[test]
     fn down_arms_without_firing_up_inside_fires_once() {
         let (mut tree, _root, button, fired) = button_fixture();
-        // Down on the label arms the button but fires nothing yet.
         assert!(dispatch_input(&mut tree, &press(1, 10.0, 10.0)));
         assert!(fired.lock().unwrap().is_empty());
-        // Release inside fires exactly once, on the button (bubbled).
         assert!(dispatch_input(
             &mut tree,
             &InputEvent::PointerUp(pe(1, 10.0, 10.0), PointerButton::Primary)
@@ -591,7 +601,6 @@ mod tests {
     fn press_drag_out_does_not_fire() {
         let (mut tree, _root, _button, fired) = button_fixture();
         assert!(dispatch_input(&mut tree, &press(2, 10.0, 10.0)));
-        // Release far outside the button: no activation.
         assert!(dispatch_input(
             &mut tree,
             &InputEvent::PointerUp(pe(2, 250.0, 250.0), PointerButton::Primary)
@@ -607,13 +616,10 @@ mod tests {
             &mut tree,
             &InputEvent::PointerCancel { contact: 3 }
         ));
-        // Stale up after cancel: nothing armed, not consumed.
         assert!(!dispatch_input(
             &mut tree,
             &InputEvent::PointerUp(pe(3, 10.0, 10.0), PointerButton::Primary)
         ));
-        // Re-arm, then remove the button mid-press: the arm dies with the
-        // node, so the stale up is unhandled (nothing armed, never fires).
         assert!(dispatch_input(&mut tree, &press(4, 10.0, 10.0)));
         assert!(tree.remove(button));
         assert!(!dispatch_input(
@@ -653,10 +659,8 @@ mod tests {
                 collection: None,
             },
         );
-        // Press is ignored entirely.
         assert!(!dispatch_input(&mut tree, &press(6, 10.0, 10.0)));
         assert!(fired.lock().unwrap().is_empty());
-        // ...and focus is refused, so keyboard activation cannot reach it.
         assert!(!tree.set_focused(Some(button)));
         assert!(!dispatch_input(
             &mut tree,
@@ -694,7 +698,6 @@ mod tests {
         )]);
         let field = tree.get(tree.root().unwrap()).unwrap().children[0];
         assert!(tree.set_focused(Some(field)));
-        // KeyDown carrying 'x' is identity only: no insertion ...
         assert!(!dispatch_input(
             &mut tree,
             &InputEvent::KeyDown(KeyEvent {
@@ -703,7 +706,6 @@ mod tests {
                 repeat: false,
             })
         ));
-        // ... then the platform TextInput inserts exactly once.
         assert!(dispatch_input(
             &mut tree,
             &InputEvent::TextInput { text: "x".into() }
@@ -745,8 +747,6 @@ mod tests {
             NodeSpec::new(NodeKind::Box(BoxContent::default()), style.clone()),
             NodeSpec::new(NodeKind::Box(BoxContent::default()), style.clone()),
         ]);
-        // Both children are 100x100 in a row: the LAST child (x=100) is
-        // topmost where they overlap the 300-wide root; hit the second box.
         let kids = tree.get(root).unwrap().children.clone();
         assert_eq!(hit_test(&tree, Point::new(10.0, 10.0)), Some(kids[0]));
         assert_eq!(hit_test(&tree, Point::new(150.0, 10.0)), Some(kids[1]));

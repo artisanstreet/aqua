@@ -3,6 +3,7 @@
 //! no stringly-typed properties. Paint properties travel to scene emission.
 
 use aqua_core::{CornerRadii, Insets, Oklch};
+use aqua_text::TextStyle;
 use taffy::prelude::TaffyAuto as _;
 use taffy::style::{
     AlignContent, AlignItems, AlignSelf, Dimension, Display, FlexDirection, FlexWrap,
@@ -347,8 +348,9 @@ const fn px_only(len: Length) -> f32 {
 
 /// Resolved typography metadata (mirrors tree `TextContent` text fields).
 /// Defaults match `TextContent::label`: 14px, white, no wrap.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Typography {
+    pub text_style: TextStyle,
     /// Font size in logical px.
     pub font_size: f32,
     /// Text color.
@@ -360,6 +362,11 @@ pub struct Typography {
 impl Default for Typography {
     fn default() -> Self {
         Self {
+            text_style: TextStyle {
+                size_px: 14.0,
+                line_height_px: 16.8,
+                ..Default::default()
+            },
             font_size: 14.0,
             color: Oklch::WHITE,
             wrap: false,
@@ -406,6 +413,7 @@ pub struct Style {
     clip: Option<bool>,
     opacity: Option<Option<f32>>,
     font_size: Option<f32>,
+    text_style: Option<TextStyle>,
     text_color: Option<Oklch>,
     text_wrap: Option<bool>,
 }
@@ -444,6 +452,7 @@ impl Style {
             clip: None,
             opacity: None,
             font_size: None,
+            text_style: None,
             text_color: None,
             text_wrap: None,
         }
@@ -480,6 +489,7 @@ impl Style {
             && self.shadow.is_none()
             && self.clip.is_none()
             && self.opacity.is_none()
+            && self.text_style.is_none()
             && self.font_size.is_none()
             && self.text_color.is_none()
             && self.text_wrap.is_none()
@@ -888,6 +898,16 @@ impl Style {
 
     /// Set font size, if any.
     #[must_use]
+    pub fn text_style(mut self, style: TextStyle) -> Self {
+        self.font_size = Some(style.size_px);
+        self.text_style = Some(style);
+        self
+    }
+
+    pub fn text_style_opt(&self) -> Option<&TextStyle> {
+        self.text_style.as_ref()
+    }
+
     pub fn font_size_opt(&self) -> Option<f32> {
         self.font_size
     }
@@ -945,6 +965,7 @@ impl Style {
         take!(clip);
         take!(opacity);
         take!(font_size);
+        take!(text_style);
         take!(text_color);
         take!(text_wrap);
     }
@@ -1081,6 +1102,10 @@ impl Style {
     #[must_use]
     pub fn resolve_typography(&self) -> Typography {
         Typography {
+            text_style: self
+                .text_style
+                .clone()
+                .unwrap_or_else(|| Typography::default().text_style),
             font_size: self.font_size.unwrap_or(14.0),
             color: self.text_color.unwrap_or(Oklch::WHITE),
             wrap: self.text_wrap.unwrap_or(false),

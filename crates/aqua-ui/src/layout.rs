@@ -10,7 +10,7 @@
 //! [`UiTree::compute_layout`]: crate::tree::UiTree::compute_layout
 
 use aqua_core::Size;
-use aqua_text::{measure_text, SharedFonts, TextStyle};
+use aqua_text::{measure_text, LineMode, SharedFonts, StyledSpan, TextLayout, TextStyle, WrapMode};
 
 /// Text metrics provider for layout. Implementations must return the same
 /// advance/line metrics the renderer will draw with; otherwise committed
@@ -29,6 +29,17 @@ pub trait TextMeasurer {
         max_width: Option<f32>,
         multiline: bool,
     ) -> Size;
+    fn measure_styled(
+        &self,
+        text: &str,
+        style: &TextStyle,
+        spans: &[StyledSpan],
+        max_width: Option<f32>,
+        multiline: bool,
+    ) -> Size {
+        let _ = spans;
+        self.measure_text(text, style.size_px, max_width, multiline)
+    }
 }
 
 /// Naive bootstrap measurer: average advance 0.6em, line height 1.2em,
@@ -116,6 +127,35 @@ impl TextMeasurer for CosmicMeasurer {
             self.scale,
         );
         Size::new(w, h)
+    }
+    fn measure_styled(
+        &self,
+        text: &str,
+        style: &TextStyle,
+        spans: &[StyledSpan],
+        max_width: Option<f32>,
+        multiline: bool,
+    ) -> Size {
+        let mut layout = TextLayout::new();
+        match spans.is_empty() {
+            true => layout.set_text(text, style),
+            false => layout.set_spans(spans.to_vec()),
+        }
+        layout.set_line_mode(if multiline {
+            LineMode::Multi
+        } else {
+            LineMode::Single
+        });
+        layout.set_wrap(if multiline {
+            WrapMode::Word
+        } else {
+            WrapMode::None
+        });
+        layout.set_max_width(if multiline { max_width } else { None });
+        layout.set_scale(self.scale);
+        let laid = layout.layout(&mut self.fonts.lock());
+        let scale = self.scale.max(0.01);
+        Size::new(laid.size.0 / scale, laid.size.1 / scale)
     }
 }
 

@@ -115,6 +115,7 @@ pub enum NamedKey {
     Backspace,
     /// Delete (forward).
     Delete,
+    Insert,
     /// Escape.
     Escape,
     /// Arrow keys.
@@ -202,6 +203,7 @@ pub enum InputEvent {
     KeyDown(KeyEvent),
     /// Key released.
     KeyUp(KeyEvent),
+    ModifiersChanged(Modifiers),
     /// Committed text from the platform (winit `KeyEvent.text`), routed
     /// exactly once per platform key event and SUPPRESSED while IME is
     /// active (IME text travels via `ImeEvent::Commit` instead). Carries the

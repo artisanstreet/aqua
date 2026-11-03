@@ -816,7 +816,7 @@ impl Application for Showcase {
                     ImeEvent::Start => {}
                 }
             }
-            InputEvent::Focused(_) => {}
+            InputEvent::Focused(_) | InputEvent::ModifiersChanged(_) => {}
         }
     }
 
@@ -931,6 +931,7 @@ impl Application for Showcase {
             );
             sem.selected = todo.done;
             items.push(A11yNode {
+                text: None,
                 semantic: sem,
                 bounds: Some(Rect::from_edges(
                     16.0,
@@ -950,6 +951,7 @@ impl Application for Showcase {
         input.focused = self.focus_zone == FocusZone::Input;
         input.value_text = Some(self.editor.text().to_string());
         items.push(A11yNode {
+            text: None,
             semantic: input,
             bounds: Some(Rect::from_edges(
                 16.0,
@@ -962,6 +964,7 @@ impl Application for Showcase {
         let mut button = SemanticNode::new(Self::sem_node(3), Role::Button);
         button.label = format!("Filter: {}", self.filter_r.get().label());
         items.push(A11yNode {
+            text: None,
             semantic: button,
             bounds: Some(Self::menu_button_rect(self.width)),
             children: vec![],
@@ -970,6 +973,7 @@ impl Application for Showcase {
         root.label = "Todo list".to_string();
         root.children = child_ids.clone();
         items.push(A11yNode {
+            text: None,
             semantic: root,
             bounds: Some(Rect::from_edges(0.0, 0.0, self.width, 640.0)),
             children: child_ids,

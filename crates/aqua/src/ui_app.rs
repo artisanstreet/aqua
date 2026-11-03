@@ -1,6 +1,9 @@
-use aqua_core::InputEvent as CoreInputEvent;
+use aqua_core::{InputEvent as CoreInputEvent, Key, Modifiers, NamedKey};
 use aqua_platform::{
-    a11y::A11yActionRequest, chrome::DragRegions, AquaWindowId, ObservedWindowState, WindowEvent,
+    a11y::A11yActionRequest,
+    chrome::DragRegions,
+    services::{Clipboard, ClipboardError},
+    AquaWindowId, ObservedWindowState, WindowEvent,
 };
 use aqua_protocol::{A11yNode, Input, Instant, Output};
 use aqua_reactive::{DepTuple, Runtime as ReactiveRuntime, Scope};
@@ -10,6 +13,45 @@ use aqua_ui::element::Element;
 use crate::runtime::{AppCtx, Application, Aqua};
 
 pub use aqua_runtime::{Runtime as UiApp, RuntimeError as UiAppError};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipboardOutcome {
+    Unhandled,
+    Handled { redraw: bool },
+}
+
+pub fn dispatch_clipboard(
+    app: &mut UiApp,
+    clipboard: &mut dyn Clipboard,
+    event: &CoreInputEvent,
+) -> Result<ClipboardOutcome, ClipboardError> {
+    let CoreInputEvent::KeyDown(key) = event else {
+        return Ok(ClipboardOutcome::Unhandled);
+    };
+    let control = key.modifiers == Modifiers::CONTROL
+        || key.modifiers == Modifiers::CONTROL.union(Modifiers::SHIFT);
+    let shift = key.modifiers == Modifiers::SHIFT;
+    let copy = control && matches!(key.key, Key::Char('c' | 'C') | Key::Named(NamedKey::Insert));
+    let cut = (control && matches!(key.key, Key::Char('x' | 'X')))
+        || (shift && key.key == Key::Named(NamedKey::Delete));
+    let paste = (control && matches!(key.key, Key::Char('v' | 'V')))
+        || (shift && key.key == Key::Named(NamedKey::Insert));
+    if copy || cut {
+        let mut redraw = false;
+        if let Some(text) = app.selected_text() {
+            clipboard.set_text(text)?;
+            redraw = cut && app.delete_selected_text();
+        }
+        return Ok(ClipboardOutcome::Handled { redraw });
+    }
+    if paste {
+        let redraw = clipboard
+            .get_text()?
+            .is_some_and(|text| app.paste_text(&text));
+        return Ok(ClipboardOutcome::Handled { redraw });
+    }
+    Ok(ClipboardOutcome::Unhandled)
+}
 
 fn request_redraw(ctx: &mut AppCtx, id: AquaWindowId, output: Result<Output, UiAppError>) {
     if let Ok(output) = output {
@@ -33,6 +75,19 @@ impl Application for UiApp {
 
     fn on_input(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &CoreInputEvent) {
         let _ = self.step(Input::Tick(ctx.now()));
+        match dispatch_clipboard(self, ctx.clipboard(), event) {
+            Ok(ClipboardOutcome::Handled { redraw }) => {
+                if redraw {
+                    ctx.request_frame(id, aqua_protocol::FrameReason::INPUT);
+                }
+                return;
+            }
+            Err(error) => {
+                eprintln!("aqua: {error}");
+                return;
+            }
+            Ok(ClipboardOutcome::Unhandled) => {}
+        }
         let output = self.step(Input::Event(event.clone()));
         request_redraw(ctx, id, output);
     }
@@ -48,6 +103,14 @@ impl Application for UiApp {
 
     fn chrome_regions(&self, _window: &ObservedWindowState) -> Option<DragRegions> {
         UiApp::chrome_regions(self).cloned()
+    }
+
+    fn prepare_accessibility(
+        &mut self,
+        window: &ObservedWindowState,
+        now: Instant,
+    ) -> Option<Instant> {
+        self.build_scene(window, now)
     }
 
     fn a11y_nodes(&self) -> Option<(aqua_core::NodeId, aqua_core::NodeId, Vec<A11yNode>)> {

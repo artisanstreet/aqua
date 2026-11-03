@@ -20,15 +20,15 @@ pub use aqua_protocol::{Input, Instant, Output};
 pub use aqua_runtime::Scheduler;
 
 pub use aqua_ui::element::ui;
-pub use aqua_ui::style::{auto, pct, px, Style, Typography};
+pub use aqua_ui::style::{auto, pct, px, Axis, Style, Typography};
 pub use aqua_ui::style::{Border, Length, Paint, Shadow};
 
 pub mod prelude {
     pub use crate::{
-        auto, fr, pct, px, ui, App, AppCtx, Application, Aqua, AquaConfig, AquaUserEvent, Column,
-        ColumnBuilder, ColumnWidth, Config, Context, DragRegions, Error, ExternalFrame, IntoView,
-        List, Material, ReactiveView, ResolvedMaterial, Style, Table, Theme, Titlebar, Typography,
-        UiApp, UiAppError, Window,
+        auto, fr, pct, px, ui, App, AppCtx, Application, Aqua, AquaConfig, AquaUserEvent, Axis,
+        Column, ColumnBuilder, ColumnWidth, Config, Context, DragRegions, Error, ExternalFrame,
+        IntoView, List, Material, ReactiveView, ResolvedMaterial, Style, Table, Theme, Titlebar,
+        Typography, UiApp, UiAppError, Window,
     };
     pub use aqua_core::{
         DisplayItem, ImeEvent, InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Oklch,
@@ -50,6 +50,13 @@ pub mod prelude {
     pub use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
     pub use aqua_render::{Scene, SurfaceFacade};
     pub use aqua_runtime::Scheduler;
-    pub use aqua_text::{SharedFonts, SharedRuns, TextEditor, TextLayout};
+    pub use aqua_text::document::{
+        CopySubstitution, SelectionBinding, SelectionDocument, SelectionDocumentId,
+        SelectionSource, SelectionSourceError, SelectionSourceId, SourcePosition, SourceSlice,
+    };
+    pub use aqua_text::{
+        FontFamily, FontSlant, FontStretch, FontWeight, Selection, SharedFonts, SharedRuns,
+        StyledSpan, TextEditor, TextLayout, TextStyle,
+    };
     pub use aqua_ui::element::ui as ui_builders;
 }

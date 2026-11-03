@@ -12,3 +12,4 @@ aqua-reactive = { path = "../aqua-reactive" }
 aqua-scene = { path = "../aqua-scene" }
 aqua-text = { path = "../aqua-text" }
 aqua-ui = { path = "../aqua-ui" }
+unicode-segmentation = "1.12"

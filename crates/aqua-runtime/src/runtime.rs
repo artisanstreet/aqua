@@ -2,6 +2,11 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+mod access;
+mod interaction;
+
+use interaction::TextInteraction;
+
 use aqua_core::{
     DisplayItem, InputEvent as CoreInputEvent, NodeId, Oklch, Point, Rect, Size, TextRun,
 };
@@ -13,7 +18,10 @@ use aqua_reactive::DepTuple;
 use aqua_reactive::{Runtime as ReactiveRuntime, Scope};
 
 use aqua_scene::Scene;
-use aqua_text::{LineMode, Selection, SharedFonts, SharedRuns, TextLayout, TextStyle, WrapMode};
+use aqua_text::{
+    CaretAffinity, CaretPosition, LineMode, Selection, SharedFonts, SharedRuns, StyledSpan,
+    TextLayout, TextStyle, WrapMode,
+};
 use aqua_ui::{
     binding::{MountError, View},
     element::Element,
@@ -24,9 +32,20 @@ use aqua_ui::{
     tree::{ActionEvent, ActionKind, NodeKind, TextBacking, TextContent, UiTree},
 };
 
+fn text_caret_position(text: &TextContent) -> Option<CaretPosition> {
+    match &text.backing {
+        TextBacking::Editable(editor) if !editor.is_composing() => Some(editor.caret_position()),
+        _ => text.caret().map(|byte| CaretPosition {
+            byte,
+            affinity: CaretAffinity::Downstream,
+        }),
+    }
+}
+
 #[derive(Debug)]
 pub enum RuntimeError {
     NoViewMounted,
+    Disposed,
     AlreadyMounted,
     Build(String),
     Mount(MountError),
@@ -35,6 +54,7 @@ pub enum RuntimeError {
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            RuntimeError::Disposed => write!(f, "runtime is disposed"),
             RuntimeError::NoViewMounted => write!(f, "no view mounted: call mount() first"),
             RuntimeError::AlreadyMounted => {
                 write!(f, "view already mounted: call refresh() or dispose() first")
@@ -61,21 +81,44 @@ enum SceneKey {
     CaretOpacityEnd { node: NodeId },
 }
 
+impl SceneKey {
+    fn node(self) -> NodeId {
+        match self {
+            Self::Tree { node, .. }
+            | Self::Caret { node }
+            | Self::Selection { node, .. }
+            | Self::ImeUnderline { node, .. }
+            | Self::TextClipStart { node }
+            | Self::TextClipEnd { node }
+            | Self::CaretClipStart { node }
+            | Self::CaretClipEnd { node }
+            | Self::CaretOpacityStart { node }
+            | Self::CaretOpacityEnd { node } => node,
+        }
+    }
+}
+
 struct TextJob {
     node: NodeId,
     text: String,
     style: TextStyle,
+    source_style: TextStyle,
+    spans: Vec<StyledSpan>,
     wrap: bool,
     multiline: bool,
     masked: bool,
     width: f32,
-    hash: u64,
+    paint_revision: u64,
 }
 
 struct TextEntry {
+    fonts_revision: u64,
+    source_style: TextStyle,
+    spans: Vec<StyledSpan>,
     run: aqua_text::RunId,
     registry_rev: u64,
-    text_hash: u64,
+    text: String,
+    paint_revision: u64,
     width_bits: u32,
     scale_bits: u32,
     size_bits: u32,
@@ -96,15 +139,18 @@ fn shaping_source(t: &TextContent) -> (String, bool) {
     (source, t.password)
 }
 
-fn hash_text(text: &str) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    text.hash(&mut hasher);
-    hasher.finish()
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameWork {
+    pub text_nodes_checked: usize,
+    pub text_source_bytes: usize,
+    pub text_runs_shaped: usize,
+    pub tree_scene_ops_emitted: usize,
+    pub scene_items_reconciled: usize,
+    pub tree_scene_reused: bool,
 }
 
 pub struct Runtime {
+    interaction: TextInteraction,
     tree: UiTree,
     runtime: ReactiveRuntime,
     scope: Scope,
@@ -123,6 +169,11 @@ pub struct Runtime {
     structural: Rc<RefCell<Option<Element>>>,
     disposed: bool,
     clock: Seconds,
+    cached_scene: Vec<(SceneKey, DisplayItem)>,
+    cached_text_nodes: HashSet<NodeId>,
+    dynamic_order: Vec<SceneKey>,
+    cached_version: Option<(u64, u32, u32, u32, u64)>,
+    frame_work: FrameWork,
 }
 
 impl Runtime {
@@ -131,6 +182,7 @@ impl Runtime {
         let runtime = ReactiveRuntime::new();
         let scope = runtime.create_scope();
         Self {
+            interaction: TextInteraction::default(),
             tree: UiTree::new(),
             runtime,
             scope,
@@ -149,6 +201,11 @@ impl Runtime {
             last_build_error: None,
             disposed: false,
             clock: 0.0,
+            cached_scene: Vec::new(),
+            cached_text_nodes: HashSet::new(),
+            dynamic_order: Vec::new(),
+            cached_version: None,
+            frame_work: FrameWork::default(),
         }
     }
 
@@ -157,6 +214,7 @@ impl Runtime {
             return;
         }
         self.disposed = true;
+        self.interaction = TextInteraction::default();
         if let Some(view) = self.view.take() {
             view.dispose();
         }
@@ -237,6 +295,9 @@ impl Runtime {
     }
 
     pub fn mount(&mut self, factory: impl FnOnce(&Scope) -> Element) -> Result<(), RuntimeError> {
+        if self.disposed {
+            return Err(RuntimeError::Disposed);
+        }
         if self.view.is_some() {
             return Err(RuntimeError::AlreadyMounted);
         }
@@ -254,6 +315,9 @@ impl Runtime {
         D: DepTuple,
         F: FnMut(D::Values) -> Element + 'static,
     {
+        if self.disposed {
+            return Err(RuntimeError::Disposed);
+        }
         if self.view.is_some() {
             return Err(RuntimeError::AlreadyMounted);
         }
@@ -276,6 +340,9 @@ impl Runtime {
     }
 
     pub fn refresh(&mut self, elements: Vec<Element>) -> Result<(), RuntimeError> {
+        if self.disposed {
+            return Err(RuntimeError::Disposed);
+        }
         let Some(view) = self.view.as_mut() else {
             return Err(RuntimeError::NoViewMounted);
         };
@@ -285,6 +352,9 @@ impl Runtime {
     }
 
     pub fn sync(&mut self) -> Result<(), RuntimeError> {
+        if self.disposed {
+            return Err(RuntimeError::Disposed);
+        }
         self.runtime.flush();
         self.drain_structural()
     }
@@ -303,6 +373,9 @@ impl Runtime {
     }
 
     pub fn handle_input(&mut self, event: &CoreInputEvent) -> bool {
+        if self.handle_text_interaction(event) {
+            return true;
+        }
         let consumed = match event {
             CoreInputEvent::TextInput { text } => {
                 if self.text_input_allowed() {
@@ -311,23 +384,30 @@ impl Runtime {
                     true
                 }
             }
+            CoreInputEvent::Ime(ime) => {
+                if self.text_input_allowed() {
+                    events::dispatch_ime(&mut self.tree, ime)
+                } else {
+                    true
+                }
+            }
             _ => self.host.handle_input(&mut self.tree, event),
         };
         self.host.sync_lifecycle(&mut self.tree);
-        if let CoreInputEvent::PointerDown(pe, aqua_core::PointerButton::Primary) = event {
-            self.place_pointer_caret(pe.position);
-        }
-        consumed
+        let selected = self.begin_text_interaction(event);
+        consumed || selected
     }
 
     fn text_input_allowed(&self) -> bool {
+        self.tree
+            .focused()
+            .is_some_and(|node| self.text_node_allowed(node) && !self.tree.is_disabled(node))
+    }
+
+    fn text_node_allowed(&self, mut node: NodeId) -> bool {
         let Some(modal) = self.host.service().modal_blocker() else {
             return true;
         };
-        let Some(focused) = self.tree.focused() else {
-            return false;
-        };
-        let mut node = focused;
         loop {
             let parent = self.tree.get(node).and_then(|r| r.parent);
             match parent {
@@ -357,13 +437,13 @@ impl Runtime {
         if !t.is_editable() {
             return None;
         }
-        let caret_byte = t.caret()?;
+        let caret_position = text_caret_position(t)?;
         let origin = self.text_origin(focused)?;
         let entry = self.text_runs.get(&focused)?;
         let guard = self.runs.lock();
         let handle = guard.resolve(entry.run)?;
         let layout = handle.layout;
-        let caret = layout.caret(caret_byte)?;
+        let caret = layout.caret_position(caret_position)?;
         Some(Rect::from_edges(
             origin.x + caret.x / self.scale,
             origin.y + caret.y_top / self.scale,
@@ -379,19 +459,108 @@ impl Runtime {
     }
 
     fn build_frame_inner(&mut self) -> Result<Option<Seconds>, RuntimeError> {
+        if self.disposed {
+            return Err(RuntimeError::Disposed);
+        }
+        self.frame_work = FrameWork::default();
         self.runtime.flush();
         self.drain_structural()?;
         self.host.sync_lifecycle(&mut self.tree);
+        let fonts_revision = self.fonts.lock().font_revision();
+        if self
+            .cached_version
+            .is_some_and(|version| version.4 != fonts_revision)
+        {
+            for node in self.tree.traverse() {
+                self.tree.sync_text_leaf(node);
+            }
+        }
         self.layout().map_err(RuntimeError::Build)?;
+        if self.advance_text_selection() {
+            self.layout().map_err(RuntimeError::Build)?;
+        }
         self.host.reanchor_all(&mut self.tree);
-        self.sync_text_runs();
+        let version = (
+            self.tree.content_version(),
+            self.scale.to_bits(),
+            self.viewport.w.to_bits(),
+            self.viewport.h.to_bits(),
+            fonts_revision,
+        );
+        self.sync_selection_bindings();
+        let content_changed = self.cached_version != Some(version);
+        if content_changed {
+            self.sync_text_runs();
+        }
+        let focused_scroll = |runtime: &Self| {
+            runtime
+                .tree
+                .focused()
+                .and_then(|node| runtime.text_runs.get(&node))
+                .map(|entry| entry.scroll_x.to_bits())
+        };
+        let before_scroll = focused_scroll(self);
         self.update_text_scroll();
-        let mut keyed = self.emit_keyed();
-        keyed.extend(self.caret_selection_items());
-        self.reconcile(keyed);
+        let changed = content_changed || before_scroll != focused_scroll(self);
+        if changed {
+            self.cached_scene = self.emit_keyed();
+            self.cached_text_nodes = self
+                .cached_scene
+                .iter()
+                .filter_map(|(key, item)| {
+                    matches!(item, DisplayItem::Text { .. }).then_some(key.node())
+                })
+                .collect();
+            self.frame_work.tree_scene_ops_emitted = self.cached_scene.len();
+            self.cached_version = Some(version);
+        } else {
+            self.frame_work.tree_scene_reused = true;
+        }
+        let dynamic: Vec<_> = self
+            .caret_selection_items()
+            .into_iter()
+            .filter(|(key, _)| {
+                self.cached_text_nodes.contains(&key.node())
+                    && !matches!(
+                        key,
+                        SceneKey::CaretOpacityStart { .. } | SceneKey::CaretOpacityEnd { .. }
+                    )
+            })
+            .collect();
+        let dynamic_order: Vec<_> = dynamic.iter().map(|(key, _)| *key).collect();
+        if !changed && self.dynamic_order == dynamic_order {
+            self.frame_work.scene_items_reconciled = dynamic.len();
+            for (key, item) in dynamic {
+                if let Some(id) = self.scene_map.get(&key).copied() {
+                    self.scene.update(id, item);
+                }
+            }
+        } else {
+            let mut grouped: HashMap<NodeId, Vec<(SceneKey, DisplayItem)>> = HashMap::new();
+            for (key, item) in dynamic {
+                grouped.entry(key.node()).or_default().push((key, item));
+            }
+            let mut keyed = Vec::with_capacity(self.cached_scene.len() + dynamic_order.len());
+            for (key, item) in self.cached_scene.iter().cloned() {
+                if matches!(item, DisplayItem::Text { .. }) {
+                    if let Some(items) = grouped.remove(&key.node()) {
+                        keyed.extend(items);
+                    }
+                }
+                keyed.push((key, item));
+            }
+            self.frame_work.scene_items_reconciled = keyed.len();
+            self.reconcile(keyed);
+            self.dynamic_order = dynamic_order;
+        }
         let now = self.clock;
         self.host.advance_motion(now);
-        Ok(self.host.motion_deadline(now))
+        Ok(
+            match (self.host.motion_deadline(now), self.selection_deadline()) {
+                (Some(motion), Some(selection)) => Some(motion.min(selection)),
+                (motion, selection) => motion.or(selection),
+            },
+        )
     }
 
     #[must_use]
@@ -404,8 +573,21 @@ impl Runtime {
         self.tree.last_stats()
     }
 
+    #[must_use]
+    pub fn frame_work(&self) -> FrameWork {
+        self.frame_work
+    }
+
     fn text_rect(&self, node: NodeId) -> Option<Rect> {
-        let r = self.tree.rect(node)?;
+        let mut r = self.tree.rect(node)?;
+        let mut parent = self.tree.get(node)?.parent;
+        while let Some(id) = parent {
+            let record = self.tree.get(id)?;
+            if let NodeKind::Scroll(scroll) = &record.kind {
+                r = r.translate(-scroll.offset.x, -scroll.offset.y);
+            }
+            parent = record.parent;
+        }
         let p = self.tree.get(node)?.style.padding;
         Some(Rect::from_edges(
             r.x + p.left,
@@ -432,7 +614,9 @@ impl Runtime {
         if !t.is_editable() || t.multiline() {
             return;
         }
-        let Some(byte) = t.caret() else { return };
+        let Some(position) = text_caret_position(t) else {
+            return;
+        };
         let Some(rect) = self.text_rect(node) else {
             return;
         };
@@ -443,7 +627,7 @@ impl Runtime {
         let Some(run) = guard.resolve(entry.run) else {
             return;
         };
-        let Some(caret) = run.layout.caret(byte) else {
+        let Some(caret) = run.layout.caret_position(position) else {
             return;
         };
         let x = caret.x / self.scale;
@@ -458,9 +642,15 @@ impl Runtime {
     }
 
     fn sync_text_runs(&mut self) {
+        self.sync_text_runs_for(None);
+    }
+
+    fn sync_text_runs_for(&mut self, target: Option<NodeId>) {
+        let fonts_revision = self.fonts.lock().font_revision();
         let mut live = HashSet::new();
         let mut jobs: Vec<TextJob> = Vec::new();
-        for id in self.tree.traverse() {
+        let nodes = target.map_or_else(|| self.tree.traverse(), |node| vec![node]);
+        for id in nodes {
             let Some(rec) = self.tree.get(id) else {
                 continue;
             };
@@ -468,40 +658,56 @@ impl Runtime {
                 continue;
             };
             live.insert(id.raw());
+            self.frame_work.text_nodes_checked += 1;
             let width = self.text_rect(id).map(|r| r.w).unwrap_or(0.0);
-            let style = TextStyle {
-                size_px: t.font_size,
-                line_height_px: t.font_size * 1.2,
-                ..Default::default()
-            };
+
             let multiline = t.multiline();
+            if self.text_runs.get(&id).is_some_and(|entry| {
+                entry.fonts_revision == fonts_revision
+                    && entry.paint_revision == rec.paint_rev
+                    && entry.size_bits == t.font_size.to_bits()
+                    && entry.wrap == (t.wrap || multiline)
+                    && entry.line_multi == multiline
+                    && entry.masked == (t.password && !t.is_placeholder())
+                    && entry.width_bits == width.to_bits()
+                    && entry.scale_bits == self.scale.to_bits()
+            }) {
+                continue;
+            }
             let (text, masked) = shaping_source(t);
-            let text_hash = hash_text(&text);
+            self.frame_work.text_source_bytes += text.len();
             jobs.push(TextJob {
                 node: id,
                 text,
-                style,
+                style: t.effective_text_style(),
+                source_style: t.text_style.clone(),
+                spans: t.shaping_spans().to_vec(),
                 wrap: t.wrap || multiline,
                 multiline,
                 masked,
                 width,
-                hash: text_hash,
+                paint_revision: rec.paint_rev,
             });
         }
         for TextJob {
             node: id,
             text,
             style,
+            source_style,
+            spans,
             wrap,
             multiline,
             masked,
             width,
-            hash: text_hash,
+            paint_revision,
         } in jobs
         {
             let needs = match self.text_runs.get(&id) {
                 Some(e) => {
-                    e.text_hash != text_hash
+                    e.fonts_revision != fonts_revision
+                        || e.source_style != source_style
+                        || e.spans != spans
+                        || e.text != text
                         || e.width_bits != width.to_bits()
                         || e.scale_bits != self.scale.to_bits()
                         || e.size_bits != style.size_px.to_bits()
@@ -512,11 +718,18 @@ impl Runtime {
                 None => true,
             };
             if !needs {
+                if let Some(entry) = self.text_runs.get_mut(&id) {
+                    entry.paint_revision = paint_revision;
+                }
                 continue;
             }
+            self.frame_work.text_runs_shaped += 1;
             let build = || {
                 let mut layout = TextLayout::new();
-                layout.set_text(&text, &style);
+                match spans.is_empty() {
+                    true => layout.set_text(&text, &style),
+                    false => layout.set_spans(spans.clone()),
+                }
                 layout.set_line_mode(if multiline {
                     LineMode::Multi
                 } else {
@@ -548,9 +761,13 @@ impl Runtime {
                     self.text_runs.insert(
                         id,
                         TextEntry {
+                            fonts_revision,
                             run,
                             registry_rev: r,
-                            text_hash,
+                            text: text.clone(),
+                            source_style: source_style.clone(),
+                            spans: spans.clone(),
+                            paint_revision,
                             width_bits: width.to_bits(),
                             scale_bits: self.scale.to_bits(),
                             size_bits: style.size_px.to_bits(),
@@ -564,8 +781,12 @@ impl Runtime {
                 }
             };
             if let Some(entry) = self.text_runs.get_mut(&id) {
+                entry.fonts_revision = fonts_revision;
                 entry.registry_rev = registry_rev;
-                entry.text_hash = text_hash;
+                entry.text = text;
+                entry.source_style = source_style;
+                entry.spans = spans;
+                entry.paint_revision = paint_revision;
                 entry.width_bits = width.to_bits();
                 entry.scale_bits = self.scale.to_bits();
                 entry.size_bits = style.size_px.to_bits();
@@ -573,6 +794,9 @@ impl Runtime {
                 entry.line_multi = multiline;
                 entry.masked = masked;
             }
+        }
+        if target.is_some() {
+            return;
         }
         let dead: Vec<NodeId> = self
             .text_runs
@@ -659,24 +883,21 @@ impl Runtime {
         if let Some(e) = self.text_runs.get(&node) {
             return (e.run, e.registry_rev);
         }
-        let (text, style, wrap, multiline, masked, width, text_hash) =
+        let (text, style, source_style, spans, wrap, multiline, masked, width, paint_revision) =
             match self.tree.get(node).and_then(|r| match &r.kind {
                 NodeKind::Text(t) => {
-                    let style = TextStyle {
-                        size_px: t.font_size,
-                        line_height_px: t.font_size * 1.2,
-                        ..Default::default()
-                    };
+                    let style = t.effective_text_style();
                     let (display, masked) = shaping_source(t);
-                    let hash = hash_text(&display);
                     Some((
                         display,
                         style,
+                        t.text_style.clone(),
+                        t.shaping_spans().to_vec(),
                         t.wrap || t.multiline(),
                         t.multiline(),
                         masked,
                         self.text_rect(node).map(|r| r.w).unwrap_or(0.0),
-                        hash,
+                        r.paint_rev,
                     ))
                 }
                 _ => None,
@@ -685,7 +906,10 @@ impl Runtime {
                 None => return (aqua_text::RunId(0), 0),
             };
         let mut layout = TextLayout::new();
-        layout.set_text(&text, &style);
+        match spans.is_empty() {
+            true => layout.set_text(&text, &style),
+            false => layout.set_spans(spans.clone()),
+        }
         layout.set_line_mode(if multiline {
             LineMode::Multi
         } else {
@@ -700,9 +924,13 @@ impl Runtime {
         self.text_runs.insert(
             node,
             TextEntry {
+                fonts_revision: self.fonts.lock().font_revision(),
                 run,
                 registry_rev: r,
-                text_hash,
+                text,
+                source_style,
+                spans,
+                paint_revision,
                 width_bits: width.to_bits(),
                 scale_bits: self.scale.to_bits(),
                 size_bits: style.size_px.to_bits(),
@@ -716,9 +944,22 @@ impl Runtime {
     }
 
     fn caret_selection_items(&self) -> Vec<(SceneKey, DisplayItem)> {
-        let Some(focused) = self.tree.focused() else {
+        let mut nodes = self.interaction.selected_nodes.clone();
+        if let Some(node) = self.tree.focused() {
+            if !nodes.contains(&node) {
+                nodes.push(node);
+            }
+        }
+        nodes
+            .into_iter()
+            .flat_map(|node| self.text_selection_items(node))
+            .collect()
+    }
+
+    fn text_selection_items(&self, focused: NodeId) -> Vec<(SceneKey, DisplayItem)> {
+        if !self.text_node_allowed(focused) {
             return Vec::new();
-        };
+        }
         let mut opacity = 1.0;
         let mut ancestor = Some(focused);
         while let Some(node) = ancestor {
@@ -762,7 +1003,7 @@ impl Runtime {
                         origin,
                         t.is_editable(),
                         selection,
-                        t.caret(),
+                        text_caret_position(t),
                         composition,
                     )
                 }
@@ -835,8 +1076,8 @@ impl Runtime {
             }
         }
         if editable {
-            if let Some(byte) = caret_byte {
-                if let Some(c) = layout.caret(byte) {
+            if let Some(position) = caret_byte {
+                if let Some(c) = layout.caret_position(position) {
                     out.push((
                         SceneKey::Caret { node: focused },
                         DisplayItem::Rect {
@@ -904,14 +1145,31 @@ impl Runtime {
             }
             return;
         }
-        for (_, id) in self.scene_map.drain() {
-            scene.remove(id);
-        }
-        self.scene_map.clear();
+        let live: HashSet<_> = order.iter().copied().collect();
+        self.scene_map.retain(|key, id| {
+            if live.contains(key) {
+                true
+            } else {
+                scene.remove(*id);
+                false
+            }
+        });
+        let mut ids = Vec::with_capacity(items.len());
         for (key, item) in items {
-            let id = scene.insert(item);
-            self.scene_map.insert(key, id);
+            let id = match self.scene_map.get(&key).copied() {
+                Some(id) => {
+                    scene.update(id, item);
+                    id
+                }
+                None => {
+                    let id = scene.insert(item);
+                    self.scene_map.insert(key, id);
+                    id
+                }
+            };
+            ids.push(id);
         }
+        assert!(scene.set_order(&ids));
         self.scene_order = order;
     }
 }
@@ -997,13 +1255,19 @@ impl Runtime {
             .emit_semantics()
             .into_iter()
             .map(|semantic| {
-                let bounds = self.tree.rect(semantic.node);
+                let bounds = semantic.bounds.map(|bounds| Rect {
+                    x: bounds.x * self.scale,
+                    y: bounds.y * self.scale,
+                    w: bounds.w * self.scale,
+                    h: bounds.h * self.scale,
+                });
                 let children = self
                     .tree
                     .get(semantic.node)
                     .map(|r| r.children.clone())
                     .unwrap_or_default();
                 A11yNode {
+                    text: self.text_accessibility(semantic.node),
                     semantic,
                     bounds,
                     children,
@@ -1014,7 +1278,10 @@ impl Runtime {
     }
 
     fn apply_access(&mut self, request: &A11yActionRequest) {
-        if self.tree.get(request.node).is_none() {
+        if self.tree.get(request.node).is_none()
+            || self.tree.is_disabled(request.node)
+            || !self.text_node_allowed(request.node)
+        {
             return;
         }
         match request.action {
@@ -1030,6 +1297,48 @@ impl Runtime {
                     focused: None,
                 });
             }
+            A11yAction::SetValue | A11yAction::ReplaceSelectedText => {
+                if let A11yActionData::Value(value) = &request.data {
+                    let replace_all = request.action == A11yAction::SetValue;
+                    let normalized: String = value
+                        .replace("\r\n", "\n")
+                        .replace('\r', "\n")
+                        .chars()
+                        .filter(|character| {
+                            !character.is_control() || matches!(character, '\n' | '\t')
+                        })
+                        .collect();
+                    let changed = self
+                        .tree
+                        .edit_text(request.node, |text| {
+                            if let TextBacking::Editable(editor) = &mut text.backing {
+                                if replace_all {
+                                    editor.select_all();
+                                }
+                                editor.insert_paste(&normalized);
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                        .unwrap_or(false);
+                    if changed {
+                        let text =
+                            self.tree
+                                .get(request.node)
+                                .and_then(|record| match &record.kind {
+                                    NodeKind::Text(text) => Some(text.text().to_owned()),
+                                    _ => None,
+                                });
+                        self.tree.fire_action(ActionEvent {
+                            node: request.node,
+                            kind: ActionKind::TextChanged,
+                            text,
+                            focused: None,
+                        });
+                    }
+                }
+            }
             _ => {}
         }
         if let A11yActionData::TextSelection {
@@ -1040,6 +1349,17 @@ impl Runtime {
         } = &request.data
         {
             self.apply_access_selection(request.node, *focus_node, *anchor_index, *focus_index);
+        }
+        if let A11yActionData::TextByteSelection {
+            anchor_node,
+            anchor_byte,
+            focus_node,
+            focus_byte,
+        } = request.data
+        {
+            if request.node == anchor_node {
+                self.apply_access_byte_selection(anchor_node, focus_node, anchor_byte, focus_byte);
+            }
         }
     }
 
@@ -1056,7 +1376,7 @@ impl Runtime {
         let Some(NodeKind::Text(text)) = self.tree.get(node).map(|r| &r.kind) else {
             return;
         };
-        if !text.is_editable() {
+        if !text.is_editable() && !text.selectable {
             return;
         }
         let display = text.display_text();
@@ -1067,12 +1387,7 @@ impl Runtime {
                 .map_or(display.len(), |(b, _)| b)
         };
         let selection = Selection::new(to_byte(anchor_index), to_byte(focus_index));
-        let _ = self.tree.set_focused(Some(node));
-        self.tree.edit_text(node, |tc| {
-            if let TextBacking::Editable(ref mut ed) = tc.backing {
-                ed.set_selection(selection);
-            }
-        });
+        self.selection_from_access(node, selection);
     }
 
     pub fn set_chrome_regions(&mut self, regions: Option<DragRegions>) {
@@ -1082,41 +1397,6 @@ impl Runtime {
     #[must_use]
     pub fn text_run_count(&self) -> usize {
         self.text_runs.len()
-    }
-
-    fn place_pointer_caret(&mut self, at: Point) {
-        use aqua_ui::events::hit_test;
-        let Some(focused) = self.tree.focused() else {
-            return;
-        };
-        if hit_test(&self.tree, at) != Some(focused) {
-            return;
-        }
-        let origin = match self.text_origin(focused) {
-            Some(r) => r,
-            None => return,
-        };
-        let entry = match self.text_runs.get(&focused) {
-            Some(e) => e,
-            None => return,
-        };
-        let guard = self.runs.lock();
-        let layout = match guard.resolve(entry.run) {
-            Some(h) => h.layout,
-            None => return,
-        };
-        let byte = layout.hit(
-            (at.x - origin.x) * self.scale,
-            (at.y - origin.y) * self.scale,
-        );
-        drop(guard);
-        if let Some(byte) = byte {
-            self.tree.edit_text(focused, |tc| {
-                if let TextBacking::Editable(ref mut ed) = tc.backing {
-                    ed.set_caret(byte);
-                }
-            });
-        }
     }
 }
 

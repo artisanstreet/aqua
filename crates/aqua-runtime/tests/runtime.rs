@@ -162,3 +162,6 @@ fn time_never_runs_backwards() {
         .unwrap();
     assert_eq!(runtime.now_secs(), 2.0);
 }
+
+#[path = "runtime/selection-sources.rs"]
+mod selection_sources;

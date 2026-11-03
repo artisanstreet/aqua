@@ -795,7 +795,7 @@ impl View {
         // Assemble body children: header (clip side) is synced separately
         // below; here the body runs in order with exact spacer spans.
         let (len, typo) = match self.collections.get(&raw) {
-            Some(m) => (m.state.len(), m.typo),
+            Some(m) => (m.state.len(), m.typo.clone()),
             None => return Ok(false),
         };
         // Re-lower retained elements purely (no factories) plus fresh builds.
@@ -845,13 +845,6 @@ impl View {
                         tags.push(BodyTag::Row(idx));
                         rs
                     } else if let Some(ret) = m.rows.get(&idx) {
-                        // Retained residents synchronize shallow: live kind
-                        // clone plus spec style/paint/key, no children,
-                        // managed. Key/order/style reconcile while live
-                        // content (signal-updated labels, editors, nested
-                        // scrolls, painters) survives scrolls and resizes
-                        // untouched. Fresh/source/plan changes rebuild full
-                        // descriptors instead (see above).
                         let rs = lower_specs_in(&ret.element, &typo).map_err(|e| e.to_string())?;
                         debug_assert_eq!(rs.len(), 1);
                         row_margins.insert(
@@ -862,22 +855,23 @@ impl View {
                             ),
                         );
                         let mut shallow = rs.into_iter().next().unwrap();
-                        // Preserve live runtime state that a stateless
-                        // re-lower would clobber: static label text
-                        // (possibly signal-updated — the update path no-ops
-                        // on equality) and canvas painters (replaced
-                        // wholesale by the update path). Nested scroll
-                        // offsets need no patch (the managed path never
-                        // touches them); editable models are preserved by
-                        // the update path itself. Dead nodes fall back to
-                        // the lowered spec (remounts fresh via the sweep
-                        // above, so this is unreachable in practice).
                         if let Some(node) = ret.node {
                             if let Some(live) = tree.get(node) {
                                 match (&mut shallow.kind, &live.kind) {
                                     (NodeKind::Text(ref mut fresh_tc), NodeKind::Text(live_tc)) => {
                                         if !live_tc.is_editable() {
                                             fresh_tc.set_text(live_tc.text());
+                                            fresh_tc.text_style = live_tc.text_style.clone();
+                                            fresh_tc.spans = live_tc.spans.clone();
+                                            fresh_tc.font_size = live_tc.font_size;
+                                            fresh_tc.color = live_tc.color;
+                                            fresh_tc.selectable = live_tc.selectable;
+                                            fresh_tc.selection = live_tc.selection;
+                                            fresh_tc.selection_source =
+                                                live_tc.selection_source.clone();
+                                            fresh_tc.wrap = live_tc.wrap;
+                                            fresh_tc.password = live_tc.password;
+                                            fresh_tc.placeholder = live_tc.placeholder.clone();
                                         }
                                     }
                                     (

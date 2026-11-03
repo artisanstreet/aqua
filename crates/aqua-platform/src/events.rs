@@ -35,6 +35,7 @@ pub enum AquaKeyCode {
     Space,
     Backspace,
     Delete,
+    Insert,
     ArrowLeft,
     ArrowRight,
     ArrowUp,
@@ -121,6 +122,7 @@ pub fn translate_physical_key(k: winit::keyboard::PhysicalKey) -> AquaKeyCode {
             K::Space => AquaKeyCode::Space,
             K::Backspace => AquaKeyCode::Backspace,
             K::Delete => AquaKeyCode::Delete,
+            K::Insert => AquaKeyCode::Insert,
             K::ArrowLeft => AquaKeyCode::ArrowLeft,
             K::ArrowRight => AquaKeyCode::ArrowRight,
             K::ArrowUp => AquaKeyCode::ArrowUp,
@@ -258,6 +260,7 @@ fn aqua_code_to_named(code: AquaKeyCode) -> aqua_core::NamedKey {
         AquaKeyCode::Tab => N::Tab,
         AquaKeyCode::Backspace => N::Backspace,
         AquaKeyCode::Delete => N::Delete,
+        AquaKeyCode::Insert => N::Insert,
         AquaKeyCode::ArrowLeft => N::Left,
         AquaKeyCode::ArrowRight => N::Right,
         AquaKeyCode::ArrowUp => N::Up,
@@ -368,6 +371,7 @@ pub fn classify_logical_key(
             let named = match named {
                 N::Backspace => Some(K::Backspace),
                 N::Delete => Some(K::Delete),
+                N::Insert => Some(K::Insert),
                 N::Enter => Some(K::Enter),
                 N::Tab => Some(K::Tab),
                 N::Escape => Some(K::Escape),
@@ -396,6 +400,10 @@ pub fn classify_logical_key(
 
 /// `winit` IME occurrence -> canonical [`aqua_core::InputEvent`].
 /// Always `Some` (every native IME occurrence has a core meaning).
+pub fn ime_is_composing(ime: &winit::event::Ime) -> bool {
+    matches!(ime, winit::event::Ime::Preedit(marked, _) if !marked.is_empty())
+}
+
 pub fn translate_ime_core(ime: &winit::event::Ime) -> aqua_core::InputEvent {
     use aqua_core::{ImeEvent as C, InputEvent as E};
     match translate_ime(ime) {

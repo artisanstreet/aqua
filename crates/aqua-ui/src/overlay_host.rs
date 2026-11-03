@@ -464,6 +464,9 @@ impl OverlayHost {
     }
 
     fn route_key(&mut self, tree: &mut UiTree, key: &KeyEvent) -> (KeyOutcome, bool) {
+        if events::text_is_composing(tree) && self.focused_in_modal_domain(tree) {
+            return (KeyOutcome::Ignored, true);
+        }
         if key.key == Key::Named(NamedKey::Tab) && !key.repeat {
             if let Some(modal) = self.service.modal_blocker() {
                 let reverse = key.modifiers.contains(Modifiers::SHIFT);
@@ -480,7 +483,9 @@ impl OverlayHost {
                 (outcome, true)
             }
             KeyOutcome::CapturedByModal { .. } => {
-                events::dispatch_key(tree, key);
+                if self.focused_in_modal_domain(tree) {
+                    events::dispatch_key(tree, key);
+                }
                 (outcome, true)
             }
             KeyOutcome::Ignored => {
@@ -488,6 +493,35 @@ impl OverlayHost {
                 (outcome, consumed)
             }
         }
+    }
+
+    fn focused_in_modal_domain(&self, tree: &UiTree) -> bool {
+        let Some(modal) = self.service.modal_blocker() else {
+            return true;
+        };
+        let Some(mut node) = tree.focused() else {
+            return false;
+        };
+        loop {
+            let Some(parent) = tree.get(node).and_then(|record| record.parent) else {
+                return false;
+            };
+            if Some(parent) == tree.root() {
+                break;
+            }
+            node = parent;
+        }
+        let Some(overlay) = self.overlay_of_root(node) else {
+            return false;
+        };
+        let stack = self.service.stack();
+        let Some(modal_index) = stack.iter().position(|item| *item == modal) else {
+            return false;
+        };
+        stack
+            .iter()
+            .position(|item| *item == overlay)
+            .is_some_and(|index| index >= modal_index)
     }
 
     /// Convenience router for full input events. Returns `true` when
@@ -498,10 +532,13 @@ impl OverlayHost {
                 PointerOutcome::Ignored => events::dispatch_input(tree, event),
                 _ => true,
             },
-            // route_key already performs tree fallback. Dispatching again
-            // doubles Backspace, arrow movement, and field submissions.
             InputEvent::KeyDown(key) => self.route_key(tree, key).1,
             InputEvent::Scroll { at, delta } => self.handle_scroll(tree, *at, *delta),
+            InputEvent::TextInput { .. } | InputEvent::Ime(_)
+                if !self.focused_in_modal_domain(tree) =>
+            {
+                true
+            }
             _ => events::dispatch_input(tree, event),
         }
     }

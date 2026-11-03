@@ -20,5 +20,6 @@ wgpu = { workspace = true }
 pollster = "0.4"
 
 [dev-dependencies]
+accesskit = "0.25"
 taffy = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }

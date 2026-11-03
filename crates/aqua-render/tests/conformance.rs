@@ -335,7 +335,9 @@ fn grouped_text_respects_rectangles_after_it_and_isolates_nested_alpha() {
     renderer.draw(&plan).unwrap();
     let visible = renderer.readback().unwrap();
     let ink: Vec<_> = visible
-        .as_chunks::<4>().0.iter()
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
         .filter(|(_, pixel)| pixel[3] > 90)
         .map(|(index, _)| index)
@@ -426,11 +428,15 @@ fn inline_span_colors_survive_group_and_text_opacity() {
     renderer.draw(&plan).unwrap();
     let pixels = renderer.readback().unwrap();
     let red = pixels
-        .as_chunks::<4>().0.iter()
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[0] > 90 && pixel[1] < 3 && pixel[2] < 3)
         .count();
     let green = pixels
-        .as_chunks::<4>().0.iter()
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[1] > 90 && pixel[0] < 3 && pixel[2] < 3)
         .count();
     assert!(
@@ -438,7 +444,11 @@ fn inline_span_colors_survive_group_and_text_opacity() {
         "inline glyph colors must override the blue default: red {red}, green {green}"
     );
     assert!(
-        pixels.as_chunks::<4>().0.iter().all(|pixel| pixel[3] <= 103),
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel[3] <= 103),
         "text and group opacity apply to explicit span colors"
     );
 }

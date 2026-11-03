@@ -3,5 +3,5 @@
 mod runtime;
 pub mod scheduler;
 
-pub use runtime::{Runtime, RuntimeError};
+pub use runtime::{FrameWork, Runtime, RuntimeError};
 pub use scheduler::{FrameStats, Scheduler};

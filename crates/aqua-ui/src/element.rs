@@ -14,7 +14,9 @@ use crate::tree::{
     CanvasPaintCallback, MediaContent, NodeKind, NodeSpec, ScrollContent, TextBacking, TextContent,
     UiTree, ViewportContent,
 };
+use aqua_text::document::{SelectionBinding, SelectionDocumentId, SourceSlice};
 use aqua_text::{LineMode, Selection};
+use aqua_text::{StyledSpan, TextStyle};
 
 /// User key: hashed with a fixed seed at mount for keyed reconciliation.
 /// Anything the macro's `.with_key(expr)` accepts must convert into this.
@@ -166,8 +168,9 @@ impl From<String> for Axis {
 ///
 /// Sealed implementation detail (only constructed inside this module).
 #[doc(hidden)]
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TypoChain {
+    text_style: Option<TextStyle>,
     font_size: Option<f32>,
     color: Option<Oklch>,
     wrap: Option<bool>,
@@ -177,6 +180,7 @@ impl TypoChain {
     /// Child chain: own explicit fields win, otherwise the parent's.
     pub(crate) fn child(&self, own: &TypoChain) -> TypoChain {
         TypoChain {
+            text_style: own.text_style.clone().or_else(|| self.text_style.clone()),
             font_size: own.font_size.or(self.font_size),
             color: own.color.or(self.color),
             wrap: own.wrap.or(self.wrap),
@@ -187,6 +191,7 @@ impl TypoChain {
     fn resolve(&self) -> Typography {
         let base = Typography::default();
         Typography {
+            text_style: self.text_style.clone().unwrap_or(base.text_style),
             font_size: self.font_size.unwrap_or(base.font_size),
             color: self.color.unwrap_or(base.color),
             wrap: self.wrap.unwrap_or(base.wrap),
@@ -247,6 +252,9 @@ impl StyleArg for Style {
             // no wrapper nodes. Nothing is dropped here: per-corner radii
             // are rejected loudly at lowering (see `LowerError`).
             self.apply_to(layout, paint);
+            if let Some(style) = self.text_style_opt() {
+                typo.text_style = Some(style.clone());
+            }
             if let Some(v) = self.font_size_opt() {
                 typo.font_size = Some(v);
             }
@@ -572,6 +580,8 @@ pub struct Text {
     paint: Paint,
     typo: TypoChain,
     initial: String,
+    spans: Vec<StyledSpan>,
+    selection_source: Option<SelectionBinding>,
     font_size: f32,
     color: Oklch,
     editable: bool,
@@ -591,6 +601,8 @@ impl Default for Text {
             paint: Paint::default(),
             typo: TypoChain::default(),
             initial: String::new(),
+            spans: Vec::new(),
+            selection_source: None,
             font_size: 14.0,
             color: Oklch::WHITE,
             editable: false,
@@ -657,6 +669,33 @@ impl Text {
 
     /// Font size in logical px. Explicit: wins over inherited styles,
     /// and is itself inherited by descendant text.
+    pub fn text_style(mut self, style: TextStyle) -> Self {
+        self.font_size = style.size_px;
+        self.typo.font_size = Some(style.size_px);
+        self.typo.text_style = Some(style);
+        self
+    }
+
+    pub fn selection_source(self, slice: SourceSlice) -> Self {
+        self.selection_source_in(SelectionDocumentId::default(), slice)
+    }
+
+    pub fn selection_source_in(
+        mut self,
+        document: SelectionDocumentId,
+        slice: SourceSlice,
+    ) -> Self {
+        self.selection_source = Some(SelectionBinding { document, slice });
+        self.selectable = true;
+        self
+    }
+
+    pub fn spans(mut self, spans: Vec<StyledSpan>) -> Self {
+        self.initial = spans.iter().map(|span| span.text.as_str()).collect();
+        self.spans = spans;
+        self
+    }
+
     pub fn font_size(mut self, size: impl NumberArg) -> Self {
         let size = size.into_f32();
         self.font_size = size;
@@ -1897,9 +1936,19 @@ impl Element {
         self
     }
 
-    /// This element's explicit role, if any.
     pub(crate) fn role_opt(&self) -> Option<Role> {
-        self.role
+        self.role.or(match &self.kind {
+            ElementKind::Text(text) if text.editable && text.password => Some(Role::PasswordField),
+            ElementKind::Text(text) if text.editable => Some(Role::TextField),
+            ElementKind::Text(_) | ElementKind::Dynamic(_) => Some(Role::Text),
+            ElementKind::Button(_) => Some(Role::Button),
+            ElementKind::Checkbox(_) => Some(Role::Checkbox),
+            ElementKind::Slider(_) => Some(Role::Slider),
+            ElementKind::Tabs(_) => Some(Role::TabList),
+            ElementKind::Media(_) => Some(Role::Image),
+            ElementKind::Scroll(_) => Some(Role::ScrollRegion),
+            _ => None,
+        })
     }
 
     /// This element's collection coordinates override, if any.
@@ -1989,21 +2038,24 @@ impl Element {
     /// empty for fragments, which carry no props of their own).
     pub(crate) fn typo_chain(&self) -> TypoChain {
         match &self.kind {
-            ElementKind::Box(b) => b.typo,
-            ElementKind::Text(t) => t.typo,
-            ElementKind::Media(m) => m.typo,
-            ElementKind::Scroll(s) => s.typo,
-            ElementKind::Canvas(c) => c.typo,
-            ElementKind::Viewport3D(v) => v.typo,
-            ElementKind::Button(b) => b.typo,
-            ElementKind::Checkbox(c) => c.typo,
-            ElementKind::Slider(s) => s.typo,
-            ElementKind::Dropdown(d) => d.typo,
-            ElementKind::Tabs(t) => t.typo,
-            ElementKind::Dynamic(d) => d.typo,
+            ElementKind::Box(b) => b.typo.clone(),
+            ElementKind::Text(t) => t.typo.clone(),
+            ElementKind::Media(m) => m.typo.clone(),
+            ElementKind::Scroll(s) => s.typo.clone(),
+            ElementKind::Canvas(c) => c.typo.clone(),
+            ElementKind::Viewport3D(v) => v.typo.clone(),
+            ElementKind::Button(b) => b.typo.clone(),
+            ElementKind::Checkbox(c) => c.typo.clone(),
+            ElementKind::Slider(s) => s.typo.clone(),
+            ElementKind::Dropdown(d) => d.typo.clone(),
+            ElementKind::Tabs(t) => t.typo.clone(),
+            ElementKind::Dynamic(d) => d.typo.clone(),
             ElementKind::Collection(d) => {
                 let mut typo = TypoChain::default();
                 for style in &d.styles {
+                    if let Some(value) = style.text_style_opt() {
+                        typo.text_style = Some(value.clone());
+                    }
                     if let Some(v) = style.font_size_opt() {
                         typo.font_size = Some(v);
                     }
@@ -2276,6 +2328,7 @@ impl Element {
                 }
                 if let Some(rec) = tree.get_mut(id) {
                     if let NodeKind::Text(ref mut tc) = rec.kind {
+                        tc.text_style = eff.text_style.clone();
                         tc.font_size = eff.font_size;
                         tc.color = eff.color;
                         tc.wrap = eff.wrap;
@@ -2385,6 +2438,9 @@ impl Element {
     ) {
         if let Some(rec) = tree.get_mut(id) {
             if let NodeKind::Text(ref mut tc) = rec.kind {
+                tc.text_style = eff.text_style.clone();
+                tc.spans = t.spans.clone();
+                tc.selection_source = t.selection_source.clone();
                 tc.font_size = eff.font_size;
                 tc.color = eff.color;
                 tc.selectable = t.selectable;
@@ -2708,6 +2764,7 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
             };
             let eff = inherited.child(&d.typo).resolve();
             let mut tc = TextContent::label(source.try_get().unwrap_or_default());
+            tc.text_style = eff.text_style.clone();
             tc.font_size = eff.font_size;
             tc.color = eff.color;
             tc.wrap = eff.wrap;
@@ -2785,6 +2842,9 @@ fn text_content(t: &Text, eff: &Typography) -> TextContent {
     } else {
         TextContent::label(t.initial.clone())
     };
+    tc.text_style = eff.text_style.clone();
+    tc.spans = t.spans.clone();
+    tc.selection_source = t.selection_source.clone();
     tc.font_size = eff.font_size;
     tc.color = eff.color;
     tc.selectable = t.selectable;

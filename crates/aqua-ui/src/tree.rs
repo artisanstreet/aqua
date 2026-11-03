@@ -34,6 +34,8 @@
 //! via [`UiTree::push_command`]), and event registration
 //! ([`UiTree::set_action_callback`], fired by event dispatch in `events.rs`).
 
+use aqua_text::document::SelectionBinding;
+use aqua_text::{StyledSpan, TextStyle};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
@@ -69,11 +71,14 @@ pub enum TextBacking {
     /// Read-only content (selection state lives in [`TextContent::selection`]).
     Static(TextModel),
     /// Editable content (selection/undo/IME owned by the editor).
-    Editable(TextEditor),
+    Editable(Box<TextEditor>),
 }
 
 /// Text node content and editing state.
 pub struct TextContent {
+    pub text_style: TextStyle,
+    pub spans: Vec<StyledSpan>,
+    pub selection_source: Option<SelectionBinding>,
     /// Content store.
     pub backing: TextBacking,
     /// Font size in logical px.
@@ -97,10 +102,43 @@ pub struct TextContent {
 }
 
 impl TextContent {
+    pub fn effective_text_style(&self) -> TextStyle {
+        let mut style = self.text_style.clone();
+        let ratio = self.font_size / style.size_px.max(0.01);
+        style.size_px = self.font_size;
+        style.line_height_px *= ratio;
+        style
+    }
+
+    pub fn shaping_spans(&self) -> &[StyledSpan] {
+        match &self.backing {
+            TextBacking::Static(model)
+                if !self.password
+                    && self.spans.iter().map(|span| span.text.len()).sum::<usize>()
+                        == model.text().len()
+                    && self
+                        .spans
+                        .iter()
+                        .flat_map(|span| span.text.chars())
+                        .eq(model.text().chars()) =>
+            {
+                &self.spans
+            }
+            _ => &[],
+        }
+    }
+
     /// Static label: model-backed, no editing machinery.
     pub fn label(text: impl Into<String>) -> Self {
         Self {
             backing: TextBacking::Static(TextModel::new(text)),
+            text_style: TextStyle {
+                size_px: 14.0,
+                line_height_px: 16.8,
+                ..Default::default()
+            },
+            spans: Vec::new(),
+            selection_source: None,
             font_size: 14.0,
             color: Oklch::WHITE,
             selectable: false,
@@ -114,14 +152,21 @@ impl TextContent {
     /// Editable node: editor-backed.
     pub fn editable(text: impl Into<String>, multiline: bool) -> Self {
         Self {
-            backing: TextBacking::Editable(TextEditor::with_text(
+            backing: TextBacking::Editable(Box::new(TextEditor::with_text(
                 &text.into(),
                 if multiline {
                     LineMode::Multi
                 } else {
                     LineMode::Single
                 },
-            )),
+            ))),
+            text_style: TextStyle {
+                size_px: 14.0,
+                line_height_px: 16.8,
+                ..Default::default()
+            },
+            spans: Vec::new(),
+            selection_source: None,
             font_size: 14.0,
             color: Oklch::WHITE,
             selectable: true,
@@ -197,6 +242,9 @@ impl TextContent {
 
     /// Replace content, preserving editor state (caret clamps, undo records).
     pub fn set_text(&mut self, text: &str) {
+        if self.text() != text {
+            self.spans.clear();
+        }
         match &mut self.backing {
             TextBacking::Static(m) => m.set_text(text),
             TextBacking::Editable(e) => e.set_text(text),
@@ -636,6 +684,8 @@ pub struct LeafCtx {
 /// Text measurement input owned by the UI tree.
 #[derive(Debug, Clone)]
 pub struct LeafText {
+    pub text_style: TextStyle,
+    pub spans: Vec<StyledSpan>,
     /// Display text to measure.
     pub text: String,
     /// Font size in logical px.
@@ -877,10 +927,6 @@ impl UiTree {
         true
     }
 
-    /// Emit the accessibility tree in paint order: one [`SemanticNode`] per
-    /// live node with children, committed bounds, role, disabled, focus,
-    /// label, and value. Empty labels on `Text` nodes fall back to content.
-    /// The platform adapter converts these to native APIs (e.g. accesskit).
     pub fn emit_semantics(&self) -> Vec<SemanticNode> {
         let mut out = Vec::new();
         for id in self.traverse() {
@@ -888,21 +934,64 @@ impl UiTree {
                 continue;
             };
             let mut label = rec.semantics.label.clone();
+            let mut value_text = rec.semantics.value_text.clone();
             if label.is_empty() {
-                if let NodeKind::Text(ref t) = rec.kind {
-                    label = t.text().to_string();
+                match &rec.kind {
+                    NodeKind::Text(text) if text.is_editable() => label = text.placeholder.clone(),
+                    NodeKind::Text(text) if !text.password => label = text.text().to_owned(),
+                    _ if matches!(
+                        rec.semantics.role,
+                        Role::Button | Role::Checkbox | Role::Tab | Role::MenuItem
+                    ) =>
+                    {
+                        let mut pending = rec.children.iter().rev().copied().collect::<Vec<_>>();
+                        let mut labels = Vec::new();
+                        while let Some(child) = pending.pop() {
+                            if let Some(child) = self.get(child) {
+                                match &child.kind {
+                                    NodeKind::Text(text) if !text.password => {
+                                        labels.push(text.text())
+                                    }
+                                    _ => pending.extend(child.children.iter().rev().copied()),
+                                }
+                            }
+                        }
+                        label = labels.join(" ");
+                    }
+                    _ => {}
                 }
+            }
+            if let NodeKind::Text(text) = &rec.kind {
+                if text.is_editable() {
+                    value_text = Some(if text.password {
+                        "•".repeat(text.text().chars().count())
+                    } else {
+                        text.text().to_owned()
+                    });
+                }
+            }
+            let mut bounds = self.rects.get(&id.raw()).copied();
+            let mut parent = rec.parent;
+            while let Some(node) = parent {
+                let Some(record) = self.get(node) else {
+                    break;
+                };
+                if let NodeKind::Scroll(scroll) = &record.kind {
+                    bounds =
+                        bounds.map(|bounds| bounds.translate(-scroll.offset.x, -scroll.offset.y));
+                }
+                parent = record.parent;
             }
             out.push(SemanticNode {
                 node: id,
                 role: rec.semantics.role,
                 label,
                 focused: self.focused == Some(id),
-                disabled: rec.semantics.disabled,
+                disabled: self.is_disabled(id),
                 selected: rec.semantics.selected,
-                value_text: rec.semantics.value_text.clone(),
+                value_text,
                 children: rec.children.clone(),
-                bounds: self.rects.get(&id.raw()).copied(),
+                bounds,
                 collection: rec.semantics.collection,
             });
         }
@@ -1261,6 +1350,9 @@ impl UiTree {
                     // cosmetic props only.
                     if let Some(rec) = self.nodes.get_mut(id.raw()) {
                         if let NodeKind::Text(ref mut cur) = rec.kind {
+                            cur.text_style = t.text_style;
+                            cur.spans = t.spans;
+                            cur.selection_source = t.selection_source;
                             cur.font_size = t.font_size;
                             cur.color = t.color;
                             cur.selectable = t.selectable;
@@ -1286,6 +1378,9 @@ impl UiTree {
                     // string. Reconciliation must retain typography too.
                     if let Some(rec) = self.nodes.get_mut(id.raw()) {
                         if let NodeKind::Text(ref mut cur) = rec.kind {
+                            cur.text_style = t.text_style;
+                            cur.spans = t.spans;
+                            cur.selection_source = t.selection_source;
                             cur.font_size = t.font_size;
                             cur.color = t.color;
                             cur.selectable = t.selectable;
@@ -1362,6 +1457,8 @@ impl UiTree {
                 text: Some(LeafText {
                     text: t.display_text(),
                     font_size: t.font_size,
+                    text_style: t.effective_text_style(),
+                    spans: t.shaping_spans().to_vec(),
                     multiline: t.multiline(),
                 }),
             },
@@ -1697,7 +1794,7 @@ impl UiTree {
         if !should_update {
             return true;
         }
-        let (display, font_size, multiline) = {
+        let (display, font_size, text_style, spans, multiline) = {
             let Some(rec) = self.nodes.get_mut(id.raw()) else {
                 return false;
             };
@@ -1706,18 +1803,99 @@ impl UiTree {
             };
             tc.set_text(&text);
             rec.dirty_paint = true;
-            (tc.display_text(), tc.font_size, tc.multiline())
+            (
+                tc.display_text(),
+                tc.font_size,
+                tc.effective_text_style(),
+                tc.shaping_spans().to_vec(),
+                tc.multiline(),
+            )
         };
         if let Some(ctx) = self.taffy.get_node_context_mut(t) {
             ctx.text = Some(LeafText {
                 text: display,
                 font_size,
+                text_style,
+                spans,
                 multiline,
             });
         }
         self.mark_layout_dirty(id);
         self.touch_paint(id);
         true
+    }
+
+    pub fn set_text_selection(&mut self, id: NodeId, selection: Option<Selection>) -> bool {
+        let composing = self.get(id).is_some_and(|record| {
+            matches!(&record.kind, NodeKind::Text(TextContent { backing: TextBacking::Editable(editor), .. }) if editor.is_composing())
+        });
+        if composing {
+            return self
+                .edit_text(id, |text| {
+                    if let TextBacking::Editable(editor) = &mut text.backing {
+                        editor.set_selection(
+                            selection
+                                .unwrap_or_else(|| Selection::caret_at(editor.selection().caret)),
+                        );
+                    }
+                })
+                .is_some();
+        }
+        let Some(record) = self.nodes.get_mut(id.raw()) else {
+            return false;
+        };
+        let NodeKind::Text(text) = &mut record.kind else {
+            return false;
+        };
+        match &mut text.backing {
+            TextBacking::Editable(editor) => {
+                editor.set_selection(
+                    selection.unwrap_or_else(|| Selection::caret_at(editor.selection().caret)),
+                );
+            }
+            TextBacking::Static(model) => {
+                let boundary = |position: usize| {
+                    let position = position.min(model.len_bytes());
+                    if model.is_grapheme_boundary(position) {
+                        position
+                    } else {
+                        model.prev_grapheme(position)
+                    }
+                };
+                text.selection = selection.map(|selection| {
+                    Selection::new(boundary(selection.anchor), boundary(selection.caret))
+                });
+            }
+        }
+        true
+    }
+
+    pub fn edit_editor<R>(
+        &mut self,
+        id: NodeId,
+        edit: impl FnOnce(&mut TextEditor) -> R,
+    ) -> Option<R> {
+        let (result, content_changed) = {
+            let record = self.nodes.get_mut(id.raw())?;
+            let NodeKind::Text(text) = &mut record.kind else {
+                return None;
+            };
+            let TextBacking::Editable(editor) = &mut text.backing else {
+                return None;
+            };
+            let revision = editor.revision();
+            let composing = editor.is_composing();
+            let result = edit(editor);
+            (
+                result,
+                revision != editor.revision() || composing || editor.is_composing(),
+            )
+        };
+        if content_changed {
+            self.sync_text_leaf(id);
+            self.touch_paint(id);
+        }
+        Some(result)
     }
 
     /// Run a text edit closure against a text node, then re-sync the Taffy
@@ -1757,6 +1935,8 @@ impl UiTree {
             ctx.text = Some(LeafText {
                 text: tc.display_text(),
                 font_size: tc.font_size,
+                text_style: tc.effective_text_style(),
+                spans: tc.shaping_spans().to_vec(),
                 multiline: tc.multiline(),
             });
         }
@@ -2096,7 +2276,9 @@ fn measure_leaf(
         text:
             Some(LeafText {
                 text,
-                font_size,
+                font_size: _,
+                text_style,
+                spans,
                 multiline,
             }),
     }) = ctx
@@ -2111,7 +2293,8 @@ fn measure_leaf(
         } else {
             None
         };
-        let measured: Size = measurer.measure_text(text, *font_size, max_width, *multiline);
+        let measured: Size =
+            measurer.measure_styled(text, text_style, spans, max_width, *multiline);
         if input.known_dimensions.width.is_none() {
             size.width = measured.w;
         }
@@ -2378,23 +2561,6 @@ mod tests {
         label.placeholder = "ignored".to_string();
         assert!(!label.is_placeholder());
         assert_eq!(label.display_text(), "");
-    }
-
-    #[test]
-    fn placeholder_semantics_value_stays_empty() {
-        let mut tree = UiTree::new();
-        let mut tc = TextContent::editable("", false);
-        tc.placeholder = "Search...".to_string();
-        let root = tree.mount_spec(column(vec![NodeSpec::new(
-            NodeKind::Text(tc),
-            LayoutStyle::default(),
-        )]));
-        let field = tree.get(root).unwrap().children[0];
-        let nodes = tree.emit_semantics();
-        let sem = nodes.iter().find(|n| n.node == field).unwrap();
-        assert_eq!(sem.label, ""); // committed text, not the hint
-        assert_eq!(sem.value_text, None);
-        assert!(!sem.focused);
     }
 
     #[test]

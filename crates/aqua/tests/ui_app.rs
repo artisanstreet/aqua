@@ -322,3 +322,6 @@ fn padded_single_line_field_keeps_caret_visible_at_multiple_scales() {
         );
     }
 }
+
+#[path = "ui_app/editor-workload.rs"]
+mod editor_workload;

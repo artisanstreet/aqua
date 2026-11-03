@@ -90,6 +90,21 @@ impl A11yAdapter {
     }
 
     /// Push a semantic update when (and only when) AT is active.
+    pub fn needs_snapshot(&self) -> bool {
+        self.bridge.needs_snapshot()
+    }
+
+    pub fn push_nodes(
+        &mut self,
+        root: aqua_core::NodeId,
+        focus: aqua_core::NodeId,
+        items: &[crate::a11y::A11yNode],
+    ) {
+        if let Some(update) = self.bridge.build_snapshot(root, focus, items) {
+            self.adapter.update_if_active(|| update);
+        }
+    }
+
     pub fn push_snapshot(&mut self, update: TreeUpdate) {
         self.adapter.update_if_active(|| update);
     }

@@ -291,6 +291,9 @@ impl Application for ManagedUiApp {
         }
         self.ui.on_wake(ctx, id);
     }
+    fn on_frame_completed(&mut self, ctx: &mut AppCtx, id: AquaWindowId, sequence: u64) {
+        self.ui.on_frame_completed(ctx, id, sequence);
+    }
     fn cursor(&self) -> aqua_core::CursorIcon {
         self.ui.cursor()
     }

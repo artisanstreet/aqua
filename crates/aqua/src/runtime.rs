@@ -90,6 +90,7 @@ struct GpuWindow {
     surface: SurfaceFacade,
     renderer: Renderer,
     ledger: GpuLedger,
+    text_raster_mode: aqua_core::scene::TextRasterMode,
 }
 
 #[derive(Debug, Default)]
@@ -98,6 +99,36 @@ struct GpuLedger {
     completed: u64,
     presented: u64,
     unreleased: u32,
+}
+
+impl GpuLedger {
+    fn complete(&mut self, sequence: u64) -> Option<u32> {
+        if sequence <= self.completed || sequence > self.submitted {
+            return None;
+        }
+        let released = (sequence - self.completed).min(u64::from(self.unreleased)) as u32;
+        self.completed = sequence;
+        self.unreleased -= released;
+        Some(released)
+    }
+}
+
+fn complete_gpu_event(ledger: Option<&mut GpuLedger>, sequence: u64) -> Option<u32> {
+    ledger.and_then(|ledger| ledger.complete(sequence))
+}
+
+#[derive(Clone, Debug)]
+pub struct CaptureMetadata {
+    pub adapter: wgpu::AdapterInfo,
+    pub surface_format: wgpu::TextureFormat,
+    pub surface_alpha_mode: wgpu::CompositeAlphaMode,
+    pub present_mode: wgpu::PresentMode,
+    pub text_raster_mode: aqua_core::scene::TextRasterMode,
+    pub client_width: u32,
+    pub client_height: u32,
+    pub scale_factor: f64,
+    pub submitted_sequence: u64,
+    pub completed_sequence: u64,
 }
 
 struct SharedGpu {
@@ -114,11 +145,31 @@ pub struct AppCtx<'a> {
     proxy: Option<winit::event_loop::EventLoopProxy<AquaUserEvent>>,
     flushers: &'a mut HashMap<AquaWindowId, Box<dyn FnMut() -> FlushReport>>,
     windows: &'a HashMap<AquaWindowId, WindowRecord>,
+    shared_gpu: Option<&'a SharedGpu>,
     clipboard: &'a mut Box<dyn Clipboard>,
     window_requests: &'a mut VecDeque<WindowRequest>,
 }
 
 impl AppCtx<'_> {
+    pub fn capture_metadata(&self, id: AquaWindowId) -> Option<CaptureMetadata> {
+        let record = self.windows.get(&id)?;
+        let window = record.window.as_ref()?;
+        let gpu = record.gpu.as_ref()?;
+        let size = window.inner_size();
+        Some(CaptureMetadata {
+            adapter: self.shared_gpu?.adapter.get_info(),
+            surface_format: gpu.surface.format(),
+            surface_alpha_mode: gpu.surface.alpha_mode(),
+            present_mode: gpu.surface.present_mode(),
+            text_raster_mode: gpu.text_raster_mode,
+            client_width: size.width,
+            client_height: size.height,
+            scale_factor: window.scale_factor(),
+            submitted_sequence: gpu.ledger.submitted,
+            completed_sequence: gpu.ledger.completed,
+        })
+    }
+
     pub fn window_state(&self, id: AquaWindowId) -> Option<&ObservedWindowState> {
         self.windows.get(&id).map(|record| &record.observed)
     }
@@ -232,6 +283,8 @@ pub trait Application {
     }
 
     fn on_wake(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId) {}
+
+    fn on_frame_completed(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _sequence: u64) {}
 
     fn cursor(&self) -> aqua_core::CursorIcon {
         aqua_core::CursorIcon::Default
@@ -543,6 +596,7 @@ impl Aqua {
                 gpu.renderer
                     .set_text_raster_mode(*mode)
                     .map_err(|error| WindowError::Native(error.to_string()))?;
+                gpu.text_raster_mode = *mode;
                 gpu.surface.request_present();
                 self.scheduler.request_frame(id, FrameReason::EXPLICIT);
             }
@@ -668,6 +722,7 @@ impl Aqua {
             proxy,
             flushers: &mut self.flushers,
             windows: &self.windows,
+            shared_gpu: self.shared_gpu.as_ref(),
             clipboard: &mut self.clipboard,
             window_requests: &mut self.window_requests,
         };
@@ -1169,6 +1224,7 @@ impl<A: Application> Loop<A> {
                 surface: facade,
                 renderer,
                 ledger: GpuLedger::default(),
+                text_raster_mode: aqua_core::scene::TextRasterMode::default(),
             });
         }
         Ok(())
@@ -1188,8 +1244,9 @@ impl<A: Application> Loop<A> {
             .name("aqua-gpu-complete".into())
             .spawn(move || {
                 for (id, seq) in rx {
-                    let _ = device.poll(wgpu::PollType::wait_indefinitely());
-                    if let Some(p) = &proxy {
+                    if let (Ok(_), Some(p)) =
+                        (device.poll(wgpu::PollType::wait_indefinitely()), &proxy)
+                    {
                         let _ = p.send_event(AquaUserEvent::GpuComplete(id, seq));
                     }
                 }
@@ -1866,22 +1923,19 @@ impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for L
                 let _ = id;
             }
             AquaUserEvent::GpuComplete(id, seq) => {
-                let release = match self.aqua.windows.get_mut(&id) {
-                    Some(rec) => match rec.gpu.as_mut() {
-                        Some(gpu) if seq > gpu.ledger.completed => {
-                            let newly = (seq - gpu.ledger.completed)
-                                .min(gpu.ledger.unreleased as u64)
-                                as u32;
-                            gpu.ledger.completed = seq;
-                            gpu.ledger.unreleased -= newly;
-                            newly
-                        }
-                        _ => 0,
-                    },
-                    None => 0,
-                };
-                for _ in 0..release {
-                    self.aqua.scheduler.mark_presented(id);
+                let ledger = self
+                    .aqua
+                    .windows
+                    .get_mut(&id)
+                    .and_then(|record| record.gpu.as_mut())
+                    .map(|gpu| &mut gpu.ledger);
+                let release = complete_gpu_event(ledger, seq);
+                if let Some(release) = release {
+                    for _ in 0..release {
+                        self.aqua.scheduler.mark_presented(id);
+                    }
+                    self.aqua
+                        .with_ctx(|ctx| self.app.on_frame_completed(ctx, id, seq));
                 }
             }
         }
@@ -1974,6 +2028,27 @@ mod tests {
             occluded: false,
         });
         (aqua, Probe::new(), id)
+    }
+
+    #[test]
+    fn gpu_completions_require_submitted_new_sequences_and_ignore_closed_windows() {
+        let mut ledger = GpuLedger {
+            submitted: 3,
+            completed: 0,
+            presented: 3,
+            unreleased: 3,
+        };
+        assert_eq!(complete_gpu_event(Some(&mut ledger), 0), None);
+        assert_eq!(complete_gpu_event(Some(&mut ledger), 4), None);
+        assert_eq!(ledger.completed, 0);
+        assert_eq!(complete_gpu_event(Some(&mut ledger), 2), Some(2));
+        assert_eq!(ledger.unreleased, 1);
+        assert_eq!(complete_gpu_event(Some(&mut ledger), 2), None);
+        assert_eq!(complete_gpu_event(Some(&mut ledger), 1), None);
+        assert_eq!(complete_gpu_event(None, 3), None);
+        assert_eq!(complete_gpu_event(Some(&mut ledger), 3), Some(1));
+        assert_eq!(ledger.completed, 3);
+        assert_eq!(ledger.unreleased, 0);
     }
 
     #[test]

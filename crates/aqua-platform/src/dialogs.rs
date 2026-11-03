@@ -1,12 +1,5 @@
-//! Native file dialogs via `rfd` (Win32 on Windows, portal-based on Linux).
-//!
-//! The request builder is pure and headless-testable; `execute()` opens the
-//! real OS dialog and therefore needs a display + event loop. Headless use
-//! returns [`DialogError::Unavailable`], never a panic and never a fake path.
-
 use std::path::PathBuf;
 
-/// What the dialog is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogKind {
     OpenFile,
@@ -15,7 +8,6 @@ pub enum DialogKind {
     PickFolder,
 }
 
-/// One file-type filter, e.g. `("PNG images", ["png"])`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileFilter {
     pub name: String,
@@ -31,7 +23,6 @@ impl FileFilter {
     }
 }
 
-/// Pure dialog description. Build it headless, `execute()` it on the GUI thread.
 #[derive(Debug, Clone, Default)]
 pub struct DialogRequest {
     pub kind: Option<DialogKind>,
@@ -111,27 +102,73 @@ impl DialogRequest {
         dialog
     }
 
-    /// Open the OS dialog (blocking, GUI thread only). `Ok(None)` = user
-    /// cancelled — a normal outcome, not an error.
     pub fn execute(&self) -> Result<Option<PathBuf>, DialogError> {
         let kind = self.validated()?;
+        if kind == DialogKind::OpenFiles {
+            return Err(DialogError::MultipleSelectionRequiresMulti);
+        }
         if !dialogs_available() {
             return Err(DialogError::Unavailable(
                 "no display / portal for native dialogs in this session",
             ));
         }
         let dialog = self.apply_to(rfd::FileDialog::new());
-        // rfd returns None on cancel AND on backend failure; the capability
-        // pre-check above keeps the failure case honest in practice.
         Ok(match kind {
             DialogKind::OpenFile => dialog.pick_file(),
             DialogKind::SaveFile => dialog.save_file(),
             DialogKind::PickFolder => dialog.pick_folder(),
-            DialogKind::OpenFiles => dialog.pick_files().and_then(|mut v| v.pop()),
+            DialogKind::OpenFiles => unreachable!(),
         })
     }
 
-    /// Multi-select variant: `Ok(vec![])` = user cancelled.
+    pub async fn execute_async(&self) -> Result<Vec<PathBuf>, DialogError> {
+        self.execute_async_with(rfd::AsyncFileDialog::new()).await
+    }
+
+    pub async fn execute_async_for<
+        W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle + ?Sized,
+    >(
+        &self,
+        parent: &W,
+    ) -> Result<Vec<PathBuf>, DialogError> {
+        self.execute_async_with(rfd::AsyncFileDialog::new().set_parent(parent))
+            .await
+    }
+
+    async fn execute_async_with(
+        &self,
+        mut dialog: rfd::AsyncFileDialog,
+    ) -> Result<Vec<PathBuf>, DialogError> {
+        let kind = self.validated()?;
+        if !dialogs_available() {
+            return Err(DialogError::Unavailable(
+                "no display / portal for native dialogs in this session",
+            ));
+        }
+        if let Some(title) = &self.title {
+            dialog = dialog.set_title(title);
+        }
+        if let Some(directory) = &self.start_dir {
+            dialog = dialog.set_directory(directory);
+        }
+        if let Some(name) = &self.file_name {
+            dialog = dialog.set_file_name(name);
+        }
+        for filter in &self.filters {
+            dialog = dialog.add_filter(&filter.name, &filter.extensions);
+        }
+        let files = match kind {
+            DialogKind::OpenFiles => dialog.pick_files().await.unwrap_or_default(),
+            DialogKind::OpenFile => dialog.pick_file().await.into_iter().collect(),
+            DialogKind::SaveFile => dialog.save_file().await.into_iter().collect(),
+            DialogKind::PickFolder => dialog.pick_folder().await.into_iter().collect(),
+        };
+        Ok(files
+            .into_iter()
+            .map(|file| file.path().to_path_buf())
+            .collect())
+    }
+
     pub fn execute_multi(&self) -> Result<Vec<PathBuf>, DialogError> {
         let kind = self.validated()?;
         if !dialogs_available() {
@@ -149,25 +186,26 @@ impl DialogRequest {
     }
 }
 
-/// Dialog failure. Cancellation is NOT an error (`Ok(None)` / empty vec).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialogError {
     NoKind,
+    MultipleSelectionRequiresMulti,
     Unavailable(&'static str),
 }
 
 impl std::fmt::Display for DialogError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            DialogError::MultipleSelectionRequiresMulti => write!(
+                f,
+                "multi-select dialog requires execute_multi or execute_async"
+            ),
             DialogError::NoKind => write!(f, "dialog request has no kind"),
             DialogError::Unavailable(r) => write!(f, "dialogs unavailable: {r}"),
         }
     }
 }
 
-/// Whether this session can show a native dialog: needs a display server.
-/// Headless CI / `DISPLAY`-less Linux returns false so callers disable menu
-/// items instead of opening a dialog that can never appear.
 pub fn dialogs_available() -> bool {
     #[cfg(windows)]
     {
@@ -187,7 +225,6 @@ pub fn dialogs_available() -> bool {
     }
 }
 
-/// Capability report for diagnostics / menu enablement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DialogCapability {
     pub supported: bool,
@@ -227,7 +264,7 @@ mod tests {
     #[test]
     fn headless_execute_is_honest() {
         if dialogs_available() {
-            return; // display present: cannot test the headless path here.
+            return;
         }
         let err = DialogRequest::open_file().execute().unwrap_err();
         assert!(matches!(err, DialogError::Unavailable(_)));

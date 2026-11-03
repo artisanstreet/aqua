@@ -3,6 +3,9 @@ pub mod a11y;
 pub mod a11y_winit;
 mod access_tree;
 pub mod adapters;
+#[cfg(windows)]
+mod apartment;
+pub mod badge;
 pub mod chrome;
 #[cfg(windows)]
 pub mod chrome_winit;
@@ -11,8 +14,11 @@ pub mod events;
 pub mod geometry;
 pub mod host;
 pub mod material;
+pub mod monitor;
+pub mod notifications;
 pub mod prefs;
 pub mod services;
+pub mod shell;
 pub mod window;
 
 pub use aqua_protocol::FrameReason;

@@ -153,8 +153,10 @@ fn system_parameters_info(
 fn windows_high_contrast() -> PrefState {
     use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
     use windows::Win32::UI::WindowsAndMessaging::SPI_GETHIGHCONTRAST;
-    let mut hc = HIGHCONTRASTW::default();
-    hc.cbSize = core::mem::size_of::<HIGHCONTRASTW>() as u32;
+    let mut hc = HIGHCONTRASTW {
+        cbSize: core::mem::size_of::<HIGHCONTRASTW>() as u32,
+        ..Default::default()
+    };
     let ok = system_parameters_info(
         SPI_GETHIGHCONTRAST,
         hc.cbSize,

@@ -15,6 +15,12 @@ pub use aqua_core::geometry::{CornerRadii, Insets, Point, Rect, Size, Transform2
 
 pub use aqua_protocol::WindowId as AquaWindowId;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhysicalPosition {
+    pub x: i32,
+    pub y: i32,
+}
+
 /// Logical (DIP) 2D size at the windowing boundary (`f64`).
 ///
 /// Convert to canonical [`Size`] (`f32`) before layout/scene work via

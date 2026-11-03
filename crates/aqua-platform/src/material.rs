@@ -102,12 +102,12 @@ pub fn material_capability(requested: WindowMaterial) -> MaterialCapability {
     }
     #[cfg(windows)]
     {
-        return MaterialCapability {
+        MaterialCapability {
             requested,
             supported: true,
             active: requested,
             reason: "Windows 11 DWM system-backdrop path; runtime build check at apply",
-        };
+        }
     }
     #[cfg(not(windows))]
     {

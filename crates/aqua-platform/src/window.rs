@@ -55,15 +55,23 @@ impl Default for WindowOptions {
 
 impl WindowOptions {
     pub fn validated(&self) -> Result<(), WindowError> {
-        if self.inner_size.is_empty() {
-            return Err(WindowError::EmptySize);
-        }
-        if let Some(m) = self.min_size {
-            if m.is_empty() {
+        for size in std::iter::once(self.inner_size)
+            .chain(self.min_size)
+            .chain(self.max_size)
+        {
+            if size.is_empty() || !size.width.is_finite() || !size.height.is_finite() {
                 return Err(WindowError::EmptySize);
             }
         }
-        if self.titlebar_height.is_nan() || self.titlebar_height < 0.0 {
+        if let (Some(min), Some(max)) = (self.min_size, self.max_size) {
+            if min.width > max.width || min.height > max.height {
+                return Err(WindowError::InvalidSizeConstraints);
+            }
+        }
+        if self.title.contains('\0') {
+            return Err(WindowError::InvalidTitle);
+        }
+        if !self.titlebar_height.is_finite() || self.titlebar_height < 0.0 {
             return Err(WindowError::InvalidChromeHeight);
         }
         Ok(())
@@ -83,6 +91,10 @@ impl WindowOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowError {
     EmptySize,
+    InvalidSizeConstraints,
+    InvalidTitle,
+    UnknownWindow(AquaWindowId),
+    Native(String),
     InvalidChromeHeight,
     Unsupported(&'static str),
 }
@@ -98,6 +110,14 @@ pub enum WindowRequest {
     SetMinimized(AquaWindowId, bool),
     SetMaximized(AquaWindowId, bool),
     Close(AquaWindowId),
+    Activate(AquaWindowId),
+    SetBadge(AquaWindowId, Option<crate::badge::TaskbarBadge>),
+    SetMaxFrameRate(AquaWindowId, Option<std::num::NonZeroU32>),
+    SetVsync(AquaWindowId, bool),
+    SetOuterPosition(AquaWindowId, crate::geometry::PhysicalPosition),
+    Center(AquaWindowId),
+    BeginSnapshotTransition(AquaWindowId, aqua_core::scene::SnapshotTransition),
+    SetTextRasterMode(AquaWindowId, aqua_core::scene::TextRasterMode),
 }
 
 /// Observed (compositor-confirmed) per-window state.

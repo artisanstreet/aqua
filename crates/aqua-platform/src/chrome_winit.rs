@@ -620,8 +620,10 @@ fn monitor_work_area(hwnd: HWND) -> Option<RectI> {
         if monitor.0.is_null() {
             return None;
         }
-        let mut info = MONITORINFO::default();
-        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
         if GetMonitorInfoW(monitor, &mut info).as_bool() {
             let w = info.rcWork;
             Some(RectI {
@@ -858,7 +860,7 @@ fn chrome_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESU
         WM_DPICHANGED => {
             // Refresh band + glass margin for the new DPI. wParam hiword =
             // Y-axis DPI. Chain afterwards (winit repositions from lParam).
-            let new_dpi = (((wparam.0 as u32) >> 16) & 0xFFFF) as u32;
+            let new_dpi = ((wparam.0 as u32) >> 16) & 0xFFFF;
             if new_dpi != 0 {
                 st.dpi.set(new_dpi);
                 let band = (st.titlebar_height.get() * f64::from(new_dpi) / 96.0)

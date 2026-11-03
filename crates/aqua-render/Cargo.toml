@@ -13,11 +13,17 @@ wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }
 glyphon = "0.12"
 cosmic-text = "0.19"
+fontdb = "0.23"
 pollster = "0.4"
-# media3d owner (parent-authorized 2026-10-25): maintained still-image
-# codecs. Selected formats only; webp/tiff/qoi/exr stay disabled until a
-# consumer needs them (keeps build time and attack surface bounded).
-image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif", "webp"] }
+
+resvg = "0.48.1"
+kurbo = "0.13"
+roxmltree = "0.21"
+tiny-skia = "0.12"
 
 [dev-dependencies]
 pollster = "0.4"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_Graphics_DirectWrite", "Win32_Foundation"] }

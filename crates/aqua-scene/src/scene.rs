@@ -150,6 +150,26 @@ impl Scene {
         true
     }
 
+    pub fn set_order(&mut self, ids: &[NodeId]) -> bool {
+        if ids.len() != self.order.len() {
+            return false;
+        }
+        let mut seen = std::collections::HashSet::with_capacity(ids.len());
+        for id in ids {
+            if self.get(*id).is_none() || !seen.insert(id.raw().index) {
+                return false;
+            }
+        }
+        let order: Vec<u32> = ids.iter().map(|id| id.raw().index).collect();
+        if order != self.order {
+            self.order = order;
+            self.order_dirty = true;
+            self.struct_version += 1;
+            self.revision += 1;
+        }
+        true
+    }
+
     pub fn get(&self, id: NodeId) -> Option<&DisplayItem> {
         let raw = id.raw();
         self.nodes

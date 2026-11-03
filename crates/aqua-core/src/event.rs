@@ -116,6 +116,7 @@ pub enum NamedKey {
     /// Delete (forward).
     Delete,
     Insert,
+    ContextMenu,
     /// Escape.
     Escape,
     /// Arrow keys.

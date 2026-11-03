@@ -7,6 +7,15 @@ use unicode_segmentation::UnicodeSegmentation;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SelectionSourceId(pub u64);
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct SelectionDocumentId(pub u64);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectionBinding {
+    pub document: SelectionDocumentId,
+    pub slice: SourceSlice,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourcePosition {
     pub source: SelectionSourceId,
@@ -19,7 +28,44 @@ pub struct SelectionSource {
     pub order: Vec<u64>,
     pub text: Arc<str>,
     pub separator: Arc<str>,
+    pub copies: Vec<CopySubstitution>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopySubstitution {
+    pub range: Range<usize>,
+    pub replacement: Arc<str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SelectionSourceError {
+    InvalidCopyRange {
+        source: SelectionSourceId,
+        range: Range<usize>,
+    },
+    OverlappingCopyRanges {
+        source: SelectionSourceId,
+    },
+}
+
+impl std::fmt::Display for SelectionSourceError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidCopyRange { source, range } => write!(
+                formatter,
+                "invalid copy range {}..{} for selection source {}",
+                range.start, range.end, source.0
+            ),
+            Self::OverlappingCopyRanges { source } => write!(
+                formatter,
+                "overlapping copy ranges for selection source {}",
+                source.0
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SelectionSourceError {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceSlice {
@@ -60,7 +106,8 @@ impl SelectionDocument {
         Self::default()
     }
 
-    pub fn register(&mut self, source: SelectionSource) {
+    pub fn register(&mut self, source: SelectionSource) -> Result<(), SelectionSourceError> {
+        let source = validate_source(source)?;
         let reorder = self
             .sources
             .get(&source.id)
@@ -70,14 +117,23 @@ impl SelectionDocument {
             self.rebuild_order();
         }
         self.normalize_selection();
+        Ok(())
     }
 
-    pub fn register_many(&mut self, sources: impl IntoIterator<Item = SelectionSource>) {
+    pub fn register_many(
+        &mut self,
+        sources: impl IntoIterator<Item = SelectionSource>,
+    ) -> Result<(), SelectionSourceError> {
+        let sources: Vec<_> = sources
+            .into_iter()
+            .map(validate_source)
+            .collect::<Result<_, _>>()?;
         for source in sources {
             self.sources.insert(source.id, source);
         }
         self.rebuild_order();
         self.normalize_selection();
+        Ok(())
     }
 
     pub fn unregister(&mut self, id: SelectionSourceId) -> bool {
@@ -204,7 +260,7 @@ impl SelectionDocument {
                 copied.push_str(&source.separator);
             }
             let range = self.range_for(*id)?;
-            copied.push_str(&source.text[range]);
+            push_copied(&mut copied, source, range);
         }
         (!copied.is_empty()).then_some(copied)
     }
@@ -262,4 +318,53 @@ impl SelectionDocument {
             .map(|(index, id)| (*id, index))
             .collect();
     }
+}
+
+fn validate_source(mut source: SelectionSource) -> Result<SelectionSource, SelectionSourceError> {
+    if source.copies.is_empty() {
+        return Ok(source);
+    }
+    let mut boundaries: Vec<usize> = source
+        .text
+        .grapheme_indices(true)
+        .map(|(offset, _)| offset)
+        .collect();
+    boundaries.push(source.text.len());
+    for copy in &source.copies {
+        if copy.range.start >= copy.range.end
+            || boundaries.binary_search(&copy.range.start).is_err()
+            || boundaries.binary_search(&copy.range.end).is_err()
+        {
+            return Err(SelectionSourceError::InvalidCopyRange {
+                source: source.id,
+                range: copy.range.clone(),
+            });
+        }
+    }
+    source
+        .copies
+        .sort_by_key(|copy| (copy.range.start, copy.range.end));
+    if source
+        .copies
+        .windows(2)
+        .any(|pair| pair[0].range.end > pair[1].range.start)
+    {
+        return Err(SelectionSourceError::OverlappingCopyRanges { source: source.id });
+    }
+    Ok(source)
+}
+
+fn push_copied(copied: &mut String, source: &SelectionSource, range: Range<usize>) {
+    let mut cursor = range.start;
+    for copy in &source.copies {
+        if copy.range.end <= range.start || copy.range.start >= range.end {
+            continue;
+        }
+        copied.push_str(&source.text[cursor..copy.range.start.max(cursor)]);
+        if copy.range.start >= range.start && copy.range.end <= range.end {
+            copied.push_str(&copy.replacement);
+        }
+        cursor = copy.range.end.min(range.end);
+    }
+    copied.push_str(&source.text[cursor..range.end]);
 }

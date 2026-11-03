@@ -231,9 +231,12 @@ fn editor_conversation_workload_combines_virtualization_rich_text_selection_stre
     let (preceding, preceding_id) = resident
         .iter()
         .copied()
-        .filter(|(node, id)| *id < anchor_id && visual_y(&app, *node) < 0.0)
+        .filter(|(node, id)| {
+            *id < anchor_id && visual_y(&app, *node) + app.tree().rect(*node).unwrap().h <= 0.0
+        })
         .max_by_key(|(_, id)| *id)
         .unwrap();
+    let preceding_height = app.tree().rect(preceding).unwrap().h;
     messages[preceding_id as usize].body =
         "A growing streamed paragraph above the reading anchor. ".repeat(30);
     let updated = messages[preceding_id as usize].clone();
@@ -247,6 +250,12 @@ fn editor_conversation_workload_combines_virtualization_rich_text_selection_stre
     app.register_selection_source(source(&updated)).unwrap();
     frame(&mut app);
     frame(&mut app);
+    let grown = source_nodes(&app)
+        .into_iter()
+        .find(|(_, id)| *id == preceding_id)
+        .unwrap()
+        .0;
+    assert!(app.tree().rect(grown).unwrap().h > preceding_height * 2.0);
     let anchor = source_nodes(&app)
         .into_iter()
         .find(|(_, id)| *id == anchor_id)
@@ -282,8 +291,10 @@ fn editor_conversation_workload_combines_virtualization_rich_text_selection_stre
         assert_eq!(app.frame_work().text_source_bytes, content(&updated).len());
     }
     let offset = app.tree().scroll_offset(scroll).unwrap();
+    let bottom = app.tree().rect(last).unwrap().bottom();
+    let viewport_bottom = app.tree().rect(scroll).unwrap().bottom();
     app.tree_mut()
-        .scroll_to(scroll, Point::new(offset.x, offset.y - 36.0));
+        .scroll_to(scroll, Point::new(offset.x, bottom - viewport_bottom - 8.0));
     frame(&mut app);
     let NodeKind::Text(text) = &app.tree().get(last).unwrap().kind else {
         panic!()

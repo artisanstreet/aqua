@@ -1,31 +1,23 @@
-// Compose: textured quad with opacity + rounded-clip, premultiplied-over.
-// Used for base->surface blits, blurred-region quads, and external layers
-// (media / viewport frames).
-//
-// Alpha convention: internal targets (base, blur/group scratch) are
-// PREMULTIPLIED working space. Media and viewport owners normalize their
-// external layers to the same convention. Explicit straight-alpha imports
-// use premultiplied = 0 so the shader multiplies rgb*a before compositing.
-// Straight input through premultiplied math renders too bright at half
-// alpha — the flag exists so the difference is explicit, not hidden.
 
 struct ComposeUniforms {
-    viewport: vec2<f32>, // target size in physical px
+    viewport: vec2<f32>,
     opacity: f32,
     clip_radius: f32,
-    output_gamma: f32,   // 0 = linear, 1 = encoded premultiplied, 2 = encoded premultiplied via sRGB target
-    premultiplied: f32,  // 1 = source already premultiplied, 0 = straight
-    pad: vec2<f32>,      // explicit pad: struct is exactly 8 floats / 32 B
+    output_gamma: f32,
+    premultiplied: f32,
+    pad: vec2<f32>,
 }
 @group(0) @binding(0) var<uniform> u: ComposeUniforms;
 @group(0) @binding(1) var src_tex: texture_2d<f32>;
 @group(0) @binding(2) var src_smp: sampler;
+struct Clip { bounds: vec4<f32>, radius: vec4<f32> }
+@group(0) @binding(3) var<storage, read> clips: array<Clip>;
 
 struct VsIn {
-    @location(0) corner: vec2<f32>,   // per-vertex 0..1 (8-byte stride buffer)
-    @location(1) dst_rect: vec4<f32>, // per-instance: x, y, w, h in physical px
-    @location(2) src_rect: vec4<f32>, // per-instance: uv-space source rect
-    @location(3) clip: vec4<f32>,     // per-instance: x, y, w, h; w < 0 disables
+    @location(0) corner: vec2<f32>,
+    @location(1) dst_rect: vec4<f32>,
+    @location(2) src_rect: vec4<f32>,
+    @location(3) clip: vec4<f32>,
 }
 
 struct VsOut {
@@ -56,16 +48,22 @@ fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    // Rounded-clip edge coverage multiplies alpha (real AA on the mask
-    // edge), never a hard discard threshold.
     var clip_cover = 1.0;
     if (in.clip.z >= 0.0) {
         let cc = in.clip.xy + in.clip.zw * 0.5;
         let d = sd_round_box(in.px - cc, in.clip.zw * 0.5, u.clip_radius);
         let aa = fwidth(d) * 1.5 + 1e-4;
         clip_cover = 1.0 - smoothstep(-aa, aa, d);
-        if (clip_cover <= 0.001) { discard; }
+
     }
+    for (var index = 0u; index < u32(u.pad.x); index += 1u) {
+        let clip = clips[index];
+        let center = clip.bounds.xy + clip.bounds.zw * 0.5;
+        let distance = sd_round_box(in.px - center, clip.bounds.zw * 0.5, clip.radius.x);
+        let aa = fwidth(distance) * 1.5 + 1e-4;
+        clip_cover *= 1.0 - smoothstep(-aa, aa, distance);
+    }
+    if (clip_cover <= 0.001) { discard; }
     let c = textureSample(src_tex, src_smp, in.uv);
     var rgb = c.rgb;
     var a = c.a;
@@ -74,8 +72,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     let coverage = u.opacity * clip_cover;
     if (u.output_gamma > 0.5) {
-        // Compositors expect premultiplied ENCODED channels. Encoding
-        // premultiplied linear channels directly creates bright halos.
         var straight = vec3<f32>(0.0);
         if (a > 0.0) { straight = max(rgb / a, vec3<f32>(0.0)); }
         let encoded = select(straight * 12.92,
@@ -83,8 +79,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             straight > vec3<f32>(0.0031308));
         let premultiplied = encoded * a * coverage;
         if (u.output_gamma > 1.5) {
-            // An sRGB attachment performs a final hardware encode. Undo
-            // it here so its stored bytes are still encoded-premultiplied.
             let linear = select(premultiplied / 12.92,
                 pow(max((premultiplied + 0.055) / 1.055, vec3<f32>(0.0)), vec3<f32>(2.4)),
                 premultiplied > vec3<f32>(0.04045));

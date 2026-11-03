@@ -198,7 +198,10 @@ impl DamageTracker {
             h: r.h * s,
         };
         match new_item {
-            DisplayItem::Rect { .. } | DisplayItem::External { .. } => {
+            DisplayItem::Image { .. }
+            | DisplayItem::Vector { .. }
+            | DisplayItem::Rect { .. }
+            | DisplayItem::External { .. } => {
                 // Footprints are effect-inclusive by caller invariant; the
                 // item itself carries no separate bounds here, so the caller
                 // must use record_rect_change for precise rects. Fall back to
@@ -214,10 +217,16 @@ impl DamageTracker {
                 // renderer must use record_text_change with measured ink.
                 self.invalidate_full(InvalidationReason::ContentChanged);
             }
-            DisplayItem::PushClip { .. }
+            DisplayItem::PushTextColorMap(_)
+            | DisplayItem::PopTextColorMap
+            | DisplayItem::PushContentBlur { .. }
+            | DisplayItem::PopContentBlur
+            | DisplayItem::PushClip { .. }
             | DisplayItem::PushOpacity(_)
             | DisplayItem::PopClip
-            | DisplayItem::PopOpacity => {
+            | DisplayItem::PopOpacity
+            | DisplayItem::PushTransform(_)
+            | DisplayItem::PopTransform => {
                 self.invalidate_full(InvalidationReason::StructuralChanged);
             }
         }
@@ -331,10 +340,16 @@ impl DamageTracker {
 fn reason_of(item: &DisplayItem) -> InvalidationReason {
     match item {
         DisplayItem::BackdropBlur { .. } => InvalidationReason::EffectParamChanged,
-        DisplayItem::PushClip { .. }
+        DisplayItem::PushTextColorMap(_)
+        | DisplayItem::PopTextColorMap
+        | DisplayItem::PushContentBlur { .. }
+        | DisplayItem::PopContentBlur
+        | DisplayItem::PushClip { .. }
         | DisplayItem::PushOpacity(_)
         | DisplayItem::PopClip
-        | DisplayItem::PopOpacity => InvalidationReason::StructuralChanged,
+        | DisplayItem::PopOpacity
+        | DisplayItem::PushTransform(_)
+        | DisplayItem::PopTransform => InvalidationReason::StructuralChanged,
         _ => InvalidationReason::ContentChanged,
     }
 }

@@ -30,6 +30,7 @@ pub enum RenderError {
     BudgetExceeded(&'static str),
     TextureTooLarge(u32, u32),
     Gpu(String),
+    Vector(crate::vector::VectorError),
 }
 
 impl std::fmt::Display for RenderError {
@@ -41,6 +42,7 @@ impl std::fmt::Display for RenderError {
             RenderError::BudgetExceeded(s) => write!(f, "resource budget exceeded: {s}"),
             RenderError::TextureTooLarge(w, h) => write!(f, "target too large: {w}x{h}"),
             RenderError::Gpu(s) => write!(f, "gpu error: {s}"),
+            RenderError::Vector(error) => error.fmt(f),
         }
     }
 }
@@ -113,6 +115,9 @@ struct ComposeUniforms {
 
 #[derive(Debug)]
 struct GroupOp {
+    text_maps: Vec<aqua_core::scene::TextColorMap>,
+    filter: Option<(Rect, f32)>,
+    clips: Vec<(Rect, f32)>,
     bounds: Rect,
     opacity: f32,
     instances: Vec<RectInstance>,
@@ -124,6 +129,7 @@ enum GroupCommand {
     Rects { start: u32, count: u32 },
     Text(ShapedRun),
     Group(GroupOp),
+    Surface(SurfaceOp),
 }
 
 /// Cached per-node paint context from the last slow-path walk: physical
@@ -133,6 +139,7 @@ enum GroupCommand {
 struct NodeCtx {
     clip: Rect, // physical px; w < 0 = unclipped
     clip_r: f32,
+    clip_index: u32,
     in_group: bool,
 }
 
@@ -150,20 +157,32 @@ enum Op {
         params: BlurParams,
     }, // physical px
     Group(GroupOp),
-    External {
-        bounds: Rect,
-        layer: u64,
-        opacity: f32,
-        clip_radius: f32,
-    },
+    Surface(SurfaceOp),
     /// Text runs in painter position. Drawn via the text provider into
     /// whatever target is current (base or group scratch).
     Texts(Vec<ShapedRun>),
 }
 
+#[derive(Debug)]
+struct SurfaceOp {
+    pixel_scale: f32,
+    bounds: Rect,
+    source: SurfaceSource,
+    opacity: f32,
+    clips: Vec<(Rect, f32)>,
+    placement: Option<(aqua_core::image::ImageFit, aqua_core::Point, Rect)>,
+}
+
+#[derive(Debug)]
+enum SurfaceSource {
+    External(u64),
+    Vector(aqua_core::vector::VectorSource),
+}
+
 /// CPU-side plan for one presented frame.
 #[derive(Debug, Default)]
 pub struct FramePlan {
+    validation_error: Option<&'static str>,
     ops: Vec<Op>,
     instances: Vec<RectInstance>,
     damage: DamageSet,
@@ -284,7 +303,10 @@ impl ScratchPool {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -319,7 +341,16 @@ const MAX_UPLOAD_RANGES: usize = 8;
 /// Cap on cached compose-pipeline format variants (base + surfaces).
 const MAX_COMPOSE_PIPES: usize = 4;
 
+struct SnapshotState {
+    previous: usize,
+    output: usize,
+    settings: crate::effects::SnapshotTransition,
+    elapsed: std::time::Duration,
+}
+
 pub struct Renderer {
+    effect_compositor: crate::effects::compositor::EffectCompositor,
+    snapshot: Option<SnapshotState>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     format: wgpu::TextureFormat, // base working format (linear, non-sRGB)
@@ -335,6 +366,11 @@ pub struct Renderer {
     compose_pipes: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
     rect_uniform_buf: wgpu::Buffer,
     rect_uniform_bind: wgpu::BindGroup,
+    rect_bind_layout: wgpu::BindGroupLayout,
+    clip_buffer: wgpu::Buffer,
+    clip_capacity: usize,
+    clip_nodes: Vec<[f32; 8]>,
+    clip_dirty: bool,
     blur_bind_layout: wgpu::BindGroupLayout,
     compose_bind_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
@@ -361,6 +397,7 @@ pub struct Renderer {
 
     base: Option<(wgpu::Texture, wgpu::TextureView)>,
     pool: ScratchPool,
+    vectors: crate::vector::VectorCache,
     external: HashMap<u64, wgpu::TextureView>,
     external_size: HashMap<u64, (u32, u32)>,
     /// Layers with new content since the last prepare. Registration IS the
@@ -414,16 +451,28 @@ impl Renderer {
 
         let rect_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("aqua-rect-bind"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
         let rect_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("aqua-rect-uniform"),
@@ -431,13 +480,25 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let clip_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("aqua-clip-tree"),
+            size: 32,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let rect_uniform_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("aqua-rect-bind-group"),
             layout: &rect_bind_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: rect_uniform_buf.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: clip_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: rect_uniform_buf.as_entire_binding(),
+                },
+            ],
         });
 
         let blend_premult = Some(wgpu::BlendState {
@@ -612,6 +673,16 @@ impl Renderer {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("aqua-compose-bind"),
                 entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                     uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
@@ -672,6 +743,8 @@ impl Renderer {
             Box::new(GlyphonProvider::new(&device, &queue, format, backend));
 
         Self {
+            effect_compositor: crate::effects::compositor::EffectCompositor::new(&device, format),
+            snapshot: None,
             device,
             queue,
             format,
@@ -684,6 +757,11 @@ impl Renderer {
             compose_pipes,
             rect_uniform_buf,
             rect_uniform_bind,
+            rect_bind_layout,
+            clip_buffer,
+            clip_capacity: 1,
+            clip_nodes: Vec::new(),
+            clip_dirty: true,
             blur_bind_layout,
             compose_bind_layout,
             sampler,
@@ -700,6 +778,7 @@ impl Renderer {
             dirty_ranges: Vec::new(),
             base: None,
             pool: ScratchPool::new(ResourceBudget::default()),
+            vectors: crate::vector::VectorCache::default(),
             external: HashMap::new(),
             external_size: HashMap::new(),
             external_dirty: Vec::new(),
@@ -767,11 +846,18 @@ impl Renderer {
         if w > MAX_TARGET_DIM || h > MAX_TARGET_DIM {
             return Err(RenderError::TextureTooLarge(w, h));
         }
+        let scale = scale.max(0.01);
+        if self.width == w && self.height == h && self.scale == scale && self.base.is_some() {
+            return Ok(());
+        }
+        self.cancel_snapshot_transition();
         self.width = w;
         self.height = h;
         self.scale = scale.max(0.01);
         self.tracker.set_scale(self.scale);
         self.tracker.set_frame_size(w as f32, h as f32);
+        self.tracker
+            .invalidate_full(InvalidationReason::StructuralChanged);
         // Physical-pixel state is stale: retained base, instance mirror and
         // slot map all rebuild on the next full repaint.
         self.base_valid = false;
@@ -825,21 +911,36 @@ impl Renderer {
         }
     }
 
-    /// Release a layer's cached view/dims/bounds. Call when the layer is
-    /// removed so the map cannot grow without bound. Returns false for
-    /// unknown layers. Note: removal from the SCENE still needs the normal
-    /// scene-remove path for repaint damage.
     pub fn unregister_external(&mut self, layer: u64) -> bool {
         let had = self.external.remove(&layer).is_some();
         self.external_size.remove(&layer);
-        self.layer_bounds.remove(&layer);
+        let bounds = self.layer_bounds.remove(&layer);
         self.external_dirty.retain(|&l| l != layer);
+        if had {
+            match bounds {
+                Some(bounds) => self.tracker.record_rect_change(bounds, Some(bounds)),
+                None => self
+                    .tracker
+                    .invalidate_full(InvalidationReason::ContentChanged),
+            }
+        }
         had
     }
 
     pub fn add_custom_pass(&mut self, pass: Box<dyn CustomPass>) {
         self.custom_passes.push(pass);
         self.unconsumed_passes += 1;
+    }
+
+    pub fn vector_stats(&self) -> crate::vector::VectorStats {
+        self.vectors.stats()
+    }
+
+    pub fn set_vector_budget(&mut self, budget: crate::vector::VectorBudget) {
+        self.vectors.set_budget(budget);
+        self.base_valid = false;
+        self.tracker
+            .invalidate_full(InvalidationReason::StructuralChanged);
     }
 
     pub fn diagnostics(&self) -> &RenderDiagnostics {
@@ -849,6 +950,19 @@ impl Renderer {
     /// Swap the text provider (facade wiring for the shared text backend).
     /// The provider must be built for the same device/format; see
     /// [`GlyphonProvider::new`].
+    pub fn set_text_raster_mode(
+        &mut self,
+        mode: aqua_core::scene::TextRasterMode,
+    ) -> Result<(), RenderError> {
+        self.text
+            .set_raster_mode(&self.device, &self.queue, self.format, mode)
+            .map_err(RenderError::Gpu)?;
+        self.base_valid = false;
+        self.tracker
+            .invalidate_full(InvalidationReason::ContentChanged);
+        Ok(())
+    }
+
     pub fn set_text_provider(&mut self, provider: Box<dyn TextProvider>) {
         self.text = provider;
     }
@@ -866,6 +980,7 @@ impl Renderer {
     /// the caller should skip presentation.
     pub fn prepare(&mut self, scene: &mut Scene) -> FramePlan {
         let mut plan = FramePlan {
+            validation_error: None,
             nodes_total: scene.len(),
             ..Default::default()
         };
@@ -923,6 +1038,12 @@ impl Renderer {
                 DisplayItem::PushClip { .. }
                 | DisplayItem::PushOpacity(_)
                 | DisplayItem::PopClip
+                | DisplayItem::PushTextColorMap(_)
+                | DisplayItem::PopTextColorMap
+                | DisplayItem::PushContentBlur { .. }
+                | DisplayItem::PopContentBlur
+                | DisplayItem::PushTransform(_)
+                | DisplayItem::PopTransform
                 | DisplayItem::PopOpacity => {
                     // Structural change: explicit full-frame invalidation.
                     self.tracker.record_change(item, None);
@@ -1007,7 +1128,7 @@ impl Renderer {
                     let idx = id.raw().index;
                     let ctx = self.ctx_of[&idx];
                     let slot = self.slot_of[&idx];
-                    let inst = build_rect_instance(
+                    let mut inst = build_rect_instance(
                         bounds,
                         *radius,
                         *fill,
@@ -1017,6 +1138,7 @@ impl Renderer {
                         (ctx.clip, ctx.clip_r),
                         s,
                     );
+                    inst.misc[2] = ctx.clip_index as f32;
                     self.mirror[slot] = inst;
                     self.dirty_ranges.push((slot, slot + 1));
                     plan.ops.push(Op::Rects {
@@ -1050,6 +1172,9 @@ impl Renderer {
         plan.nodes_traversed = scene.len();
         plan.mirror_current = false;
         let s = self.scale;
+        self.clip_nodes.clear();
+        self.clip_dirty = true;
+        let mut clip_indices = Vec::<u32>::new();
         let mut clip_stack: Vec<(Rect, f32)> = Vec::new(); // physical px
         let mut group_stack: Vec<GroupOp> = Vec::new();
         let mut blur_regions: Vec<(Rect, Rect)> = Vec::new(); // (logical, phys)
@@ -1059,9 +1184,69 @@ impl Renderer {
         // entries are pruned afterwards (memory lifecycle, no per-frame
         // full scan: this IS the structural walk).
         let mut seen_layers: HashSet<u64> = HashSet::new();
+        let mut transforms = vec![aqua_core::Transform2D::IDENTITY];
+        let mut has_transform = false;
+        let mut text_maps = Vec::<aqua_core::scene::TextColorMap>::new();
 
         for (id, item) in scene.ordered() {
             match item {
+                DisplayItem::PushTransform(local) => {
+                    has_transform = true;
+                    let combined = local.then(*transforms.last().unwrap());
+                    if ![
+                        combined.a,
+                        combined.b,
+                        combined.c,
+                        combined.d,
+                        combined.tx,
+                        combined.ty,
+                    ]
+                    .iter()
+                    .all(|v| v.is_finite())
+                        || combined.b != 0.0
+                        || combined.c != 0.0
+                        || combined.a != combined.d
+                        || combined.a <= 0.0
+                    {
+                        plan.validation_error = Some("subtree transform requires finite positive uniform scale and translation");
+                    }
+                    transforms.push(combined);
+                    continue;
+                }
+                DisplayItem::PopTransform => {
+                    if transforms.len() == 1 {
+                        plan.validation_error = Some("unbalanced transform stack");
+                    } else {
+                        transforms.pop();
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            let transform = *transforms.last().unwrap();
+            let transformed = transform_item(item, transform);
+            let item = &transformed;
+            match item {
+                DisplayItem::PushTextColorMap(map) => {
+                    has_transform = true;
+                    if ![map.start, map.end, map.strength]
+                        .iter()
+                        .all(|v| v.is_finite())
+                        || map.end <= map.start
+                        || !(0.0..=1.0).contains(&map.strength)
+                        || !map.target.to_linear().iter().all(|v| v.is_finite())
+                    {
+                        plan.validation_error = Some("invalid text color mapping");
+                    }
+                    text_maps.push(*map);
+                }
+                DisplayItem::PopTextColorMap => {
+                    if text_maps.pop().is_none() {
+                        plan.validation_error = Some("unbalanced text color map");
+                    }
+                }
+
+                DisplayItem::PushTransform(_) | DisplayItem::PopTransform => unreachable!(),
                 DisplayItem::Rect {
                     bounds,
                     radius,
@@ -1098,6 +1283,7 @@ impl Renderer {
                         (clip, clip_r),
                         s,
                     );
+                    inst.misc[2] = clip_indices.last().copied().unwrap_or(0) as f32;
                     // NOTE: shader centers the shadow at instance-quad center
                     // + shadow.xy, so store the offset relative to the quad
                     // center (quad covers rect + shadow footprint).
@@ -1122,6 +1308,7 @@ impl Renderer {
                             NodeCtx {
                                 clip,
                                 clip_r,
+                                clip_index: clip_indices.last().copied().unwrap_or(0),
                                 in_group: false,
                             },
                         );
@@ -1131,12 +1318,25 @@ impl Renderer {
                             NodeCtx {
                                 clip,
                                 clip_r,
+                                clip_index: clip_indices.last().copied().unwrap_or(0),
                                 in_group: true,
                             },
                         );
                     }
                 }
                 DisplayItem::PushClip { bounds, radius } => {
+                    let parent = clip_indices.last().copied().unwrap_or(0);
+                    self.clip_nodes.push([
+                        bounds.x * s,
+                        bounds.y * s,
+                        bounds.w * s,
+                        bounds.h * s,
+                        *radius * s,
+                        parent as f32,
+                        0.0,
+                        0.0,
+                    ]);
+                    clip_indices.push(self.clip_nodes.len() as u32);
                     clip_stack.push((
                         Rect {
                             x: bounds.x * s,
@@ -1148,10 +1348,14 @@ impl Renderer {
                     ));
                 }
                 DisplayItem::PopClip => {
+                    clip_indices.pop();
                     clip_stack.pop();
                 }
                 DisplayItem::PushOpacity(o) => {
                     group_stack.push(GroupOp {
+                        text_maps: Vec::new(),
+                        filter: None,
+                        clips: clip_stack.clone(),
                         bounds: Rect {
                             x: 0.0,
                             y: 0.0,
@@ -1163,14 +1367,39 @@ impl Renderer {
                         commands: Vec::new(),
                     });
                 }
-                DisplayItem::PopOpacity => {
+                DisplayItem::PushContentBlur { bounds, radius } => {
+                    if !radius.is_finite() || *radius < 0.0 {
+                        plan.validation_error =
+                            Some("content blur requires finite nonnegative radius");
+                    }
+                    group_stack.push(GroupOp {
+                        text_maps: Vec::new(),
+                        filter: Some((*bounds, *radius)),
+                        clips: clip_stack.clone(),
+                        bounds: *bounds,
+                        opacity: 1.0,
+                        instances: Vec::new(),
+                        commands: Vec::new(),
+                    });
+                }
+                DisplayItem::PopOpacity | DisplayItem::PopContentBlur => {
                     if let Some(g) = group_stack.pop() {
                         // True group isolation: bounds in physical px.
+                        if matches!(item, DisplayItem::PopContentBlur) != g.filter.is_some() {
+                            plan.validation_error = Some("mismatched content group stack");
+                        }
+                        let logical = match g.filter {
+                            Some((bounds, radius)) => crate::scene::inflate(
+                                bounds,
+                                BlurParams::for_radius(radius * s).padding() / s,
+                            ),
+                            None => g.bounds,
+                        };
                         let phys = Rect {
-                            x: g.bounds.x * s,
-                            y: g.bounds.y * s,
-                            w: g.bounds.w * s,
-                            h: g.bounds.h * s,
+                            x: logical.x * s,
+                            y: logical.y * s,
+                            w: logical.w * s,
+                            h: logical.h * s,
                         };
                         let op = Op::Group(GroupOp { bounds: phys, ..g });
                         if let Some(parent) = group_stack.last_mut() {
@@ -1238,16 +1467,24 @@ impl Renderer {
                         }
                     });
                     let text_opacity = (color.alpha * opacity).clamp(0.0, 1.0);
-                    let shaped =
+                    let mut shaped =
                         resolve_scene_text(run, *at, color.with_alpha(1.0), 1.0, clip_logical, s);
+                    shaped.scale = transform.a;
                     let bounds = Rect {
                         x: 0.0,
                         y: 0.0,
                         w: self.width as f32,
                         h: self.height as f32,
                     };
-                    let isolated = match text_opacity < 1.0 {
+                    let isolated = match text_opacity < 1.0
+                        || !text_maps.is_empty()
+                        || clip_stack.len() > 1
+                        || clip_stack.iter().any(|(_, radius)| *radius > 0.0)
+                    {
                         true => Some(GroupOp {
+                            text_maps: text_maps.clone(),
+                            filter: None,
+                            clips: clip_stack.clone(),
                             bounds,
                             opacity: text_opacity,
                             instances: Vec::new(),
@@ -1281,30 +1518,103 @@ impl Renderer {
                         }
                     }
                 }
-                DisplayItem::External {
+                DisplayItem::Image {
                     bounds,
                     layer,
+                    fit,
+                    position,
+                    source,
                     opacity,
                     rounded_clip,
                 } => {
-                    flush_rect_run(&mut plan.ops, &plan.instances, &mut top_start);
-                    flush_texts(&mut plan.ops, &mut pending_texts);
-                    // Remember logical bounds for content-only invalidation
-                    // (register_external with an unchanged scene).
                     self.layer_bounds.insert(*layer, *bounds);
                     seen_layers.insert(*layer);
-                    plan.ops.push(Op::External {
+                    let physical = Rect {
+                        x: bounds.x * s,
+                        y: bounds.y * s,
+                        w: bounds.w * s,
+                        h: bounds.h * s,
+                    };
+                    let mut clips = clip_stack.clone();
+                    clips.push((physical, *rounded_clip * s));
+                    let op = SurfaceOp {
+                        pixel_scale: s * transform.a,
+                        bounds: physical,
+                        source: SurfaceSource::External(*layer),
+                        opacity: *opacity,
+                        clips,
+                        placement: Some((*fit, *position, *source)),
+                    };
+                    emit_surface(
+                        &mut plan,
+                        &mut group_stack,
+                        op,
+                        s,
+                        &mut top_start,
+                        &mut pending_texts,
+                    );
+                }
+                DisplayItem::Vector {
+                    bounds,
+                    source,
+                    opacity,
+                } => {
+                    let op = SurfaceOp {
+                        pixel_scale: s * transform.a,
                         bounds: Rect {
                             x: bounds.x * s,
                             y: bounds.y * s,
                             w: bounds.w * s,
                             h: bounds.h * s,
                         },
-                        layer: *layer,
+                        source: SurfaceSource::Vector(source.clone()),
                         opacity: *opacity,
-                        clip_radius: *rounded_clip * s,
-                    });
-                    top_start = plan.instances.len() as u32;
+                        clips: clip_stack.clone(),
+                        placement: None,
+                    };
+                    emit_surface(
+                        &mut plan,
+                        &mut group_stack,
+                        op,
+                        s,
+                        &mut top_start,
+                        &mut pending_texts,
+                    );
+                }
+                DisplayItem::External {
+                    bounds,
+                    layer,
+                    opacity,
+                    rounded_clip,
+                } => {
+                    self.layer_bounds.insert(*layer, *bounds);
+                    seen_layers.insert(*layer);
+                    let physical = Rect {
+                        x: bounds.x * s,
+                        y: bounds.y * s,
+                        w: bounds.w * s,
+                        h: bounds.h * s,
+                    };
+                    let mut clips = clip_stack.clone();
+                    if *rounded_clip > 0.0 {
+                        clips.push((physical, *rounded_clip * s));
+                    }
+                    let op = SurfaceOp {
+                        pixel_scale: s * transform.a,
+                        bounds: physical,
+                        source: SurfaceSource::External(*layer),
+                        opacity: *opacity,
+                        clips,
+                        placement: None,
+                    };
+                    emit_surface(
+                        &mut plan,
+                        &mut group_stack,
+                        op,
+                        s,
+                        &mut top_start,
+                        &mut pending_texts,
+                    );
                 }
             }
         }
@@ -1326,7 +1636,17 @@ impl Renderer {
         // Complex content anywhere forces full-repaint fallback (correct,
         // documented): fast value updates and scissored partial repaint
         // cover plain-rect scenes only.
-        self.has_complex = plan.ops.iter().any(|op| !matches!(op, Op::Rects { .. }));
+        self.has_complex =
+            has_transform || plan.ops.iter().any(|op| !matches!(op, Op::Rects { .. }));
+        if !text_maps.is_empty() {
+            plan.validation_error = Some("unbalanced text color map");
+        }
+        if !group_stack.is_empty() {
+            plan.validation_error = Some("unbalanced content group stack");
+        }
+        if transforms.len() != 1 {
+            plan.validation_error = Some("unbalanced transform stack");
+        }
 
         // Backdrop dependency: any blur whose region overlaps accumulated
         // damage recomputes, even with unchanged params. Checked BEFORE take.
@@ -1354,6 +1674,9 @@ impl Renderer {
     /// Text renders into the SAME open encoder (text-agent protocol), so
     /// painter order holds without submit boundaries.
     pub fn draw(&mut self, plan: &FramePlan) -> Result<(), RenderError> {
+        if let Some(error) = plan.validation_error {
+            return Err(RenderError::Gpu(error.into()));
+        }
         let t0 = std::time::Instant::now();
         let (w, h) = (self.width, self.height);
         // Clone the base view up front: draw helpers take &mut self, so no
@@ -1363,7 +1686,6 @@ impl Renderer {
             .as_ref()
             .map(|(_, v)| v.clone())
             .ok_or_else(|| RenderError::Gpu("no base target; call set_size".into()))?;
-        let base_format = self.format;
 
         // Clean plan over a valid base: no work at all. (The facade never
         // calls draw on clean plans; direct calls are explicit no-ops.)
@@ -1371,6 +1693,8 @@ impl Renderer {
             return Ok(());
         }
 
+        self.text.begin_frame();
+        self.upload_clip_nodes()?;
         if plan.mirror_current {
             // Fast path: write dirty slot ranges from the retained mirror.
             self.upload_dirty_ranges()?;
@@ -1453,41 +1777,15 @@ impl Renderer {
                             &mut encoder,
                             &base_view,
                             *bounds,
-                            *params,
+                            (*params, false),
                         )?;
                         passes += 3; // H + V + composite
                     }
                     Op::Group(g) => {
                         passes += self.draw_group(&device, &queue, &mut encoder, &base_view, g)?;
                     }
-                    Op::External {
-                        bounds,
-                        layer,
-                        opacity,
-                        clip_radius,
-                    } => {
-                        if let Some(view) = self.external.get(layer).cloned() {
-                            self.blit(
-                                &device,
-                                &mut encoder,
-                                &view,
-                                &base_view,
-                                base_format,
-                                *bounds,
-                                full_uv(),
-                                *opacity,
-                                // Rounded clip applies to the layer bounds:
-                                // corners outside the radius stay clear.
-                                [bounds.x, bounds.y, bounds.w, bounds.h],
-                                *clip_radius,
-                                0.0,
-                                1.0, // external layers arrive premultiplied (media contract)
-                            )?;
-                            passes += 1;
-                        }
-                        // Unregistered layers are skipped but counted: the
-                        // media/viewport owner hasn't fed a frame yet. The gap is
-                        // visible in diagnostics via passes_last, never silent.
+                    Op::Surface(surface) => {
+                        passes += self.draw_surface(&device, &mut encoder, &base_view, surface)?;
                     }
                     Op::Texts(runs) => {
                         for run in runs.clone() {
@@ -1501,6 +1799,9 @@ impl Renderer {
                             width: self.width,
                             height: self.height,
                         });
+                        if stats.raster_failures != 0 {
+                            return Err(RenderError::Gpu("text rasterization failed".into()));
+                        }
                         self.diagnostics.text_areas_last = stats.areas as u64;
                         self.diagnostics.text_stale_last = stats.stale_skipped;
                         self.diagnostics.text_mismatch_last = stats.revision_mismatches;
@@ -1607,18 +1908,126 @@ impl Renderer {
     /// `output_gamma`: 0 keeps linear working values; 1 writes encoded,
     /// premultiplied compositor bytes to Unorm; 2 writes those same bytes
     /// through an sRGB attachment, compensating for hardware encoding.
+    pub fn start_snapshot_transition(
+        &mut self,
+        settings: crate::effects::SnapshotTransition,
+    ) -> Result<(), RenderError> {
+        if settings.duration.is_zero()
+            || !settings.band.is_finite()
+            || settings.band <= 0.0
+            || settings.band > 1.0
+            || !settings
+                .shimmer
+                .to_linear()
+                .iter()
+                .all(|value| value.is_finite())
+        {
+            return Err(RenderError::Gpu("invalid snapshot transition".into()));
+        }
+        if !self.base_valid {
+            return Err(RenderError::Gpu(
+                "snapshot transition requires a rendered frame".into(),
+            ));
+        }
+        self.cancel_snapshot_transition();
+        let previous = self
+            .pool
+            .acquire(&self.device, self.width, self.height, self.format)?;
+        let output = match self
+            .pool
+            .acquire(&self.device, self.width, self.height, self.format)
+        {
+            Ok(index) => index,
+            Err(error) => {
+                self.pool.release(previous);
+                return Err(error);
+            }
+        };
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("aqua-transition-snapshot"),
+            });
+        encoder.copy_texture_to_texture(
+            self.base.as_ref().unwrap().0.as_image_copy(),
+            self.pool.entries[previous].texture.as_image_copy(),
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        self.snapshot = Some(SnapshotState {
+            previous,
+            output,
+            settings,
+            elapsed: std::time::Duration::ZERO,
+        });
+        Ok(())
+    }
+
+    pub fn cancel_snapshot_transition(&mut self) {
+        if let Some(snapshot) = self.snapshot.take() {
+            self.pool.release(snapshot.previous);
+            self.pool.release(snapshot.output);
+        }
+    }
+
+    pub fn set_snapshot_transition_elapsed(&mut self, elapsed: std::time::Duration) -> bool {
+        let complete = self.snapshot.as_mut().is_some_and(|snapshot| {
+            snapshot.elapsed = elapsed;
+            elapsed >= snapshot.settings.duration
+        });
+        if complete {
+            self.cancel_snapshot_transition();
+        }
+        self.snapshot.is_some()
+    }
+
+    pub fn snapshot_transition_active(&self) -> bool {
+        self.snapshot.is_some()
+    }
+
+    fn composed_presentation(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let Some(snapshot) = &self.snapshot else {
+            return self.base.as_ref().unwrap().clone();
+        };
+        let previous = &self.pool.entries[snapshot.previous];
+        let output = &self.pool.entries[snapshot.output];
+        let base = &self.base.as_ref().unwrap().1;
+        self.effect_compositor.encode(
+            &self.device,
+            encoder,
+            [base, &previous.view, &output.view],
+            crate::effects::compositor::EffectUniforms {
+                viewport: [self.width as f32, self.height as f32],
+                progress: (snapshot.elapsed.as_secs_f64()
+                    / snapshot.settings.duration.as_secs_f64()) as f32,
+                band: snapshot.settings.band,
+                target: snapshot.settings.shimmer.to_linear(),
+                mode: 0,
+                padding: [0; 3],
+            },
+        );
+        (output.texture.clone(), output.view.clone())
+    }
+
     pub fn blit_to(
         &mut self,
         target: &wgpu::TextureView,
         target_format: wgpu::TextureFormat,
         output_gamma: f32,
     ) -> Result<(), RenderError> {
-        let base_view = self.base.as_ref().map(|(_, v)| v.clone()).unwrap();
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("aqua-blit"),
             });
+        let (_, base_view) = self.composed_presentation(&mut encoder);
         let device = self.device.clone();
         self.blit(
             &device,
@@ -1647,7 +2056,6 @@ impl Renderer {
     /// Must be called after `draw`; returns a full-frame copy.
     pub fn readback(&mut self) -> Result<Vec<u8>, RenderError> {
         let (w, h) = (self.width, self.height);
-        let base = self.base.as_ref().map(|(t, _)| t.clone()).unwrap();
         let padded_bpr = align256(w * 4);
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("aqua-readback"),
@@ -1660,6 +2068,7 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("aqua-copy"),
             });
+        let (base, _) = self.composed_presentation(&mut encoder);
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &base,
@@ -1991,8 +2400,9 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         base_view: &wgpu::TextureView,
         bounds: Rect,
-        params: BlurParams,
+        filter: (BlurParams, bool),
     ) -> Result<(), RenderError> {
+        let (params, replace) = filter;
         let (w, h) = (self.width, self.height);
         let ds = params.downsample.max(1);
         let (sw, sh) = ((w / ds).max(1), (h / ds).max(1));
@@ -2071,7 +2481,24 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
 
-        // Composite blurred region back onto base.
+        if replace {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("aqua-filter-clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: base_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
         let src_view = self.pool.entries[ib].view.clone();
         // uv subrect of the scratch corresponding to bounds (clamped).
         let bx0 = (bounds.x / w as f32).clamp(0.0, 1.0);
@@ -2101,6 +2528,145 @@ impl Renderer {
         self.pool.release(ia);
         self.pool.release(ib);
         Ok(())
+    }
+
+    fn upload_clip_nodes(&mut self) -> Result<(), RenderError> {
+        if !self.clip_dirty {
+            return Ok(());
+        }
+        let count = self.clip_nodes.len().max(1);
+        let bytes = (count * 32) as u64;
+        if bytes > self.device.limits().max_storage_buffer_binding_size {
+            return Err(RenderError::BudgetExceeded("rectangle clip tree"));
+        }
+        if count > self.clip_capacity {
+            self.clip_capacity = count;
+            self.clip_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("aqua-clip-tree"),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.rect_uniform_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("aqua-rect-bind"),
+                layout: &self.rect_bind_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.rect_uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.clip_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+        }
+        match self.clip_nodes.is_empty() {
+            true => {
+                self.queue
+                    .write_buffer(&self.clip_buffer, 0, bytemuck::cast_slice(&[[0.0f32; 8]]))
+            }
+            false => self.queue.write_buffer(
+                &self.clip_buffer,
+                0,
+                bytemuck::cast_slice(&self.clip_nodes),
+            ),
+        }
+        self.clip_dirty = false;
+        Ok(())
+    }
+
+    fn draw_surface(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        op: &SurfaceOp,
+    ) -> Result<u32, RenderError> {
+        let bounds = op.bounds;
+        if ![bounds.x, bounds.y, bounds.w, bounds.h, op.opacity]
+            .iter()
+            .all(|value| value.is_finite())
+        {
+            return Err(RenderError::Vector(
+                crate::vector::VectorError::InvalidGeometry,
+            ));
+        }
+        if bounds.is_empty()
+            || bounds
+                .intersect(Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: self.width as f32,
+                    h: self.height as f32,
+                })
+                .is_empty()
+        {
+            return Ok(0);
+        }
+        let view = match &op.source {
+            SurfaceSource::External(layer) => match self.external.get(layer).cloned() {
+                Some(view) => view,
+                None => return Ok(0),
+            },
+            SurfaceSource::Vector(source) => self
+                .vectors
+                .view(
+                    device,
+                    &self.queue,
+                    source,
+                    bounds.w.ceil() as u32,
+                    bounds.h.ceil() as u32,
+                )
+                .map_err(RenderError::Vector)?,
+        };
+        let placement = match (&op.source, op.placement) {
+            (SurfaceSource::External(layer), Some((fit, position, source))) => {
+                let (width, height) = self
+                    .external_size
+                    .get(layer)
+                    .copied()
+                    .ok_or_else(|| RenderError::Gpu("image dimensions missing".into()))?;
+                aqua_core::image::ImagePlacement::resolve(
+                    bounds,
+                    aqua_core::Size::new(
+                        width as f32 * op.pixel_scale,
+                        height as f32 * op.pixel_scale,
+                    ),
+                    fit,
+                    position,
+                    source,
+                )
+                .map_err(|error| RenderError::Gpu(format!("image fit: {error:?}")))?
+            }
+            _ => aqua_core::image::ImagePlacement {
+                destination: bounds,
+                source: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1.0,
+                    h: 1.0,
+                },
+            },
+        };
+        let uv = placement.source;
+        self.blit_clipped(
+            device,
+            encoder,
+            &view,
+            target,
+            self.format,
+            placement.destination,
+            [uv.x, uv.y, uv.w, uv.h],
+            op.opacity,
+            [0.0, 0.0, -1.0, 0.0],
+            0.0,
+            0.0,
+            1.0,
+            &op.clips,
+        )?;
+        Ok(1)
     }
 
     fn draw_group(
@@ -2179,6 +2745,9 @@ impl Renderer {
                             width: w,
                             height: h,
                         });
+                        if stats.raster_failures != 0 {
+                            return Err(RenderError::Gpu("text rasterization failed".into()));
+                        }
                         passes += u32::from(stats.areas > 0);
                         self.diagnostics.text_areas_last += stats.areas as u64;
                         self.diagnostics.text_stale_last += stats.stale_skipped;
@@ -2186,6 +2755,9 @@ impl Renderer {
                     }
                     GroupCommand::Group(inner) => {
                         passes += self.draw_group(device, queue, encoder, &view, inner)?;
+                    }
+                    GroupCommand::Surface(surface) => {
+                        passes += self.draw_surface(device, encoder, &view, surface)?;
                     }
                 }
             }
@@ -2195,6 +2767,56 @@ impl Renderer {
             self.pool.release(scratch);
             return Err(error);
         }
+        let mut mapped_scratch = None;
+        let mut filtered_view = view.clone();
+        for map in &group.text_maps {
+            let output = match self.pool.acquire(device, w, h, self.format) {
+                Ok(index) => index,
+                Err(error) => {
+                    if let Some(index) = mapped_scratch {
+                        self.pool.release(index);
+                    }
+                    self.pool.release(scratch);
+                    return Err(error);
+                }
+            };
+            let output_view = self.pool.entries[output].view.clone();
+            let [r, g, b, _] = map.target.to_linear();
+            self.effect_compositor.encode(
+                device,
+                encoder,
+                [&filtered_view, &filtered_view, &output_view],
+                crate::effects::compositor::EffectUniforms {
+                    viewport: [w as f32, h as f32],
+                    progress: map.start * self.scale,
+                    band: map.end * self.scale,
+                    target: [r, g, b, map.strength],
+                    mode: 1,
+                    padding: [0; 3],
+                },
+            );
+            if let Some(index) = mapped_scratch.replace(output) {
+                self.pool.release(index);
+            }
+            filtered_view = output_view;
+            passes += 1;
+        }
+        if let Some((_, radius)) = group.filter {
+            if let Err(error) = self.apply_blur(
+                device,
+                queue,
+                encoder,
+                &view,
+                group.bounds,
+                (BlurParams::for_radius(radius * self.scale), true),
+            ) {
+                self.pool.release(scratch);
+                return Err(error);
+            }
+            if radius * self.scale >= 0.5 {
+                passes += 4;
+            }
+        }
         let b = group.bounds.intersect(Rect {
             x: 0.0,
             y: 0.0,
@@ -2202,10 +2824,10 @@ impl Renderer {
             h: h as f32,
         });
         let (bw, bh) = (w as f32, h as f32);
-        let result = self.blit(
+        let result = self.blit_clipped(
             device,
             encoder,
-            &view,
+            &filtered_view,
             base_view,
             self.format,
             Rect {
@@ -2225,7 +2847,11 @@ impl Renderer {
             0.0,
             0.0,
             1.0,
+            &group.clips,
         );
+        if let Some(index) = mapped_scratch {
+            self.pool.release(index);
+        }
         self.pool.release(scratch);
         result.map(|()| passes)
     }
@@ -2271,6 +2897,40 @@ impl Renderer {
         output_gamma: f32,
         premultiplied: f32,
     ) -> Result<(), RenderError> {
+        self.blit_clipped(
+            device,
+            encoder,
+            src,
+            target,
+            target_format,
+            dst,
+            src_uv,
+            opacity,
+            clip,
+            clip_radius,
+            output_gamma,
+            premultiplied,
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn blit_clipped(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        src: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        target_format: wgpu::TextureFormat,
+        dst: Rect,
+        src_uv: [f32; 4],
+        opacity: f32,
+        clip: [f32; 4],
+        clip_radius: f32,
+        output_gamma: f32,
+        premultiplied: f32,
+        clips: &[(Rect, f32)],
+    ) -> Result<(), RenderError> {
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("aqua-compose-u"),
             size: std::mem::size_of::<ComposeUniforms>() as u64,
@@ -2288,10 +2948,51 @@ impl Renderer {
                 clip_radius,
                 output_gamma,
                 premultiplied,
-                _pad: [0.0; 2],
+                _pad: [clips.len() as f32, 0.0],
             }]),
         );
-        let bind = self.bind_for(device, &self.compose_bind_layout, &uniform, src);
+        let mut clip_data = Vec::<[f32; 8]>::with_capacity(clips.len().max(1));
+        for (bounds, radius) in clips {
+            clip_data.push([
+                bounds.x, bounds.y, bounds.w, bounds.h, *radius, 0.0, 0.0, 0.0,
+            ]);
+        }
+        if clip_data.is_empty() {
+            clip_data.push([0.0; 8]);
+        }
+        let clip_bytes = bytemuck::cast_slice(&clip_data);
+        if clip_bytes.len() as u64 > device.limits().max_storage_buffer_binding_size {
+            return Err(RenderError::BudgetExceeded("clip stack"));
+        }
+        let clip_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("aqua-compose-clips"),
+            size: clip_bytes.len() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&clip_buffer, 0, clip_bytes);
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("aqua-compose-bind"),
+            layout: &self.compose_bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(src),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: clip_buffer.as_entire_binding(),
+                },
+            ],
+        });
         let inst = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("aqua-compose-inst"),
             size: std::mem::size_of::<ComposeInstance>() as u64,
@@ -2469,9 +3170,40 @@ fn build_rect_instance(
 /// maintaining the group's logical union bounds.
 // `Vec` (not a slice) is required: groups grow via `push`.
 #[allow(clippy::ptr_arg)]
+fn emit_surface(
+    plan: &mut FramePlan,
+    groups: &mut [GroupOp],
+    surface: SurfaceOp,
+    scale: f32,
+    top_start: &mut u32,
+    texts: &mut Vec<ShapedRun>,
+) {
+    match groups.last_mut() {
+        Some(group) => {
+            let bounds = Rect {
+                x: surface.bounds.x / scale,
+                y: surface.bounds.y / scale,
+                w: surface.bounds.w / scale,
+                h: surface.bounds.h / scale,
+            };
+            group.bounds = match group.commands.is_empty() {
+                true => bounds,
+                false => group.bounds.union(bounds),
+            };
+            group.commands.push(GroupCommand::Surface(surface));
+        }
+        None => {
+            flush_rect_run(&mut plan.ops, &plan.instances, top_start);
+            flush_texts(&mut plan.ops, texts);
+            plan.ops.push(Op::Surface(surface));
+            *top_start = plan.instances.len() as u32;
+        }
+    }
+}
+
 fn emit_rect_instance(
     plan: &mut FramePlan,
-    group_stack: &mut Vec<GroupOp>,
+    group_stack: &mut [GroupOp],
     s: f32,
     inst: RectInstance,
 ) {
@@ -2628,6 +3360,64 @@ fn make_compose_pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+fn transform_item(item: &DisplayItem, transform: aqua_core::Transform2D) -> DisplayItem {
+    let bounds = |r: Rect| Rect {
+        x: r.x * transform.a + transform.tx,
+        y: r.y * transform.d + transform.ty,
+        w: r.w * transform.a,
+        h: r.h * transform.d,
+    };
+    let mut result = item.clone();
+    match &mut result {
+        DisplayItem::PushTextColorMap(map) => {
+            map.start = map.start * transform.a + transform.tx;
+            map.end = map.end * transform.a + transform.tx;
+        }
+        DisplayItem::Rect {
+            bounds: r,
+            radius,
+            border_width,
+            shadow,
+            ..
+        } => {
+            *r = bounds(*r);
+            *radius *= transform.a;
+            *border_width *= transform.a;
+            if let Some((x, y, blur, _)) = shadow {
+                *x *= transform.a;
+                *y *= transform.a;
+                *blur *= transform.a;
+            }
+        }
+        DisplayItem::PushContentBlur { bounds: r, radius }
+        | DisplayItem::PushClip { bounds: r, radius }
+        | DisplayItem::BackdropBlur { bounds: r, radius } => {
+            *r = bounds(*r);
+            *radius *= transform.a;
+        }
+        DisplayItem::Image {
+            bounds: r,
+            rounded_clip,
+            ..
+        }
+        | DisplayItem::External {
+            bounds: r,
+            rounded_clip,
+            ..
+        } => {
+            *r = bounds(*r);
+            *rounded_clip *= transform.a;
+        }
+        DisplayItem::Vector { bounds: r, .. } => *r = bounds(*r),
+        DisplayItem::Text { at, .. } => {
+            at[0] = at[0] * transform.a + transform.tx;
+            at[1] = at[1] * transform.d + transform.ty;
+        }
+        _ => {}
+    }
+    result
 }
 
 #[cfg(test)]

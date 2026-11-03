@@ -1,30 +1,15 @@
-//! Shared text style types for Aqua.
-//!
-//! These are plain-data, renderer-neutral types owned by `aqua-text`.
-//! They convert to `cosmic-text` attributes internally, so `aqua-core`,
-//! `aqua-ui` and `aqua-render` never need to name shaping-engine types.
-//! (`aqua-core` does not exist yet; when it does, these types stay here and
-//! core/UI depend on this crate for text styling.)
-
-/// A font family selector, in fallback order.
+use unicode_segmentation::UnicodeSegmentation;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FontFamily {
-    /// System sans-serif UI font.
     SansSerif,
-    /// System serif font.
     Serif,
-    /// System monospace font.
     Monospace,
-    /// System cursive font.
     Cursive,
-    /// System fantasy font.
     Fantasy,
-    /// A named family, e.g. `"DejaVu Sans"`, `"Noto Sans Arabic"`.
     Named(String),
 }
 
 impl FontFamily {
-    /// Convert to the shaping engine's family type.
     pub fn to_cosmic(&self) -> cosmic_text::Family<'_> {
         match self {
             FontFamily::SansSerif => cosmic_text::Family::SansSerif,
@@ -37,7 +22,6 @@ impl FontFamily {
     }
 }
 
-/// Font weight as a numeric value (100..=900), following CSS conventions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FontWeight(pub u16);
 
@@ -60,7 +44,6 @@ impl Default for FontWeight {
     }
 }
 
-/// Upright vs slanted face selection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FontSlant {
     #[default]
@@ -79,7 +62,6 @@ impl FontSlant {
     }
 }
 
-/// Horizontal condensation/expansion of a face.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FontStretch {
     Condensed,
@@ -98,20 +80,17 @@ impl FontStretch {
     }
 }
 
-/// Complete styling for a run of text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextStyle {
-    /// Fallback-ordered family list. The first entry is the preferred family.
     pub families: Vec<FontFamily>,
-    /// Font size in logical pixels (before the layout scale factor).
     pub size_px: f32,
-    /// Line height in logical pixels (before the layout scale factor).
     pub line_height_px: f32,
     pub weight: FontWeight,
     pub slant: FontSlant,
     pub stretch: FontStretch,
-    /// Extra letter spacing in units of em. `None` means no override.
     pub letter_spacing_em: Option<f32>,
+    pub underline: bool,
+    pub strikethrough: bool,
 }
 
 impl Default for TextStyle {
@@ -124,13 +103,13 @@ impl Default for TextStyle {
             slant: FontSlant::Normal,
             stretch: FontStretch::Normal,
             letter_spacing_em: None,
+            underline: false,
+            strikethrough: false,
         }
     }
 }
 
 impl TextStyle {
-    /// A short, stable, human-readable key for cache invalidation.
-    /// Any field that affects shaping output must appear here.
     pub fn cache_key(&self) -> String {
         let families: Vec<String> = self
             .families
@@ -145,20 +124,19 @@ impl TextStyle {
             })
             .collect();
         format!(
-            "fam={}|size={:.3}|lh={:.3}|w={}|s={:?}|st={:?}|ls={:?}",
+            "fam={}|size={:.3}|lh={:.3}|w={}|s={:?}|st={:?}|ls={:?}|u={}|strike={}",
             families.join(","),
             self.size_px,
             self.line_height_px,
             self.weight.0,
             self.slant,
             self.stretch,
-            self.letter_spacing_em
+            self.letter_spacing_em,
+            self.underline,
+            self.strikethrough,
         )
     }
 
-    /// Shaping attributes borrowing any named family strings from `self`.
-    /// The caller must keep `self` (or the owning spans) alive while the
-    /// returned attrs are used.
     pub fn to_cosmic_in(&self) -> cosmic_text::Attrs<'_> {
         let family = match self.families.first() {
             Some(f) => f.to_cosmic(),
@@ -175,9 +153,6 @@ impl TextStyle {
         attrs
     }
 
-    /// Base shaping attributes for this style (first family only).
-    /// Named families fall back to sans-serif here because `Attrs` borrows
-    /// the name; prefer [`TextStyle::to_cosmic_in`] in the layout layer.
     pub fn to_cosmic(&self) -> cosmic_text::Attrs<'static> {
         let family = match self.families.first() {
             Some(FontFamily::SansSerif) => cosmic_text::Family::SansSerif,
@@ -185,9 +160,6 @@ impl TextStyle {
             Some(FontFamily::Monospace) => cosmic_text::Family::Monospace,
             Some(FontFamily::Cursive) => cosmic_text::Family::Cursive,
             Some(FontFamily::Fantasy) => cosmic_text::Family::Fantasy,
-            // `Attrs` borrows the name; the layout layer keeps owned spans
-            // alive, so this arm is only used for single static families.
-            // Named families go through `to_cosmic_in`.
             Some(FontFamily::Named(_)) => cosmic_text::Family::SansSerif,
             None => cosmic_text::Family::SansSerif,
         };
@@ -203,22 +175,49 @@ impl TextStyle {
     }
 }
 
-/// One styled run inside a paragraph. Inline styling is data within one
-/// layout operation: a styled word must not become a separate layout child.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StyledSpan {
+    inline_cell_width: Option<f32>,
+    pub interaction: Option<u64>,
     pub color_srgb: Option<[u8; 4]>,
     pub text: String,
     pub style: TextStyle,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InlineCellError {
+    InvalidWidth,
+    ExpectedOneGrapheme,
+}
+
 impl StyledSpan {
+    pub fn inline_cell(mut self, width: f32) -> Result<Self, InlineCellError> {
+        if !width.is_finite() || width <= 0.0 {
+            return Err(InlineCellError::InvalidWidth);
+        }
+        if self.text.graphemes(true).count() != 1 || self.text.contains(['\n', '\r']) {
+            return Err(InlineCellError::ExpectedOneGrapheme);
+        }
+        self.inline_cell_width = Some(width);
+        Ok(self)
+    }
+    pub fn inline_cell_width(&self) -> Option<f32> {
+        self.inline_cell_width
+    }
+
+    pub fn link(mut self, id: u64) -> Self {
+        self.interaction = Some(id);
+        self
+    }
+
     pub fn color(mut self, rgba_srgb: [u8; 4]) -> Self {
         self.color_srgb = Some(rgba_srgb);
         self
     }
     pub fn new(text: impl Into<String>, style: TextStyle) -> Self {
         Self {
+            inline_cell_width: None,
+            interaction: None,
             color_srgb: None,
             text: text.into(),
             style,
@@ -227,6 +226,8 @@ impl StyledSpan {
 
     pub fn plain(text: impl Into<String>) -> Self {
         Self {
+            inline_cell_width: None,
+            interaction: None,
             color_srgb: None,
             text: text.into(),
             style: TextStyle::default(),
@@ -234,17 +235,11 @@ impl StyledSpan {
     }
 }
 
-/// Line-wrapping policy.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum WrapMode {
-    /// No wrapping; lines break only at explicit newlines.
     None,
-    /// Wrap at glyph boundaries.
     Glyph,
-    /// Wrap at word boundaries.
     Word,
-    /// Wrap at word boundaries, falling back to glyph boundaries for
-    /// words that cannot fit on a line by themselves.
     #[default]
     WordOrGlyph,
 }
@@ -260,7 +255,6 @@ impl WrapMode {
     }
 }
 
-/// Horizontal alignment of laid-out lines.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TextAlign {
     #[default]
@@ -275,7 +269,7 @@ pub enum TextAlign {
 impl TextAlign {
     pub fn to_cosmic(self) -> Option<cosmic_text::Align> {
         match self {
-            TextAlign::Start => None, // shaper default: LTR -> Left, RTL -> Right
+            TextAlign::Start => None,
             TextAlign::End => Some(cosmic_text::Align::End),
             TextAlign::Left => Some(cosmic_text::Align::Left),
             TextAlign::Right => Some(cosmic_text::Align::Right),
@@ -285,15 +279,10 @@ impl TextAlign {
     }
 }
 
-/// Single-line vs multi-line behavior. These are separate policies: a
-/// single-line field rejects newlines on input and never wraps, while a
-/// multi-line field honors newlines and wraps per [`WrapMode`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum LineMode {
-    /// One visual line; newline characters are stripped on input.
     #[default]
     Single,
-    /// Newlines break lines; wrapping follows [`WrapMode`].
     Multi,
 }
 

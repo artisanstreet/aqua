@@ -111,3 +111,23 @@ fn composition_restores_or_commits_at_original_boundary_after_grapheme_join() {
     assert!(editor.undo());
     assert_eq!(editor.text(), "🇦x🇧");
 }
+
+#[test]
+fn transactional_range_replacement_keeps_history_and_rejects_active_composition() {
+    use aqua_text::{LineMode, Selection, TextEditor};
+    let mut editor = TextEditor::new(LineMode::Multi);
+    editor.insert("a👩‍💻z");
+    editor.move_to_start(false);
+    let before = editor.selection();
+    assert!(editor.replace_range(2.."a👩‍💻".len(), "é"));
+    assert_eq!(editor.text(), "aéz");
+    editor.undo();
+    assert_eq!(editor.text(), "a👩‍💻z");
+    assert_eq!(editor.selection(), before);
+    editor.set_selection(Selection::new(1, "a👩‍💻".len()));
+    editor.set_composition("文", 3..3);
+    assert!(!editor.replace_range(0..1, "no"));
+    editor.cancel_composition();
+    assert_eq!(editor.text(), "a👩‍💻z");
+    assert!(!editor.replace_range(50..60, "invalid"));
+}

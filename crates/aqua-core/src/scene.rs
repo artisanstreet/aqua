@@ -92,8 +92,53 @@ pub fn decode_layer(layer: u64) -> Option<(LayerKind, RawId)> {
 }
 
 /// One paint operation in painter order (position in the commit sequence).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextRasterMode {
+    Outline,
+    #[default]
+    PlatformDefault,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnapshotTransition {
+    pub duration: std::time::Duration,
+    pub band: f32,
+    pub shimmer: Oklch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextColorMap {
+    pub start: f32,
+    pub end: f32,
+    pub target: Oklch,
+    pub strength: f32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum DisplayItem {
+    PushTextColorMap(TextColorMap),
+    PopTextColorMap,
+    PushContentBlur {
+        bounds: Rect,
+        radius: f32,
+    },
+    PopContentBlur,
+    PushTransform(crate::Transform2D),
+    PopTransform,
+    Image {
+        bounds: Rect,
+        layer: u64,
+        fit: crate::image::ImageFit,
+        position: crate::Point,
+        source: Rect,
+        opacity: f32,
+        rounded_clip: f32,
+    },
+    Vector {
+        bounds: Rect,
+        source: crate::vector::VectorSource,
+        opacity: f32,
+    },
     /// Filled rounded rect with optional border and drop shadow.
     Rect {
         /// Bounds in logical units.
@@ -177,7 +222,10 @@ impl DisplayItem {
                 }
                 Some(r)
             }
-            DisplayItem::PushClip { bounds, .. }
+            DisplayItem::Image { bounds, .. }
+            | DisplayItem::Vector { bounds, .. }
+            | DisplayItem::PushContentBlur { bounds, .. }
+            | DisplayItem::PushClip { bounds, .. }
             | DisplayItem::BackdropBlur { bounds, .. }
             | DisplayItem::External { bounds, .. } => Some(*bounds),
             DisplayItem::Text { at, .. } => {
@@ -187,7 +235,14 @@ impl DisplayItem {
                     crate::geometry::Size::ZERO,
                 ))
             }
-            DisplayItem::PushOpacity(_) | DisplayItem::PopClip | DisplayItem::PopOpacity => None,
+            DisplayItem::PushTextColorMap(_)
+            | DisplayItem::PopTextColorMap
+            | DisplayItem::PopContentBlur
+            | DisplayItem::PushOpacity(_)
+            | DisplayItem::PopClip
+            | DisplayItem::PopOpacity
+            | DisplayItem::PushTransform(_)
+            | DisplayItem::PopTransform => None,
         }
     }
 }

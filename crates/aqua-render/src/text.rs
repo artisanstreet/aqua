@@ -37,6 +37,8 @@
 //! group opacity applies once at composite; top-level text alpha is
 //! premultiplied by the item opacity at resolve time.
 
+mod raster;
+
 use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
 use aqua_text::{ResolveError, RunHandle, RunId, RunRegistry, SharedFonts, SharedRuns};
@@ -75,6 +77,7 @@ impl TextBackend {
 /// revision; mismatches resolve to the current layout and are counted.
 #[derive(Clone, Debug)]
 pub struct ShapedRun {
+    pub scale: f32,
     /// `TextRun.id` from the scene.
     pub id: u64,
     /// `TextRun.revision` from the scene.
@@ -106,6 +109,7 @@ pub struct TextFrame<'a> {
 /// counter. Callers must NOT add estimates into real byte totals.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TextStats {
+    pub raster_failures: u64,
     /// Areas resolved and prepared.
     pub areas: usize,
     /// Runs skipped for unknown ids (removed/unmounted text).
@@ -121,6 +125,17 @@ pub struct TextStats {
 }
 
 pub trait TextProvider: Send + Sync {
+    fn begin_frame(&mut self) {}
+    fn set_raster_mode(
+        &mut self,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _format: wgpu::TextureFormat,
+        _mode: aqua_core::scene::TextRasterMode,
+    ) -> Result<(), String> {
+        Err("text provider has no raster mode support".into())
+    }
+
     fn queue_run(&mut self, run: ShapedRun);
     /// Resolve queued runs against the shared registry, prepare ONCE for
     /// all of them, and encode ONE `Load` render pass into the supplied
@@ -161,12 +176,15 @@ fn resolve_for_encode<'a>(
 
 /// Glyphon-backed provider over the shared backend.
 pub struct GlyphonProvider {
+    format: wgpu::TextureFormat,
+    raster_cache: raster::RasterCache,
     backend: TextBackend,
     swash_cache: SwashCache,
     cache: Cache,
     atlas: TextAtlas,
     viewport: Viewport,
-    renderer: TextRenderer,
+    renderers: Vec<TextRenderer>,
+    renderer_cursor: usize,
     pending: Vec<ShapedRun>,
     last_stats: TextStats,
 }
@@ -187,12 +205,15 @@ impl GlyphonProvider {
         let renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         Self {
+            format,
+            raster_cache: raster::RasterCache::default(),
             backend,
             swash_cache,
             cache,
             atlas,
             viewport,
-            renderer,
+            renderers: vec![renderer],
+            renderer_cursor: 0,
             pending: Vec::new(),
             last_stats: TextStats::default(),
         }
@@ -208,19 +229,39 @@ impl GlyphonProvider {
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
     ) {
+        self.format = format;
         self.cache = Cache::new(device);
         self.atlas = TextAtlas::new(device, queue, &self.cache, format);
         self.viewport = Viewport::new(device, &self.cache);
-        self.renderer = TextRenderer::new(
+        self.renderers = vec![TextRenderer::new(
             &mut self.atlas,
             device,
             wgpu::MultisampleState::default(),
             None,
-        );
+        )];
+        self.renderer_cursor = 0;
     }
 }
 
 impl TextProvider for GlyphonProvider {
+    fn begin_frame(&mut self) {
+        self.renderer_cursor = 0;
+    }
+    fn set_raster_mode(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        mode: aqua_core::scene::TextRasterMode,
+    ) -> Result<(), String> {
+        if self.raster_cache.mode != mode {
+            self.raster_cache.mode = mode;
+            self.raster_cache.clear();
+            self.set_format(device, queue, format);
+        }
+        Ok(())
+    }
+
     fn queue_run(&mut self, run: ShapedRun) {
         self.pending.push(run);
     }
@@ -244,33 +285,92 @@ impl TextProvider for GlyphonProvider {
         // user code runs under it.
         let mut fonts = self.backend.fonts.lock();
         let runs_guard = self.backend.runs.lock();
-        let areas: Vec<TextArea> = runs
-            .iter()
-            .filter_map(|run| {
-                let handle = match resolve_for_encode(&runs_guard, run) {
-                    Ok(h) => h,
-                    Err(SkipReason::StaleRevision { .. }) => {
-                        stats.revision_mismatches += 1;
-                        return None;
-                    }
-                    Err(SkipReason::Unknown) => {
-                        stats.stale_skipped += 1;
-                        return None;
-                    }
-                };
-                let Some(buffer) = handle.layout.buffer() else {
+        if self.renderer_cursor == 0 && self.raster_cache.near_capacity() {
+            self.raster_cache.clear();
+            self.cache = Cache::new(frame.device);
+            self.atlas = TextAtlas::new(frame.device, frame.queue, &self.cache, self.format);
+            self.viewport = Viewport::new(frame.device, &self.cache);
+            self.viewport.update(
+                frame.queue,
+                Resolution {
+                    width: frame.width,
+                    height: frame.height,
+                },
+            );
+            self.renderers.clear();
+            self.renderer_cursor = 0;
+        }
+        let empty = cosmic_text::Buffer::new_empty(cosmic_text::Metrics::new(1.0, 1.0));
+        let mut custom = Vec::<(ShapedRun, Vec<glyphon::CustomGlyph>)>::new();
+        for run in &runs {
+            let handle = match resolve_for_encode(&runs_guard, run) {
+                Ok(handle) => handle,
+                Err(SkipReason::StaleRevision { .. }) => {
+                    stats.revision_mismatches += 1;
+                    continue;
+                }
+                Err(SkipReason::Unknown) => {
                     stats.stale_skipped += 1;
-                    return None;
-                };
-                Some(TextArea {
-                    buffer,
-                    left: run.at_physical[0],
-                    top: run.at_physical[1],
-                    scale: 1.0,
-                    bounds: clip_to_bounds(run.clip_physical),
-                    default_color: run.color_glyphon,
-                    custom_glyphs: &[],
-                })
+                    continue;
+                }
+            };
+            let Some(buffer) = handle.layout.buffer() else {
+                stats.stale_skipped += 1;
+                continue;
+            };
+            let mut glyphs = Vec::new();
+            for line in buffer.layout_runs() {
+                for glyph in line.glyphs {
+                    let physical =
+                        glyph.physical((run.at_physical[0], run.at_physical[1]), run.scale);
+                    let cached = match self.raster_cache.get(
+                        fonts.font_system_mut(),
+                        &mut self.swash_cache,
+                        physical.cache_key,
+                    ) {
+                        Ok(cached) => cached,
+                        Err(error) => {
+                            eprintln!("aqua-render: {error}");
+                            stats.raster_failures += 1;
+                            self.last_stats = stats;
+                            return stats;
+                        }
+                    };
+                    let Some(image) = &cached.image else {
+                        continue;
+                    };
+                    if image.placement.width > u16::MAX as u32
+                        || image.placement.height > u16::MAX as u32
+                    {
+                        stats.raster_failures += 1;
+                        self.last_stats = stats;
+                        return stats;
+                    }
+                    glyphs.push(glyphon::CustomGlyph {
+                        id: cached.id,
+                        left: (physical.x + image.placement.left) as f32,
+                        top: ((line.line_y * run.scale).round() as i32 + physical.y
+                            - image.placement.top) as f32,
+                        width: image.placement.width as f32,
+                        height: image.placement.height as f32,
+                        color: glyph.color_opt,
+                        snap_to_physical_pixel: true,
+                        metadata: glyph.metadata,
+                    });
+                }
+            }
+            custom.push((run.clone(), glyphs));
+        }
+        let areas: Vec<TextArea> = custom
+            .iter()
+            .map(|(run, glyphs)| TextArea {
+                buffer: &empty,
+                left: 0.0,
+                top: 0.0,
+                scale: 1.0,
+                bounds: clip_to_bounds(run.clip_physical),
+                default_color: run.color_glyphon,
+                custom_glyphs: glyphs,
             })
             .collect();
         stats.areas = areas.len();
@@ -281,7 +381,17 @@ impl TextProvider for GlyphonProvider {
         // Single prepare for ALL areas of this target, then its render.
         // This pairing is the invariant: never prepare(A)+prepare(B) before
         // render(A), or A's draw reads B's instance buffer.
-        if let Err(e) = self.renderer.prepare(
+        if self.renderer_cursor == self.renderers.len() {
+            self.renderers.push(TextRenderer::new(
+                &mut self.atlas,
+                frame.device,
+                wgpu::MultisampleState::default(),
+                None,
+            ));
+        }
+        let renderer = &mut self.renderers[self.renderer_cursor];
+        self.renderer_cursor += 1;
+        if let Err(e) = renderer.prepare_with_custom(
             frame.device,
             frame.queue,
             fonts.font_system_mut(),
@@ -289,8 +399,10 @@ impl TextProvider for GlyphonProvider {
             &self.viewport,
             areas,
             &mut self.swash_cache,
+            |request| self.raster_cache.rasterized(request.id),
         ) {
             eprintln!("aqua-render: glyphon prepare failed: {e:?}");
+            stats.raster_failures += 1;
             self.last_stats = stats;
             return stats;
         }
@@ -313,8 +425,9 @@ impl TextProvider for GlyphonProvider {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-            if let Err(e) = self.renderer.render(&self.atlas, &self.viewport, &mut pass) {
+            if let Err(e) = renderer.render(&self.atlas, &self.viewport, &mut pass) {
                 eprintln!("aqua-render: glyphon render failed: {e:?}");
+                stats.raster_failures += 1;
             }
         }
         // atlas_upload_bytes stays None: glyphon exposes no counter and a
@@ -338,6 +451,7 @@ impl TextProvider for GlyphonProvider {
     }
 
     fn trim_atlas(&mut self) {
+        self.renderer_cursor = 0;
         self.atlas.trim();
     }
 
@@ -389,6 +503,7 @@ pub fn resolve_scene_text(
     c.alpha = (c.alpha * opacity).clamp(0.0, 1.0);
     let [r, g, b, a] = c.to_srgb8();
     ShapedRun {
+        scale: 1.0,
         id: run.id,
         revision: run.revision,
         at_physical: [at_logical[0] * scale, at_logical[1] * scale],
@@ -412,6 +527,7 @@ mod tests {
 
     fn queued(id: u64, revision: u64) -> ShapedRun {
         ShapedRun {
+            scale: 1.0,
             id,
             revision,
             at_physical: [0.0, 0.0],

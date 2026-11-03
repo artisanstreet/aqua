@@ -109,9 +109,10 @@ impl SurfaceFacade {
             .ok_or_else(|| {
                 RenderError::SurfaceFailed("surface incompatible with adapter: no formats".into())
             })?;
-        let present_mode = prefer_present_mode
-            .filter(|m| caps.present_modes.contains(m))
-            .unwrap_or(wgpu::PresentMode::Fifo);
+        let present_mode = choose_present_mode(
+            &caps.present_modes,
+            prefer_present_mode.unwrap_or(wgpu::PresentMode::Fifo),
+        )?;
         let alpha_mode = if caps
             .alpha_modes
             .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
@@ -154,6 +155,22 @@ impl SurfaceFacade {
         self.config.present_mode
     }
 
+    pub fn set_present_mode(
+        &mut self,
+        device: &wgpu::Device,
+        adapter: &wgpu::Adapter,
+        prefer: wgpu::PresentMode,
+    ) -> Result<wgpu::PresentMode, RenderError> {
+        let capabilities = self.surface.get_capabilities(adapter);
+        let selected = choose_present_mode(&capabilities.present_modes, prefer)?;
+        if self.config.present_mode != selected {
+            self.config.present_mode = selected;
+            self.surface.configure(device, &self.config);
+            self.policy.request_present();
+        }
+        Ok(selected)
+    }
+
     /// Actual compositor alpha mode selected from the surface capabilities.
     pub fn alpha_mode(&self) -> wgpu::CompositeAlphaMode {
         self.config.alpha_mode
@@ -193,7 +210,7 @@ impl SurfaceFacade {
         scene: &mut Scene,
     ) -> Result<bool, RenderError> {
         let plan = renderer.prepare(scene);
-        let raster_dirty = !plan.is_clean();
+        let raster_dirty = !plan.is_clean() || renderer.snapshot_transition_active();
         if raster_dirty {
             renderer.draw(&plan)?;
         }
@@ -241,6 +258,30 @@ impl SurfaceFacade {
             _ => Ok(presented),
         }
     }
+}
+
+pub fn choose_present_mode(
+    supported: &[wgpu::PresentMode],
+    preferred: wgpu::PresentMode,
+) -> Result<wgpu::PresentMode, RenderError> {
+    use wgpu::PresentMode;
+    let automatic = match preferred {
+        PresentMode::AutoVsync => &[PresentMode::FifoRelaxed, PresentMode::Fifo][..],
+        PresentMode::AutoNoVsync => &[
+            PresentMode::Immediate,
+            PresentMode::Mailbox,
+            PresentMode::Fifo,
+        ][..],
+        _ if supported.contains(&preferred) => return Ok(preferred),
+        _ => &[PresentMode::Fifo][..],
+    };
+    automatic
+        .iter()
+        .find(|mode| supported.contains(mode))
+        .copied()
+        .ok_or_else(|| {
+            RenderError::SurfaceFailed("surface has no compatible presentation mode".into())
+        })
 }
 
 #[cfg(test)]

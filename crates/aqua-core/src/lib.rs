@@ -8,8 +8,10 @@ pub mod color;
 pub mod event;
 pub mod geometry;
 pub mod id;
+pub mod image;
 pub mod scene;
 pub mod semantic;
+pub mod vector;
 
 pub use arena::Arena;
 pub use color::Oklch;
@@ -24,3 +26,5 @@ pub use scene::{
     LAYER_MAX_GENERATION, LAYER_TAG_MASK, LAYER_TAG_MEDIA, LAYER_TAG_VIEWPORT,
 };
 pub use semantic::{CollectionSemantics, Role, SemanticNode};
+
+pub use image::ImageRef;

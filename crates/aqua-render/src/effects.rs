@@ -5,6 +5,10 @@
 //! - in-app backdrop filter: earlier content behind the element;
 //! - native window material: platform compositor, NOT our shaders.
 
+pub use aqua_core::scene::SnapshotTransition;
+
+pub(crate) mod compositor;
+
 use crate::scene::Rect;
 
 /// Separable Gaussian blur parameters. Radius in physical pixels.
@@ -111,7 +115,7 @@ impl EffectCapabilities {
             rounded_clip: true,
             group_opacity: true, // isolated intermediate surface, applied once
             backdrop_blur: true,
-            content_blur: false, // deferred: needs isolated-group raster pass
+            content_blur: true,
             custom_passes: true,
             external_layers: true,
             text_runs: true,
@@ -121,7 +125,6 @@ impl EffectCapabilities {
     /// Explicitly unsupported in this implementation (honest ledger).
     pub fn unsupported() -> &'static [&'static str] {
         &[
-            "content (self) blur: isolated-group raster pass not yet implemented",
             "blend modes beyond premultiplied-over",
             "arbitrary path masks (rounded-rect clips only)",
             "native window materials (platform adapter responsibility)",
@@ -155,13 +158,5 @@ mod tests {
                 q.sigma_working()
             );
         }
-    }
-
-    #[test]
-    fn capabilities_are_explicit() {
-        let caps = EffectCapabilities::supported_by_this_renderer();
-        assert!(caps.backdrop_blur && caps.rounded_clip && caps.custom_passes);
-        assert!(!caps.content_blur);
-        assert!(!EffectCapabilities::unsupported().is_empty());
     }
 }

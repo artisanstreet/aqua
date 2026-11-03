@@ -1,29 +1,27 @@
-// Rounded-rect primitive: fill + border + drop shadow + clip + opacity.
-// One instanced quad per DisplayItem::Rect. The quad covers the union of the
-// rect and its shadow footprint (computed on the CPU); the shader composites
-// shadow under fill within a single fragment output (premultiplied-over).
 
 struct Uniforms {
-    viewport: vec2<f32>, // physical pixels
+    viewport: vec2<f32>,
 }
 @group(0) @binding(0) var<uniform> u: Uniforms;
+struct ClipNode { bounds: vec4<f32>, state: vec4<f32> }
+@group(0) @binding(1) var<storage, read> clips: array<ClipNode>;
 
 struct Instance {
-    rect: vec4<f32>,        // x, y, w, h (physical px, top-left origin)
-    radius_bw: vec2<f32>,   // corner radius, border width
+    rect: vec4<f32>,
+    radius_bw: vec2<f32>,
     pad0: vec2<f32>,
-    fill: vec4<f32>,        // premultiplied linear
-    border_color: vec4<f32>,// premultiplied linear
-    shadow: vec4<f32>,      // offset_x, offset_y, blur, enabled
-    shadow_color: vec4<f32>,// premultiplied linear
-    clip: vec4<f32>,        // x, y, w, h; w < 0 disables
-    misc: vec4<f32>,        // clip_radius, opacity, 0, 0
+    fill: vec4<f32>,
+    border_color: vec4<f32>,
+    shadow: vec4<f32>,
+    shadow_color: vec4<f32>,
+    clip: vec4<f32>,
+    misc: vec4<f32>,
 }
 
 struct VsIn {
-    @location(0) corner: vec2<f32>, // 0..1 across the instance quad
+    @location(0) corner: vec2<f32>,
     @location(1) rect: vec4<f32>,
-    @location(2) rb_pack: vec4<f32>, // radius, border_width, 0, 0
+    @location(2) rb_pack: vec4<f32>,
     @location(3) fill: vec4<f32>,
     @location(4) border_color: vec4<f32>,
     @location(5) shadow: vec4<f32>,
@@ -51,7 +49,6 @@ fn vs_main(in: VsIn) -> VsOut {
     let p = vec2<f32>(in.rect.x + in.corner.x * in.rect.z,
                       in.rect.y + in.corner.y * in.rect.w);
     out.px = p;
-    // top-left px origin -> NDC
     let ndc = vec2<f32>(p.x / u.viewport.x * 2.0 - 1.0,
                         1.0 - p.y / u.viewport.y * 2.0);
     out.pos = vec4<f32>(ndc, 0.0, 1.0);
@@ -78,20 +75,21 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                         in.clip, in.misc);
     let opacity = inst.misc.y;
 
-    // Axis clip (hard discard outside, AA on rounded clip).
-    if (inst.clip.z >= 0.0) {
-        let cc = inst.clip.xy + inst.clip.zw * 0.5;
-        let d = sd_round_box(in.px - cc, inst.clip.zw * 0.5, inst.misc.x);
-        let aa = fwidth(d) * 1.5 + 1e-4;
-        let cover = 1.0 - smoothstep(-aa, aa, d);
-        if (cover <= 0.001) { discard; }
+    var clip_cover = 1.0;
+    var clip_id = u32(inst.misc.z);
+    let clip_aa = max(fwidth(in.px.x), fwidth(in.px.y)) * 1.5 + 1e-4;
+    loop {
+        if (clip_id == 0u) { break; }
+        let clip = clips[clip_id - 1u];
+        let center = clip.bounds.xy + clip.bounds.zw * 0.5;
+        let distance = sd_round_box(in.px - center, clip.bounds.zw * 0.5, clip.state.x);
+        clip_cover *= 1.0 - smoothstep(-clip_aa, clip_aa, distance);
+        clip_id = u32(clip.state.y);
     }
-
-    let rc = inst.rect.xy + inst.rect.zw * 0.5; // rect center
+    let rc = inst.rect.xy + inst.rect.zw * 0.5;
     let half = inst.rect.zw * 0.5;
     let rad = min(inst.radius_bw.x, min(half.x, half.y));
 
-    // Fill + border coverage.
     let d = sd_round_box(in.px - rc, half, rad);
     let aa = fwidth(d) * 1.5 + 1e-4;
     let fill_cover = 1.0 - smoothstep(-aa, aa, d);
@@ -100,9 +98,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let bw = inst.radius_bw.y;
     if (bw > 0.001) {
         let d_in = sd_round_box(in.px - rc, half - vec2<f32>(bw, bw), max(rad - bw, 0.0));
-        // A border is the outer coverage minus the inset coverage.
-        // Subtracting SDF distances instead produces a constant everywhere
-        // inside the shape and incorrectly paints its entire fill as border.
         let inner_cover = min(fill_cover, 1.0 - smoothstep(-aa, aa, d_in));
         let band = max(fill_cover - inner_cover, 0.0);
         fill_rgb = inst.fill.rgb * inner_cover + inst.border_color.rgb * band;
@@ -112,7 +107,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         fill_a = fill_cover * inst.fill.a;
     }
 
-    // Drop shadow under fill.
     var out_rgb = fill_rgb;
     var out_a = fill_a;
     if (inst.shadow.w > 0.5 && inst.shadow.z > 0.001) {
@@ -125,15 +119,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         out_a = sa + fill_a * (1.0 - sa);
     }
 
-    // Rounded-clip coverage multiplies alpha.
-    if (inst.clip.z >= 0.0 && inst.misc.x > 0.001) {
-        let cc = inst.clip.xy + inst.clip.zw * 0.5;
-        let dc = sd_round_box(in.px - cc, inst.clip.zw * 0.5, inst.misc.x);
-        let aac = fwidth(dc) * 1.5 + 1e-4;
-        let ccov = 1.0 - smoothstep(-aac, aac, dc);
-        out_rgb *= ccov;
-        out_a *= ccov;
-    }
+    out_rgb *= clip_cover;
+    out_a *= clip_cover;
 
     return vec4<f32>(out_rgb * opacity, out_a * opacity);
 }

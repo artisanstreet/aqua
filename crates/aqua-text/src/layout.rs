@@ -75,6 +75,25 @@ pub struct Rect {
     pub h: f32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextInteractionRange {
+    pub id: u64,
+    pub range: std::ops::Range<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecorationKind {
+    Underline,
+    Strikethrough,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextDecoration {
+    pub kind: DecorationKind,
+    pub bounds: Rect,
+    pub color_srgb: Option<[u8; 4]>,
+}
+
 pub struct TextLayout {
     spans: Vec<StyledSpan>,
     wrap: WrapMode,
@@ -263,7 +282,12 @@ impl TextLayout {
     fn input_key(&self, fonts_rev: u64, display: &str) -> InputKey {
         let mut style_key = String::new();
         for s in &self.spans {
-            style_key.push_str(&format!("{}:{:?}:", s.text.len(), s.color_srgb));
+            style_key.push_str(&format!(
+                "{}:{:?}:{:?}:",
+                s.text.len(),
+                s.color_srgb,
+                s.inline_cell_width().map(f32::to_bits)
+            ));
             style_key.push_str(&s.style.cache_key());
             style_key.push(';');
         }
@@ -290,6 +314,31 @@ impl TextLayout {
         source_len: usize,
         fonts_rev: u64,
     ) -> Arc<LaidOut> {
+        let inline_spacings: Vec<_> = self
+            .spans
+            .iter()
+            .map(|span| {
+                span.inline_cell_width()
+                    .filter(|_| self.mask.is_none())
+                    .map(|width| {
+                        let metrics = cosmic_text::Metrics::new(
+                            (span.style.size_px * self.scale).max(1.0),
+                            (span.style.line_height_px * self.scale).max(1.0),
+                        );
+                        let mut probe = cosmic_text::Buffer::new(fonts.font_system_mut(), metrics);
+                        let attrs = span
+                            .style
+                            .to_cosmic_in()
+                            .letter_spacing(0.0)
+                            .metrics(metrics);
+                        probe.set_text(&span.text, &attrs, cosmic_text::Shaping::Advanced, None);
+                        probe.shape_until_scroll(fonts.font_system_mut(), false);
+                        let natural: f32 = probe.layout_runs().map(|line| line.line_w).sum();
+                        let glyphs: usize = probe.layout_runs().map(|line| line.glyphs.len()).sum();
+                        (width * self.scale - natural) / (metrics.font_size * glyphs.max(1) as f32)
+                    })
+            })
+            .collect();
         let buffer = self.buffer.get_or_insert_with(|| {
             let metrics = first_metrics(&self.spans, self.scale);
             cosmic_text::Buffer::new(fonts.font_system_mut(), metrics)
@@ -312,8 +361,11 @@ impl TextLayout {
                 .unwrap_or_else(cosmic_text::Attrs::new);
             let mut texts: Vec<String> = Vec::with_capacity(self.spans.len());
             let mut attrs_vec: Vec<cosmic_text::Attrs<'_>> = Vec::with_capacity(self.spans.len());
-            for s in &self.spans {
+            for (index, s) in self.spans.iter().enumerate() {
                 let mut attrs = s.style.to_cosmic_in();
+                if let Some(spacing) = inline_spacings[index] {
+                    attrs = attrs.letter_spacing(spacing);
+                }
                 if let Some([r, g, b, a]) = s.color_srgb {
                     attrs = attrs.color(cosmic_text::Color::rgba(r, g, b, a));
                 }
@@ -518,6 +570,66 @@ impl TextLayout {
             ));
         position.byte = self.to_source(position.byte);
         Some(position)
+    }
+
+    pub fn interaction_ranges(&self) -> Vec<TextInteractionRange> {
+        let mut offset = 0;
+        self.spans
+            .iter()
+            .filter_map(|span| {
+                let range = offset..offset + span.text.len();
+                offset = range.end;
+                span.interaction
+                    .map(|id| TextInteractionRange { id, range })
+            })
+            .collect()
+    }
+
+    pub fn decorations(&self) -> Vec<TextDecoration> {
+        let Some(laid) = self.cached.as_ref() else {
+            return Vec::new();
+        };
+        let mut offset = 0;
+        let mut output = Vec::new();
+        for span in &self.spans {
+            let range = offset..offset + span.text.len();
+            offset = range.end;
+            if !span.style.underline && !span.style.strikethrough {
+                continue;
+            }
+            let thickness = (span.style.size_px * self.scale / 14.0).max(1.0);
+            for bounds in self.selection_rects(range) {
+                let Some(line) = laid.lines.iter().find(|line| line.y_top == bounds.y) else {
+                    continue;
+                };
+                for (enabled, kind, y) in [
+                    (
+                        span.style.underline,
+                        DecorationKind::Underline,
+                        line.baseline_y + span.style.size_px * self.scale * 0.08,
+                    ),
+                    (
+                        span.style.strikethrough,
+                        DecorationKind::Strikethrough,
+                        line.baseline_y - span.style.size_px * self.scale * 0.3,
+                    ),
+                ] {
+                    if enabled {
+                        output.push(TextDecoration {
+                            kind,
+                            bounds: Rect {
+                                x: bounds.x,
+                                y,
+                                w: bounds.w,
+                                h: thickness,
+                            },
+                            color_srgb: span.color_srgb,
+                        });
+                    }
+                }
+            }
+        }
+        output
     }
 
     pub fn word_hit(&self, x: f32, y: f32) -> Option<usize> {

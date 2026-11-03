@@ -229,6 +229,24 @@ impl TextEditor {
         caret
     }
 
+    pub fn replace_range(&mut self, range: std::ops::Range<usize>, text: &str) -> bool {
+        if self.is_composing() || range.start > range.end || range.end > self.text().len() {
+            return false;
+        }
+        let before = self.selection;
+        self.set_selection(Selection::new(range.start, range.end));
+        let revision = self.revision();
+        self.insert_paste(text);
+        if self.revision() == revision {
+            self.set_selection(before);
+            return false;
+        }
+        if let Some(record) = self.undo_stack.last_mut() {
+            record.before = before;
+        }
+        true
+    }
+
     pub fn delete_backward(&mut self) -> bool {
         self.break_typing_group();
         if !self.selection.is_caret() {

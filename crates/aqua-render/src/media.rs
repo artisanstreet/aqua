@@ -34,6 +34,8 @@
 //!   [`GpuImageCache`] caps GPU bytes/textures with LRU eviction. Evicted or
 //!   removed handles go stale and fail closed (generations, like `Scene`).
 
+pub mod animation;
+
 use std::collections::{HashMap, VecDeque};
 
 use aqua_core::geometry::Rect;
@@ -79,7 +81,7 @@ impl std::fmt::Display for MediaError {
             MediaError::UnsupportedFormat => {
                 write!(
                     f,
-                    "media: unsupported format (enabled: png, bmp, jpeg, gif)"
+                    "media: unsupported format (enabled: png, bmp, jpeg, gif, webp)"
                 )
             }
             MediaError::Decode(m) => write!(f, "media: decode failed: {m}"),
@@ -116,6 +118,29 @@ pub struct DecodedImage {
 }
 
 impl DecodedImage {
+    pub fn from_rgba(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, MediaError> {
+        if width == 0 || height == 0 {
+            return Err(MediaError::Decode("zero-sized image".into()));
+        }
+        if width > MAX_IMAGE_DIM || height > MAX_IMAGE_DIM {
+            return Err(MediaError::DimensionsTooLarge(width, height));
+        }
+        let count = u64::from(width) * u64::from(height);
+        if count > MAX_IMAGE_PIXELS {
+            return Err(MediaError::TooManyPixels(count));
+        }
+        if count * 4 != pixels.len() as u64 {
+            return Err(MediaError::Decode(
+                "RGBA byte length does not match image dimensions".into(),
+            ));
+        }
+        Ok(Self {
+            width,
+            height,
+            pixels: pixels.into_boxed_slice().into_vec(),
+        })
+    }
+
     /// Width in pixels.
     pub fn width(&self) -> u32 {
         self.width
@@ -222,7 +247,8 @@ pub fn decode_bytes(bytes: &[u8]) -> Result<DecodedImage, MediaError> {
         image::ImageFormat::Png
         | image::ImageFormat::Bmp
         | image::ImageFormat::Jpeg
-        | image::ImageFormat::Gif => {}
+        | image::ImageFormat::Gif
+        | image::ImageFormat::WebP => {}
         _ => return Err(MediaError::UnsupportedFormat),
     }
     // Header-only dimensions first: no pixel allocation for hostile headers.
@@ -682,7 +708,7 @@ impl GpuImageCache {
         };
         let stride = align256(w * bpp);
         let bytes = stride as u64 * h as u64;
-        if bytes > self.budget.max_gpu_bytes {
+        if bytes > self.budget.max_gpu_bytes || self.budget.max_textures == 0 {
             return Err(MediaError::OverBudget);
         }
         // Pad rows to the 256-byte `write_texture` alignment.
@@ -695,6 +721,7 @@ impl GpuImageCache {
         {
             dest[..row].copy_from_slice(&pixels[y * row..(y + 1) * row]);
         }
+        self.release(id);
         while self.resident_bytes() + bytes > self.budget.max_gpu_bytes
             || self.textures.len() >= self.budget.max_textures
         {

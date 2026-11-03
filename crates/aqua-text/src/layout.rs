@@ -1,22 +1,3 @@
-//! Measurement and shaped-run extraction.
-//!
-//! `TextLayout` owns display text plus styling, retains one shaping-engine
-//! `Buffer` across frames (reusing its allocations), and produces owned,
-//! renderer-neutral [`LaidOut`] snapshots:
-//!
-//! * overall size, per-line boxes, baselines — for `aqua-ui` measurement,
-//! * per-glyph shaped data (font id, glyph id, positions, bidi levels) —
-//!   for `aqua-render`/custom canvas work and accessibility,
-//! * caret and hit-testing geometry — for editing and IME candidate windows.
-//!
-//! Coordinate space: scaled logical pixels, origin at the layout top-left,
-//! y growing downward. All sizes are already multiplied by the layout scale,
-//! so consumers must not scale them again.
-//!
-//! Rasterization is deliberately *not* here: the renderer (glyphon, which
-//! shares `cosmic-text 0.19`) rasterizes from text + attributes. These DTOs
-//! exist so measurement and final pixels agree on the same shaping.
-
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -25,16 +6,10 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::font::FontManager;
 use crate::style::{LineMode, StyledSpan, TextAlign, TextStyle, WrapMode};
 
-/// One shaped glyph in layout space.
-///
-/// `x`/`y` are the shaping engine's glyph offsets: `x` is the visual offset
-/// from the layout left edge (line alignment already applied), `y` is the
-/// engine-internal vertical offset of the glyph hitbox. Line-level geometry
-/// (`LaidLine::y_top`, `baseline_y`, `height`) is the contract for caret and
-/// selection rectangles; glyph `x`/`w` position carets horizontally.
-/// `src_byte_*` are byte indices in the *source* (unmasked) text.
 #[derive(Clone, Debug)]
 pub struct LaidGlyph {
+    pub display_byte_start: usize,
+    pub display_byte_end: usize,
     pub src_byte_start: usize,
     pub src_byte_end: usize,
     pub font_id: fontdb::ID,
@@ -46,35 +21,23 @@ pub struct LaidGlyph {
     pub bidi_level: u8,
 }
 
-/// One visual line.
 #[derive(Clone, Debug)]
 pub struct LaidLine {
-    /// Index of the source paragraph (`\n`-separated) this line belongs to.
     pub paragraph: usize,
-    /// Byte range in *display* coordinates covered by this visual line.
     pub display_range: std::ops::Range<usize>,
-    /// Distance from layout top to line top, scaled px.
     pub y_top: f32,
-    /// Line height, scaled px.
     pub height: f32,
-    /// Baseline y in layout space (`y_top + ascent offset`), scaled px.
     pub baseline_y: f32,
-    /// Natural line width (glyph extents), scaled px, alignment baked in.
     pub width: f32,
-    /// True when the paragraph base direction is right-to-left.
     pub rtl: bool,
     pub glyphs: Vec<LaidGlyph>,
 }
 
-/// Owned, renderer-neutral layout result.
 #[derive(Clone, Debug, Default)]
 pub struct LaidOut {
-    /// Overall size in scaled px: `(max line width, sum of line heights)`.
     pub size: (f32, f32),
-    /// Width constraint used, if any, in scaled px.
     pub constrained_width: Option<f32>,
     pub lines: Vec<LaidLine>,
-    /// Baseline of the first visual line, or `None` for empty text.
     pub first_baseline_y: Option<f32>,
 }
 
@@ -84,7 +47,19 @@ impl LaidOut {
     }
 }
 
-/// Caret rectangle in layout space.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CaretAffinity {
+    Upstream,
+    #[default]
+    Downstream,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaretPosition {
+    pub byte: usize,
+    pub affinity: CaretAffinity,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CaretRect {
     pub x: f32,
@@ -92,7 +67,6 @@ pub struct CaretRect {
     pub height: f32,
 }
 
-/// Axis-aligned rectangle in layout space (selection highlight).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub x: f32,
@@ -101,10 +75,6 @@ pub struct Rect {
     pub h: f32,
 }
 
-/// Retained single-text layout with dirty tracking.
-///
-/// Reuse one `TextLayout` per text widget: unchanged inputs skip shaping
-/// entirely and return the cached [`LaidOut`].
 pub struct TextLayout {
     spans: Vec<StyledSpan>,
     wrap: WrapMode,
@@ -117,11 +87,8 @@ pub struct TextLayout {
     last_key: Option<InputKey>,
     cached: Option<Arc<LaidOut>>,
     fonts_rev_seen: u64,
-    /// Displayed text currently in the buffer (masked/newline-folded).
     display_text: String,
-    /// Paragraph start offsets (display bytes) mirroring buffer lines.
     para_starts: Vec<usize>,
-    /// Cluster map for masked text: ((src_start), (display_start)) pairs.
     cluster_map: Vec<(usize, usize)>,
     display_len: usize,
     source_len: usize,
@@ -168,14 +135,11 @@ impl TextLayout {
         }
     }
 
-    /// Plain text with one style.
     pub fn set_text(&mut self, text: &str, style: &TextStyle) {
         let spans = vec![StyledSpan::new(text.to_string(), style.clone())];
         self.set_spans(spans);
     }
 
-    /// Rich text: multiple styled spans concatenated in order.
-    /// Newlines may appear inside any span and start new paragraphs.
     pub fn set_spans(&mut self, spans: Vec<StyledSpan>) {
         if spans.is_empty() {
             self.spans = vec![StyledSpan::plain("")];
@@ -206,7 +170,6 @@ impl TextLayout {
         }
     }
 
-    /// Wrapping width in *unscaled* logical px. `None` means unbounded.
     pub fn set_max_width(&mut self, width: Option<f32>) {
         if self.max_width != width {
             self.max_width = width;
@@ -214,8 +177,6 @@ impl TextLayout {
         }
     }
 
-    /// Device/pinch scale. Font sizes, line heights and widths are multiplied
-    /// by this before shaping; results are reported in scaled px.
     pub fn set_scale(&mut self, scale: f32) {
         let scale = scale.max(0.01);
         if (self.scale - scale).abs() > f32::EPSILON {
@@ -224,8 +185,6 @@ impl TextLayout {
         }
     }
 
-    /// Mask each grapheme cluster with `c` (password fields). `None`
-    /// disables masking. Caret/hit APIs keep speaking *source* coordinates.
     pub fn set_mask(&mut self, mask: Option<char>) {
         if self.mask != mask {
             self.mask = mask;
@@ -233,24 +192,18 @@ impl TextLayout {
         }
     }
 
-    /// Source text length in bytes (unmasked coordinates).
     pub fn source_len(&self) -> usize {
         self.source_len
     }
 
-    /// Scale this layout was configured with (outputs are in scaled px).
     pub fn scale(&self) -> f32 {
         self.scale
     }
 
-    /// Scaled size from the last [`TextLayout::layout`] call, or `None`
-    /// before the first layout. Borrowed from the retained cache.
     pub fn last_scaled_size(&self) -> Option<(f32, f32)> {
         self.cached.as_ref().map(|laid| laid.size)
     }
 
-    /// Lay out (reusing the retained buffer and cache when inputs and the
-    /// font database are unchanged) and return the result.
     pub fn layout(&mut self, fonts: &mut FontManager) -> Arc<LaidOut> {
         let fonts_rev = fonts_revision(fonts);
         let (display, cluster_map, source_len) =
@@ -266,10 +219,6 @@ impl TextLayout {
         self.shape(fonts, key, display, cluster_map, source_len, fonts_rev)
     }
 
-    /// Lay out via a [`SharedLayoutCache`], so identical text elsewhere in
-    /// the UI reuses shaping work. Instance state (needed by
-    /// [`TextLayout::caret`]/[`TextLayout::hit`]) is still refreshed on a
-    /// shared hit; only shaping is skipped.
     pub fn layout_shared(
         &mut self,
         fonts: &mut FontManager,
@@ -314,6 +263,7 @@ impl TextLayout {
     fn input_key(&self, fonts_rev: u64, display: &str) -> InputKey {
         let mut style_key = String::new();
         for s in &self.spans {
+            style_key.push_str(&format!("{}:{:?}:", s.text.len(), s.color_srgb));
             style_key.push_str(&s.style.cache_key());
             style_key.push(';');
         }
@@ -360,12 +310,13 @@ impl TextLayout {
                 .first()
                 .map(|s| s.style.to_cosmic_in())
                 .unwrap_or_else(cosmic_text::Attrs::new);
-            // Borrowed attrs must not outlive `self.spans`; collect owned
-            // (text, attrs-with-metrics) pairs first, then shape.
             let mut texts: Vec<String> = Vec::with_capacity(self.spans.len());
             let mut attrs_vec: Vec<cosmic_text::Attrs<'_>> = Vec::with_capacity(self.spans.len());
             for s in &self.spans {
                 let mut attrs = s.style.to_cosmic_in();
+                if let Some([r, g, b, a]) = s.color_srgb {
+                    attrs = attrs.color(cosmic_text::Color::rgba(r, g, b, a));
+                }
                 attrs = attrs.metrics(cosmic_text::Metrics::new(
                     (s.style.size_px * self.scale).max(1.0),
                     (s.style.line_height_px * self.scale).max(1.0),
@@ -384,12 +335,11 @@ impl TextLayout {
         }
         buffer.shape_until_scroll(fonts.font_system_mut(), false);
 
-        // Paragraph offsets from the actual buffer lines.
         let mut para_starts = Vec::with_capacity(buffer.lines.len() + 1);
         let mut off = 0usize;
         for line in &buffer.lines {
             para_starts.push(off);
-            off += line.text().len() + 1; // +1 for the '\n' separator
+            off += line.text().len() + 1;
         }
         off = off.min(display.len());
         para_starts.push(off);
@@ -407,6 +357,8 @@ impl TextLayout {
                 let d_end = para_start + g.end;
                 let (s_start, s_end) = display_range_to_source(&cluster_map, d_start, d_end);
                 glyphs.push(LaidGlyph {
+                    display_byte_start: d_start,
+                    display_byte_end: d_end,
                     src_byte_start: s_start,
                     src_byte_end: s_end,
                     font_id: g.font_id,
@@ -423,7 +375,9 @@ impl TextLayout {
             }
             max_w = max_w.max(run.line_w);
             total_h = run.line_top + run.line_height;
-            let display_range = para_start..para_start + run.text.len();
+            let start = run.glyphs.iter().map(|g| g.start).min().unwrap_or(0);
+            let end = run.glyphs.iter().map(|g| g.end).max().unwrap_or(0);
+            let display_range = para_start + start..para_start + end;
             lines.push(LaidLine {
                 paragraph: para,
                 display_range,
@@ -436,7 +390,6 @@ impl TextLayout {
             });
         }
 
-        // Empty content still occupies one line height so carets have a home.
         if lines.is_empty() {
             let h = metrics.line_height.max(1.0);
             lines.push(LaidLine {
@@ -470,13 +423,11 @@ impl TextLayout {
         laid
     }
 
-    /// Map a *source* byte index to display coordinates (identity unless masked).
     fn to_display(&self, src: usize) -> usize {
         if self.mask.is_none() {
             return src.min(self.display_len);
         }
         let src = src.min(self.source_len);
-        // Binary search cluster starts; caret positions are boundaries.
         match self.cluster_map.binary_search_by(|(s, _)| s.cmp(&src)) {
             Ok(i) => self.cluster_map[i].1,
             Err(i) => {
@@ -489,7 +440,6 @@ impl TextLayout {
         }
     }
 
-    /// Map a *display* byte index (snapped to a boundary) to source coordinates.
     fn to_source(&self, display: usize) -> usize {
         if self.mask.is_none() {
             return display.min(self.source_len);
@@ -498,36 +448,205 @@ impl TextLayout {
         s
     }
 
-    /// Caret rectangle for a *source* byte index. Returns `None` only if no
-    /// layout has been produced yet (call [`TextLayout::layout`] first).
     pub fn caret(&self, src_byte: usize) -> Option<CaretRect> {
+        self.caret_position(CaretPosition {
+            byte: src_byte,
+            affinity: CaretAffinity::Downstream,
+        })
+    }
+
+    pub fn caret_position(&self, position: CaretPosition) -> Option<CaretRect> {
         let laid = self.cached.as_ref()?;
-        let d = self.to_display(src_byte);
-        for line in &laid.lines {
-            if d >= line.display_range.start && d <= line.display_range.end {
-                let x = caret_x_in_line(line, d, laid.constrained_width);
-                return Some(CaretRect {
-                    x,
-                    y_top: line.y_top,
-                    height: line.height,
-                });
+        let byte = self.to_display(position.byte);
+        let line =
+            match position.affinity {
+                CaretAffinity::Upstream => laid.lines.iter().find(|line| {
+                    byte >= line.display_range.start && byte <= line.display_range.end
+                }),
+                CaretAffinity::Downstream => laid.lines.iter().rev().find(|line| {
+                    byte >= line.display_range.start && byte <= line.display_range.end
+                }),
             }
-        }
-        // Past the end: use the last line.
-        let line = laid.lines.last()?;
+            .or_else(|| {
+                laid.lines
+                    .iter()
+                    .rev()
+                    .find(|line| byte >= line.display_range.start)
+            })
+            .or_else(|| laid.lines.first())?;
+        let preferred = line.glyphs.iter().find(|glyph| match position.affinity {
+            CaretAffinity::Upstream => glyph.display_byte_end == byte,
+            CaretAffinity::Downstream => glyph.display_byte_start == byte,
+        });
+        let x = preferred
+            .map(|glyph| {
+                let rtl = glyph.bidi_level % 2 == 1;
+                match (position.affinity, rtl) {
+                    (CaretAffinity::Upstream, false) | (CaretAffinity::Downstream, true) => {
+                        glyph.x + glyph.w
+                    }
+                    _ => glyph.x,
+                }
+            })
+            .unwrap_or_else(|| {
+                caret_x_in_line(line, byte, laid.constrained_width, &self.display_text)
+            });
         Some(CaretRect {
-            x: caret_x_in_line(line, d.min(line.display_range.end), laid.constrained_width),
+            x,
             y_top: line.y_top,
             height: line.height,
         })
     }
 
-    /// Hit-test layout space to a *source* byte index, snapped to a
-    /// grapheme boundary of the source text.
-    ///
-    /// Correct for LTR and RTL paragraphs. Inside mixed-direction runs the
-    /// result is the nearest visual glyph edge, which may split a logical
-    /// cluster order — the return value is still a valid boundary.
+    pub fn hit_position(&self, x: f32, y: f32) -> Option<CaretPosition> {
+        let laid = self.cached.as_ref()?;
+        let line = laid
+            .lines
+            .iter()
+            .find(|line| y < line.y_top + line.height)
+            .or_else(|| laid.lines.last())?;
+        let positions = glyph_positions(line, &self.display_text);
+        let (_, mut position) = positions
+            .into_iter()
+            .min_by(|a, b| (a.0 - x).abs().total_cmp(&(b.0 - x).abs()))
+            .unwrap_or((
+                0.0,
+                CaretPosition {
+                    byte: line.display_range.start,
+                    affinity: CaretAffinity::Downstream,
+                },
+            ));
+        position.byte = self.to_source(position.byte);
+        Some(position)
+    }
+
+    pub fn horizontal_position(
+        &self,
+        position: CaretPosition,
+        left: bool,
+    ) -> Option<CaretPosition> {
+        let laid = self.cached.as_ref()?;
+        let caret = self.caret_position(position)?;
+        let index = laid
+            .lines
+            .iter()
+            .position(|line| line.y_top == caret.y_top)?;
+        let line = &laid.lines[index];
+        let target = glyph_positions(line, &self.display_text)
+            .into_iter()
+            .filter(|(x, _)| {
+                if left {
+                    *x < caret.x - 0.01
+                } else {
+                    *x > caret.x + 0.01
+                }
+            })
+            .min_by(|a, b| (a.0 - caret.x).abs().total_cmp(&(b.0 - caret.x).abs()));
+        if let Some((_, mut target)) = target {
+            target.byte = self.to_source(target.byte);
+            return Some(target);
+        }
+        let previous = left != line.rtl;
+        let next = if previous {
+            index.checked_sub(1)
+        } else {
+            (index + 1 < laid.lines.len()).then_some(index + 1)
+        };
+        let Some(next) = next else {
+            return Some(position);
+        };
+        let next = &laid.lines[next];
+        Some(CaretPosition {
+            byte: self.to_source(if previous {
+                next.display_range.end
+            } else {
+                next.display_range.start
+            }),
+            affinity: if previous {
+                CaretAffinity::Upstream
+            } else {
+                CaretAffinity::Downstream
+            },
+        })
+    }
+
+    pub fn line_boundary_position(
+        &self,
+        position: CaretPosition,
+        end: bool,
+    ) -> Option<CaretPosition> {
+        let laid = self.cached.as_ref()?;
+        let caret = self.caret_position(position)?;
+        let line = laid.lines.iter().find(|line| line.y_top == caret.y_top)?;
+        Some(CaretPosition {
+            byte: self.to_source(if end {
+                line.display_range.end
+            } else {
+                line.display_range.start
+            }),
+            affinity: if end {
+                CaretAffinity::Upstream
+            } else {
+                CaretAffinity::Downstream
+            },
+        })
+    }
+
+    pub fn vertical_position(
+        &self,
+        position: CaretPosition,
+        up: bool,
+        goal_x: f32,
+    ) -> Option<CaretPosition> {
+        self.block_position(position, up, goal_x, false)
+    }
+
+    pub fn paragraph_position(
+        &self,
+        position: CaretPosition,
+        up: bool,
+        goal_x: f32,
+    ) -> Option<CaretPosition> {
+        self.block_position(position, up, goal_x, true)
+    }
+
+    fn block_position(
+        &self,
+        position: CaretPosition,
+        up: bool,
+        goal_x: f32,
+        paragraph: bool,
+    ) -> Option<CaretPosition> {
+        let laid = self.cached.as_ref()?;
+        let caret = self.caret_position(position)?;
+        let index = laid
+            .lines
+            .iter()
+            .position(|line| line.y_top == caret.y_top)?;
+        let current = laid.lines[index].paragraph;
+        let target = if up {
+            laid.lines[..index]
+                .iter()
+                .rev()
+                .find(|line| !paragraph || line.paragraph != current)
+        } else {
+            laid.lines[index + 1..]
+                .iter()
+                .find(|line| !paragraph || line.paragraph != current)
+        };
+        let Some(line) = target else {
+            return Some(CaretPosition {
+                byte: if up { 0 } else { self.source_len },
+                affinity: if up {
+                    CaretAffinity::Downstream
+                } else {
+                    CaretAffinity::Upstream
+                },
+            });
+        };
+        self.hit_position(goal_x, line.y_top + line.height * 0.5)
+    }
+
     pub fn hit(&self, x: f32, y: f32) -> Option<usize> {
         let laid = self.cached.as_ref()?;
         if laid.lines.is_empty() {
@@ -551,13 +670,118 @@ impl TextLayout {
         Some(self.to_source(d))
     }
 
-    /// Selection highlight rectangles for a *source* byte range.
+    pub fn horizontal_target(&self, src_byte: usize, left: bool) -> Option<usize> {
+        let laid = self.cached.as_ref()?;
+        let caret = self.caret(src_byte)?;
+        let index = laid
+            .lines
+            .iter()
+            .position(|line| line.y_top == caret.y_top)?;
+        let line = &laid.lines[index];
+        let edges = glyph_edges(line, &self.display_text);
+        let target = edges
+            .iter()
+            .filter(|(x, _)| {
+                if left {
+                    *x < caret.x - 0.01
+                } else {
+                    *x > caret.x + 0.01
+                }
+            })
+            .min_by(|a, b| (a.0 - caret.x).abs().total_cmp(&(b.0 - caret.x).abs()));
+        if let Some((_, byte)) = target {
+            return Some(self.to_source(*byte));
+        }
+        let previous = left != line.rtl;
+        let next = if previous {
+            index.checked_sub(1)
+        } else {
+            (index + 1 < laid.lines.len()).then_some(index + 1)
+        };
+        let Some(next) = next else {
+            return Some(src_byte.min(self.source_len));
+        };
+        let next = &laid.lines[next];
+        Some(self.to_source(if previous {
+            next.display_range.end
+        } else {
+            next.display_range.start
+        }))
+    }
+
+    pub fn line_boundary(&self, src_byte: usize, end: bool) -> Option<usize> {
+        let laid = self.cached.as_ref()?;
+        let d = self.to_display(src_byte);
+        let line = laid
+            .lines
+            .iter()
+            .rev()
+            .find(|line| d >= line.display_range.start)
+            .or_else(|| laid.lines.first())?;
+        Some(self.to_source(if end {
+            line.display_range.end
+        } else {
+            line.display_range.start
+        }))
+    }
+
+    pub fn paragraph_target(&self, src_byte: usize, up: bool, goal_x: f32) -> Option<usize> {
+        let laid = self.cached.as_ref()?;
+        let caret = self.caret(src_byte)?;
+        let index = laid
+            .lines
+            .iter()
+            .position(|line| line.y_top == caret.y_top)?;
+        let paragraph = laid.lines[index].paragraph;
+        let target = if up {
+            laid.lines[..index]
+                .iter()
+                .rev()
+                .find(|line| line.paragraph != paragraph)
+        } else {
+            laid.lines[index + 1..]
+                .iter()
+                .find(|line| line.paragraph != paragraph)
+        };
+        let Some(line) = target else {
+            return Some(if up { 0 } else { self.source_len });
+        };
+        self.hit(goal_x, line.y_top + line.height * 0.5)
+    }
+
+    pub fn vertical_target(&self, src_byte: usize, up: bool, goal_x: f32) -> Option<usize> {
+        let laid = self.cached.as_ref()?;
+        let caret = self.caret(src_byte)?;
+        let index = laid
+            .lines
+            .iter()
+            .position(|line| line.y_top == caret.y_top)?;
+        let target = if up {
+            index.checked_sub(1)
+        } else {
+            (index + 1 < laid.lines.len()).then_some(index + 1)
+        };
+        let Some(target) = target else {
+            return Some(if up { 0 } else { self.source_len });
+        };
+        let line = &laid.lines[target];
+        self.hit(goal_x, line.y_top + line.height * 0.5)
+    }
+
     pub fn selection_rects(&self, range: std::ops::Range<usize>) -> Vec<Rect> {
         let Some(laid) = self.cached.as_ref() else {
             return Vec::new();
         };
-        let start = self.to_display(range.start);
-        let end = self.to_display(range.end);
+        let start = snap_to_boundary(
+            &self.display_text,
+            self.to_display(range.start),
+            0..self.display_len,
+        );
+        let end = snap_to_boundary(
+            &self.display_text,
+            self.to_display(range.end),
+            0..self.display_len,
+        );
         let (start, end) = if start <= end {
             (start, end)
         } else {
@@ -565,40 +789,53 @@ impl TextLayout {
         };
         let mut out = Vec::new();
         for line in &laid.lines {
-            let ls = line.display_range.start;
-            let le = line.display_range.end;
-            if end <= ls || start >= le {
-                // Fully covered middle lines still highlight full width.
-                if start <= ls && end >= le && le > ls {
-                    let (x0, x1) = full_line_span(line, laid.constrained_width);
-                    out.push(Rect {
-                        x: x0,
-                        y: line.y_top,
-                        w: (x1 - x0).max(0.0),
-                        h: line.height,
-                    });
+            let mut spans: Vec<(f32, f32)> = Vec::new();
+            for glyph in &line.glyphs {
+                let from = start.max(glyph.display_byte_start);
+                let to = end.min(glyph.display_byte_end);
+                if from >= to {
+                    continue;
                 }
-                continue;
+                let Some(cluster) = self
+                    .display_text
+                    .get(glyph.display_byte_start..glyph.display_byte_end)
+                else {
+                    continue;
+                };
+                let count = cluster.graphemes(true).count().max(1) as f32;
+                let start_count = cluster[..from - glyph.display_byte_start]
+                    .graphemes(true)
+                    .count() as f32;
+                let end_count = cluster[..to - glyph.display_byte_start]
+                    .graphemes(true)
+                    .count() as f32;
+                let (leading, trailing) = if glyph.bidi_level % 2 == 1 {
+                    (glyph.x + glyph.w, glyph.x)
+                } else {
+                    (glyph.x, glyph.x + glyph.w)
+                };
+                let left = leading + (trailing - leading) * start_count / count;
+                let right = leading + (trailing - leading) * end_count / count;
+                spans.push((left.min(right), left.max(right)));
             }
-            let s = start.max(ls);
-            let e = end.min(le);
-            if s >= e && !(line.glyphs.is_empty() && start == end) {
-                continue;
+            spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut merged: Vec<(f32, f32)> = Vec::new();
+            for (left, right) in spans {
+                match merged.last_mut() {
+                    Some(last) if left <= last.1 + 0.1 => last.1 = last.1.max(right),
+                    _ => merged.push((left, right)),
+                }
             }
-            let x0 = caret_x_in_line(line, s, laid.constrained_width);
-            let x1 = caret_x_in_line(line, e, laid.constrained_width);
-            out.push(Rect {
-                x: x0.min(x1),
+            out.extend(merged.into_iter().map(|(left, right)| Rect {
+                x: left,
                 y: line.y_top,
-                w: (x1 - x0).abs(),
+                w: right - left,
                 h: line.height,
-            });
+            }));
         }
         out
     }
 
-    /// Height of one line in scaled px with the current first-span style.
-    /// Useful for empty editors before layout.
     pub fn single_line_height(&self) -> f32 {
         if let Some(s) = self.spans.first() {
             (s.style.line_height_px * self.scale).max(1.0)
@@ -607,32 +844,15 @@ impl TextLayout {
         }
     }
 
-    /// The retained shaping buffer backing the last [`TextLayout::layout`].
-    /// `None` before the first layout call.
-    ///
-    /// Renderer contract (`aqua-render`/glyphon): build
-    /// `glyphon::TextArea { buffer: layout.buffer(), … }` and call
-    /// `TextRenderer::prepare` with `fonts.lock().font_system_mut()` from
-    /// the *same* [`FontManager`] used for [`TextLayout::layout`]. Same
-    /// buffer + same font system = measurement and pixels cannot disagree.
-    /// Do not mutate the buffer (no `set_text`/`set_size`); all changes go
-    /// through `TextLayout` setters so the cache key stays valid.
     pub fn buffer(&self) -> Option<&cosmic_text::Buffer> {
         self.buffer.as_ref()
     }
 
-    /// Current display text (masked/newline-folded). Mostly for debugging;
-    /// prefer source coordinates everywhere else.
     pub fn display_text(&self) -> &str {
         &self.display_text
     }
 }
 
-/// One-shot measurement for `aqua-ui` layout callbacks (Taffy measure fns).
-///
-/// Creates no retained state; for repeated measurement of the same text
-/// keep a [`TextLayout`] instead. `max_width` and the result are in
-/// unscaled logical px; `scale` is applied internally.
 pub fn measure_text(
     fonts: &mut FontManager,
     text: &str,
@@ -650,9 +870,6 @@ pub fn measure_text(
     (laid.size.0 * inv, laid.size.1 * inv)
 }
 
-/// Bounded LRU cache sharing [`LaidOut`] snapshots across `TextLayout`s
-/// (e.g. repeated labels in a list). Capacity counts entries; each key holds
-/// its content string, so memory is `O(capacity × longest content)`.
 pub struct SharedLayoutCache {
     map: HashMap<InputKey, Arc<LaidOut>>,
     order: VecDeque<InputKey>,
@@ -709,12 +926,9 @@ impl SharedLayoutCache {
 }
 
 fn fonts_revision(fonts: &FontManager) -> u64 {
-    // Explicit monotonic counter owned by FontManager (bumped on every
-    // load_*). Face count alone would miss same-count font replacement.
     fonts.font_revision()
 }
 
-/// Rebuild paragraph offsets from a cached result (display coordinates).
 fn para_starts_for(laid: &LaidOut) -> Vec<usize> {
     let mut starts: Vec<usize> = laid.lines.iter().map(|l| l.display_range.start).collect();
     let end = laid.lines.last().map(|l| l.display_range.end).unwrap_or(0);
@@ -733,10 +947,6 @@ fn first_metrics(spans: &[StyledSpan], scale: f32) -> cosmic_text::Metrics {
     }
 }
 
-/// Build the display string plus cluster map.
-/// Returns `(display, cluster_map, source_len)`.
-/// `cluster_map` entries are `(src_byte_start, display_byte_start)` per
-/// grapheme cluster, in order; only populated when masking.
 fn build_display(
     spans: &[StyledSpan],
     mask: Option<char>,
@@ -792,8 +1002,6 @@ fn masked_span_text(text: &str, mask: Option<char>, line_mode: LineMode) -> Stri
     out
 }
 
-/// Map a display byte range to source coordinates via the cluster map.
-/// Identity when the map is empty (unmasked).
 fn display_range_to_source(map: &[(usize, usize)], d_start: usize, d_end: usize) -> (usize, usize) {
     if map.is_empty() {
         return (d_start, d_end);
@@ -808,25 +1016,24 @@ fn display_range_to_source(map: &[(usize, usize)], d_start: usize, d_end: usize)
     (to_src(d_start), to_src(d_end))
 }
 
-fn caret_x_in_line(line: &LaidLine, display_byte: usize, constrained_width: Option<f32>) -> f32 {
+fn caret_x_in_line(
+    line: &LaidLine,
+    display_byte: usize,
+    constrained_width: Option<f32>,
+    text: &str,
+) -> f32 {
     if line.glyphs.is_empty() {
         return empty_line_x(line, constrained_width);
     }
-    // Glyphs are in visual order; display offsets advance in the same order
-    // (exact both masked and unmasked — see caret_x_visual).
-    caret_x_visual(line, display_byte, constrained_width)
+    caret_x_visual(line, display_byte, constrained_width, text)
 }
 
-/// True visual caret placement using glyph edges in display coordinates.
-///
-/// Glyph display spans advance in visual order. Post-hoc we only know each
-/// glyph's *source* span, so display offsets are distributed proportionally
-/// to source lengths. This is exact when unmasked (source == display bytes)
-/// and exact when masked (every cluster maps to one mask char and glyph
-/// source spans are whole clusters). The caret snaps to the nearest glyph
-/// edge; for LTR text this is exact, for RTL/mixed runs it is the nearest
-/// visual edge (documented approximation, still a valid boundary).
-fn caret_x_visual(line: &LaidLine, display_byte: usize, constrained_width: Option<f32>) -> f32 {
+fn caret_x_visual(
+    line: &LaidLine,
+    display_byte: usize,
+    constrained_width: Option<f32>,
+    text: &str,
+) -> f32 {
     let line_start = line.display_range.start;
     let line_end = line.display_range.end;
     if line.glyphs.is_empty() {
@@ -846,10 +1053,7 @@ fn caret_x_visual(line: &LaidLine, display_byte: usize, constrained_width: Optio
             line_end_x(line)
         };
     }
-    // Walk glyphs; each glyph's display span is proportional to its
-    // source length (exact masked and unmasked — see above). Find the
-    // glyph edge nearest to the fractional position.
-    edge_search(line, display_byte)
+    edge_search(line, display_byte, text)
 }
 
 fn line_start_x(line: &LaidLine) -> f32 {
@@ -868,45 +1072,78 @@ fn line_end_x(line: &LaidLine) -> f32 {
 
 fn empty_line_x(line: &LaidLine, constrained_width: Option<f32>) -> f32 {
     let _ = constrained_width;
-    // Alignment is baked into glyph x by the shaper; with no glyphs there
-    // is no baked offset, so x=0 (line origin). UI layers applying block
-    // alignment to empty lines should offset by their own constraint.
     let _ = line;
     0.0
 }
 
-/// Visual edges of a line: `(x, display_byte)` for each glyph's leading
-/// edge in visual order plus the trailing edge of the last glyph.
-/// Display bytes distribute proportionally to source lengths — exact both
-/// masked and unmasked (see `caret_x_visual`).
-fn glyph_edges(line: &LaidLine) -> Vec<(f32, usize)> {
-    let mut edges = Vec::with_capacity(line.glyphs.len() + 1);
-    if line.glyphs.is_empty() {
-        return edges;
+fn glyph_positions(line: &LaidLine, text: &str) -> Vec<(f32, CaretPosition)> {
+    let mut positions = Vec::new();
+    for glyph in &line.glyphs {
+        let rtl = glyph.bidi_level % 2 == 1;
+        let (leading, trailing) = if rtl {
+            (glyph.x + glyph.w, glyph.x)
+        } else {
+            (glyph.x, glyph.x + glyph.w)
+        };
+        positions.push((
+            leading,
+            CaretPosition {
+                byte: glyph.display_byte_start,
+                affinity: CaretAffinity::Downstream,
+            },
+        ));
+        positions.push((
+            trailing,
+            CaretPosition {
+                byte: glyph.display_byte_end,
+                affinity: CaretAffinity::Upstream,
+            },
+        ));
+        if let Some(cluster) = text.get(glyph.display_byte_start..glyph.display_byte_end) {
+            let count = cluster.graphemes(true).count();
+            for (index, (offset, _)) in cluster.grapheme_indices(true).enumerate().skip(1) {
+                positions.push((
+                    leading + (trailing - leading) * index as f32 / count as f32,
+                    CaretPosition {
+                        byte: glyph.display_byte_start + offset,
+                        affinity: CaretAffinity::Downstream,
+                    },
+                ));
+            }
+        }
     }
-    let line_start = line.display_range.start;
-    let total_src: usize = line
-        .glyphs
-        .iter()
-        .map(|g| g.src_byte_end.saturating_sub(g.src_byte_start))
-        .sum();
-    let total_src = total_src.max(1) as f32;
-    let total_disp = (line.display_range.end - line_start).max(1) as f32;
-    let mut acc = 0.0f32;
-    for g in &line.glyphs {
-        edges.push((g.x, line_start + (acc / total_src * total_disp) as usize));
-        acc += g.src_byte_end.saturating_sub(g.src_byte_start) as f32;
+    positions
+}
+
+fn glyph_edges(line: &LaidLine, text: &str) -> Vec<(f32, usize)> {
+    let mut edges = Vec::with_capacity(line.glyphs.len() * 2);
+    for glyph in &line.glyphs {
+        let rtl = glyph.bidi_level % 2 == 1;
+        let (leading, trailing) = if rtl {
+            (glyph.x + glyph.w, glyph.x)
+        } else {
+            (glyph.x, glyph.x + glyph.w)
+        };
+        edges.push((leading, glyph.display_byte_start));
+        edges.push((trailing, glyph.display_byte_end));
+        if let Some(cluster) = text.get(glyph.display_byte_start..glyph.display_byte_end) {
+            let count = cluster.graphemes(true).count();
+            for (index, (offset, _)) in cluster.grapheme_indices(true).enumerate().skip(1) {
+                let fraction = index as f32 / count as f32;
+                edges.push((
+                    leading + (trailing - leading) * fraction,
+                    glyph.display_byte_start + offset,
+                ));
+            }
+        }
     }
-    let last = line.glyphs.last().expect("non-empty");
-    edges.push((last.x + last.w, line.display_range.end));
     edges
 }
 
-/// Nearest visual glyph-edge x for a display byte offset within the line.
-fn edge_search(line: &LaidLine, display_byte: usize) -> f32 {
+fn edge_search(line: &LaidLine, display_byte: usize, text: &str) -> f32 {
     let mut best_x = line.glyphs.first().map(|g| g.x).unwrap_or(0.0);
     let mut best_dist = usize::MAX;
-    for (ex, eb) in glyph_edges(line) {
+    for (ex, eb) in glyph_edges(line, text) {
         let dist = display_byte.abs_diff(eb);
         if dist < best_dist {
             best_dist = dist;
@@ -916,22 +1153,13 @@ fn edge_search(line: &LaidLine, display_byte: usize) -> f32 {
     best_x
 }
 
-fn full_line_span(line: &LaidLine, constrained_width: Option<f32>) -> (f32, f32) {
-    let _ = constrained_width;
-    if line.glyphs.is_empty() {
-        return (0.0, 0.0);
-    }
-    (line_start_x(line), line_end_x(line))
-}
-
 fn hit_in_line(display_text: &str, line: &LaidLine, x: f32) -> usize {
     if line.glyphs.is_empty() {
         return line.display_range.start;
     }
-    // Nearest visual edge by x; ties favor the earlier edge.
     let mut best_byte = line.display_range.start;
     let mut best_dist = f32::INFINITY;
-    for (ex, eb) in glyph_edges(line) {
+    for (ex, eb) in glyph_edges(line, display_text) {
         let dist = (x - ex).abs();
         if dist < best_dist {
             best_dist = dist;
@@ -944,7 +1172,6 @@ fn hit_in_line(display_text: &str, line: &LaidLine, x: f32) -> usize {
 fn snap_to_boundary(text: &str, byte: usize, clamp: std::ops::Range<usize>) -> usize {
     let byte = byte.clamp(clamp.start, clamp.end.min(text.len()));
     if text.is_char_boundary(byte) {
-        // Snap further to grapheme boundary (combining sequences).
         let mut b = byte;
         while b > clamp.start && !is_grapheme_boundary_at(text, b) {
             b -= 1;
@@ -1011,7 +1238,6 @@ mod tests {
         layout.set_text("é cottage", &style());
         let laid = layout.layout(&mut fonts);
         assert!(!laid.lines[0].glyphs.is_empty());
-        // Caret at byte 0 and byte 3 (after the e+combining cluster).
         let c0 = layout.caret(0).unwrap();
         let c3 = layout.caret(3).unwrap();
         assert!(c3.x >= c0.x);
@@ -1044,7 +1270,6 @@ mod tests {
     #[test]
     fn wrap_constrains_width() {
         let mut fonts = manager();
-        // Natural (unwrapped) width for comparison.
         let mut natural = TextLayout::new();
         natural.set_line_mode(LineMode::Multi);
         natural.set_text("this is a fairly long line of text for wrapping", &style());
@@ -1053,10 +1278,6 @@ mod tests {
 
         let mut layout = TextLayout::new();
         layout.set_line_mode(LineMode::Multi);
-        // WordOrGlyph: even the over-long word ("wrapping" ≈ 74px at 16px)
-        // must break so the line stays near the 60px constraint. The shaper
-        // may overshoot by a partial glyph; wrapping (not exactness) is the
-        // property under test.
         layout.set_wrap(WrapMode::WordOrGlyph);
         layout.set_max_width(Some(60.0));
         layout.set_text("this is a fairly long line of text for wrapping", &style());
@@ -1074,8 +1295,6 @@ mod tests {
         layout.set_max_width(Some(60.0));
         layout.set_text("this is a fairly long line of text for wrapping", &style());
         let laid = layout.layout(&mut fonts);
-        // Correct shaper behavior: the over-long word overflows its line
-        // rather than splitting mid-word.
         assert!(laid.size.0 > 60.0);
         assert!(laid.lines.len() > 1);
     }
@@ -1109,7 +1328,6 @@ mod tests {
         layout.set_text("secret", &style());
         let laid = layout.layout(&mut fonts);
         assert!(!laid.lines.is_empty());
-        // 6 graphemes -> 6 mask chars.
         assert_eq!(laid.lines[0].glyphs.len(), 6);
         let c = layout.caret(6).unwrap();
         assert!(c.x > 0.0);
@@ -1136,16 +1354,12 @@ mod tests {
     #[test]
     fn font_load_invalidates_shared_cache() {
         use super::SharedLayoutCache;
-        // Same-count replacement must still reshape: the key carries the
-        // explicit font revision, not a face count.
-        let mut fonts = manager(); // system fonts
+        let mut fonts = manager();
         let mut cache = SharedLayoutCache::new(8);
         let mut t = TextLayout::new();
         t.set_text("abc", &style());
         t.layout_shared(&mut fonts, &mut cache);
         assert_eq!(cache.misses, 1);
-        // Fresh instance, same inputs: shared hit (the per-instance fast
-        // path would bypass the shared counters, so use a new layout).
         let mut t2 = TextLayout::new();
         t2.set_text("abc", &style());
         t2.layout_shared(&mut fonts, &mut cache);

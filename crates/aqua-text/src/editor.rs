@@ -1,23 +1,10 @@
-//! The editing model: text + selection + IME composition + undo/redo.
-//!
-//! `TextEditor` owns a [`TextModel`] and a [`Selection`] and implements
-//! grapheme-safe movement/deletion, word jumps, selection extension,
-//! single-line policy, IME preedit commit/cancel, and bounded undo/redo.
-//! It knows nothing about pixels: pair it with [`crate::TextLayout`] (same
-//! source coordinates) for caret rectangles and hit-testing.
-//!
-//! Byte indices throughout. The editor keeps the selection on grapheme
-//! boundaries after every operation.
-
+use crate::layout::{CaretAffinity, CaretPosition};
 use crate::model::TextModel;
 use crate::selection::Selection;
 use crate::style::LineMode;
 
-/// One undoable step.
 #[derive(Clone, Debug)]
 struct EditRecord {
-    /// Byte position where the change starts (in pre-edit coordinates for
-    /// deletes, post-edit for inserts — resolved at apply time).
     kind: EditKind,
     before: Selection,
     after: Selection,
@@ -33,9 +20,6 @@ enum EditKind {
         pos: usize,
         text: String,
     },
-    /// One user operation that replaced `deleted` with `inserted` at `pos`
-    /// (typing over a selection, IME commit over a selection). Undo and redo
-    /// each restore content AND selection in a single step.
     Replace {
         pos: usize,
         deleted: String,
@@ -43,9 +27,6 @@ enum EditKind {
     },
 }
 
-/// Text removed by starting a preedit over a selection. Uncommitted, so it
-/// lives outside undo history — but cancel must restore it losslessly and
-/// commit/keystrokes must account for it (see below).
 #[derive(Clone, Debug)]
 struct Replaced {
     pos: usize,
@@ -53,19 +34,14 @@ struct Replaced {
     before: Selection,
 }
 
-/// Composition (IME preedit) state.
 #[derive(Clone, Debug)]
 struct Composition {
-    /// Byte index in committed text where the preedit sits.
     start: usize,
     text: String,
-    /// Cursor within the preedit, as a byte range (may be empty).
     cursor: std::ops::Range<usize>,
-    /// Selection content removed to make room for the preedit, if any.
     replaced: Option<Replaced>,
 }
 
-/// Editable text with selection, IME and undo.
 pub struct TextEditor {
     model: TextModel,
     selection: Selection,
@@ -74,6 +50,9 @@ pub struct TextEditor {
     undo_stack: Vec<EditRecord>,
     redo_stack: Vec<EditRecord>,
     undo_limit: usize,
+    merge_typing: bool,
+    vertical_column: Option<usize>,
+    caret_affinity: CaretAffinity,
 }
 
 impl TextEditor {
@@ -86,6 +65,9 @@ impl TextEditor {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             undo_limit: 100,
+            merge_typing: false,
+            vertical_column: None,
+            caret_affinity: CaretAffinity::Downstream,
         }
     }
 
@@ -99,9 +81,6 @@ impl TextEditor {
         self.model.text()
     }
 
-    /// Committed text plus the active preedit spliced in (what the user
-    /// sees). Pass this to `TextLayout`; coordinates differ from committed
-    /// text while composing — see [`TextEditor::composition_range`].
     pub fn display_text(&self) -> String {
         match &self.ime {
             Some(c) => {
@@ -117,27 +96,29 @@ impl TextEditor {
         self.selection
     }
 
-    /// Place the caret at byte `pos`, collapsing any selection. The position
-    /// is clamped into the text and snapped to the nearest grapheme boundary
-    /// (ties snap to the previous boundary), so UI hit-testing can pass raw
-    /// coordinates safely. Cancels any active preedit (displaced text is
-    /// restored losslessly) — same policy as keyboard caret movement.
-    /// Never touches undo history.
     pub fn set_caret(&mut self, pos: usize) {
         self.set_selection(Selection::caret_at(pos));
     }
 
-    /// Replace the selection wholesale. Both ends are clamped into the text
-    /// and snapped to the nearest grapheme boundary (ties snap down);
-    /// anchor/caret order is preserved exactly as given, so shift-extend
-    /// state round-trips through the caller. Cancels any active preedit
-    /// (displaced text restored losslessly). Never touches undo history.
     pub fn set_selection(&mut self, selection: Selection) {
         self.cancel_composition();
+        self.break_typing_group();
         let len = self.model.len_bytes();
         let anchor = snap_nearest(&self.model, selection.anchor.min(len));
         let caret = snap_nearest(&self.model, selection.caret.min(len));
         self.selection = Selection::new(anchor, caret);
+    }
+
+    pub fn caret_position(&self) -> CaretPosition {
+        CaretPosition {
+            byte: self.selection.caret,
+            affinity: self.caret_affinity,
+        }
+    }
+
+    pub fn move_caret_position(&mut self, position: CaretPosition, extend: bool) {
+        self.move_caret_to(position.byte, extend);
+        self.caret_affinity = position.affinity;
     }
 
     pub fn line_mode(&self) -> LineMode {
@@ -145,6 +126,7 @@ impl TextEditor {
     }
 
     pub fn set_line_mode(&mut self, mode: LineMode) {
+        self.break_typing_group();
         self.line_mode = mode;
         if mode == LineMode::Single {
             self.cancel_composition();
@@ -152,9 +134,6 @@ impl TextEditor {
                 let clean: String = self.model.text().replace('\n', " ");
                 self.model.set_text(clean);
                 self.selection.clamp(self.model.len_bytes());
-                // Folding changed byte positions: every stored record is
-                // stale, and replaying one could restore a newline that is
-                // now illegal. Drop history instead of corrupting text.
                 self.undo_stack.clear();
                 self.redo_stack.clear();
             }
@@ -173,7 +152,6 @@ impl TextEditor {
         self.redo_stack.len()
     }
 
-    /// Maximum undo steps retained. Older steps are dropped from the front.
     pub fn set_undo_limit(&mut self, limit: usize) {
         self.undo_limit = limit.max(1);
         while self.undo_stack.len() > self.undo_limit {
@@ -181,9 +159,8 @@ impl TextEditor {
         }
     }
 
-    /// Replace all text, clearing selection, IME and undo history.
-    /// Use for external/model-driven changes, not for keystrokes.
     pub fn set_text(&mut self, text: &str) {
+        self.break_typing_group();
         let text = self.apply_line_policy(text);
         self.model.set_text(text);
         self.selection.collapse_to(0);
@@ -193,7 +170,6 @@ impl TextEditor {
         self.redo_stack.clear();
     }
 
-    /// Selected text in committed coordinates, or `None` for a bare caret.
     pub fn selected_text(&self) -> Option<&str> {
         if self.selection.is_caret() {
             return None;
@@ -202,13 +178,15 @@ impl TextEditor {
         self.model.text().get(r)
     }
 
-    // ---- input operations (each is one undo step) ----
-
-    /// Type or paste `s`, replacing the selection. Newlines are stripped in
-    /// single-line mode. Returns the new caret position.
     pub fn insert(&mut self, s: &str) -> usize {
         self.commit_composition_if_any_without_record();
         let s = self.apply_line_policy(s);
+        if s.is_empty() && self.selection.is_caret() {
+            return self.selection.caret;
+        }
+        self.vertical_column = None;
+        self.caret_affinity = CaretAffinity::Downstream;
+        let merge_next = !s.contains(char::is_whitespace);
         let before = self.selection;
         let range = self.selection.range();
         let deleted = if range.is_empty() {
@@ -217,11 +195,8 @@ impl TextEditor {
             self.model.delete(range.clone())
         };
         let ins = self.model.insert(range.start, &s);
-        let caret = ins.end;
+        let caret = snap_nearest(&self.model, ins.end);
         self.selection.collapse_to(caret);
-        // A replace is ONE user operation: a single Replace record restores
-        // both content and selection in one undo. Plain typing still merges
-        // consecutive single chars for natural Ctrl+Z granularity.
         if !deleted.is_empty() {
             if s.is_empty() {
                 self.push_record(EditRecord {
@@ -253,12 +228,13 @@ impl TextEditor {
                 after: Selection::caret_at(caret),
             });
         }
+        self.merge_typing = merge_next;
         self.redo_stack.clear();
         caret
     }
 
-    /// Delete selection, or the grapheme before the caret.
     pub fn delete_backward(&mut self) -> bool {
+        self.break_typing_group();
         if !self.selection.is_caret() {
             self.delete_selection();
             return true;
@@ -271,7 +247,7 @@ impl TextEditor {
         }
         let before = self.selection;
         let removed = self.model.delete(prev..caret);
-        self.selection.collapse_to(prev);
+        self.selection.collapse_to(snap_nearest(&self.model, prev));
         self.push_record(EditRecord {
             kind: EditKind::Delete {
                 pos: prev,
@@ -284,8 +260,8 @@ impl TextEditor {
         true
     }
 
-    /// Delete selection, or the grapheme after the caret.
     pub fn delete_forward(&mut self) -> bool {
+        self.break_typing_group();
         if !self.selection.is_caret() {
             self.delete_selection();
             return true;
@@ -298,7 +274,7 @@ impl TextEditor {
         }
         let before = self.selection;
         let removed = self.model.delete(caret..next);
-        self.selection.collapse_to(caret);
+        self.selection.collapse_to(snap_nearest(&self.model, caret));
         self.push_record(EditRecord {
             kind: EditKind::Delete {
                 pos: caret,
@@ -311,8 +287,8 @@ impl TextEditor {
         true
     }
 
-    /// Delete the current selection. No-op for a bare caret.
     pub fn delete_selection(&mut self) {
+        self.break_typing_group();
         let range = self.selection.range();
         if range.is_empty() {
             return;
@@ -320,7 +296,8 @@ impl TextEditor {
         self.commit_composition_if_any_without_record();
         let before = self.selection;
         let removed = self.model.delete(range.clone());
-        self.selection.collapse_to(range.start);
+        self.selection
+            .collapse_to(snap_nearest(&self.model, range.start));
         self.push_record(EditRecord {
             kind: EditKind::Delete {
                 pos: range.start,
@@ -332,10 +309,10 @@ impl TextEditor {
         self.redo_stack.clear();
     }
 
-    // ---- movement (not undoable) ----
-
-    fn move_caret(&mut self, pos: usize, extend: bool) {
-        let pos = pos.min(self.model.len_bytes());
+    pub fn move_caret_to(&mut self, pos: usize, extend: bool) {
+        self.cancel_composition();
+        self.break_typing_group();
+        let pos = snap_nearest(&self.model, pos.min(self.model.len_bytes()));
         if extend {
             self.selection.extend_to(pos);
         } else {
@@ -345,38 +322,140 @@ impl TextEditor {
     }
 
     pub fn move_left(&mut self, extend: bool) {
-        let p = self.model.prev_grapheme(self.selection.caret);
-        self.move_caret(p, extend);
+        self.cancel_composition();
+        let p = if !extend && !self.selection.is_caret() {
+            self.selection.range().start
+        } else {
+            self.model.prev_grapheme(self.selection.caret)
+        };
+        self.move_caret_to(p, extend);
     }
 
     pub fn move_right(&mut self, extend: bool) {
-        let p = self.model.next_grapheme(self.selection.caret);
-        self.move_caret(p, extend);
+        self.cancel_composition();
+        let p = if !extend && !self.selection.is_caret() {
+            self.selection.range().end
+        } else {
+            self.model.next_grapheme(self.selection.caret)
+        };
+        self.move_caret_to(p, extend);
     }
 
     pub fn move_word_left(&mut self, extend: bool) {
+        self.cancel_composition();
         let p = self.model.prev_word(self.selection.caret);
-        self.move_caret(p, extend);
+        self.move_caret_to(p, extend);
     }
 
     pub fn move_word_right(&mut self, extend: bool) {
+        self.cancel_composition();
         let p = self.model.next_word(self.selection.caret);
-        self.move_caret(p, extend);
+        self.move_caret_to(p, extend);
     }
 
     pub fn move_to_start(&mut self, extend: bool) {
-        self.move_caret(0, extend);
+        self.move_caret_to(0, extend);
     }
 
     pub fn move_to_end(&mut self, extend: bool) {
-        self.move_caret(self.model.len_bytes(), extend);
+        self.move_caret_to(self.model.len_bytes(), extend);
+    }
+
+    pub fn break_typing_group(&mut self) {
+        self.caret_affinity = CaretAffinity::Downstream;
+        self.merge_typing = false;
+        self.vertical_column = None;
+    }
+
+    pub fn insert_paste(&mut self, text: &str) -> usize {
+        self.break_typing_group();
+        let caret = self.insert(text);
+        self.break_typing_group();
+        caret
+    }
+
+    pub fn delete_word_backward(&mut self) -> bool {
+        self.delete_word(true)
+    }
+
+    pub fn delete_word_forward(&mut self) -> bool {
+        self.delete_word(false)
+    }
+
+    fn delete_word(&mut self, backward: bool) -> bool {
+        self.cancel_composition();
+        let before = self.selection;
+        if self.selection.is_caret() {
+            let at = self.selection.caret;
+            let target = if backward {
+                self.model.prev_word(at)
+            } else {
+                self.model.next_word(at)
+            };
+            if target == at {
+                return false;
+            }
+            self.selection.extend_to(target);
+        }
+        self.delete_selection();
+        if let Some(record) = self.undo_stack.last_mut() {
+            record.before = before;
+        }
+        true
+    }
+
+    pub fn move_line_boundary(&mut self, end: bool, extend: bool) {
+        self.cancel_composition();
+        let at = self.selection.caret;
+        let text = self.text();
+        let target = if end {
+            text[at..].find('\n').map_or(text.len(), |i| at + i)
+        } else {
+            text[..at].rfind('\n').map_or(0, |i| i + 1)
+        };
+        self.move_caret_to(target, extend);
+    }
+
+    pub fn move_paragraph(&mut self, down: bool, extend: bool) {
+        self.move_vertical(!down, extend);
+    }
+
+    pub fn move_vertical(&mut self, up: bool, extend: bool) {
+        use unicode_segmentation::UnicodeSegmentation;
+        self.cancel_composition();
+        let at = self.selection.caret;
+        let start = self.text()[..at].rfind('\n').map_or(0, |i| i + 1);
+        let column = self
+            .vertical_column
+            .unwrap_or_else(|| self.text()[start..at].graphemes(true).count());
+        let text = self.text();
+        let current_end = text[at..].find('\n').map_or(text.len(), |i| at + i);
+        let row = if up {
+            start.checked_sub(1).map(|end| {
+                let begin = text[..end].rfind('\n').map_or(0, |i| i + 1);
+                begin..end
+            })
+        } else if current_end < text.len() {
+            let begin = current_end + 1;
+            Some(begin..text[begin..].find('\n').map_or(text.len(), |i| begin + i))
+        } else {
+            None
+        };
+        let target = row.map_or(if up { 0 } else { text.len() }, |row| {
+            text[row.clone()]
+                .grapheme_indices(true)
+                .nth(column)
+                .map_or(row.end, |(i, _)| row.start + i)
+        });
+        self.move_caret_to(target, extend);
+        self.vertical_column = Some(column);
     }
 
     pub fn select_all(&mut self) {
+        self.cancel_composition();
+        self.break_typing_group();
         self.selection = Selection::new(0, self.model.len_bytes());
     }
-
-    // ---- undo / redo ----
 
     pub fn can_undo(&self) -> bool {
         !self.undo_stack.is_empty()
@@ -387,6 +466,7 @@ impl TextEditor {
     }
 
     pub fn undo(&mut self) -> bool {
+        self.break_typing_group();
         let Some(rec) = self.undo_stack.pop() else {
             return false;
         };
@@ -394,10 +474,10 @@ impl TextEditor {
         match &rec.kind {
             EditKind::Insert { pos, text } => {
                 let end = pos + text.len();
-                self.model.delete(*pos..end);
+                self.model.replace_exact(*pos..end, "");
             }
             EditKind::Delete { pos, text } => {
-                self.model.insert(*pos, text);
+                self.model.replace_exact(*pos..*pos, text);
             }
             EditKind::Replace {
                 pos,
@@ -405,8 +485,8 @@ impl TextEditor {
                 inserted,
             } => {
                 let end = pos + inserted.len();
-                self.model.delete(*pos..end);
-                self.model.insert(*pos, deleted);
+                self.model.replace_exact(*pos..end, "");
+                self.model.replace_exact(*pos..*pos, deleted);
             }
         }
         self.selection = rec.before;
@@ -416,17 +496,18 @@ impl TextEditor {
     }
 
     pub fn redo(&mut self) -> bool {
+        self.break_typing_group();
         let Some(rec) = self.redo_stack.pop() else {
             return false;
         };
         self.cancel_composition();
         match &rec.kind {
             EditKind::Insert { pos, text } => {
-                self.model.insert(*pos, text);
+                self.model.replace_exact(*pos..*pos, text);
             }
             EditKind::Delete { pos, text } => {
                 let end = pos + text.len();
-                self.model.delete(*pos..end);
+                self.model.replace_exact(*pos..end, "");
             }
             EditKind::Replace {
                 pos,
@@ -434,8 +515,8 @@ impl TextEditor {
                 inserted,
             } => {
                 let end = pos + deleted.len();
-                self.model.delete(*pos..end);
-                self.model.insert(*pos, inserted);
+                self.model.replace_exact(*pos..end, "");
+                self.model.replace_exact(*pos..*pos, inserted);
             }
         }
         self.selection = rec.after;
@@ -444,24 +525,12 @@ impl TextEditor {
         true
     }
 
-    // ---- IME composition ----
-
-    /// True while a preedit is active.
     pub fn is_composing(&self) -> bool {
         self.ime.is_some()
     }
 
-    /// Set or replace the preedit. `cursor` is a byte range inside the
-    /// preedit text (often empty). The preedit is inserted at the current
-    /// caret, replacing any selection; selection collapses into the preedit
-    /// cursor. The replaced selection is held UNCOMMITTED in the composition:
-    /// cancel restores it losslessly, commit folds it into one undoable
-    /// Replace, and a keystroke flushes it as a Delete before the new edit.
     pub fn set_composition(&mut self, text: &str, cursor: std::ops::Range<usize>) {
         let text = self.apply_line_policy(text);
-        // Superseded active preedit: keep its replaced text only when the
-        // new preedit continues at the same anchor (a preedit update);
-        // otherwise restore first so nothing is silently lost.
         let carried = self.ime.take().and_then(|old| {
             let caret = self.selection.caret.min(self.model.len_bytes());
             if old.start == caret {
@@ -487,8 +556,9 @@ impl TextEditor {
         };
         let start = self.selection.caret.min(self.model.len_bytes());
         let len = text.len();
-        let cs = cursor.start.min(len);
-        let ce = cursor.end.min(len);
+        let preedit = TextModel::new(text.clone());
+        let cs = snap_nearest(&preedit, cursor.start.min(len));
+        let ce = snap_nearest(&preedit, cursor.end.min(len));
         self.ime = Some(Composition {
             start,
             text,
@@ -497,16 +567,11 @@ impl TextEditor {
         });
     }
 
-    /// Commit the preedit into the text as one undoable step (a Replace when
-    /// the preedit covered a selection, else an Insert).
-    /// Returns false when nothing was composing.
     pub fn commit_composition(&mut self) -> bool {
         let Some(c) = self.ime.take() else {
             return false;
         };
         if c.text.is_empty() {
-            // Empty preedit committed nothing: give back what the preedit
-            // displaced, with no history change.
             self.restore_replaced(c.replaced, c.start);
             return true;
         }
@@ -536,8 +601,6 @@ impl TextEditor {
         true
     }
 
-    /// Drop the preedit, losslessly restoring any selection it displaced.
-    /// No history change: uncommitted text was never real.
     pub fn cancel_composition(&mut self) -> bool {
         let Some(c) = self.ime.take() else {
             return false;
@@ -546,15 +609,10 @@ impl TextEditor {
         true
     }
 
-    /// Byte range of the preedit in *display* coordinates
-    /// (`display_text()`), for IME candidate-window positioning and
-    /// underline rendering. `None` when not composing.
     pub fn composition_range(&self) -> Option<std::ops::Range<usize>> {
         self.ime.as_ref().map(|c| c.start..c.start + c.text.len())
     }
 
-    /// Caret position for IME purposes: the preedit cursor when composing,
-    /// else the normal caret. In *display* coordinates.
     pub fn ime_caret(&self) -> usize {
         match &self.ime {
             Some(c) => c.start + c.cursor.end.min(c.text.len()),
@@ -562,13 +620,12 @@ impl TextEditor {
         }
     }
 
-    // ---- internals ----
-
     fn apply_line_policy(&self, s: &str) -> String {
+        let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
         if self.line_mode == LineMode::Single {
-            s.replace(['\n', '\r'], " ")
+            normalized.replace('\n', " ")
         } else {
-            s.replace('\r', "")
+            normalized
         }
     }
 
@@ -579,9 +636,8 @@ impl TextEditor {
         }
     }
 
-    /// Merge a typed char into the previous insert record when adjacent.
     fn try_merge_insert(&mut self, pos: usize, s: &str, before: Selection, caret: usize) -> bool {
-        if s.chars().count() != 1 {
+        if !self.merge_typing || s.chars().count() != 1 {
             return false;
         }
         let Some(last) = self.undo_stack.last_mut() else {
@@ -598,10 +654,6 @@ impl TextEditor {
         }
     }
 
-    /// Keystroke edits replace an active preedit: the preedit itself was
-    /// never committed text (no record for dropping it), but a selection it
-    /// displaced becomes permanent here, so flush that as one Delete record
-    /// before the new edit proceeds.
     fn commit_composition_if_any_without_record(&mut self) {
         let Some(c) = self.ime.take() else {
             return;
@@ -625,9 +677,6 @@ impl TextEditor {
         self.redo_stack.clear();
     }
 
-    /// Restore text displaced by a preedit (cancel / empty-commit /
-    /// superseded preedit), or collapse to `fallback` when nothing was
-    /// displaced. Never touches undo history.
     fn restore_replaced(&mut self, replaced: Option<Replaced>, fallback: usize) {
         match replaced {
             Some(r) => {
@@ -642,10 +691,6 @@ impl TextEditor {
     }
 }
 
-/// Snap a clamped byte index to the nearest grapheme-cluster boundary.
-/// Ties snap to the previous boundary. The model already guarantees
-/// boundary safety on edit; this is the safety net for raw UI input
-/// (e.g. hit-test coordinates) passed to the public setters.
 fn snap_nearest(model: &TextModel, at: usize) -> usize {
     if model.is_grapheme_boundary(at) {
         return at;
@@ -667,8 +712,8 @@ mod tests {
     fn grapheme_delete_removes_whole_cluster() {
         let mut ed = TextEditor::with_text("aéb", LineMode::Single);
         ed.move_to_end(false);
-        ed.move_left(false); // caret after "b" -> before "b"? "aéb": move left from end
-        ed.move_left(false); // before the e+combining cluster
+        ed.move_left(false);
+        ed.move_left(false);
         assert!(ed.delete_forward());
         assert_eq!(ed.text(), "ab");
     }
@@ -714,7 +759,6 @@ mod tests {
         ed.insert("b");
         assert_eq!(ed.text(), "ab");
         assert!(ed.undo());
-        // 'a' and 'b' merged into one record (adjacent single-char inserts).
         assert_eq!(ed.text(), "");
         assert!(ed.redo());
         assert_eq!(ed.text(), "ab");
@@ -738,10 +782,10 @@ mod tests {
         ed.insert("ab");
         assert_eq!(ed.undo_len(), 1);
         ed.insert("c");
-        assert_eq!(ed.undo_len(), 1); // merged
+        assert_eq!(ed.undo_len(), 1);
         ed.select_all();
         ed.insert("z");
-        assert_eq!(ed.undo_len(), 2); // one Replace record
+        assert_eq!(ed.undo_len(), 2);
         assert_eq!(ed.text(), "z");
     }
 
@@ -749,7 +793,7 @@ mod tests {
     fn replace_selection_is_single_undo_restoring_content_and_selection() {
         let mut ed = TextEditor::with_text("hello world", LineMode::Single);
         ed.move_to_end(false);
-        ed.move_word_left(true); // selects "world", anchor=11 caret=6
+        ed.move_word_left(true);
         let sel_before = ed.selection();
         assert_eq!(ed.selected_text(), Some("world"));
         ed.insert("there");
@@ -772,7 +816,7 @@ mod tests {
     fn mode_change_to_single_clears_history_when_folding() {
         let mut ed = TextEditor::new(LineMode::Multi);
         ed.insert("a\nb");
-        ed.insert("c"); // "a\nbc", history present
+        ed.insert("c");
         assert!(ed.can_undo());
         ed.set_line_mode(LineMode::Single);
         assert_eq!(ed.text(), "a bc");
@@ -789,7 +833,7 @@ mod tests {
         ed.move_to_end(false);
         ed.insert("d");
         assert_eq!(ed.text(), "abcd");
-        ed.set_line_mode(LineMode::Single); // no folding: positions valid
+        ed.set_line_mode(LineMode::Single);
         assert!(ed.can_undo());
         assert!(ed.undo());
         assert_eq!(ed.text(), "abc");
@@ -799,11 +843,10 @@ mod tests {
     fn ime_over_selection_commit_is_single_undo() {
         let mut ed = TextEditor::with_text("hello world", LineMode::Single);
         ed.move_to_end(false);
-        ed.move_word_left(true); // selects "world"
+        ed.move_word_left(true);
         let sel_before = ed.selection();
         ed.set_composition("ワールド", 0..12);
         assert!(ed.is_composing());
-        // Committed text untouched; display shows the preedit in its place.
         assert_eq!(ed.text(), "hello ");
         assert_eq!(ed.display_text(), "hello ワールド");
 
@@ -821,7 +864,7 @@ mod tests {
     fn ime_over_selection_cancel_is_lossless() {
         let mut ed = TextEditor::with_text("hello world", LineMode::Single);
         ed.move_to_end(false);
-        ed.move_word_left(true); // selects "world"
+        ed.move_word_left(true);
         ed.set_composition("あ", 0..3);
         assert!(ed.is_composing());
         assert!(ed.cancel_composition());
@@ -841,7 +884,7 @@ mod tests {
         ed.move_to_end(false);
         ed.move_word_left(true);
         ed.set_composition("あ", 0..3);
-        ed.set_composition("あい", 0..6); // preedit update at same anchor
+        ed.set_composition("あい", 0..6);
         assert_eq!(ed.display_text(), "hello あい");
         assert!(ed.cancel_composition());
         assert_eq!(ed.text(), "hello world");
@@ -852,12 +895,11 @@ mod tests {
     fn keystroke_during_compose_flushes_displaced_text_to_history() {
         let mut ed = TextEditor::with_text("hello world", LineMode::Single);
         ed.move_to_end(false);
-        ed.move_word_left(true); // selects "world"
+        ed.move_word_left(true);
         ed.set_composition("あ", 0..3);
-        ed.insert("X"); // replaces the uncommitted preedit
+        ed.insert("X");
         assert_eq!(ed.text(), "hello X");
         assert!(!ed.is_composing());
-        // Two records: the flushed selection deletion + the typed insert.
         assert!(ed.undo());
         assert_eq!(ed.text(), "hello ");
         assert!(ed.undo());
@@ -868,22 +910,18 @@ mod tests {
     #[test]
     fn invalid_positions_are_grapheme_safe() {
         use crate::model::TextModel;
-        // Mid-cluster, mid-char and out-of-range indices never panic and
-        // never split clusters or scalar values.
         let mut m = TextModel::new("ae\u{301}x");
-        assert!(!m.is_grapheme_boundary(2)); // inside "e + combining mark"
-        assert!(!m.is_grapheme_boundary(3)); // inside the combining mark bytes
-        m.delete(2..3); // snaps outward to the whole cluster
+        assert!(!m.is_grapheme_boundary(2));
+        assert!(!m.is_grapheme_boundary(3));
+        m.delete(2..3);
         assert_eq!(m.text(), "ax");
         m.insert(usize::MAX, "!");
         assert!(m.text().ends_with('!'));
-        m.delete(usize::MAX..usize::MAX); // clamped to a trailing no-op
+        m.delete(usize::MAX..usize::MAX);
         assert_eq!(m.next_grapheme(usize::MAX), m.len_bytes());
-        // End of text: Left moves into the last cluster, not past the end.
         assert_eq!(m.prev_grapheme(usize::MAX), m.len_bytes() - "!".len());
         assert!(m.is_grapheme_boundary(0));
 
-        // Editor no-ops on an empty document.
         let mut ed = TextEditor::new(LineMode::Single);
         assert!(!ed.delete_backward());
         assert!(!ed.delete_forward());
@@ -893,7 +931,6 @@ mod tests {
         ed.move_right(false);
         assert_eq!(ed.selection(), Selection::caret_at(0));
 
-        // Oversized IME cursor clamps into the preedit.
         let mut ed2 = TextEditor::with_text("hi", LineMode::Single);
         ed2.move_to_end(false);
         ed2.set_composition("あ", 0..999);
@@ -913,7 +950,7 @@ mod tests {
         assert!(ed.commit_composition());
         assert_eq!(ed.text(), "hiあ");
         assert!(!ed.is_composing());
-        assert!(ed.undo()); // commit is one undo step
+        assert!(ed.undo());
         assert_eq!(ed.text(), "hi");
 
         ed.set_composition("x", 0..1);
@@ -925,7 +962,7 @@ mod tests {
     fn undo_limit_bounds_history() {
         let mut ed = TextEditor::new(LineMode::Single);
         ed.set_undo_limit(3);
-        ed.insert("a b c d e"); // spaces break merging -> several records
+        ed.insert("a b c d e");
         assert!(ed.undo_len() <= 3, "undo stack exceeded limit");
     }
 }
@@ -938,15 +975,12 @@ mod setter_tests {
     #[test]
     fn set_caret_clamps_and_snaps_invalid_positions() {
         let mut ed = TextEditor::with_text("aéx", LineMode::Single);
-        // Byte 2 is inside the "e + combining mark" cluster (1..4).
         ed.set_caret(2);
         assert_eq!(ed.selection(), Selection::caret_at(1), "snaps to nearest");
-        // Byte 3 is also inside the cluster, equidistant-ish: ties go down.
         ed.set_caret(3);
         assert!(ed.selection().caret == 1 || ed.selection().caret == 4);
         ed.set_caret(usize::MAX);
         assert_eq!(ed.selection(), Selection::caret_at(ed.text().len()));
-        // No history change from placement.
         assert!(!ed.can_undo());
         assert_eq!(ed.undo_len(), 0);
     }
@@ -957,13 +991,12 @@ mod setter_tests {
         let emoji_start = 1;
         let emoji_end = "a👨‍👧".len();
         assert!(emoji_end - emoji_start > 2);
-        ed.set_caret(emoji_start + 2); // mid-sequence
+        ed.set_caret(emoji_start + 2);
         let c = ed.selection().caret;
         assert!(
             c == emoji_start || c == emoji_end,
             "lands on a cluster edge, got {c}"
         );
-        // Typing there keeps the emoji intact.
         ed.insert("!");
         assert!(ed.text().starts_with("a👨‍👧") || ed.text().contains("👨‍👧"));
     }
@@ -971,14 +1004,12 @@ mod setter_tests {
     #[test]
     fn set_selection_preserves_anchor_caret_extend_semantics() {
         let mut ed = TextEditor::with_text("hello world", LineMode::Single);
-        ed.set_selection(Selection::new(11, 6)); // anchor right, caret left
+        ed.set_selection(Selection::new(11, 6));
         assert_eq!(ed.selection(), Selection::new(11, 6));
         assert_eq!(ed.selected_text(), Some("world"));
-        // Reversed order is preserved, not normalized.
         ed.set_selection(Selection::new(2, 9));
         assert_eq!(ed.selection(), Selection::new(2, 9));
         assert_eq!(ed.selected_text(), Some("llo wor"));
-        // Out-of-range ends clamp.
         ed.set_selection(Selection::new(usize::MAX, 0));
         assert_eq!(ed.selection(), Selection::new(ed.text().len(), 0));
         assert!(!ed.can_undo(), "placement never records history");
@@ -988,18 +1019,14 @@ mod setter_tests {
     fn setters_cancel_composition_losslessly_without_history() {
         let mut ed = TextEditor::with_text("hello world", LineMode::Single);
         ed.move_to_end(false);
-        ed.move_word_left(true); // selects "world"
+        ed.move_word_left(true);
         ed.set_composition("あ", 0..3);
         assert!(ed.is_composing());
-        // Click elsewhere: preedit drops, displaced text is restored
-        // losslessly, and the click position wins (restored selection is
-        // then replaced by the placement, as with a plain cancel+click).
         ed.set_caret(0);
         assert!(!ed.is_composing());
         assert_eq!(ed.text(), "hello world");
         assert_eq!(ed.selection(), Selection::caret_at(0));
         assert!(!ed.can_undo());
-        // set_selection during composition behaves the same.
         let mut ed2 = TextEditor::with_text("hello world", LineMode::Single);
         ed2.move_to_end(false);
         ed2.move_word_left(true);
@@ -1013,10 +1040,8 @@ mod setter_tests {
     #[test]
     fn set_selection_mid_cluster_snaps_both_ends_independently() {
         let mut ed = TextEditor::with_text("xáy", LineMode::Single);
-        // "á" cluster spans bytes 1..4. Select 2..3 (fully inside).
         ed.set_selection(Selection::new(2, 3));
         let r = ed.selection().range();
-        // Both ends snap out to whole-cluster edges; never a split cluster.
         assert!(r.start == 1 && r.end == 4, "got {r:?}");
         assert_eq!(ed.selected_text(), Some("á"));
     }

@@ -207,13 +207,19 @@ impl TextStyle {
 /// layout operation: a styled word must not become a separate layout child.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StyledSpan {
+    pub color_srgb: Option<[u8; 4]>,
     pub text: String,
     pub style: TextStyle,
 }
 
 impl StyledSpan {
+    pub fn color(mut self, rgba_srgb: [u8; 4]) -> Self {
+        self.color_srgb = Some(rgba_srgb);
+        self
+    }
     pub fn new(text: impl Into<String>, style: TextStyle) -> Self {
         Self {
+            color_srgb: None,
             text: text.into(),
             style,
         }
@@ -221,6 +227,7 @@ impl StyledSpan {
 
     pub fn plain(text: impl Into<String>) -> Self {
         Self {
+            color_srgb: None,
             text: text.into(),
             style: TextStyle::default(),
         }

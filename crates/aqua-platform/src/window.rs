@@ -99,6 +99,14 @@ pub enum WindowError {
     Unsupported(&'static str),
 }
 
+impl std::fmt::Display for WindowError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, formatter)
+    }
+}
+
+impl std::error::Error for WindowError {}
+
 /// Intent sent toward the host. The host may accept, defer, or reject.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WindowRequest {

@@ -2,6 +2,7 @@ pub mod app;
 pub mod config;
 pub mod error;
 pub mod factory;
+pub mod images;
 pub mod mailbox;
 pub mod runtime;
 pub mod ui_app;
@@ -25,6 +26,10 @@ pub use aqua_ui::style::{auto, pct, px, Axis, Style, Typography};
 pub use aqua_ui::style::{Border, Length, Paint, Shadow};
 
 pub mod prelude {
+    pub use crate::images::{
+        ImageAssetBudget, ImageAssetError, ImageAssets, ImageHandle, ImageStatus,
+        ImageSubscription, ManagedUiApp,
+    };
     pub use crate::mailbox::{Mailbox, SendError, Sender};
     pub use crate::{
         auto, fr, pct, px, ui, App, AppCtx, Application, Aqua, AquaConfig, AquaUserEvent, Axis,
@@ -80,3 +85,8 @@ pub mod prelude {
     };
     pub use aqua_ui::popup::{PopupFocus, PopupOptions};
 }
+
+pub use images::{
+    ImageAssetBudget, ImageAssetError, ImageAssetStats, ImageAssets, ImageHandle, ImageStatus,
+    ImageSubscription, ManagedUiApp,
+};

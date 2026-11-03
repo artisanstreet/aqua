@@ -52,9 +52,13 @@ use crate::ui_app::{UiApp, UiAppError};
 pub struct Context<'a> {
     scope: &'a Scope,
     material: &'a ResolvedMaterial,
+    images: &'a crate::images::ImageAssets,
 }
 
 impl<'a> Context<'a> {
+    pub fn images(&self) -> crate::images::ImageAssets {
+        self.images.clone()
+    }
     /// Root reactive scope: create app signals here and pass them into
     /// [`Context::view`] as explicit dependencies.
     #[must_use]
@@ -194,10 +198,12 @@ impl App {
         ui.apply_startup_motion_policy(
             prefs.reduce_motion.is_on() || resolved.runtime.reduced_motion,
         );
+        let images = crate::images::ImageAssets::default();
         let view = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let ctx = Context {
                 scope: ui.scope(),
                 material: &resolved.material,
+                images: &images,
             };
             setup(&ctx)
         })) {
@@ -211,7 +217,12 @@ impl App {
             ui.dispose();
             return Err(Error::Mount(e));
         }
-        Ok(Prepared { aqua, ui, resolved })
+        Ok(Prepared {
+            aqua,
+            ui,
+            resolved,
+            images,
+        })
     }
 }
 
@@ -221,6 +232,7 @@ pub(crate) struct Prepared {
     aqua: Aqua,
     ui: UiApp,
     resolved: ResolvedConfig,
+    images: crate::images::ImageAssets,
 }
 
 impl Prepared {
@@ -229,13 +241,15 @@ impl Prepared {
             aqua,
             mut ui,
             resolved,
+            images,
         } = self;
         if resolved.runtime.headless {
             return run_headless_one_frame(&mut ui, &resolved);
         }
         // On loop failure the running host drops with the loop, and
         // `UiApp::drop` funnels into `dispose` (scopes + views + runs).
-        aqua.run(ui).map_err(Error::Runtime)?;
+        aqua.run(crate::images::ManagedUiApp::new(ui, images))
+            .map_err(Error::Runtime)?;
         Ok(())
     }
 }

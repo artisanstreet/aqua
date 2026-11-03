@@ -2,6 +2,7 @@ pub mod app;
 pub mod config;
 pub mod error;
 pub mod factory;
+pub mod mailbox;
 pub mod runtime;
 pub mod ui_app;
 

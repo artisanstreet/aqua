@@ -1,5 +1,22 @@
 # Aqua validation: acceptance checklist, environment, and evidence
 
+## Editor-port qualification (2026-11-03)
+
+The current behavior, consumer workloads and remaining limits are recorded in
+[`EDITOR_READINESS.md`](EDITOR_READINESS.md). Strict canonical validation after
+the text/runtime/native integration finished with **13 passed, zero failed,
+zero skipped**, including all workspace crates, real GPU tests, formatting,
+all-target Clippy and the Windows GNU all-target check. The canonical script
+now includes `aqua-scene`, `aqua-protocol` and `aqua-runtime` explicitly.
+
+The rebuilt Windows Todo passed native UI Automation Unicode document reading,
+emoji-grapheme selection roundtrips, value updates, invocation, bound state and
+close through `scripts/windows-accessibility.ps1`. The rebuilt Windows keyboard
+regression exited zero with `WINDOWS_INPUT_OK`. The new graphics conformance
+suite passed three tests on native Windows AMD/DX12 and Linux llvmpipe/Vulkan.
+These are operation and pixel checks, not screen-reader speech or comparative
+performance claims. Results below are historical.
+
 Owner: verification agent. This is the honest ledger for the Aqua
 conformance suite. Status words are load-bearing:
 

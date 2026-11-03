@@ -1,5 +1,27 @@
 # Aqua performance: what we measure, what we refuse to claim
 
+## Runtime update (2026-11-03)
+
+`Runtime::frame_work()` exposes text nodes inspected, source bytes compared,
+runs shaped, base scene operations emitted, scene items reconciled and base
+scene reuse. The 1,001-text transcript suite in
+`crates/aqua-runtime/tests/frame-work.rs` checks that unchanged frames inspect
+zero text nodes, compare zero source bytes, shape zero runs and emit zero base
+scene operations. Moving a selection reuses the base scene. Streaming a source
+reshapes its changed run while content frames still traverse mounted nodes.
+
+Font loads invalidate metrics and runs. Scene insertion/removal/reordering
+preserves surviving node identities. Source-backed selection copies unmounted
+rows without realizing their UI. The combined 20,000-message consumer workload
+checks bounded realization, source copy, rich streaming updates and reading
+anchor preservation after variable-height changes.
+
+These are behavioral and operation-count gates. They do not measure frame-time
+distributions or establish a performance advantage over GPUI or Chromium. The
+renderer-only timings and implementation costs below are historical evidence;
+the old claim that every frame clones/hashes all text no longer applies to
+unchanged or selection-only frames.
+
 Owner: verification agent. The design (`GUI_FRAMEWORK_DESIGN.md` §§
 "Performance architecture", "Data locality", "Demand-driven scheduling")
 requires honest, inspectable efficiency evidence — not benchmark victories.

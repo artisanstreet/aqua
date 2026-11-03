@@ -1,5 +1,18 @@
 # `aqua-text` — shared text infrastructure
 
+The 2026-11-03 behavior and port gates are recorded in
+[`EDITOR_READINESS.md`](EDITOR_READINESS.md). New public modules include
+`navigation` (Blink-derived Windows rules with ICU dictionary segmentation) and
+`document` (source-backed selections independent of mounted leaves). Shaped
+navigation and hit testing now carry `CaretPosition`/`CaretAffinity`; the
+byte-only methods remain compatibility entrypoints.
+
+`Text::text_style`, inherited `Style::text_style`, `Text::spans` and
+`StyledSpan::color` carry rich static text through actual measurement/shaping
+and GPU glyph color. Editable fields retain plain source with full font styling.
+Clipboard shortcuts, selection gestures and autoscroll are wired through the
+runtime and facade; the older gaps below describe the original implementation.
+
 Owner: text agent. Crate: `crates/aqua-text/`. API version: **1**
 (`aqua_text::AQUA_TEXT_API_VERSION`).
 

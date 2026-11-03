@@ -1,10 +1,10 @@
 # UiApp (`aqua/src/ui_app.rs`) + `examples/todo.rs`
 
-Owner: overlays/UI-host agent. Status: **implemented, frozen**
-(workspace `cargo check --all-targets` green, strict `clippy -D warnings`
-clean for owned files, `cargo test -p aqua` green incl. verifier
-consumer tests, `cargo run -p aqua --example todo -- --headless` green
-end-to-end, native Win11 todo EXE smoke EXIT 0 — see Verification).
+Current runtime and Editor-port qualification are recorded in
+[`EDITOR_READINESS.md`](EDITOR_READINESS.md). `UiApp` now reexports the
+sans-IO `aqua_runtime::Runtime`; `aqua/src/ui_app.rs` adapts its input, retained
+scene, clipboard and accessibility contracts to the native host. The original
+implementation notes and 2026-10-26 verification below are historical.
 
 ## What it is
 
@@ -83,20 +83,21 @@ button → asserts each step (rows, header counts, scene ops, text runs,
   clean, `render_errors` 0, system clipboard. High-level native GPU run
   proven; no appearance/AT verification (see gaps).
 
-## Actual gaps (no code edits — sources frozen for final gates)
+## Updated behavior (2026-11-03)
 
-1. **Drag-select / word-click**: pointer caret sets a collapsed caret;
-   gesture disambiguation (drag to extend, double-click word) is
-   unimplemented. `set_caret`/`set_selection` landed; no fake behavior.
-2. **Native AT untested**: `on_a11y_action` routes Focus/Press/TextSelection
-   against the real tree, but no native assistive-technology run has
-   exercised it — Windows AT verification pending (appearance/AT were
-   explicitly out of the smoke scope).
-3. **Linear host traversals**: `sync_text_runs`, `caret_selection_items`,
-   and `overlay_of_root`-style walks are O(tree) per frame. Fine for the
-   todo scale; a dirty-set/incremental pass is the known next perf step
-   if profiles demand it — not correctness debt.
-4. **Clipboard/shortcut integration**: system clipboard proven present by
-   the smoke run; app-level clipboard shortcuts (copy/paste/select-all
-   key bindings in fields) are not wired — routing exists
-   (`dispatch_text_input`, `set_ime_cursor_area` path), bindings pending.
+Pointer selection now supports drag, word/paragraph clicks, Shift-click,
+direction reversal and edge autoscroll. The source document retains copy order
+across unmounted leaves. Shaped visual navigation carries caret affinity and
+horizontal goals; Windows word/paragraph commands use Blink-derived policies.
+Clipboard shortcuts execute through the real application adapter and preserve
+the document if a clipboard write fails.
+
+Unchanged and selection-only frames reuse cached base scene items; content
+updates still traverse the mounted tree. Text sources use exact comparison and
+shaping invalidation includes typography, spans, scale and font revisions.
+Scene order changes preserve live scene IDs.
+
+Native UI Automation exercises roles, Unicode text ranges, selection, value
+changes and invocation. Narrator/NVDA speech and broad manual accessibility
+qualification remain separate acceptance work. The renderer/backend roadmap
+and the Editor application port remain as described in the readiness ledger.

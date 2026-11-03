@@ -2,6 +2,13 @@
 
 Last updated: 2026-10-29.
 
+Implementation update (2026-11-03): the scene/protocol/runtime extractions,
+explicit time and analytic springs have landed, together with the text and
+Editor-workload qualification in [`docs/EDITOR_READINESS.md`](docs/EDITOR_READINESS.md).
+The native backend, render transport and text-rasterizer replacements below
+remain the target architecture. The historical current-state descriptions
+are not the latest feature ledger.
+
 This document supersedes the foundation choices in `GUI_FRAMEWORK_DESIGN.md` (winit and wgpu) and records the target architecture. It is a design, not an implementation ledger: nothing below the "Current state" sections exists yet. Numbers marked "estimate" are unmeasured.
 
 ## 1. Goals

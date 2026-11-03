@@ -45,12 +45,54 @@ pub fn dispatch_clipboard(
         return Ok(ClipboardOutcome::Handled { redraw });
     }
     if paste {
-        let redraw = clipboard
-            .get_text()?
-            .is_some_and(|text| app.paste_text(&text));
+        let files = match clipboard.get_files() {
+            Ok(files) => files.unwrap_or_default(),
+            Err(ClipboardError::Unsupported(_)) => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        let image = match clipboard.get_image() {
+            Ok(Some(image)) => Some(
+                aqua_ui::input::PasteImage::new(
+                    image.width(),
+                    image.height(),
+                    std::sync::Arc::from(image.rgba()),
+                )
+                .ok_or(ClipboardError::InvalidImage)?,
+            ),
+            Ok(None) | Err(ClipboardError::Unsupported(_)) => None,
+            Err(error) => return Err(error),
+        };
+        let text = clipboard.get_text()?.map(std::sync::Arc::from);
+        let redraw = app.paste_clipboard(aqua_ui::input::ClipboardPaste {
+            text,
+            image,
+            paths: files.into(),
+        });
         return Ok(ClipboardOutcome::Handled { redraw });
     }
     Ok(ClipboardOutcome::Unhandled)
+}
+
+pub fn dispatch_input_with_clipboard(
+    app: &mut UiApp,
+    clipboard: &mut dyn Clipboard,
+    event: &CoreInputEvent,
+) -> Result<Output, ClipboardError> {
+    let mut error = None;
+    let output = app.step_input_with_default(event, |app| {
+        match dispatch_clipboard(app, clipboard, event) {
+            Ok(ClipboardOutcome::Unhandled) => None,
+            Ok(ClipboardOutcome::Handled { redraw }) => Some(redraw),
+            Err(failed) => {
+                error = Some(failed);
+                Some(false)
+            }
+        }
+    });
+    match error {
+        Some(error) => Err(error),
+        None => Ok(output),
+    }
 }
 
 fn request_redraw(ctx: &mut AppCtx, id: AquaWindowId, output: Result<Output, UiAppError>) {
@@ -62,6 +104,13 @@ fn request_redraw(ctx: &mut AppCtx, id: AquaWindowId, output: Result<Output, UiA
 }
 
 impl Application for UiApp {
+    fn on_click_settings(&mut self, settings: aqua_core::ClickSettings) {
+        self.set_click_settings(settings);
+    }
+    fn cursor(&self) -> aqua_core::CursorIcon {
+        UiApp::cursor(self)
+    }
+
     fn on_window_event(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, event: &WindowEvent) {
         let viewport = match event {
             WindowEvent::Resized(_, size) => Some((size.as_core_size(), self.scale())),
@@ -75,21 +124,34 @@ impl Application for UiApp {
 
     fn on_input(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &CoreInputEvent) {
         let _ = self.step(Input::Tick(ctx.now()));
-        match dispatch_clipboard(self, ctx.clipboard(), event) {
-            Ok(ClipboardOutcome::Handled { redraw }) => {
-                if redraw {
-                    ctx.request_frame(id, aqua_protocol::FrameReason::INPUT);
-                }
-                return;
-            }
-            Err(error) => {
-                eprintln!("aqua: {error}");
-                return;
-            }
-            Ok(ClipboardOutcome::Unhandled) => {}
+        match dispatch_input_with_clipboard(self, ctx.clipboard(), event) {
+            Ok(output) if !output.redraw.is_empty() => ctx.request_frame(id, output.redraw),
+            Ok(_) => {}
+            Err(error) => eprintln!("aqua: {error}"),
         }
-        let output = self.step(Input::Event(event.clone()));
-        request_redraw(ctx, id, output);
+    }
+
+    fn on_files_dropped(
+        &mut self,
+        ctx: &mut AppCtx,
+        id: AquaWindowId,
+        paths: &[std::path::PathBuf],
+    ) {
+        if self.drop_files(paths.to_vec()) {
+            ctx.request_frame(id, aqua_protocol::FrameReason::INPUT);
+        }
+    }
+
+    fn on_files_dropped_at(
+        &mut self,
+        ctx: &mut AppCtx,
+        id: AquaWindowId,
+        paths: &[std::path::PathBuf],
+        at: Option<aqua_core::Point>,
+    ) {
+        if self.drop_files_at(paths.to_vec(), at) {
+            ctx.request_frame(id, aqua_protocol::FrameReason::INPUT);
+        }
     }
 
     fn on_a11y_action(&mut self, ctx: &mut AppCtx, id: AquaWindowId, request: &A11yActionRequest) {

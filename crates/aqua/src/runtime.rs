@@ -1,19 +1,4 @@
-//! Application runtime: event loop orchestration on peer contracts.
-//!
-//! The runtime owns NO UI tree, text model, overlay, motion, or scene
-//! vocabulary — those belong to `aqua-ui`, `aqua-text`, `aqua-render`, and
-//! `aqua-core`. It owns exactly: window lifetimes, event routing, the
-//! platform [`Scheduler`](aqua_platform::Scheduler), GPU surface setup, and
-//! the ready → produce → present cycle.
-//!
-//! Event flow per winit occurrence:
-//! `host::translate_window_event` → framework [`WindowEvent`]; the `None`
-//! arm (input/IME/scale detail) routes through `events::translate_*` and is
-//! converted to canonical [`aqua_core::event::InputEvent`] — including real
-//! capture-loss cancel. [`window_event_frame_reason`] decides scheduling.
-//! Nothing here invents event semantics.
-
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant as WallInstant};
 
@@ -35,7 +20,7 @@ use aqua_platform::{
     a11y::{A11yActionRequest, A11yNode},
     prefs::{prefers_opaque_frame, query_preferences, OsPreferences},
     services::{app_clipboard, Clipboard, ClipboardBackend},
-    AquaWindowId, FrameReason, ObservedWindowState, WindowEvent,
+    AquaWindowId, FrameReason, ObservedWindowState, WindowEvent, WindowOptions, WindowRequest,
 };
 use aqua_protocol::Instant;
 use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
@@ -44,88 +29,59 @@ use aqua_runtime::Scheduler;
 
 use crate::config::AquaConfig;
 
-/// User wake event for cross-thread reactive notification.
-///
-/// Source writes from worker threads must wake the UI executor through the
-/// event-loop proxy (`EventLoopProxy::send_event`) — never by polling.
-/// The payload names the window whose bound runtime queued effects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AquaUserEvent {
     ReactiveWake(AquaWindowId),
-    /// Assistive-technology actions arrived while idle (bridge waker):
-    /// drain them into UI behaviors now.
+    Messages(AquaWindowId),
+    WindowRequests,
+    ReplayBadges,
     A11yActions(AquaWindowId),
-    /// GPU completion for one window's submission sequence: all submissions
-    /// numbered `<= seq` have completed. Releases scheduler in-flight slots.
-    /// Stale ids (closed window) are ignored; device loss force-releases via
-    /// the error path instead of waiting on callbacks that may never fire.
     GpuComplete(AquaWindowId, u64),
 }
 
-/// Per-frame context for [`Application::externals`]: the Viewport3D / custom
-/// renderer extension boundary. The app borrows the shared wgpu
-/// device/queue (cheap `Arc` clones inside) to run offscreen media and
-/// viewport passes, then feeds sampled views back through
-/// [`ExternalFrame::register_external`] every frame shown. No private
-/// framework fork, no second queue, no blocking reads in production paths.
+enum ExternalUpdate {
+    Register(u64, wgpu::TextureView, u32, u32),
+    Remove(u64),
+}
+
 pub struct ExternalFrame<'a> {
-    /// Shared logical device (cloned handle, not a new device).
+    pub window: &'a ObservedWindowState,
+    pub now: Instant,
     pub device: &'a wgpu::Device,
-    /// Shared queue (never create a second one).
     pub queue: &'a wgpu::Queue,
-    /// Renderer working color format for offscreen targets.
     pub color_format: wgpu::TextureFormat,
-    /// Physical pixels of the window surface.
     pub width: u32,
-    /// Physical pixels of the window surface.
     pub height: u32,
-    /// UI scale (logical px * scale = physical px).
     pub scale: f32,
-    register: &'a mut dyn FnMut(u64, wgpu::TextureView, u32, u32),
+    register: &'a mut dyn FnMut(ExternalUpdate),
 }
 
 impl ExternalFrame<'_> {
-    /// Feed one sampled view for this frame (re-register every frame shown;
-    /// the renderer only samples). Views must stay alive through `draw`.
+    pub fn unregister_external(&mut self, layer: u64) {
+        (self.register)(ExternalUpdate::Remove(layer));
+    }
+
     pub fn register_external(&mut self, layer: u64, view: wgpu::TextureView, w: u32, h: u32) {
-        (self.register)(layer, view, w, h)
+        (self.register)(ExternalUpdate::Register(layer, view, w, h))
     }
 }
 
-/// Per-window runtime record.
 struct WindowRecord {
     observed: ObservedWindowState,
     winit_id: Option<winit::window::WindowId>,
-    /// Custom-titlebar guard (`aqua-platform::chrome::WindowsChrome`):
-    /// installed after window creation, before the window is shown, and
-    /// retained here until destruction. Declared BEFORE `window` so it
-    /// drops first — the guard must release/restore native chrome state
-    /// while the HWND is still alive. `None` for headless windows and
-    /// whenever install falls back to the native titlebar.
+    transparent: bool,
+    vsync: bool,
+    snapshot_started: Option<Instant>,
+    badge: Option<aqua_platform::badge::TaskbarBadge>,
     chrome: Option<aqua_platform::chrome::WindowsChrome>,
     window: Option<Arc<winit::window::Window>>,
-    /// Whether the retained guard backs an active overlay (`effective_titlebar
-    /// == Overlay` at install). Native/Hidden installs retain a guard but
-    /// draw no custom chrome — [`Aqua::has_chrome`] reports this flag, never
-    /// bare retention. Plain data — no drop-ordering role.
     chrome_overlay: bool,
-    /// Last explicit drag regions pushed to the chrome guard plus the scale
-    /// they were converted with (`None` = the install-time defaults are in
-    /// effect). The guard stores PHYSICAL rects, so equal logical regions
-    /// at a new scale must be re-pushed. Compared per frame so clean frames
-    /// push nothing; a hook flipping `Some` → `None` pushes empty rects to
-    /// clear stale holes. Plain data — no drop-ordering role.
     last_regions: Option<(DragRegions, f64)>,
     gpu: Option<GpuWindow>,
     cursor: Option<(f64, f64)>,
-    /// Buttons currently held (bit 0 primary, 1 secondary, 2 middle, 3+ extra).
     buttons: u8,
-    /// Last modifier state (`ModifiersChanged`); routed into key events.
     modifiers: CoreModifiers,
-    /// IME composition active: committed key text is suppressed while set
-    /// (IME text travels via `Commit` instead).
     ime_active: bool,
-    /// Live accessibility bridge (`cfg(windows)` only).
     #[cfg(windows)]
     a11y: Option<A11yAdapter>,
 }
@@ -136,20 +92,11 @@ struct GpuWindow {
     ledger: GpuLedger,
 }
 
-/// Actual GPU submission accounting per window. `mark_presented` (the
-/// scheduler's in-flight release) fires on *completion* reported by the
-/// dedicated worker thread — never at submit: `frame.present()` only queues
-/// work, so releasing at submit would let a 900 Hz Immediate loop outrun
-/// the GPU without bound.
 #[derive(Debug, Default)]
 struct GpuLedger {
-    /// Submission sequence number (1-based count of submitted frames).
     submitted: u64,
-    /// Highest completed sequence (from the completion worker).
     completed: u64,
-    /// Present requests submitted to the surface.
     presented: u64,
-    /// Scheduler slots held awaiting completion.
     unreleased: u32,
 }
 
@@ -160,18 +107,80 @@ struct SharedGpu {
     queue: wgpu::Queue,
 }
 
-/// Handle handed to [`Application`] callbacks: frame demand, reactive binding,
-/// clipboard, and ordered shutdown.
 pub struct AppCtx<'a> {
     now: Instant,
     scheduler: &'a mut Scheduler,
     quit_requested: &'a mut bool,
     proxy: Option<winit::event_loop::EventLoopProxy<AquaUserEvent>>,
     flushers: &'a mut HashMap<AquaWindowId, Box<dyn FnMut() -> FlushReport>>,
+    windows: &'a HashMap<AquaWindowId, WindowRecord>,
     clipboard: &'a mut Box<dyn Clipboard>,
+    window_requests: &'a mut VecDeque<WindowRequest>,
 }
 
 impl AppCtx<'_> {
+    pub fn window_state(&self, id: AquaWindowId) -> Option<&ObservedWindowState> {
+        self.windows.get(&id).map(|record| &record.observed)
+    }
+
+    pub fn dialog(
+        &self,
+        id: AquaWindowId,
+        request: aqua_platform::dialogs::DialogRequest,
+    ) -> Result<
+        impl std::future::Future<
+                Output = Result<Vec<std::path::PathBuf>, aqua_platform::dialogs::DialogError>,
+            > + Send
+            + 'static,
+        aqua_platform::window::WindowError,
+    > {
+        use aqua_platform::window::WindowError;
+        let window = self
+            .windows
+            .get(&id)
+            .ok_or(WindowError::UnknownWindow(id))?
+            .window
+            .clone()
+            .ok_or(WindowError::Unsupported("dialog requires a native window"))?;
+        Ok(async move { request.execute_async_for(window.as_ref()).await })
+    }
+
+    pub fn display(&self, id: AquaWindowId) -> Option<aqua_platform::monitor::DisplayInfo> {
+        aqua_platform::monitor::current(self.windows.get(&id)?.window.as_ref()?)
+    }
+
+    pub fn bind_mailbox<T>(&self, window: AquaWindowId, mailbox: &crate::mailbox::Mailbox<T>) {
+        let proxy = self.proxy.clone();
+        mailbox.set_waker(Arc::new(move || {
+            if let Some(proxy) = &proxy {
+                let _ = proxy.send_event(AquaUserEvent::Messages(window));
+            }
+        }));
+    }
+
+    pub fn request_window(
+        &mut self,
+        request: WindowRequest,
+    ) -> Result<(), aqua_platform::window::WindowError> {
+        match &request {
+            WindowRequest::Create(options) => options.validated()?,
+            WindowRequest::SetTitle(_, title) if title.contains('\0') => {
+                return Err(aqua_platform::window::WindowError::InvalidTitle)
+            }
+            WindowRequest::SetInnerSize(_, size)
+                if size.is_empty() || !size.width.is_finite() || !size.height.is_finite() =>
+            {
+                return Err(aqua_platform::window::WindowError::EmptySize);
+            }
+            _ => {}
+        }
+        self.window_requests.push_back(request);
+        if let Some(proxy) = &self.proxy {
+            let _ = proxy.send_event(AquaUserEvent::WindowRequests);
+        }
+        Ok(())
+    }
+
     pub fn now(&self) -> Instant {
         self.now
     }
@@ -184,20 +193,10 @@ impl AppCtx<'_> {
         self.scheduler.request_animation_deadline(id, at);
     }
 
-    /// Application clipboard: native backend when available, explicit
-    /// in-memory fallback otherwise. All operations are fallible and
-    /// reported — never a silent no-op.
     pub fn clipboard(&mut self) -> &mut dyn Clipboard {
         &mut **self.clipboard
     }
 
-    /// Bind an app-owned [`ReactiveRuntime`] to a window with a host-driven
-    /// update boundary: switches the runtime to `auto_flush(false)`,
-    /// installs a wake callback that pings the UI thread through the
-    /// event-loop proxy, and registers the runtime for flushing at the draw
-    /// boundary. The app must keep owning the `Runtime` (handles are `Weak`;
-    /// dropping it diagnoses `RuntimeDropped`, never UB). Headless use:
-    /// bind, then `flush()` manually after state updates — no proxy needed.
     pub fn bind_reactive(&mut self, window: AquaWindowId, rt: &ReactiveRuntime) {
         rt.set_auto_flush(false);
         let flusher = rt.clone();
@@ -211,16 +210,35 @@ impl AppCtx<'_> {
         });
     }
 
-    /// Ordered shutdown: finish the current dispatch, then exit the loop.
     pub fn quit(&mut self) {
         *self.quit_requested = true;
     }
 }
 
 pub trait Application {
+    fn on_click_settings(&mut self, _settings: aqua_core::ClickSettings) {}
+
+    fn on_start(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId) {}
+
+    fn on_window_request_error(
+        &mut self,
+        _request: &WindowRequest,
+        _error: &aqua_platform::window::WindowError,
+    ) {
+    }
+
+    fn can_close(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId) -> bool {
+        true
+    }
+
+    fn on_wake(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId) {}
+
+    fn cursor(&self) -> aqua_core::CursorIcon {
+        aqua_core::CursorIcon::Default
+    }
+
     fn on_window_event(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &WindowEvent);
     fn on_input(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &CoreInputEvent);
-    /// OS file drop onto a window (OLE / portal paths). Default ignores.
     fn on_files_dropped(
         &mut self,
         _ctx: &mut AppCtx,
@@ -228,8 +246,16 @@ pub trait Application {
         _paths: &[std::path::PathBuf],
     ) {
     }
-    /// Assistive-technology action request (Press/Focus/...) for a semantic
-    /// node. Default ignores; UI owners route to focus/activation behaviors.
+    fn on_files_dropped_at(
+        &mut self,
+        ctx: &mut AppCtx,
+        id: AquaWindowId,
+        paths: &[std::path::PathBuf],
+        _at: Option<aqua_core::Point>,
+    ) {
+        self.on_files_dropped(ctx, id, paths);
+    }
+
     fn on_a11y_action(
         &mut self,
         _ctx: &mut AppCtx,
@@ -237,8 +263,6 @@ pub trait Application {
         _request: &A11yActionRequest,
     ) {
     }
-    /// Semantic snapshot for the accessibility tree: root, focused node, and
-    /// positioned nodes. `None` (default) publishes nothing.
     fn prepare_accessibility(
         &mut self,
         _window: &ObservedWindowState,
@@ -250,34 +274,13 @@ pub trait Application {
     fn a11y_nodes(&self) -> Option<(aqua_core::NodeId, aqua_core::NodeId, Vec<A11yNode>)> {
         None
     }
-    /// IME candidate-window anchor in window-local logical units, or `None`
-    /// when no editor has focus. The runtime forwards it to the OS via
-    /// `set_ime_cursor_area` after every scene build. UiApp owners: implement
-    /// this from your shaped caret (`ime_anchor`); the hook name
-    /// `ime_cursor_area` is the agreed facade contract.
     fn ime_cursor_area(&self) -> Option<aqua_core::Rect> {
         None
     }
-    /// Custom-titlebar drag regions for `window`: extra draggable rects plus
-    /// `no_drag` holes for interactive header widgets, in client-local
-    /// logical px (the runtime converts with the current scale). `None`
-    /// (default) keeps the install-time regions — and, after previously
-    /// returning `Some`, clears explicit rects back to the default drag
-    /// band rather than leaving stale holes. Applied after every
-    /// scene/layout commit, only while a live chrome guard is retained.
     fn chrome_regions(&self, _window: &ObservedWindowState) -> Option<DragRegions> {
         None
     }
-    /// GPU extension boundary (Viewport3D, media, custom passes): run
-    /// offscreen passes against the shared device/queue and register sampled
-    /// views for this frame. Default ignores. Called before `build_scene` so
-    /// committed `External` items reference freshly registered layers.
     fn externals(&mut self, _frame: &mut ExternalFrame<'_>) {}
-    /// Rebuild window content into the retained [`Scene`]. May return the
-    /// next animation deadline: the runtime registers it with the platform
-    /// scheduler so motion progresses without input. Return `None` when
-    /// settled (idle windows schedule nothing). Deadlines must be in the
-    /// future; a perpetually-past deadline would keep the loop awake.
     fn build_scene(&mut self, window: &ObservedWindowState, now: Instant) -> Option<Instant>;
     fn scene_mut(&mut self, _id: AquaWindowId) -> Option<&mut Scene> {
         None
@@ -288,35 +291,18 @@ pub trait Application {
     fn on_render_error(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _message: &str) {}
 }
 
-/// Legacy alias for the renamed low-level callback trait.
-///
-/// `Application` is canonical. This alias exists only so `runtime::App`
-/// paths keep resolving during migration; it must NOT be re-exported at the
-/// crate root, where `App` is the new builder (see [`crate::App`]).
 #[deprecated(
     since = "0.1.0",
     note = "low-level callback trait renamed to `Application`; root `App` is now the builder"
 )]
 pub use self::Application as App;
 
-/// Per-frame chrome-region decision for one window.
 #[derive(Debug)]
 enum ChromePlan {
-    /// Push these explicit rects to the guard.
     Apply(DragRegions),
-    /// The hook went quiet after explicit rects were pushed: push empty
-    /// rects so stale holes don't linger. The install-time drag band is
-    /// separate state and persists.
     Clear,
 }
 
-/// Decide whether explicit drag rects need pushing: only when the hook's
-/// value differs from what was last pushed, or when the scale changed (the
-/// guard stores PHYSICAL rects, so equal logical regions at a new scale
-/// must be re-pushed). `None` after `Some` yields [`ChromePlan::Clear`]
-/// (never a stale no-op); equal values at equal scale yield no work, so
-/// clean frames allocate and apply nothing. Non-finite scales normalize
-/// to 1.0, matching the guard's own clamp.
 fn chrome_plan(
     cached: &Option<(DragRegions, f64)>,
     next: Option<DragRegions>,
@@ -341,7 +327,6 @@ fn chrome_plan(
     }
 }
 
-/// The Aqua application runtime.
 pub struct Aqua {
     config: AquaConfig,
     scheduler: Scheduler,
@@ -353,40 +338,17 @@ pub struct Aqua {
     render_errors: u64,
     proxy: Option<winit::event_loop::EventLoopProxy<AquaUserEvent>>,
     flushers: HashMap<AquaWindowId, Box<dyn FnMut() -> FlushReport>>,
-    /// Completion driver mailbox. The worker thread blocks in
-    /// `device.poll(Wait)` per submission (off the UI thread) and wakes the
-    /// loop with `GpuComplete`; it parks on `recv` when nothing is in
-    /// flight. Created lazily on the first submitted frame — one thread per
-    /// device, never per frame.
     completion_tx: Option<std::sync::mpsc::Sender<(AquaWindowId, u64)>>,
-    /// The one shared font set for shaping (apps) and glyph rasterization
-    /// (renderer, via [`TextBackend`](aqua_render::text::TextBackend)).
-    /// Headless-safe: no GPU involved.
     fonts: aqua_text::SharedFonts,
-    /// The one shared run registry: apps mint `TextRun`s here, the renderer
-    /// resolves them here. UI writes the registry BEFORE the scene commits,
-    /// so a scene revision never outruns its layout.
     runs: aqua_text::SharedRuns,
-    /// OS preferences snapshot (prefs drive material fallback + motion
-    /// policy). Theme updates arrive via `WindowEvent::ThemeChanged`.
     prefs: OsPreferences,
-    /// Application clipboard: native backend when available, explicit
-    /// in-memory fallback otherwise (reported, never silent).
     clipboard: Box<dyn Clipboard>,
+    window_requests: VecDeque<WindowRequest>,
     clipboard_backend: ClipboardBackend,
-    /// Presented-frame budget from `AQUA_SMOKE_FRAMES` (validation only):
-    /// the loop exits cleanly after this many presented frames so CI/WSLg
-    /// smoke runs terminate without user input. For mostly-static apps use
-    /// `AQUA_SMOKE_MS` instead: frame budgets never finish without active
-    /// animation.
     smoke_frames: Option<u64>,
     frames_presented: u64,
-    /// Wall-clock smoke budget from `AQUA_SMOKE_MS` (validation only):
-    /// sleep normally until the deadline, then quit with a production
-    /// report. Validates idle behavior (e.g. fps 900 must not loop).
     smoke_deadline: Option<WallInstant>,
     epoch: WallInstant,
-    /// Event-loop iterations, reported by time-bounded smoke runs.
     wakeups: u64,
 }
 
@@ -395,11 +357,6 @@ impl Aqua {
         Self::new_with_preferences(config, query_preferences())
     }
 
-    /// Crate-private construction over one caller-supplied preferences
-    /// snapshot. The root [`crate::App`] builder queries preferences once,
-    /// resolves its authoring [`crate::Config`] against that same snapshot,
-    /// and constructs here — so startup never snapshots the OS twice.
-    /// Legacy [`Aqua::new`] keeps querying itself for direct low-level use.
     pub(crate) fn new_with_preferences(
         mut config: AquaConfig,
         prefs: OsPreferences,
@@ -409,9 +366,6 @@ impl Aqua {
             .map_err(|e| format!("invalid window options: {e:?}"))?;
         let mut scheduler = Scheduler::new();
         config.apply_to_scheduler(&mut scheduler);
-        // `prefs` is the single startup snapshot (see `new_with_preferences`).
-        // Native materials need transparency everywhere they show; without
-        // it the backdrop is silently hidden behind opaque content.
         if aqua_platform::material::material_needs_transparent_window(config.material)
             && !config.window.transparent
         {
@@ -434,8 +388,6 @@ impl Aqua {
         if let Some(n) = smoke_frames {
             eprintln!("aqua: smoke mode — exiting after {n} presented frames");
         }
-        // Time-bounded smoke: a static app may only ever draw one frame, so
-        // a frame budget alone never finishes without active animation.
         let smoke_deadline = std::env::var("AQUA_SMOKE_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -461,6 +413,7 @@ impl Aqua {
             prefs,
             clipboard,
             clipboard_backend,
+            window_requests: VecDeque::new(),
             smoke_deadline,
             epoch: WallInstant::now(),
             wakeups: 0,
@@ -481,11 +434,6 @@ impl Aqua {
         self.windows.len()
     }
 
-    /// Whether an ACTIVE overlay guard is retained for `id`: a guard is
-    /// present *and* the window was installed as `Overlay`. Native/Hidden
-    /// installs retain a (detached) guard but draw no custom chrome, so
-    /// bare retention would be a false claim — this reports `false` for
-    /// them, for install fallback, and for headless windows.
     pub fn has_chrome(&self, id: AquaWindowId) -> bool {
         self.windows
             .get(&id)
@@ -509,6 +457,200 @@ impl Aqua {
         }
     }
 
+    pub fn dispatch_start(&mut self, app: &mut impl Application, id: AquaWindowId) {
+        if self.windows.contains_key(&id) {
+            self.with_ctx(|ctx| app.on_start(ctx, id));
+        }
+    }
+
+    pub fn dispatch_wake(&mut self, app: &mut impl Application, id: AquaWindowId) {
+        if self.windows.contains_key(&id) {
+            self.with_ctx(|ctx| app.on_wake(ctx, id));
+        }
+    }
+
+    pub fn dispatch_window_requests(&mut self, app: &mut impl Application) {
+        let requests: Vec<_> = self.window_requests.drain(..).collect();
+        for request in requests {
+            if let WindowRequest::Create(options) = &request {
+                if self.proxy.is_some() {
+                    self.window_requests.push_back(request);
+                    continue;
+                }
+                let id = self.alloc_id();
+                self.add_headless_window(ObservedWindowState {
+                    id,
+                    title: options.title.clone(),
+                    inner_size: options.inner_size,
+                    scale_factor: 1.0,
+                    focused: false,
+                    visible: false,
+                    occluded: false,
+                });
+                self.dispatch_start(app, id);
+                continue;
+            }
+            if let Err(error) = self.apply_window_request(app, &request) {
+                app.on_window_request_error(&request, &error);
+            }
+        }
+    }
+
+    fn apply_window_request(
+        &mut self,
+        app: &mut impl Application,
+        request: &WindowRequest,
+    ) -> Result<(), aqua_platform::window::WindowError> {
+        use aqua_platform::window::WindowError;
+        let id = match request {
+            WindowRequest::Create(_) => {
+                return Err(WindowError::Unsupported("requires active event loop"))
+            }
+            WindowRequest::SetTitle(id, _)
+            | WindowRequest::SetInnerSize(id, _)
+            | WindowRequest::SetVisible(id, _)
+            | WindowRequest::RequestRedraw(id)
+            | WindowRequest::SetMinimized(id, _)
+            | WindowRequest::SetMaximized(id, _)
+            | WindowRequest::Close(id)
+            | WindowRequest::Activate(id)
+            | WindowRequest::SetBadge(id, _)
+            | WindowRequest::SetMaxFrameRate(id, _)
+            | WindowRequest::SetVsync(id, _)
+            | WindowRequest::SetOuterPosition(id, _)
+            | WindowRequest::Center(id)
+            | WindowRequest::BeginSnapshotTransition(id, _)
+            | WindowRequest::SetTextRasterMode(id, _) => *id,
+        };
+        let window = self
+            .windows
+            .get(&id)
+            .ok_or(WindowError::UnknownWindow(id))?
+            .window
+            .clone();
+        match request {
+            WindowRequest::Close(_) => {
+                if self.with_ctx(|ctx| app.can_close(ctx, id)) {
+                    self.with_ctx(|ctx| app.on_window_event(ctx, id, &WindowEvent::Destroyed(id)));
+                    self.remove_window(id);
+                }
+            }
+            WindowRequest::SetTextRasterMode(_, mode) => {
+                let record = self.windows.get_mut(&id).expect("validated window");
+                let gpu = record.gpu.as_mut().ok_or(WindowError::Unsupported(
+                    "text raster mode requires a renderer",
+                ))?;
+                gpu.renderer
+                    .set_text_raster_mode(*mode)
+                    .map_err(|error| WindowError::Native(error.to_string()))?;
+                gpu.surface.request_present();
+                self.scheduler.request_frame(id, FrameReason::EXPLICIT);
+            }
+            WindowRequest::BeginSnapshotTransition(_, settings) => {
+                let now = self.clock();
+                let reduced = self.motion_reduced();
+                let record = self.windows.get_mut(&id).expect("validated window");
+                let gpu = record
+                    .gpu
+                    .as_mut()
+                    .ok_or(WindowError::Unsupported("snapshot requires a renderer"))?;
+                if reduced {
+                    gpu.renderer.cancel_snapshot_transition();
+                    record.snapshot_started = None;
+                } else {
+                    gpu.renderer
+                        .start_snapshot_transition(*settings)
+                        .map_err(|error| WindowError::Native(error.to_string()))?;
+                    record.snapshot_started = Some(now);
+                }
+                gpu.surface.request_present();
+                self.scheduler.request_frame(id, FrameReason::EXPLICIT);
+            }
+            WindowRequest::SetMaxFrameRate(_, target) => {
+                self.scheduler.set_window_fps_target(id, *target);
+                self.scheduler.request_frame(id, FrameReason::EXPLICIT);
+            }
+            WindowRequest::SetVsync(_, enabled) => {
+                if let Some(record) = self.windows.get_mut(&id) {
+                    if let (Some(gpu), Some(shared)) =
+                        (record.gpu.as_mut(), self.shared_gpu.as_ref())
+                    {
+                        let mode = if *enabled {
+                            wgpu::PresentMode::AutoVsync
+                        } else {
+                            wgpu::PresentMode::AutoNoVsync
+                        };
+                        gpu.surface
+                            .set_present_mode(&shared.device, &shared.adapter, mode)
+                            .map_err(|error| WindowError::Native(error.to_string()))?;
+                    }
+                    record.vsync = *enabled;
+                }
+                self.scheduler.request_frame(id, FrameReason::EXPLICIT);
+            }
+            WindowRequest::SetBadge(_, badge) => {
+                self.windows.get_mut(&id).expect("validated window").badge = *badge;
+                if let Some(window) = window.as_ref() {
+                    aqua_platform::badge::set_badge(window, *badge)
+                        .map_err(|error| WindowError::Native(error.to_string()))?;
+                }
+            }
+            WindowRequest::RequestRedraw(_) => {
+                self.scheduler.request_frame(id, FrameReason::EXPLICIT);
+            }
+            _ => {
+                if let Some(window) = window.as_ref() {
+                    match request {
+                        WindowRequest::SetTitle(_, title) => {
+                            window.set_title(title);
+                            if let Some(record) = self.windows.get_mut(&id) {
+                                record.observed.title = window.title();
+                            }
+                        }
+                        WindowRequest::SetInnerSize(_, size) => {
+                            let _ = window.request_inner_size(winit::dpi::LogicalSize::new(
+                                size.width,
+                                size.height,
+                            ));
+                        }
+                        WindowRequest::SetVisible(_, visible) => {
+                            window.set_visible(*visible);
+                            if let (Some(record), Some(visible)) =
+                                (self.windows.get_mut(&id), window.is_visible())
+                            {
+                                record.observed.visible = visible;
+                            }
+                        }
+                        WindowRequest::SetMinimized(_, minimized) => {
+                            window.set_minimized(*minimized)
+                        }
+                        WindowRequest::SetMaximized(_, maximized) => {
+                            window.set_maximized(*maximized)
+                        }
+                        WindowRequest::Activate(_) => {
+                            window.set_minimized(false);
+                            window.focus_window();
+                        }
+                        WindowRequest::SetOuterPosition(_, position) => window.set_outer_position(
+                            winit::dpi::PhysicalPosition::new(position.x, position.y),
+                        ),
+                        WindowRequest::Center(_) => {
+                            if let Some(display) = aqua_platform::monitor::current(window) {
+                                let size = window.outer_size();
+                                let position = display.center_physical(size.width, size.height);
+                                window.set_outer_position(winit::dpi::PhysicalPosition::new(
+                                    position.x, position.y,
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn alloc_id(&mut self) -> AquaWindowId {
         let id = AquaWindowId::new(self.next_id).expect("window id overflow");
         self.next_id += 1;
@@ -525,19 +667,25 @@ impl Aqua {
             quit_requested: &mut *quit,
             proxy,
             flushers: &mut self.flushers,
+            windows: &self.windows,
             clipboard: &mut self.clipboard,
+            window_requests: &mut self.window_requests,
         };
         f(&mut ctx)
     }
 
-    /// Headless window registration (tests): no winit, no GPU.
     pub fn add_headless_window(&mut self, observed: ObservedWindowState) -> AquaWindowId {
         let id = observed.id;
+        self.next_id = self.next_id.max(id.raw().saturating_add(1));
         self.windows.insert(
             id,
             WindowRecord {
                 observed,
                 winit_id: None,
+                transparent: false,
+                vsync: self.config.vsync,
+                snapshot_started: None,
+                badge: None,
                 chrome: None,
                 chrome_overlay: false,
                 last_regions: None,
@@ -554,13 +702,15 @@ impl Aqua {
         id
     }
 
-    /// Headless dispatch of a framework window event (tests + pumps).
     pub fn dispatch_window_event(
         &mut self,
         app: &mut impl Application,
         id: AquaWindowId,
         event: &WindowEvent,
     ) {
+        if !self.windows.contains_key(&id) {
+            return;
+        }
         self.apply_observed(id, event);
         if let Some(reason) = window_event_frame_reason(event) {
             self.scheduler.request_frame(id, reason);
@@ -568,36 +718,55 @@ impl Aqua {
         let ev = event.clone();
         self.bind_app_reactive(app, id);
         self.with_ctx(|ctx| app.on_window_event(ctx, id, &ev));
-        if matches!(
-            event,
-            WindowEvent::CloseRequested(_) | WindowEvent::Destroyed(_)
-        ) {
+        if let WindowEvent::Focused(_, focused) = event {
+            self.with_ctx(|ctx| app.on_input(ctx, id, &CoreInputEvent::Focused(*focused)));
+        }
+        let close = match event {
+            WindowEvent::Destroyed(_) => true,
+            WindowEvent::CloseRequested(_) => self.with_ctx(|ctx| app.can_close(ctx, id)),
+            _ => false,
+        };
+        if close {
             self.remove_window(id);
         }
     }
 
-    /// Headless dispatch of a canonical input event (tests + pumps).
     pub fn dispatch_input(
         &mut self,
         app: &mut impl Application,
         id: AquaWindowId,
         event: &CoreInputEvent,
     ) {
+        if !self.windows.contains_key(&id) {
+            return;
+        }
         self.scheduler.request_frame(id, FrameReason::INPUT);
         let ev = event.clone();
         self.with_ctx(|ctx| app.on_input(ctx, id, &ev));
     }
 
-    /// Headless file-drop delivery (tests + pumps).
     pub fn dispatch_file_drop(
         &mut self,
         app: &mut impl Application,
         id: AquaWindowId,
         paths: &[std::path::PathBuf],
     ) {
+        self.dispatch_file_drop_at(app, id, paths, None);
+    }
+
+    pub fn dispatch_file_drop_at(
+        &mut self,
+        app: &mut impl Application,
+        id: AquaWindowId,
+        paths: &[std::path::PathBuf],
+        at: Option<aqua_core::Point>,
+    ) {
+        if !self.windows.contains_key(&id) {
+            return;
+        }
         self.scheduler.request_frame(id, FrameReason::INPUT);
         let owned = paths.to_vec();
-        self.with_ctx(|ctx| app.on_files_dropped(ctx, id, &owned));
+        self.with_ctx(|ctx| app.on_files_dropped_at(ctx, id, &owned, at));
     }
 
     fn apply_observed(&mut self, id: AquaWindowId, event: &WindowEvent) {
@@ -615,6 +784,11 @@ impl Aqua {
             WindowEvent::Focused(_, f) => {
                 if let Some(rec) = self.windows.get_mut(&id) {
                     rec.observed.focused = *f;
+                    if !f {
+                        rec.buttons = 0;
+                        rec.modifiers = CoreModifiers::NONE;
+                        rec.ime_active = false;
+                    }
                 }
             }
             WindowEvent::Occluded(_, o) => {
@@ -632,8 +806,6 @@ impl Aqua {
     }
 
     fn remove_window(&mut self, id: AquaWindowId) {
-        // The record (custom-titlebar guard included) drops here: guard
-        // first, then the winit window — see `WindowRecord` field order.
         if let Some(rec) = self.windows.remove(&id) {
             if let Some(wid) = rec.winit_id {
                 self.winit_map.remove(&wid);
@@ -643,44 +815,30 @@ impl Aqua {
         self.flushers.remove(&id);
     }
 
-    /// Cloneable wake handle for worker threads: `send_event` wakes the UI
-    /// executor without polling. Returns `None` before `run()` starts the
-    /// loop (headless use needs no proxy — flush manually instead).
     pub fn event_proxy(&self) -> Option<winit::event_loop::EventLoopProxy<AquaUserEvent>> {
         self.proxy.clone()
     }
 
-    /// Replace the shared run registry (e.g. hermetic tests).
     pub fn set_runs(&mut self, runs: aqua_text::SharedRuns) {
         self.runs = runs;
     }
 
-    /// The shared registry apps mint `TextRun`s through.
     pub fn runs(&self) -> &aqua_text::SharedRuns {
         &self.runs
     }
 
-    /// Backend handle for renderer construction: one font database and one
-    /// run registry for the whole process. Never a second `FontSystem`.
     pub fn text_backend(&self) -> aqua_render::text::TextBackend {
         aqua_render::text::TextBackend::new(self.fonts.clone(), self.runs.clone())
     }
 
-    /// Replace the shared font set (e.g. hermetic test fonts, bundled app
-    /// fonts). The same handle serves shaping in apps and glyph
-    /// rasterization in the renderer.
     pub fn set_fonts(&mut self, fonts: aqua_text::SharedFonts) {
         self.fonts = fonts;
     }
 
-    /// The shared fonts for app-side shaping (`TextLayout::layout`).
     pub fn fonts(&self) -> &aqua_text::SharedFonts {
         &self.fonts
     }
 
-    /// Per-window GPU accounting: (submitted, present-requested, completed).
-    /// `None` for headless windows. Submitted counts encoder submissions;
-    /// completed counts GPU-finished work (never the submit call itself).
     pub fn gpu_stats(&self, id: AquaWindowId) -> Option<(u64, u64, u64)> {
         self.windows
             .get(&id)
@@ -688,61 +846,229 @@ impl Aqua {
             .map(|g| (g.ledger.submitted, g.ledger.presented, g.ledger.completed))
     }
 
-    /// OS preferences snapshot (material fallback + motion policy source).
     pub fn preferences(&self) -> &OsPreferences {
         &self.prefs
     }
 
-    /// Effective startup motion request: OS reduced-motion preference or an
-    /// explicit config request. The single accessor low-level entry points
-    /// use to derive the policy.
     pub(crate) fn motion_reduced(&self) -> bool {
         self.prefs.reduce_motion.is_on() || self.config.reduced_motion
     }
 
-    /// Which clipboard backend is active (native vs explicit fallback).
     pub fn clipboard_backend(&self) -> ClipboardBackend {
         self.clipboard_backend
     }
 
-    /// Run the GUI event loop. Returns on ordered shutdown.
-    /// GPU absence is a loud error, never a silent fallback (software
-    /// fallback policy is an explicit future decision per `docs/PLATFORM.md`).
     pub fn run(mut self, app: impl Application + 'static) -> Result<(), String> {
         if self.config.headless {
             return Err("headless config cannot run the GUI loop; use the headless pump".into());
         }
-        let event_loop = winit::event_loop::EventLoop::<AquaUserEvent>::with_user_event()
+        let mut builder = winit::event_loop::EventLoop::<AquaUserEvent>::with_user_event();
+        #[cfg(windows)]
+        let taskbar_proxy = std::rc::Rc::new(std::cell::RefCell::new(
+            None::<winit::event_loop::EventLoopProxy<AquaUserEvent>>,
+        ));
+        #[cfg(windows)]
+        {
+            let proxy = taskbar_proxy.clone();
+            aqua_platform::badge::install_taskbar_wake(&mut builder, move || {
+                if let Some(proxy) = proxy.borrow().as_ref() {
+                    let _ = proxy.send_event(AquaUserEvent::ReplayBadges);
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        }
+        let event_loop = builder
             .build()
             .map_err(|e| format!("event loop unavailable: {e:?}"))?;
         self.proxy = Some(event_loop.create_proxy());
-        let mut loop_ = Loop { aqua: self, app };
+        #[cfg(windows)]
+        {
+            *taskbar_proxy.borrow_mut() = self.proxy.clone();
+        }
+        let mut loop_ = Loop {
+            aqua: self,
+            app,
+            startup_error: None,
+        };
         event_loop
             .run_app(&mut loop_)
-            .map_err(|e| format!("event loop failed: {e:?}"))
+            .map_err(|e| format!("event loop failed: {e:?}"))?;
+        match loop_.startup_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 
 struct Loop<A: Application> {
     aqua: Aqua,
     app: A,
+    startup_error: Option<String>,
 }
 
 impl<A: Application> Loop<A> {
-    fn ensure_gpu(&mut self, window: &Arc<winit::window::Window>) -> Result<(), String> {
+    fn process_window_requests(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        let requests: Vec<_> = self.aqua.window_requests.drain(..).collect();
+        for request in requests {
+            let result = match &request {
+                WindowRequest::Create(options) => {
+                    self.create_window(event_loop, options.clone()).map(|_| ())
+                }
+                _ => self.aqua.apply_window_request(&mut self.app, &request),
+            };
+            if let Err(error) = result {
+                self.app.on_window_request_error(&request, &error);
+            }
+        }
+        if self.aqua.windows.is_empty() && !self.aqua.config.headless {
+            event_loop.exit();
+        }
+    }
+    fn create_window(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        options: WindowOptions,
+    ) -> Result<AquaWindowId, aqua_platform::window::WindowError> {
+        options.validated()?;
+        let mut attrs = window_attributes(&options);
+        if self.aqua.config.material != aqua_platform::WindowMaterial::None {
+            attrs = attrs.with_transparent(true);
+        }
+        #[cfg(windows)]
+        {
+            attrs = attrs.with_visible(false);
+        }
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                self.aqua.render_errors += 1;
+                return Err(aqua_platform::window::WindowError::Native(format!(
+                    "window creation failed: {e}"
+                )));
+            }
+        };
+        let id = self.aqua.alloc_id();
+        let chrome = match aqua_platform::chrome::WindowsChrome::install(&window, &options) {
+            Ok(guard) => {
+                eprintln!("aqua: window chrome installed: {:?}", guard.diagnostics());
+                Some(guard)
+            }
+            Err(e) => {
+                eprintln!(
+                    "aqua: window chrome install failed ({e:?}) — continuing with native titlebar"
+                );
+                None
+            }
+        };
+        let chrome_overlay = chrome.is_some()
+            && options.effective_titlebar() == aqua_platform::window::Titlebar::Overlay;
+        let scale = window.scale_factor();
+        let size = window.inner_size();
+        let observed = ObservedWindowState {
+            id,
+            title: options.title.clone(),
+            inner_size: aqua_platform::geometry::LogicalSize::new(
+                size.width as f64 / scale,
+                size.height as f64 / scale,
+            ),
+            scale_factor: scale,
+            focused: false,
+            visible: true,
+            occluded: false,
+        };
+        self.aqua.winit_map.insert(window.id(), id);
+        self.aqua.windows.insert(
+            id,
+            WindowRecord {
+                observed,
+                winit_id: Some(window.id()),
+                badge: None,
+                vsync: self.aqua.config.vsync,
+                snapshot_started: None,
+                transparent: options.transparent
+                    || self.aqua.config.material != aqua_platform::WindowMaterial::None,
+                chrome,
+                chrome_overlay,
+                last_regions: None,
+                window: Some(window.clone()),
+                gpu: None,
+                cursor: None,
+                buttons: 0,
+                modifiers: CoreModifiers::NONE,
+                ime_active: false,
+                #[cfg(windows)]
+                a11y: None,
+            },
+        );
+        #[cfg(windows)]
+        {
+            let proxy = self.aqua.proxy.clone();
+            let waker: aqua_platform::a11y::WakeFn = std::sync::Arc::new(move || {
+                if let Some(p) = &proxy {
+                    let _ = p.send_event(AquaUserEvent::A11yActions(id));
+                }
+            });
+            match A11yAdapter::attach_with_waker(event_loop, &window, waker) {
+                Ok(mut adapter) => {
+                    let now = self.aqua.clock();
+                    if let Some(observed) = self
+                        .aqua
+                        .windows
+                        .get(&id)
+                        .map(|record| record.observed.clone())
+                    {
+                        if let Some(deadline) = self.app.prepare_accessibility(&observed, now) {
+                            self.aqua.scheduler.request_animation_deadline(id, deadline);
+                        }
+                    }
+                    if let Some((root, focus, items)) = self.app.a11y_nodes() {
+                        adapter.push_nodes(root, focus, &items);
+                    }
+                    if let Some(rec) = self.aqua.windows.get_mut(&id) {
+                        rec.a11y = Some(adapter);
+                    }
+                    window.set_visible(true);
+                }
+                Err(e) => {
+                    eprintln!("aqua: a11y attach failed ({e:?}) — continuing without bridge");
+                    window.set_visible(true);
+                }
+            }
+            Self::reapply_material(&mut self.aqua, id);
+        }
+        #[cfg(not(windows))]
+        {
+            Self::reapply_material(&mut self.aqua, id);
+        }
+        if let Err(e) = self.attach_gpu_window(id, &window) {
+            self.aqua.render_errors += 1;
+            self.aqua.remove_window(id);
+            return Err(aqua_platform::window::WindowError::Native(format!(
+                "GPU setup failed: {e}"
+            )));
+        }
+        self.aqua.with_ctx(|ctx| self.app.on_start(ctx, id));
+        self.aqua.scheduler.request_frame(id, FrameReason::EXPOSE);
+        Ok(id)
+    }
+
+    fn ensure_gpu(
+        &mut self,
+        _id: AquaWindowId,
+        window: &Arc<winit::window::Window>,
+    ) -> Result<(), String> {
         if self.aqua.shared_gpu.is_some() {
             return Ok(());
         }
-        // Proposed backend policy (design §GPU strategy): DX12 on Windows,
-        // Metal on macOS, Vulkan on Linux — selected by wgpu's default
-        // backend ordering through `request_adapter`, not by forcing one.
         let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_desc.backends = wgpu::Backends::all();
         #[cfg(windows)]
-        if self.aqua.config.window.transparent {
-            // Win32 Vulkan surfaces and HWND DXGI swapchains are opaque.
-            // Let wgpu own a DirectComposition visual and its lifetime so
-            // desktop materials show through the premultiplied swapchain.
+        if self
+            .aqua
+            .windows
+            .get(&_id)
+            .is_some_and(|record| record.transparent)
+        {
             instance_desc.backends = wgpu::Backends::DX12;
             instance_desc.backend_options.dx12.presentation_system =
                 wgpu::Dx12SwapchainKind::DxgiFromVisual;
@@ -782,13 +1108,18 @@ impl<A: Application> Loop<A> {
         id: AquaWindowId,
         window: &Arc<winit::window::Window>,
     ) -> Result<(), String> {
-        self.ensure_gpu(window)?;
+        self.ensure_gpu(id, window)?;
         let gpu = self.aqua.shared_gpu.as_ref().expect("gpu ensured");
         let size = window.inner_size();
         if size.width == 0 || size.height == 0 {
             return Err("zero-sized surface; window not yet laid out".into());
         }
-        let mode = if self.aqua.config.vsync {
+        let mode = if self
+            .aqua
+            .windows
+            .get(&id)
+            .is_some_and(|record| record.vsync)
+        {
             wgpu::PresentMode::AutoVsync
         } else {
             wgpu::PresentMode::AutoNoVsync
@@ -808,7 +1139,12 @@ impl<A: Application> Loop<A> {
             Some(mode),
         )
         .map_err(|e| format!("surface configuration failed: {e:?}"))?;
-        if self.aqua.config.window.transparent {
+        if self
+            .aqua
+            .windows
+            .get(&id)
+            .is_some_and(|record| record.transparent)
+        {
             eprintln!(
                 "aqua: transparent surface: {:?}, alpha={:?}, format={:?}",
                 gpu.adapter.get_info().backend,
@@ -817,8 +1153,6 @@ impl<A: Application> Loop<A> {
             );
         }
         let scale = window.scale_factor() as f32;
-        // Shared text backend: one font database + one run registry for the
-        // process, so measurement and pixels cannot disagree.
         let backend =
             aqua_render::text::TextBackend::new(self.aqua.fonts.clone(), self.aqua.runs.clone());
         let mut renderer = Renderer::new_with_text(
@@ -840,13 +1174,6 @@ impl<A: Application> Loop<A> {
         Ok(())
     }
 
-    /// Ensure the GPU completion worker exists, spawning it once. The worker
-    /// owns a device clone and the loop proxy: per submission it blocks in
-    /// `device.poll(Wait)` (everything submitted so far on this queue is
-    /// ordered, so the waited submission is complete on return) and then
-    /// wakes the loop. Parking on `recv` means zero idle ticks; blocking
-    /// off-UI means the in-flight cap stays meaningful even when no draws
-    /// are happening to piggyback a poll on.
     fn ensure_completion_worker(&mut self) {
         if self.aqua.completion_tx.is_some() {
             return;
@@ -861,12 +1188,6 @@ impl<A: Application> Loop<A> {
             .name("aqua-gpu-complete".into())
             .spawn(move || {
                 for (id, seq) in rx {
-                    // Blocking wait for everything submitted so far; the
-                    // awaited submission is therefore complete on return.
-                    // Under sustained saturation this never returns, which
-                    // is exactly the backpressure signal — draws have
-                    // already stopped at the cap, and the wake fires the
-                    // moment the queue drains.
                     let _ = device.poll(wgpu::PollType::wait_indefinitely());
                     if let Some(p) = &proxy {
                         let _ = p.send_event(AquaUserEvent::GpuComplete(id, seq));
@@ -885,7 +1206,6 @@ impl<A: Application> Loop<A> {
         let ids: Vec<AquaWindowId> = ready.into_iter().map(|(id, _)| id).collect();
         self.aqua.scheduler.mark_produced(&ids, now);
         for id in ids {
-            // Occluded windows do no work (surface signal): release the slot.
             let occluded = self
                 .aqua
                 .windows
@@ -900,21 +1220,14 @@ impl<A: Application> Loop<A> {
                 self.aqua.scheduler.mark_presented(id);
                 continue;
             }
-            // Host-driven update boundary: flush bound reactive effects
-            // before the app rebuilds the scene, so the frame observes one
-            // coherent state. `flush()` on an empty queue is a no-op.
             if let Some(flusher) = self.aqua.flushers.get_mut(&id) {
                 let _report = flusher();
             }
-            // Build scene through the app, then present.
             let observed = self.aqua.windows.get(&id).map(|r| r.observed.clone());
             let Some(observed) = observed else {
                 self.aqua.scheduler.mark_presented(id);
                 continue;
             };
-            // GPU extension boundary: offscreen media/viewport passes run
-            // first; `build_scene` then commits `External` items referencing
-            // freshly registered layers.
             {
                 let rec = self.aqua.windows.get_mut(&id).expect("window present");
                 let gpu = rec.gpu.as_mut().expect("gpu checked");
@@ -927,10 +1240,11 @@ impl<A: Application> Loop<A> {
                     .round()
                     .max(1.0) as u32;
                 let shared = self.aqua.shared_gpu.as_ref().expect("gpu exists");
-                let mut register = |layer: u64, view: wgpu::TextureView, w: u32, h: u32| {
-                    gpu.renderer.register_external(layer, view, w, h);
-                };
+                let mut updates = Vec::new();
+                let mut register = |update| updates.push(update);
                 let mut frame = ExternalFrame {
+                    window: &observed,
+                    now,
                     device: &shared.device,
                     queue: &shared.queue,
                     color_format: format,
@@ -940,20 +1254,22 @@ impl<A: Application> Loop<A> {
                     register: &mut register,
                 };
                 self.app.externals(&mut frame);
+                for update in updates {
+                    match update {
+                        ExternalUpdate::Register(layer, view, width, height) => {
+                            gpu.renderer.register_external(layer, view, width, height)
+                        }
+                        ExternalUpdate::Remove(layer) => {
+                            gpu.renderer.unregister_external(layer);
+                        }
+                    }
+                }
             }
             if let Some(t) = self.app.build_scene(&observed, now) {
                 self.aqua.scheduler.request_animation_deadline(id, t);
             }
-            // Custom-titlebar drag regions: push the hook's explicit rects
-            // after the scene/layout commit, converted with the current
-            // scale — only while a live guard is retained, and only when
-            // the value or the scale changed (clean frames do nothing). A
-            // quiet hook after explicit rects pushes empty rects to clear
-            // stale holes; the install-time drag band persists regardless.
             {
                 let next = self.app.chrome_regions(&observed);
-                // Normalized like the guard's own clamp, so the cache key
-                // always matches what was actually pushed.
                 let scale = observed.scale_factor;
                 let scale = if scale.is_finite() && scale > 0.0 {
                     scale
@@ -962,7 +1278,6 @@ impl<A: Application> Loop<A> {
                 };
                 if let Some(rec) = self.aqua.windows.get_mut(&id) {
                     if let Some(plan) = chrome_plan(&rec.last_regions, next, scale) {
-                        // Zero-alloc empty: `Vec::new()` never heap-allocates.
                         let cleared;
                         let payload = match &plan {
                             ChromePlan::Apply(regions) => regions,
@@ -985,8 +1300,6 @@ impl<A: Application> Loop<A> {
                     }
                 }
             }
-            // Publish the semantic snapshot when a bridge is attached and
-            // the app provides one (bounds come from committed layout).
             #[cfg(windows)]
             {
                 let needed = self
@@ -1004,15 +1317,15 @@ impl<A: Application> Loop<A> {
                     }
                 }
             }
-            // IME candidate window: position from the app's shaped caret
-            // every frame; explicitly disable when no editor has focus so a
-            // stale candidate window cannot linger after focus leaves.
             {
                 let area = self.app.ime_cursor_area();
                 if let Some(rec) = self.aqua.windows.get(&id) {
                     if let Some(window) = rec.window.as_ref() {
                         use aqua_platform::services::{set_ime_cursor_area, ImeCursorArea};
-                        window.set_ime_allowed(area.is_some());
+                        let cursor = self.app.cursor();
+                        window.set_cursor_visible(cursor != aqua_core::CursorIcon::Hidden);
+                        window.set_cursor(aqua_platform::host::to_winit_cursor(cursor));
+                        window.set_ime_allowed(rec.observed.focused && area.is_some());
                         if let Some(r) = area {
                             let logical = aqua_platform::geometry::LogicalPosition {
                                 x: r.x as f64,
@@ -1035,13 +1348,25 @@ impl<A: Application> Loop<A> {
             }
             let rec = self.aqua.windows.get_mut(&id).expect("window present");
             let gpu = rec.gpu.as_mut().expect("gpu checked");
+            let snapshot_active = rec.snapshot_started.is_some_and(|started| {
+                gpu.renderer
+                    .set_snapshot_transition_elapsed(now.saturating_duration_since(started))
+            });
+            if rec.snapshot_started.is_some() && !snapshot_active {
+                rec.snapshot_started = None;
+                gpu.surface.request_present();
+            }
+            let snapshot_interval = rec
+                .window
+                .as_ref()
+                .and_then(|window| window.current_monitor())
+                .and_then(|monitor| monitor.refresh_rate_millihertz())
+                .filter(|rate| *rate > 0)
+                .map(|rate| Duration::from_secs_f64(1000.0 / f64::from(rate)))
+                .unwrap_or(Duration::from_secs_f64(1.0 / 60.0));
             enum Outcome {
-                /// Submitted + present-requested; the completion worker
-                /// drives the slot release.
                 Submitted { seq: u64 },
-                /// Clean frame skipped: nothing submitted.
                 Skipped,
-                /// Surface/device failure with message + held slot count.
                 Failed { message: String, held: u32 },
             }
             let drawn = match self.app.scene_mut(id) {
@@ -1067,14 +1392,13 @@ impl<A: Application> Loop<A> {
                     }
                 }
             };
-            // Window borrow ends here; scheduler/context calls below.
+            if snapshot_active {
+                self.aqua
+                    .scheduler
+                    .request_animation_deadline(id, now + snapshot_interval);
+            }
             match outcome {
                 Outcome::Submitted { seq } => {
-                    // Hold the scheduler slot until GPU *completion*, so the
-                    // in-flight cap bounds actual GPU work even in Immediate
-                    // mode at 900 Hz. The dedicated worker thread blocks in
-                    // `poll(Wait)` for this submission (off-UI) and wakes
-                    // the loop — this path never blocks and never polls.
                     self.ensure_completion_worker();
                     if let Some(tx) = self.aqua.completion_tx.clone() {
                         let _ = tx.send((id, seq));
@@ -1095,10 +1419,6 @@ impl<A: Application> Loop<A> {
                 }
                 Outcome::Failed { message, held } => {
                     self.aqua.render_errors += 1;
-                    // Device loss / surface failure: completions for
-                    // in-flight submissions may never arrive. Force-release
-                    // every held slot so the window cannot wedge in
-                    // backpressure; the next demand retries fresh.
                     for _ in 0..held {
                         self.aqua.scheduler.mark_presented(id);
                     }
@@ -1119,8 +1439,6 @@ impl<A: Application> Loop<A> {
         let Some(&id) = self.aqua.winit_map.get(&window_id) else {
             return;
         };
-        // AccessKit plumbing first: the adapter must see every native event
-        // before app handling (contract in `a11y_winit`).
         #[cfg(windows)]
         {
             let window = self.aqua.windows.get(&id).and_then(|r| r.window.clone());
@@ -1146,7 +1464,6 @@ impl<A: Application> Loop<A> {
             if let Some(reason) = window_event_frame_reason(&framework) {
                 self.aqua.scheduler.request_frame(id, reason);
             }
-            // One place for DPI/material/focus follow-ups (`surface_signal`).
             let signal = surface_signal(&framework);
             if signal.resize_gpu {
                 if let WindowEvent::Resized(_, size) = &framework {
@@ -1174,13 +1491,22 @@ impl<A: Application> Loop<A> {
             self.aqua.bind_app_reactive(&self.app, id);
             self.aqua
                 .with_ctx(|ctx| self.app.on_window_event(ctx, id, &fw));
-            // Drain AT action requests into UI behaviors after app handling.
+            if let WindowEvent::Focused(_, focused) = fw {
+                self.aqua.with_ctx(|ctx| {
+                    self.app
+                        .on_input(ctx, id, &CoreInputEvent::Focused(focused))
+                });
+            }
             #[cfg(windows)]
             Self::drain_a11y_actions(&mut self.aqua, &mut self.app, id);
-            if matches!(
-                fw,
-                WindowEvent::CloseRequested(_) | WindowEvent::Destroyed(_)
-            ) {
+            let close = match fw {
+                WindowEvent::Destroyed(_) => true,
+                WindowEvent::CloseRequested(_) => {
+                    self.aqua.with_ctx(|ctx| self.app.can_close(ctx, id))
+                }
+                _ => false,
+            };
+            if close {
                 self.aqua.remove_window(id);
                 if self.aqua.windows.is_empty() {
                     event_loop.exit();
@@ -1191,9 +1517,6 @@ impl<A: Application> Loop<A> {
         self.route_input(event_loop, id, scale, event);
     }
 
-    /// Canonical translators (`events::translate_*_core`) at the boundary.
-    /// Modifiers are tracked per window; committed key text is delivered
-    /// exactly once as `TextInput` and SUPPRESSED while IME is active.
     fn route_input(
         &mut self,
         _event_loop: &winit::event_loop::ActiveEventLoop,
@@ -1202,18 +1525,21 @@ impl<A: Application> Loop<A> {
         event: winit::event::WindowEvent,
     ) {
         use winit::event::WindowEvent as W;
-        // File drops route to their own app hook (no core InputEvent
-        // variant exists, deliberately — drops are commands, not gestures).
         if let Some(drop) = translate_file_event(&event) {
             match drop {
                 FileDrop::Dropped(path) => {
                     self.aqua.scheduler.request_frame(id, FrameReason::INPUT);
+                    let at = self
+                        .aqua
+                        .windows
+                        .get(&id)
+                        .and_then(|record| record.window.as_ref())
+                        .and_then(|window| aqua_platform::host::cursor_position(window));
                     self.aqua.with_ctx(|ctx| {
                         self.app
-                            .on_files_dropped(ctx, id, std::slice::from_ref(&path))
+                            .on_files_dropped_at(ctx, id, std::slice::from_ref(&path), at)
                     });
                 }
-                // Hover enter/leave: no visual commitment in the facade.
                 FileDrop::Hovered(_) | FileDrop::HoverCancelled => {}
             }
             return;
@@ -1240,7 +1566,6 @@ impl<A: Application> Loop<A> {
                     .map(|r| r.modifiers)
                     .unwrap_or(CoreModifiers::NONE);
                 let (key_event, text) = translate_key_event(&event, modifiers);
-                // Committed text exactly once per press, suppressed during IME.
                 if pressed {
                     let ime = self.aqua.windows.get(&id).is_some_and(|r| r.ime_active);
                     if !ime {
@@ -1348,9 +1673,6 @@ impl<A: Application> Loop<A> {
                         pointer(0),
                         translate_mouse_button_core(winit::event::MouseButton::Left),
                     )),
-                    // Capture loss / interruption: real cancel. The UI must
-                    // terminate the drag; a synthesized release could
-                    // mis-activate the press target.
                     P::Cancelled => Some(CoreInputEvent::PointerCancel { contact: t.id }),
                     P::Moved => Some(CoreInputEvent::PointerMove(pointer(1))),
                 }
@@ -1376,9 +1698,19 @@ impl<A: Application> Loop<A> {
         };
         if let Some(input) = input {
             self.aqua.scheduler.request_frame(id, FrameReason::INPUT);
+            if matches!(input, CoreInputEvent::PointerDown(_, _)) {
+                if let Some(window) = self
+                    .aqua
+                    .windows
+                    .get(&id)
+                    .and_then(|record| record.window.as_ref())
+                {
+                    self.app
+                        .on_click_settings(aqua_platform::host::click_settings(window));
+                }
+            }
             self.aqua.with_ctx(|ctx| self.app.on_input(ctx, id, &input));
         }
-        // Committed text follows the key event as its own delivery.
         if let Some(text_event) = extra {
             self.aqua.scheduler.request_frame(id, FrameReason::INPUT);
             self.aqua
@@ -1386,10 +1718,6 @@ impl<A: Application> Loop<A> {
         }
     }
 
-    /// Drain queued AT action requests into UI behaviors. The full request
-    /// (node, action, payload [`A11yActionData`](aqua_platform::a11y::A11yActionData))
-    /// is forwarded untouched — the facade never drops the payload.
-    /// Free function so both the event path and the waker path share it.
     #[cfg(windows)]
     fn drain_a11y_actions(aqua: &mut Aqua, app: &mut A, id: AquaWindowId) {
         let actions = aqua
@@ -1404,10 +1732,6 @@ impl<A: Application> Loop<A> {
         }
     }
 
-    /// Re-apply the configured native material (focus/theme/prefs changes
-    /// alter the fallback posture). Honest capability reporting, never
-    /// silent success; non-Windows always falls back with a reason.
-    /// Associated function taking `&mut Aqua` so all call sites share it.
     fn reapply_material(aqua: &mut Aqua, id: AquaWindowId) {
         let material = aqua.config.effective_material(&aqua.prefs);
         let capability = aqua_platform::material::material_capability(material);
@@ -1436,143 +1760,15 @@ impl<A: Application> Loop<A> {
 
 impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for Loop<A> {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        if !self.aqua.windows.is_empty() || self.aqua.config.headless {
-            return;
-        }
-        let mut attrs = window_attributes(&self.aqua.config.window);
-        // Material shows only through transparency (platform contract).
-        if self.aqua.config.material != aqua_platform::WindowMaterial::None {
-            attrs = attrs.with_transparent(true);
-        }
-        // AccessKit attaches only to initially-invisible windows; the
-        // adapter constructor rejects visible ones. Default off here —
-        // enabled per-window below once attachment succeeds.
-        #[cfg(windows)]
-        {
-            attrs = attrs.with_visible(false);
-        }
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
-            Err(e) => {
-                self.aqua.render_errors += 1;
-                eprintln!("aqua: window creation failed: {e:?}");
+        if self.aqua.windows.is_empty() && !self.aqua.config.headless {
+            let options = self.aqua.config.window.clone();
+            if let Err(error) = self.create_window(event_loop, options.clone()) {
+                self.app
+                    .on_window_request_error(&WindowRequest::Create(options), &error);
+                self.startup_error = Some(format!("startup window failed: {error:?}"));
                 event_loop.exit();
-                return;
             }
-        };
-        let id = self.aqua.alloc_id();
-        // Custom titlebar chrome (platform `chrome::WindowsChrome` contract):
-        // install BEFORE reading size/scale — the install re-resolves the
-        // frame (`SWP_FRAMECHANGED` drops the native caption), so any size
-        // observed earlier would be stale for scene/layout/IME. Failure is
-        // loud and falls back to the honest native titlebar — never fake
-        // buttons. The guard moves into the per-window record below and
-        // drops with it (guard first — see `WindowRecord` field order).
-        let chrome = match aqua_platform::chrome::WindowsChrome::install(
-            &window,
-            &self.aqua.config.window,
-        ) {
-            Ok(guard) => {
-                eprintln!("aqua: window chrome installed: {:?}", guard.diagnostics());
-                Some(guard)
-            }
-            Err(e) => {
-                eprintln!(
-                    "aqua: window chrome install failed ({e:?}) — continuing with native titlebar"
-                );
-                None
-            }
-        };
-        let chrome_overlay = chrome.is_some()
-            && self.aqua.config.window.effective_titlebar()
-                == aqua_platform::window::Titlebar::Overlay;
-        // The adapter applies the requested client dimensions while
-        // recalculating the custom frame. Read its actual size here;
-        // winit's ordinary size request would add the native caption
-        // margins back because the overlay retains WS_CAPTION.
-        let scale = window.scale_factor();
-        let size = window.inner_size();
-        let observed = ObservedWindowState {
-            id,
-            title: self.aqua.config.window.title.clone(),
-            inner_size: aqua_platform::geometry::LogicalSize::new(
-                size.width as f64 / scale,
-                size.height as f64 / scale,
-            ),
-            scale_factor: scale,
-            focused: false,
-            visible: true,
-            occluded: false,
-        };
-        self.aqua.winit_map.insert(window.id(), id);
-        self.aqua.windows.insert(
-            id,
-            WindowRecord {
-                observed,
-                winit_id: Some(window.id()),
-                chrome,
-                chrome_overlay,
-                last_regions: None,
-                window: Some(window.clone()),
-                gpu: None,
-                cursor: None,
-                buttons: 0,
-                modifiers: CoreModifiers::NONE,
-                ime_active: false,
-                #[cfg(windows)]
-                a11y: None,
-            },
-        );
-        #[cfg(windows)]
-        {
-            // Bridge waker (required): AT actions arriving while idle wake
-            // the loop through the proxy; invoked after the bridge lock is
-            // released, so draining here cannot deadlock.
-            let proxy = self.aqua.proxy.clone();
-            let waker: aqua_platform::a11y::WakeFn = std::sync::Arc::new(move || {
-                if let Some(p) = &proxy {
-                    let _ = p.send_event(AquaUserEvent::A11yActions(id));
-                }
-            });
-            match A11yAdapter::attach_with_waker(event_loop, &window, waker) {
-                Ok(mut adapter) => {
-                    let now = self.aqua.clock();
-                    if let Some(observed) = self
-                        .aqua
-                        .windows
-                        .get(&id)
-                        .map(|record| record.observed.clone())
-                    {
-                        if let Some(deadline) = self.app.prepare_accessibility(&observed, now) {
-                            self.aqua.scheduler.request_animation_deadline(id, deadline);
-                        }
-                    }
-                    if let Some((root, focus, items)) = self.app.a11y_nodes() {
-                        adapter.push_nodes(root, focus, &items);
-                    }
-                    if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                        rec.a11y = Some(adapter);
-                    }
-                    window.set_visible(true);
-                }
-                Err(e) => {
-                    // No bridge (already-visible race, AT plumbing down):
-                    // show the window and run without accessibility.
-                    eprintln!("aqua: a11y attach failed ({e:?}) — continuing without bridge");
-                    window.set_visible(true);
-                }
-            }
-            Self::reapply_material(&mut self.aqua, id);
         }
-        #[cfg(not(windows))]
-        {
-            Self::reapply_material(&mut self.aqua, id);
-        }
-        if let Err(e) = self.attach_gpu_window(id, &window) {
-            self.aqua.render_errors += 1;
-            eprintln!("aqua: GPU setup failed: {e}");
-        }
-        self.aqua.scheduler.request_frame(id, FrameReason::EXPOSE);
     }
 
     fn window_event(
@@ -1585,12 +1781,10 @@ impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for L
     }
 
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        self.process_window_requests(event_loop);
         let wall_now = WallInstant::now();
         let now = self.aqua.clock();
         self.aqua.wakeups += 1;
-        // Time-bounded smoke: report actual production, then quit. Wakeup vs
-        // produced counts show whether an idle app slept (target 900 must
-        // not loop).
         if let Some(deadline) = self.aqua.smoke_deadline {
             if wall_now >= deadline {
                 let stats = self.aqua.scheduler.stats();
@@ -1609,9 +1803,6 @@ impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for L
             }
         }
         self.draw_ready(now);
-        // Fuse the scheduler deadline with the smoke deadline: a static app
-        // with no pending scheduler work must still wake for the smoke exit
-        // instead of sleeping past it.
         let wake = match (
             self.aqua
                 .scheduler
@@ -1631,13 +1822,32 @@ impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for L
 
     fn user_event(
         &mut self,
-        _event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &winit::event_loop::ActiveEventLoop,
         event: AquaUserEvent,
     ) {
         match event {
+            AquaUserEvent::ReplayBadges => {
+                let requests: Vec<_> = self
+                    .aqua
+                    .windows
+                    .iter()
+                    .filter_map(|(id, record)| {
+                        record
+                            .badge
+                            .map(|badge| WindowRequest::SetBadge(*id, Some(badge)))
+                    })
+                    .collect();
+                for request in requests {
+                    if let Err(error) = self.aqua.apply_window_request(&mut self.app, &request) {
+                        self.app.on_window_request_error(&request, &error);
+                    }
+                }
+            }
+            AquaUserEvent::WindowRequests => self.process_window_requests(event_loop),
+            AquaUserEvent::Messages(id) => {
+                self.aqua.dispatch_wake(&mut self.app, id);
+            }
             AquaUserEvent::ReactiveWake(id) => {
-                // Worker-thread write queued effects: flush on the UI thread
-                // and demand a frame only when effects actually ran.
                 let ran = self
                     .aqua
                     .flushers
@@ -1656,9 +1866,6 @@ impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for L
                 let _ = id;
             }
             AquaUserEvent::GpuComplete(id, seq) => {
-                // Completion callback: every submission numbered <= seq is
-                // done. Release exactly the newly completed scheduler slots;
-                // unknown ids (closed window) are ignored.
                 let release = match self.aqua.windows.get_mut(&id) {
                     Some(rec) => match rec.gpu.as_mut() {
                         Some(gpu) if seq > gpu.ledger.completed => {
@@ -1815,8 +2022,6 @@ mod tests {
     fn host_driven_reactive_boundary_manual_flush_headless() {
         use std::cell::Cell;
         use std::rc::Rc;
-        // Host-driven pattern: auto-flush off, wake hook installed, explicit
-        // flush at the update boundary. Headless pumps flush manually.
         let rt = aqua_reactive::Runtime::new();
         rt.set_auto_flush(false);
         let scope = rt.create_scope();
@@ -1833,18 +2038,16 @@ mod tests {
         let report = rt.flush();
         assert_eq!(report.ran, 1, "coalesced writes run the effect once");
         assert_eq!(seen.get(), 2, "effect observed the latest value");
-        // bind_reactive headless: no proxy, wake callback installed but inert.
         let (mut aqua, _, id) = headless();
         let rt2 = aqua_reactive::Runtime::new();
         aqua.with_ctx(|ctx| ctx.bind_reactive(id, &rt2));
         assert!(aqua.flushers.contains_key(&id));
-        drop(rt2); // app must keep owning the Runtime; handles diagnose use-after-drop
+        drop(rt2);
     }
 
     #[test]
     fn clipboard_round_trips_through_ctx_and_reports_backend() {
         let (mut aqua, _, _) = headless();
-        // Backend is explicit (system where available, memory fallback headless).
         let _ = aqua.clipboard_backend();
         aqua.with_ctx(|ctx| {
             ctx.clipboard().set_text("copy me".to_string()).unwrap();
@@ -1921,8 +2124,6 @@ mod tests {
         let (mut aqua, mut app, id) = headless();
         aqua.dispatch_input(&mut app, id, &CoreInputEvent::PointerCancel { contact: 7 });
         assert_eq!(app.cancels, 1);
-        // Cancel carries only the contact: no position, no button that a
-        // gesture could mistake for an activation.
         assert!(matches!(
             app.inputs[0],
             CoreInputEvent::PointerCancel { contact: 7 }
@@ -1933,7 +2134,7 @@ mod tests {
     fn close_removes_window_and_occluded_suppresses_work() {
         let (mut aqua, mut app, id) = headless();
         aqua.dispatch_window_event(&mut app, id, &WindowEvent::Occluded(id, true));
-        assert!(!aqua.scheduler.has_pending()); // occluded: no work scheduled
+        assert!(!aqua.scheduler.has_pending());
         aqua.dispatch_window_event(&mut app, id, &WindowEvent::CloseRequested(id));
         assert_eq!(aqua.window_count(), 0);
         assert!(!aqua.scheduler.has_pending());
@@ -1942,8 +2143,6 @@ mod tests {
     #[test]
     fn headless_windows_carry_no_chrome_guard() {
         let (mut aqua, mut app, id) = headless();
-        // No winit window exists headless: no guard installed, no overlay
-        // claimed. The native fallback is the only honest state here.
         assert!(!aqua.has_chrome(id));
         aqua.dispatch_window_event(&mut app, id, &WindowEvent::CloseRequested(id));
         assert!(!aqua.has_chrome(id));
@@ -1955,15 +2154,12 @@ mod tests {
             draggable: vec![(0.0, 0.0, 200.0, 40.0)],
             no_drag: vec![(160.0, 0.0, 200.0, 40.0)],
         };
-        // Clean frames push nothing (no per-frame allocation/apply).
         assert!(chrome_plan(&None, None, 1.0).is_none());
         assert!(chrome_plan(&Some((rects(), 1.0)), Some(rects()), 1.0).is_none());
-        // New explicit regions push.
         assert!(matches!(
             chrome_plan(&None, Some(rects()), 1.0),
             Some(ChromePlan::Apply(_))
         ));
-        // Quiet hook after explicit rects clears stale holes (band persists).
         assert!(matches!(
             chrome_plan(&Some((rects(), 1.0)), None, 1.0),
             Some(ChromePlan::Clear)
@@ -1972,8 +2168,6 @@ mod tests {
 
     #[test]
     fn chrome_plan_repushes_equal_regions_at_new_scale() {
-        // The guard stores PHYSICAL rects: identical logical regions after
-        // a ScaleChanged must be re-pushed with the new scale.
         let rects = || DragRegions {
             draggable: vec![(0.0, 0.0, 200.0, 40.0)],
             no_drag: vec![],
@@ -1983,9 +2177,7 @@ mod tests {
             chrome_plan(&cached, Some(rects()), 2.0),
             Some(ChromePlan::Apply(_))
         ));
-        // Same scale stays silent.
         assert!(chrome_plan(&cached, Some(rects()), 1.0).is_none());
-        // No explicit regions anywhere: nothing physical is stale.
         assert!(chrome_plan(&None, None, 2.0).is_none());
     }
 

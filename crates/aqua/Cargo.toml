@@ -23,3 +23,11 @@ pollster = "0.4"
 accesskit = "0.25"
 taffy = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[test]]
+name = "windows_desktop"
+harness = false
+
+[[test]]
+name = "windows_text"
+harness = false

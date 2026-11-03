@@ -110,3 +110,140 @@ fn altgr_shortcuts_are_left_for_text_input_and_disabled_fields_reject_paste() {
     app.sync().unwrap();
     assert_eq!(text.get(), "hello world");
 }
+
+#[test]
+fn native_clipboard_defaults_follow_routed_capture_and_do_not_duplicate_delivery() {
+    use aqua::ui_app::dispatch_input_with_clipboard;
+    use aqua_ui::input::{EventPhase, InputKind, InputResponse};
+    use std::{cell::Cell, rc::Rc};
+    let (mut app, text) = field();
+    let node = app.tree().root().unwrap();
+    let calls = Rc::new(Cell::new(0));
+    let callback = calls.clone();
+    app.tree_mut().listen_input(
+        node,
+        InputKind::KeyDown,
+        EventPhase::Capture,
+        Rc::new(move |_| {
+            callback.set(callback.get() + 1);
+            InputResponse::handled()
+        }),
+    );
+    let paste = shortcut(Key::Char('v'), Modifiers::CONTROL);
+    dispatch_input_with_clipboard(&mut app, &mut LockedClipboard, &paste).unwrap();
+    assert_eq!(text.get(), "hello world");
+    assert_eq!(calls.get(), 1);
+    let callback = calls.clone();
+    app.tree_mut().listen_input(
+        node,
+        InputKind::KeyDown,
+        EventPhase::Capture,
+        Rc::new(move |_| {
+            callback.set(callback.get() + 1);
+            InputResponse::default()
+        }),
+    );
+    let mut clipboard = MemoryClipboard::new();
+    clipboard.set_text("replacement".into()).unwrap();
+    dispatch_input_with_clipboard(&mut app, &mut clipboard, &paste).unwrap();
+    app.sync().unwrap();
+    assert_eq!(text.get(), "replacement world");
+    assert_eq!(calls.get(), 2);
+    app.handle_input(&shortcut(Key::Char('z'), Modifiers::CONTROL));
+    app.sync().unwrap();
+    assert_eq!(text.get(), "hello world");
+}
+
+#[test]
+fn composer_consumes_structured_image_and_file_paste_before_text_fallback() {
+    use aqua::ui_app::dispatch_input_with_clipboard;
+    use aqua_platform::services::ClipboardImage;
+    use aqua_ui::input::{EventPhase, InputKind, InputResponse, RoutedInput};
+    use std::{cell::RefCell, rc::Rc};
+    let (mut app, text) = field();
+    let node = app.tree().root().unwrap();
+    let attachments = Rc::new(RefCell::new(Vec::new()));
+    let received = attachments.clone();
+    app.tree_mut().listen_input(
+        node,
+        InputKind::ClipboardPaste,
+        EventPhase::Bubble,
+        Rc::new(move |event| {
+            let RoutedInput::ClipboardPaste(content) = &event.input else {
+                panic!()
+            };
+            if let Some(image) = &content.image {
+                received.borrow_mut().push(format!(
+                    "image:{}x{}:{}",
+                    image.width(),
+                    image.height(),
+                    image.rgba().len()
+                ));
+            }
+            for path in content.paths.iter() {
+                received
+                    .borrow_mut()
+                    .push(path.to_string_lossy().into_owned());
+            }
+            if content.image.is_some() || !content.paths.is_empty() {
+                InputResponse::handled()
+            } else {
+                InputResponse::default()
+            }
+        }),
+    );
+    let mut clipboard = MemoryClipboard::new();
+    let paste = shortcut(Key::Char('v'), Modifiers::CONTROL);
+    clipboard
+        .set_image(ClipboardImage::new(2, 1, vec![255; 8]).unwrap())
+        .unwrap();
+    dispatch_input_with_clipboard(&mut app, &mut clipboard, &paste).unwrap();
+    clipboard
+        .set_files(vec!["report.txt".into(), "chart.png".into()])
+        .unwrap();
+    dispatch_input_with_clipboard(&mut app, &mut clipboard, &paste).unwrap();
+    assert_eq!(
+        *attachments.borrow(),
+        vec!["image:2x1:8", "report.txt", "chart.png"]
+    );
+    assert_eq!(text.get(), "hello world");
+    clipboard.set_text("plain".into()).unwrap();
+    dispatch_input_with_clipboard(&mut app, &mut clipboard, &paste).unwrap();
+    app.sync().unwrap();
+    assert_eq!(text.get(), "plain world");
+    app.handle_input(&shortcut(Key::Char('z'), Modifiers::CONTROL));
+    app.sync().unwrap();
+    assert_eq!(text.get(), "hello world");
+}
+
+#[test]
+fn clipboard_format_failure_is_reported_before_any_partial_paste() {
+    use aqua::ui_app::dispatch_input_with_clipboard;
+    use aqua_platform::services::ClipboardImage;
+    struct FailedImage;
+    impl Clipboard for FailedImage {
+        fn get_text(&mut self) -> Result<Option<String>, ClipboardError> {
+            Ok(Some("available text".into()))
+        }
+        fn set_text(&mut self, _: String) -> Result<(), ClipboardError> {
+            Ok(())
+        }
+        fn clear(&mut self) -> Result<(), ClipboardError> {
+            Ok(())
+        }
+        fn get_image(&mut self) -> Result<Option<ClipboardImage>, ClipboardError> {
+            Err(ClipboardError::Os("image read failed".into()))
+        }
+    }
+    let (mut app, text) = field();
+    let result = dispatch_input_with_clipboard(
+        &mut app,
+        &mut FailedImage,
+        &shortcut(Key::Char('v'), Modifiers::CONTROL),
+    );
+    assert_eq!(
+        result.unwrap_err(),
+        ClipboardError::Os("image read failed".into())
+    );
+    assert_eq!(text.get(), "hello world");
+}

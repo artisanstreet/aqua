@@ -82,3 +82,32 @@ fn paste_normalizes_line_endings_once() {
     single.insert_paste("a\r\nb\rc");
     assert_eq!(single.text(), "a b c");
 }
+
+#[test]
+fn replacement_keeps_original_byte_position_when_deletion_joins_graphemes() {
+    let mut editor = TextEditor::with_text("🇦x🇧", LineMode::Multi);
+    editor.set_selection(Selection::new(4, 5));
+    editor.insert("y");
+    assert_eq!(editor.text(), "🇦y🇧");
+    assert!(editor.undo());
+    assert_eq!(editor.text(), "🇦x🇧");
+    assert_eq!(editor.selection(), Selection::new(4, 5));
+    assert!(editor.redo());
+    assert_eq!(editor.text(), "🇦y🇧");
+}
+
+#[test]
+fn composition_restores_or_commits_at_original_boundary_after_grapheme_join() {
+    let mut editor = TextEditor::with_text("🇦x🇧", LineMode::Multi);
+    editor.set_selection(Selection::new(4, 5));
+    editor.set_composition("z", 1..1);
+    assert_eq!(editor.display_text(), "🇦z🇧");
+    editor.cancel_composition();
+    assert_eq!(editor.text(), "🇦x🇧");
+    assert_eq!(editor.selection(), Selection::new(4, 5));
+    editor.set_composition("z", 1..1);
+    editor.commit_composition();
+    assert_eq!(editor.text(), "🇦z🇧");
+    assert!(editor.undo());
+    assert_eq!(editor.text(), "🇦x🇧");
+}

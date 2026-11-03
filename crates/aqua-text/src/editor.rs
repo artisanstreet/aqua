@@ -189,13 +189,9 @@ impl TextEditor {
         let merge_next = !s.contains(char::is_whitespace);
         let before = self.selection;
         let range = self.selection.range();
-        let deleted = if range.is_empty() {
-            String::new()
-        } else {
-            self.model.delete(range.clone())
-        };
-        let ins = self.model.insert(range.start, &s);
-        let caret = snap_nearest(&self.model, ins.end);
+        let deleted = self.model.text()[range.clone()].to_owned();
+        self.model.replace_exact(range.clone(), &s);
+        let caret = snap_nearest(&self.model, range.start + s.len());
         self.selection.collapse_to(caret);
         if !deleted.is_empty() {
             if s.is_empty() {
@@ -575,8 +571,9 @@ impl TextEditor {
             self.restore_replaced(c.replaced, c.start);
             return true;
         }
-        let ins = self.model.insert(c.start, &c.text);
-        self.selection.collapse_to(ins.end);
+        self.model.replace_exact(c.start..c.start, &c.text);
+        self.selection
+            .collapse_to(snap_nearest(&self.model, c.start + c.text.len()));
         let after = self.selection;
         match c.replaced {
             Some(r) => self.push_record(EditRecord {
@@ -680,7 +677,7 @@ impl TextEditor {
     fn restore_replaced(&mut self, replaced: Option<Replaced>, fallback: usize) {
         match replaced {
             Some(r) => {
-                self.model.insert(r.pos, &r.deleted);
+                self.model.replace_exact(r.pos..r.pos, &r.deleted);
                 self.selection = r.before;
                 self.selection.clamp(self.model.len_bytes());
             }

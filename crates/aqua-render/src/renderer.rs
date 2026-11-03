@@ -1901,13 +1901,6 @@ impl Renderer {
         self.diagnostics.frames_presented += 1;
     }
 
-    /// Draw the current base to an arbitrary view (surface facade path).
-    /// `target_format` selects the compose pipeline: the base working
-    /// format and the surface format may differ, and the pipeline's color
-    /// target must match the view (no silent format mismatch).
-    /// `output_gamma`: 0 keeps linear working values; 1 writes encoded,
-    /// premultiplied compositor bytes to Unorm; 2 writes those same bytes
-    /// through an sRGB attachment, compensating for hardware encoding.
     pub fn start_snapshot_transition(
         &mut self,
         settings: crate::effects::SnapshotTransition,

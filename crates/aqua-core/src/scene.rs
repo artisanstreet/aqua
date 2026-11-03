@@ -91,7 +91,6 @@ pub fn decode_layer(layer: u64) -> Option<(LayerKind, RawId)> {
     Some((kind, RawId { index, generation }))
 }
 
-/// One paint operation in painter order (position in the commit sequence).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TextRasterMode {
     Outline,

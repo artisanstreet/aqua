@@ -963,14 +963,20 @@ fn external_content_swap_invalidates() {
     let c = &px2[(4 * 16 + 4) * 4..][..4];
     assert!(c[2] > 200 && c[0] < 30, "blue frame shows: {c:?}");
 
-    // Lifecycle: unregister releases the cached view; re-prepare is clean.
     assert!(r.unregister_external(11));
     assert!(
         !r.unregister_external(11),
         "double unregister reports false"
     );
-    let idle = r.prepare(&mut scene);
-    assert!(idle.is_clean(), "no pending external invalidation");
+    let removed = r.prepare(&mut scene);
+    assert!(
+        !removed.is_clean(),
+        "unregister must clear retained layer pixels"
+    );
+    r.draw(&removed).expect("draw after unregister");
+    let pixels = r.readback().expect("readback after unregister");
+    assert_eq!(&pixels[(4 * 16 + 4) * 4..][..4], &[0, 0, 0, 0]);
+    assert!(r.prepare(&mut scene).is_clean());
 }
 
 /// A newly queued custom pass invalidates ONE frame even with a static

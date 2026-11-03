@@ -520,6 +520,48 @@ impl TextLayout {
         Some(position)
     }
 
+    pub fn word_hit(&self, x: f32, y: f32) -> Option<usize> {
+        let laid = self.cached.as_ref()?;
+        let line = laid
+            .lines
+            .iter()
+            .find(|line| y < line.y_top + line.height)
+            .or_else(|| laid.lines.last())?;
+        let glyph = line
+            .glyphs
+            .iter()
+            .find(|glyph| glyph.w > 0.0 && x >= glyph.x && x < glyph.x + glyph.w)
+            .or_else(|| {
+                line.glyphs
+                    .iter()
+                    .filter(|glyph| glyph.w > 0.0)
+                    .min_by(|a, b| {
+                        let distance =
+                            |glyph: &LaidGlyph| (glyph.x - x).max(0.0).max(x - glyph.x - glyph.w);
+                        distance(a).total_cmp(&distance(b))
+                    })
+            });
+        let Some(glyph) = glyph else {
+            return Some(self.to_source(line.display_range.start));
+        };
+        let cluster = self
+            .display_text
+            .get(glyph.display_byte_start..glyph.display_byte_end)?;
+        let fraction = ((x - glyph.x) / glyph.w).clamp(0.0, 1.0);
+        let fraction = if glyph.bidi_level % 2 == 1 {
+            1.0 - fraction
+        } else {
+            fraction
+        };
+        let count = cluster.graphemes(true).count();
+        let index = ((fraction * count as f32).floor() as usize).min(count.saturating_sub(1));
+        let offset = cluster
+            .grapheme_indices(true)
+            .nth(index)
+            .map_or(0, |(offset, _)| offset);
+        Some(self.to_source(glyph.display_byte_start + offset))
+    }
+
     pub fn horizontal_position(
         &self,
         position: CaretPosition,
@@ -556,7 +598,7 @@ impl TextLayout {
             return Some(position);
         };
         let next = &laid.lines[next];
-        Some(CaretPosition {
+        let target = CaretPosition {
             byte: self.to_source(if previous {
                 next.display_range.end
             } else {
@@ -567,7 +609,12 @@ impl TextLayout {
             } else {
                 CaretAffinity::Downstream
             },
-        })
+        };
+        if target.byte == position.byte {
+            self.horizontal_position(target, left)
+        } else {
+            Some(target)
+        }
     }
 
     pub fn line_boundary_position(

@@ -111,11 +111,12 @@ fn affinity_distinguishes_both_sides_of_a_soft_wrap() {
         layout.line_boundary_position(upstream, true),
         Some(upstream)
     );
-    assert_eq!(
-        layout.horizontal_position(upstream, false),
-        Some(downstream)
-    );
-    assert_eq!(layout.horizontal_position(downstream, true), Some(upstream));
+    let right = layout.horizontal_position(upstream, false).unwrap();
+    assert!(right.byte > byte);
+    assert_eq!(layout.caret_position(right).unwrap().y_top, after.y_top);
+    let left = layout.horizontal_position(downstream, true).unwrap();
+    assert!(left.byte < byte);
+    assert_eq!(layout.caret_position(left).unwrap().y_top, before.y_top);
 }
 
 #[test]
@@ -139,4 +140,37 @@ fn affinity_resolves_distinct_bidi_junction_edges() {
     assert!(layout.caret_position(left).unwrap().x < after.x);
     let right = layout.horizontal_position(upstream, false).unwrap();
     assert!(layout.caret_position(right).unwrap().x > before.x);
+}
+
+#[test]
+fn word_hit_uses_the_glyph_under_pointer_instead_of_nearest_caret() {
+    use aqua_text::navigation::{double_click_range, WordBehavior};
+    let text = "hello world";
+    let (layout, _) = shape(text, None);
+    let left = layout.caret(4).unwrap();
+    let right = layout.caret(5).unwrap();
+    let x = left.x + (right.x - left.x) * 0.8;
+    let y = left.y_top + left.height * 0.5;
+    assert_eq!(layout.hit(x, y), Some(5));
+    assert_eq!(layout.word_hit(x, y), Some(4));
+    let range = double_click_range(
+        text,
+        layout.word_hit(x, y).unwrap(),
+        WordBehavior::SkipSpaces,
+    );
+    assert_eq!(&text[range], "hello ");
+}
+
+#[test]
+fn word_hit_retains_rtl_and_combining_grapheme_boundaries() {
+    for text in ["אבגד next", "ae\u{301} next"] {
+        let (layout, result) = shape(text, None);
+        let line = &result.lines[0];
+        for glyph in &line.glyphs {
+            let byte = layout
+                .word_hit(glyph.x + glyph.w * 0.8, line.y_top + line.height / 2.0)
+                .unwrap();
+            assert!(aqua_text::TextModel::new(text).is_grapheme_boundary(byte));
+        }
+    }
 }

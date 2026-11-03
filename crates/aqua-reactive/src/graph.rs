@@ -54,6 +54,7 @@ pub(crate) struct ScopeRecord {
     pub members: Vec<NodeId>,
     pub cleanups: Vec<Box<dyn FnOnce()>>,
     pub disposed: bool,
+    pub invalidation_counter: Option<std::rc::Rc<std::cell::Cell<u64>>>,
 }
 
 /// Deferred dependency-graph mutation requested by a dynamic (`select`) node.

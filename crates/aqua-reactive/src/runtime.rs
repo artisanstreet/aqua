@@ -202,6 +202,13 @@ impl GraphRef {
                 if !matches!(guard.kind_of(*slot), Some(NodeKind::Effect { .. })) {
                     continue;
                 }
+                if let Some(counter) = guard
+                    .record(*slot)
+                    .and_then(|record| guard.scopes.get(&record.scope))
+                    .and_then(|scope| scope.invalidation_counter.as_ref())
+                {
+                    counter.set(counter.get().wrapping_add(1));
+                }
                 let already = matches!(
                     guard.kind_of(*slot),
                     Some(NodeKind::Effect { queued: true })
@@ -452,6 +459,7 @@ impl Runtime {
                 members: Vec::new(),
                 cleanups: Vec::new(),
                 disposed: false,
+                invalidation_counter: None,
             },
         );
         Scope {
@@ -734,6 +742,16 @@ impl Scope {
         self.graph.scope_live(self.id)
     }
 
+    pub fn set_invalidation_counter(&self, counter: Rc<std::cell::Cell<u64>>) {
+        self.graph
+            .ensure_scope(self.id, "Scope::set_invalidation_counter");
+        if let Some(inner) = self.graph.upgraded() {
+            if let Some(scope) = inner.borrow_mut().scopes.get_mut(&self.id) {
+                scope.invalidation_counter = Some(counter);
+            }
+        }
+    }
+
     /// Create a child scope. Disposing the child does not affect the parent;
     /// disposing the parent disposes the child.
     pub fn child(&self) -> Scope {
@@ -742,6 +760,10 @@ impl Scope {
         let mut guard = inner.borrow_mut();
         let id: ScopeId = guard.next_scope;
         guard.next_scope += 1;
+        let invalidation_counter = guard
+            .scopes
+            .get(&self.id)
+            .and_then(|parent| parent.invalidation_counter.clone());
         if let Some(parent) = guard.scopes.get_mut(&self.id) {
             parent.children.push(id);
         }
@@ -753,6 +775,7 @@ impl Scope {
                 members: Vec::new(),
                 cleanups: Vec::new(),
                 disposed: false,
+                invalidation_counter,
             },
         );
         Scope {

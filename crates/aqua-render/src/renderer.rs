@@ -113,10 +113,17 @@ struct ComposeUniforms {
 
 #[derive(Debug)]
 struct GroupOp {
-    bounds: Rect, // physical px, union of children (for damage/scratch)
+    bounds: Rect,
     opacity: f32,
     instances: Vec<RectInstance>,
-    texts: Vec<ShapedRun>,
+    commands: Vec<GroupCommand>,
+}
+
+#[derive(Debug)]
+enum GroupCommand {
+    Rects { start: u32, count: u32 },
+    Text(ShapedRun),
+    Group(GroupOp),
 }
 
 /// Cached per-node paint context from the last slow-path walk: physical
@@ -711,7 +718,7 @@ impl Renderer {
     /// Vulkan lavapipe qualifies). Used by tests and headless hosts.
     pub async fn headless(width: u32, height: u32) -> Result<Self, RenderError> {
         let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_desc.backends = wgpu::Backends::all();
+        instance_desc.backends = wgpu::Backends::from_env().unwrap_or_else(wgpu::Backends::all);
         let instance = wgpu::Instance::new(instance_desc);
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -1153,7 +1160,7 @@ impl Renderer {
                         },
                         opacity: *o,
                         instances: Vec::new(),
-                        texts: Vec::new(),
+                        commands: Vec::new(),
                     });
                 }
                 DisplayItem::PopOpacity => {
@@ -1167,35 +1174,18 @@ impl Renderer {
                         };
                         let op = Op::Group(GroupOp { bounds: phys, ..g });
                         if let Some(parent) = group_stack.last_mut() {
-                            // Nested opacity composes multiplicatively, so a
-                            // single isolation surface at the outermost group
-                            // is CORRECT: fold inner opacity into alphas.
+                            let bounds = Rect {
+                                x: phys.x / s,
+                                y: phys.y / s,
+                                w: phys.w / s,
+                                h: phys.h / s,
+                            };
+                            parent.bounds = match parent.commands.is_empty() {
+                                true => bounds,
+                                false => parent.bounds.union(bounds),
+                            };
                             if let Op::Group(inner) = op {
-                                let mul = inner.opacity;
-                                let b = inner.bounds;
-                                parent.bounds =
-                                    if parent.instances.is_empty() && parent.texts.is_empty() {
-                                        Rect {
-                                            x: b.x / s,
-                                            y: b.y / s,
-                                            w: b.w / s,
-                                            h: b.h / s,
-                                        }
-                                    } else {
-                                        parent.bounds.union(Rect {
-                                            x: b.x / s,
-                                            y: b.y / s,
-                                            w: b.w / s,
-                                            h: b.h / s,
-                                        })
-                                    };
-                                for mut inst in inner.instances {
-                                    inst.fill[3] *= mul;
-                                    inst.border[3] *= mul;
-                                    inst.shadow_color[3] *= mul;
-                                    parent.instances.push(inst);
-                                }
-                                parent.texts.extend(inner.texts);
+                                parent.commands.push(GroupCommand::Group(inner));
                             }
                         } else {
                             // Close pending top-level runs first (order!).
@@ -1247,11 +1237,48 @@ impl Renderer {
                             })
                         }
                     });
-                    let shaped = resolve_scene_text(run, *at, *color, *opacity, clip_logical, s);
+                    let text_opacity = (color.alpha * opacity).clamp(0.0, 1.0);
+                    let shaped =
+                        resolve_scene_text(run, *at, color.with_alpha(1.0), 1.0, clip_logical, s);
+                    let bounds = Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: self.width as f32,
+                        h: self.height as f32,
+                    };
+                    let isolated = match text_opacity < 1.0 {
+                        true => Some(GroupOp {
+                            bounds,
+                            opacity: text_opacity,
+                            instances: Vec::new(),
+                            commands: vec![GroupCommand::Text(shaped.clone())],
+                        }),
+                        false => None,
+                    };
                     if let Some(g) = group_stack.last_mut() {
-                        g.texts.push(shaped);
+                        let logical = Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            w: bounds.w / s,
+                            h: bounds.h / s,
+                        };
+                        g.bounds = match g.commands.is_empty() {
+                            true => logical,
+                            false => g.bounds.union(logical),
+                        };
+                        g.commands.push(match isolated {
+                            Some(group) => GroupCommand::Group(group),
+                            None => GroupCommand::Text(shaped),
+                        });
                     } else {
-                        pending_texts.push(shaped);
+                        match isolated {
+                            Some(group) => {
+                                flush_rect_run(&mut plan.ops, &plan.instances, &mut top_start);
+                                flush_texts(&mut plan.ops, &mut pending_texts);
+                                plan.ops.push(Op::Group(group));
+                            }
+                            None => pending_texts.push(shaped),
+                        }
                     }
                 }
                 DisplayItem::External {
@@ -1431,8 +1458,7 @@ impl Renderer {
                         passes += 3; // H + V + composite
                     }
                     Op::Group(g) => {
-                        self.draw_group(&device, &queue, &mut encoder, &base_view, g)?;
-                        passes += 3; // scratch rects + text pass + composite
+                        passes += self.draw_group(&device, &queue, &mut encoder, &base_view, g)?;
                     }
                     Op::External {
                         bounds,
@@ -2077,11 +2103,6 @@ impl Renderer {
         Ok(())
     }
 
-    /// TRUE group isolation, same-encoder: children render into a scratch
-    /// surface, group texts encode into it (text-agent protocol), then the
-    /// surface composites once with the group opacity. Overlapping
-    /// translucent children therefore blend correctly. Painter order holds
-    /// because everything records into the one open encoder in sequence.
     fn draw_group(
         &mut self,
         device: &wgpu::Device,
@@ -2089,15 +2110,10 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         base_view: &wgpu::TextureView,
         group: &GroupOp,
-    ) -> Result<(), RenderError> {
+    ) -> Result<u32, RenderError> {
         let (w, h) = (self.width, self.height);
-        // No silently-wrong fallback: a group that cannot be isolated
-        // is an explicit budget error, never flattened alpha.
         let scratch = self.pool.acquire(device, w, h, self.format)?;
         let view = self.pool.entries[scratch].view.clone();
-        // Upload group instances to a transient buffer. Fresh per call (never
-        // a shared buffer rewritten mid-encoder): every draw reads the values
-        // written before its own submit.
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("aqua-group-instances"),
             size: ((group.instances.len().max(1)) * std::mem::size_of::<RectInstance>()) as u64,
@@ -2107,8 +2123,8 @@ impl Renderer {
         self.queue
             .write_buffer(&buf, 0, bytemuck::cast_slice(&group.instances));
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("aqua-group"),
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("aqua-group-clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -2123,35 +2139,70 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.rect_pipeline);
-            pass.set_bind_group(0, &self.rect_uniform_bind, &[]);
-            pass.set_vertex_buffer(0, self.quad_vb.slice(..));
-            pass.set_index_buffer(self.quad_ib.slice(..), wgpu::IndexFormat::Uint32);
-            pass.set_vertex_buffer(1, buf.slice(..));
-            pass.draw_indexed(0..6, 0, 0..group.instances.len() as u32);
         }
-        // Group text draws into the isolated surface with FULL color (the
-        // group composite applies opacity once): same open encoder.
-        if !group.texts.is_empty() {
-            for run in group.texts.clone() {
-                self.text.queue_run(run);
+        let mut passes = 2;
+        let result = (|| {
+            for command in &group.commands {
+                match command {
+                    GroupCommand::Rects { start, count } => {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("aqua-group-rects"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        pass.set_pipeline(&self.rect_pipeline);
+                        pass.set_bind_group(0, &self.rect_uniform_bind, &[]);
+                        pass.set_vertex_buffer(0, self.quad_vb.slice(..));
+                        pass.set_index_buffer(self.quad_ib.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.set_vertex_buffer(1, buf.slice(..));
+                        pass.draw_indexed(0..6, 0, *start..(*start + *count));
+                        passes += 1;
+                    }
+                    GroupCommand::Text(run) => {
+                        self.text.queue_run(run.clone());
+                        let stats = self.text.encode_queued(TextFrame {
+                            device,
+                            queue,
+                            encoder,
+                            target: &view,
+                            width: w,
+                            height: h,
+                        });
+                        passes += u32::from(stats.areas > 0);
+                        self.diagnostics.text_areas_last += stats.areas as u64;
+                        self.diagnostics.text_stale_last += stats.stale_skipped;
+                        self.diagnostics.text_mismatch_last += stats.revision_mismatches;
+                    }
+                    GroupCommand::Group(inner) => {
+                        passes += self.draw_group(device, queue, encoder, &view, inner)?;
+                    }
+                }
             }
-            let stats = self.text.encode_queued(TextFrame {
-                device,
-                queue,
-                encoder,
-                target: &view,
-                width: w,
-                height: h,
-            });
-            self.diagnostics.text_areas_last += stats.areas as u64;
-            self.diagnostics.text_stale_last += stats.stale_skipped;
-            self.diagnostics.text_mismatch_last += stats.revision_mismatches;
+            Ok::<(), RenderError>(())
+        })();
+        if let Err(error) = result {
+            self.pool.release(scratch);
+            return Err(error);
         }
-        // Composite isolated surface once with group opacity.
-        let b = group.bounds;
+        let b = group.bounds.intersect(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: w as f32,
+            h: h as f32,
+        });
         let (bw, bh) = (w as f32, h as f32);
-        self.blit(
+        let result = self.blit(
             device,
             encoder,
             &view,
@@ -2173,10 +2224,10 @@ impl Renderer {
             [0.0, 0.0, -1.0, 0.0],
             0.0,
             0.0,
-            1.0, // isolated surface is premultiplied working space
-        )?;
+            1.0,
+        );
         self.pool.release(scratch);
-        Ok(())
+        result.map(|()| passes)
     }
 
     /// Compose pipeline for an exact color-target format. The base working
@@ -2431,12 +2482,20 @@ fn emit_rect_instance(
             w: inst.rect[2] / s,
             h: inst.rect[3] / s,
         };
-        g.bounds = if g.instances.is_empty() && g.texts.is_empty() {
+        g.bounds = if g.commands.is_empty() {
             b
         } else {
             g.bounds.union(b)
         };
+        let index = g.instances.len() as u32;
         g.instances.push(inst);
+        match g.commands.last_mut() {
+            Some(GroupCommand::Rects { count, .. }) => *count += 1,
+            _ => g.commands.push(GroupCommand::Rects {
+                start: index,
+                count: 1,
+            }),
+        }
     } else {
         plan.instances.push(inst);
     }

@@ -211,6 +211,37 @@ impl View {
         }
     }
 
+    pub fn bind_existing(
+        &mut self,
+        tree: &mut UiTree,
+        root: NodeId,
+        element: Element,
+    ) -> Result<(), MountError> {
+        if tree.get(root).is_none() {
+            return Err(MountError::EmptyRoot);
+        }
+        let mut content = splice_top_level(vec![element])?;
+        if content.len() != 1 {
+            return Err(MountError::MultipleRoots {
+                count: content.len(),
+            });
+        }
+        self.dispose_bound();
+        self.root = Some(root);
+        bind_new(
+            &self.scope,
+            &self.sink,
+            &mut self.bound,
+            &mut self.collections,
+            tree,
+            root,
+            &mut content[0],
+            &TypoChain::default(),
+        )?;
+        self.content = content;
+        Ok(())
+    }
+
     /// Mounted root, if any.
     #[must_use]
     pub fn root(&self) -> Option<NodeId> {
@@ -328,10 +359,7 @@ impl View {
                 &TypoChain::default(),
             )?;
         } else {
-            let kids = tree
-                .get(root)
-                .map(|r| r.children.clone())
-                .unwrap_or_default();
+            let kids = tree.content_children(root);
             debug_assert_eq!(kids.len(), content.len());
             for (kid, el) in kids.iter().zip(content.iter_mut()) {
                 bind_new(
@@ -1329,6 +1357,16 @@ fn bind_new(
         return bind_collection(collections, tree, id, el, &own);
     }
     let bindings = std::mem::take(el.bindings_mut());
+    let actions: Vec<_> = bindings
+        .iter()
+        .filter_map(|binding| match binding {
+            ElementBinding::OnAction { kind, .. } => Some(*kind),
+            ElementBinding::Popup { .. } => Some(ActionKind::Activate),
+            ElementBinding::SubscribeEdit { .. } => Some(ActionKind::TextChanged),
+            _ => None,
+        })
+        .collect();
+    tree.retain_bound_actions(id, &actions);
     let keys = effect_keys(&bindings);
     let same = bound
         .get(&id.raw())
@@ -1373,7 +1411,7 @@ fn bind_new(
             tree.set_semantics(id, sem);
         }
     }
-    let kids = tree.get(id).map(|r| r.children.clone()).unwrap_or_default();
+    let kids = tree.content_children(id);
     let mut flat = el.flat_children_mut();
     debug_assert_eq!(
         kids.len(),
@@ -1385,6 +1423,7 @@ fn bind_new(
     for (kid, child) in kids.iter().zip(flat.iter_mut()) {
         bind_new(scope, sink, bound, collections, tree, *kid, child, &own)?;
     }
+    crate::controls::initialize_node(tree, id);
     Ok(())
 }
 
@@ -1489,7 +1528,17 @@ fn effect_keys(bindings: &[ElementBinding]) -> Vec<aqua_reactive::NodeId> {
                 keys.push(read.node_id());
                 keys.push(write.node_id());
             }
-            ElementBinding::OnAction { .. }
+            ElementBinding::Popup { .. }
+            | ElementBinding::ContextMenu(_)
+            | ElementBinding::Tooltip(_)
+            | ElementBinding::Disabled(_)
+            | ElementBinding::Focusability(_)
+            | ElementBinding::TabIndex(_)
+            | ElementBinding::Label(_)
+            | ElementBinding::OnInput { .. }
+            | ElementBinding::Cursor(_)
+            | ElementBinding::Shortcut(_)
+            | ElementBinding::OnAction { .. }
             | ElementBinding::Focusable
             | ElementBinding::Painter(_) => {}
         }
@@ -1505,8 +1554,110 @@ fn apply_bindings(
     id: NodeId,
     bindings: Vec<ElementBinding>,
 ) {
+    tree.clear_input_bindings(id);
     for binding in bindings {
         match binding {
+            ElementBinding::Popup { options, content } => {
+                let sink = sink.clone();
+                tree.set_bound_action_callback(
+                    id,
+                    ActionKind::Activate,
+                    Box::new(move |_| {
+                        sink.push(UiCommand::OpenPopup {
+                            node: id,
+                            content: Box::new(content()),
+                            options: options.clone(),
+                        })
+                    }),
+                );
+            }
+            ElementBinding::ContextMenu(content) => {
+                tree.listen_input_bound(
+                    id,
+                    crate::input::InputKind::PointerDown,
+                    crate::input::EventPhase::Bubble,
+                    Rc::new(move |event| {
+                        if matches!(
+                            event.input,
+                            crate::input::RoutedInput::Native(aqua_core::InputEvent::PointerDown(
+                                _,
+                                aqua_core::PointerButton::Secondary
+                            ))
+                        ) {
+                            crate::input::InputResponse {
+                                commands: vec![UiCommand::OpenPopup {
+                                    node: id,
+                                    content: Box::new(content()),
+                                    options: crate::popup::PopupOptions::menu()
+                                        .at(event.input.position().unwrap_or(Point::ZERO)),
+                                }],
+                                ..crate::input::InputResponse::handled()
+                            }
+                        } else {
+                            crate::input::InputResponse::default()
+                        }
+                    }),
+                );
+            }
+            ElementBinding::Tooltip(tooltip) => {
+                tree.listen_input_bound(
+                    id,
+                    crate::input::InputKind::PointerEnter,
+                    crate::input::EventPhase::Bubble,
+                    Rc::new(move |_| crate::input::InputResponse {
+                        commands: vec![UiCommand::ArmTooltip {
+                            node: id,
+                            tooltip: tooltip.clone(),
+                        }],
+                        ..Default::default()
+                    }),
+                );
+                tree.listen_input_bound(
+                    id,
+                    crate::input::InputKind::PointerLeave,
+                    crate::input::EventPhase::Bubble,
+                    Rc::new(move |_| crate::input::InputResponse {
+                        commands: vec![UiCommand::HideTooltip { node: id }],
+                        ..Default::default()
+                    }),
+                );
+            }
+
+            ElementBinding::Disabled(disabled) => {
+                if let Some(record) = tree.get_mut(id) {
+                    record.semantics.disabled = disabled;
+                }
+            }
+            ElementBinding::Focusability(focusable) => {
+                if let Some(record) = tree.get_mut(id) {
+                    record.focusable = focusable;
+                }
+            }
+            ElementBinding::TabIndex(tab_index) => {
+                if let Some(record) = tree.get_mut(id) {
+                    record.tab_index = tab_index;
+                    record.focusable = true;
+                }
+            }
+            ElementBinding::Label(label) => {
+                if let Some(record) = tree.get_mut(id) {
+                    record.semantics.label = label;
+                }
+            }
+
+            ElementBinding::OnInput {
+                kind,
+                phase,
+                callback,
+            } => {
+                tree.listen_input_bound(id, kind, phase, callback);
+            }
+            ElementBinding::Cursor(cursor) => {
+                tree.set_cursor_bound(id, cursor);
+            }
+            ElementBinding::Shortcut(shortcut) => {
+                tree.bind_shortcut_bound(id, shortcut);
+            }
             ElementBinding::SubscribeText(source) => {
                 let s = sink.clone();
                 scope.subscribe(&source, move |text: String| {
@@ -1518,20 +1669,18 @@ fn apply_bindings(
                 scope.subscribe(&read, move |text: String| {
                     s.push(UiCommand::SetText { node: id, text });
                 });
-                tree.set_action_callback(
+                tree.set_bound_action_callback(
                     id,
                     ActionKind::TextChanged,
                     std::boxed::Box::new(move |e: ActionEvent| {
                         if let Some(text) = e.text {
-                            // Infallible path: a disposed write simply drops
-                            // the keystroke instead of panicking dispatch.
                             let _ = write.try_set(text);
                         }
                     }),
                 );
             }
             ElementBinding::OnAction { kind, callback } => {
-                tree.set_action_callback(id, kind, callback);
+                tree.set_bound_action_callback(id, kind, callback);
             }
             ElementBinding::Focusable => {
                 if let Some(rec) = tree.get_mut(id) {

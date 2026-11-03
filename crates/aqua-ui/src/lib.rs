@@ -13,12 +13,15 @@
 pub mod binding;
 pub mod collection;
 pub mod collection_runtime;
+pub mod controls;
 pub mod element;
 pub mod events;
+pub mod input;
 pub mod layout;
 pub mod motion;
 pub mod overlay;
 pub mod overlay_host;
+pub mod popup;
 pub mod style;
 pub mod tree;
 pub mod virtualization;

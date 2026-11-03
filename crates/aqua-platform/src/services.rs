@@ -220,18 +220,7 @@ pub fn app_clipboard() -> (Box<dyn Clipboard>, ClipboardBackend) {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CursorIcon {
-    #[default]
-    Default,
-    Text,
-    Pointer,
-    Crosshair,
-    Move,
-    NotAllowed,
-    EwResize,
-    NsResize,
-}
+pub use aqua_core::CursorIcon;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ImeCursorArea {

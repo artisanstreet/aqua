@@ -3,7 +3,9 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 
-use aqua_core::{InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Point, PointerButton};
+use aqua_core::{
+    InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Point, PointerButton, Rect,
+};
 use aqua_text::{
     document::{
         SelectionDocument, SelectionDocumentId, SelectionSource, SelectionSourceError,
@@ -89,9 +91,19 @@ struct Click {
     count: usize,
 }
 
+#[derive(Clone)]
+struct RangePress {
+    node: NodeId,
+    range: aqua_text::TextInteractionRange,
+    pointer: aqua_core::PointerEvent,
+    dragged: bool,
+}
+
 #[derive(Default)]
 pub(super) struct TextInteraction {
+    click_settings: aqua_core::ClickSettings,
     modifiers: Modifiers,
+    range_press: Option<RangePress>,
     gesture: Option<Gesture>,
     click: Option<Click>,
     selection: Option<DocumentSelection>,
@@ -109,6 +121,144 @@ pub(super) struct TextInteraction {
 }
 
 impl Runtime {
+    pub fn set_click_settings(&mut self, settings: aqua_core::ClickSettings) {
+        if self.interaction.click_settings != settings {
+            self.interaction.click_settings = settings;
+            self.interaction.click = None;
+        }
+    }
+
+    pub(super) fn blur_text_interaction(&mut self) {
+        self.cancel_text_interaction();
+        self.interaction.modifiers = Modifiers::NONE;
+        self.interaction.click = None;
+    }
+
+    pub(super) fn cancel_text_interaction(&mut self) {
+        if let Some(gesture) = self.interaction.gesture.take() {
+            self.tree.take_press(gesture.contact);
+        }
+        self.interaction.range_press = None;
+    }
+
+    pub(super) fn inline_cursor(&self) -> Option<aqua_core::CursorIcon> {
+        if self.tree.input_is_captured()
+            || self
+                .interaction
+                .gesture
+                .as_ref()
+                .is_some_and(|gesture| gesture.dragged)
+        {
+            return None;
+        }
+        let at = self.tree.pointer_position()?;
+        let node = hit_test(&self.tree, at)?;
+        self.inline_range_at(node, at)
+            .map(|_| aqua_core::CursorIcon::Pointer)
+    }
+
+    fn inline_range_at(&self, node: NodeId, at: Point) -> Option<aqua_text::TextInteractionRange> {
+        if !self.text_node_allowed(node) || self.tree.is_disabled(node) {
+            return None;
+        }
+        let Some(NodeKind::Text(text)) = self.tree.get(node).map(|record| &record.kind) else {
+            return None;
+        };
+        if text.password
+            || matches!(&text.backing, TextBacking::Editable(editor) if editor.is_composing())
+        {
+            return None;
+        }
+        let point = self.text_local_point(node, at)?;
+        let entry = self.text_runs.get(&node)?;
+        let guard = self.runs.lock();
+        let layout = guard.resolve(entry.run)?.layout;
+        let byte = layout.word_hit(point.x, point.y)?;
+        let spans = layout.interaction_ranges();
+        text.interaction_ranges
+            .iter()
+            .chain(spans.iter())
+            .find(|range| {
+                range.range.start <= byte
+                    && byte < range.range.end
+                    && range.range.end <= text.text().len()
+            })
+            .cloned()
+    }
+
+    pub(super) fn handle_inline_input(&mut self, event: &InputEvent) -> bool {
+        match event {
+            InputEvent::PointerDown(pointer, PointerButton::Primary) => {
+                self.interaction.range_press =
+                    hit_test(&self.tree, pointer.position).and_then(|node| {
+                        let repeated = self.interaction.click.is_some_and(|click| {
+                            click.node == node
+                                && self.clock - click.time
+                                    <= self.interaction.click_settings.interval().as_secs_f64()
+                                && (click.at.x - pointer.position.x).abs()
+                                    <= self.interaction.click_settings.max_distance().x
+                                && (click.at.y - pointer.position.y).abs()
+                                    <= self.interaction.click_settings.max_distance().y
+                        });
+                        if repeated {
+                            return None;
+                        }
+                        self.inline_range_at(node, pointer.position)
+                            .map(|range| RangePress {
+                                node,
+                                range,
+                                pointer: *pointer,
+                                dragged: false,
+                            })
+                    });
+            }
+            InputEvent::PointerMove(pointer) => {
+                if let Some(press) = &mut self.interaction.range_press {
+                    if press.pointer.contact == pointer.contact {
+                        press.dragged |= (press.pointer.position.x - pointer.position.x)
+                            .abs()
+                            .max((press.pointer.position.y - pointer.position.y).abs())
+                            >= 3.0;
+                    }
+                }
+            }
+            InputEvent::PointerUp(pointer, PointerButton::Primary) => {
+                let Some(press) = self
+                    .interaction
+                    .range_press
+                    .take()
+                    .filter(|press| press.pointer.contact == pointer.contact)
+                else {
+                    return false;
+                };
+                if press.dragged
+                    || hit_test(&self.tree, pointer.position) != Some(press.node)
+                    || self.inline_range_at(press.node, pointer.position).as_ref()
+                        != Some(&press.range)
+                {
+                    return false;
+                }
+                self.cancel_text_interaction();
+                self.tree.take_press(pointer.contact);
+                let host = &self.host;
+                aqua_ui::input::route_text_range(
+                    &mut self.tree,
+                    press.node,
+                    press.range.id,
+                    press.range.range,
+                    *pointer,
+                    |tree, node| host.input_allowed(tree, node),
+                );
+                return true;
+            }
+            InputEvent::Scroll { .. }
+            | InputEvent::PointerCancel { .. }
+            | InputEvent::Focused(false) => self.interaction.range_press = None,
+            _ => {}
+        }
+        false
+    }
+
     pub fn selected_text(&self) -> Option<String> {
         if let Some(node) = self.tree.focused() {
             if self.text_node_allowed(node) && !self.tree.is_disabled(node) {
@@ -512,6 +662,65 @@ impl Runtime {
         deleted
     }
 
+    pub fn text_range_rects(&mut self, node: NodeId, range: Range<usize>) -> Vec<Rect> {
+        let valid = self.tree.get(node).is_some_and(|record| matches!(&record.kind,
+            NodeKind::Text(text) if !text.password && range.start <= range.end && range.end <= text.text().len()
+                && text.text().is_char_boundary(range.start) && text.text().is_char_boundary(range.end)
+                && !matches!(&text.backing, TextBacking::Editable(editor) if editor.is_composing())));
+        if !valid {
+            return Vec::new();
+        }
+        self.sync_text_runs_for(Some(node));
+        let Some(transform) = self.tree.visual_transform(node) else {
+            return Vec::new();
+        };
+        let Some(record) = self.tree.get(node) else {
+            return Vec::new();
+        };
+        let Some(entry) = self.text_runs.get(&node) else {
+            return Vec::new();
+        };
+        let guard = self.runs.lock();
+        let Some(run) = guard.resolve(entry.run) else {
+            return Vec::new();
+        };
+        let padding = record.style.padding;
+        run.layout
+            .selection_rects(range)
+            .into_iter()
+            .map(|rect| {
+                let start = transform.apply(Point::new(
+                    padding.left - entry.scroll_x + rect.x / self.scale,
+                    padding.top + rect.y / self.scale,
+                ));
+                let end = transform.apply(Point::new(
+                    padding.left - entry.scroll_x + (rect.x + rect.w) / self.scale,
+                    padding.top + (rect.y + rect.h) / self.scale,
+                ));
+                Rect::from_edges(start.x, start.y, end.x, end.y)
+            })
+            .collect()
+    }
+
+    pub fn paste_clipboard(&mut self, content: aqua_ui::input::ClipboardPaste) -> bool {
+        if aqua_ui::events::text_is_composing(&self.tree) {
+            return false;
+        }
+        let text = content.text.clone();
+        let host = &self.host;
+        let routed = aqua_ui::input::route_clipboard(&mut self.tree, content, |tree, node| {
+            host.input_allowed(tree, node)
+        });
+        let pasted = if routed.default_prevented {
+            false
+        } else {
+            text.as_ref().is_some_and(|text| self.paste_text(text))
+        };
+        self.tree.drain_commands();
+        self.process_control_requests();
+        pasted || routed.handled || routed.default_prevented
+    }
+
     pub fn paste_text(&mut self, text: &str) -> bool {
         let Some(node) = self.editable_target() else {
             return false;
@@ -691,9 +900,12 @@ impl Runtime {
             .click
             .filter(|click| {
                 click.node == node
-                    && self.clock - click.time <= 0.5
-                    && (click.at.x - pointer.position.x).abs() <= 4.0
-                    && (click.at.y - pointer.position.y).abs() <= 4.0
+                    && self.clock - click.time
+                        <= self.interaction.click_settings.interval().as_secs_f64()
+                    && (click.at.x - pointer.position.x).abs()
+                        <= self.interaction.click_settings.max_distance().x
+                    && (click.at.y - pointer.position.y).abs()
+                        <= self.interaction.click_settings.max_distance().y
             })
             .map_or(1, |click| click.count.saturating_add(1));
         self.interaction.click = Some(Click {
@@ -808,25 +1020,19 @@ impl Runtime {
     }
 
     fn hit_text_position(&self, node: NodeId, at: Point) -> Option<CaretPosition> {
-        let origin = self.text_origin(node)?;
+        let point = self.text_local_point(node, at)?;
         let entry = self.text_runs.get(&node)?;
         let guard = self.runs.lock();
         let layout = guard.resolve(entry.run)?.layout;
-        layout.hit_position(
-            (at.x - origin.x) * self.scale,
-            (at.y - origin.y) * self.scale,
-        )
+        layout.hit_position(point.x, point.y)
     }
 
     fn hit_text_word(&self, node: NodeId, at: Point) -> Option<usize> {
-        let origin = self.text_origin(node)?;
+        let point = self.text_local_point(node, at)?;
         let entry = self.text_runs.get(&node)?;
         let guard = self.runs.lock();
         let layout = guard.resolve(entry.run)?.layout;
-        layout.word_hit(
-            (at.x - origin.x) * self.scale,
-            (at.y - origin.y) * self.scale,
-        )
+        layout.word_hit(point.x, point.y)
     }
 
     fn document_root(&self, mut node: NodeId) -> Option<NodeId> {
@@ -1030,7 +1236,7 @@ impl Runtime {
                     .copied()
                     .filter(in_domain)
                     .filter_map(|node| {
-                        let rect = self.text_rect(node)?;
+                        let rect = self.text_world_rect(node)?;
                         let dy = (rect.y - at.y).max(0.0).max(at.y - rect.bottom());
                         let dx = (rect.x - at.x).max(0.0).max(at.x - rect.right());
                         Some((node, dy * dy + dx * dx))
@@ -1145,7 +1351,15 @@ impl Runtime {
             return None;
         }
         let node = gesture.scroll?;
-        let rect = self.text_rect(node)?;
+        let bounds = self.tree.rect(node)?;
+        let padding = self.tree.get(node)?.style.padding;
+        let rect = Rect::from_edges(
+            padding.left,
+            padding.top,
+            bounds.w - padding.right,
+            bounds.h - padding.bottom,
+        );
+        let pointer = aqua_ui::input::local_position(&self.tree, node, gesture.pointer)?;
         let offset = self.tree.scroll_offset(node)?;
         let content = self.tree.content_size(node)?;
         let velocity = |coordinate: f32, start: f32, end: f32, current: f32, maximum: f32| {
@@ -1165,14 +1379,14 @@ impl Runtime {
         };
         let velocity = Point::new(
             velocity(
-                gesture.pointer.x,
+                pointer.x,
                 rect.x,
                 rect.right(),
                 offset.x,
                 (content.w - rect.w).max(0.0),
             ),
             velocity(
-                gesture.pointer.y,
+                pointer.y,
                 rect.y,
                 rect.bottom(),
                 offset.y,

@@ -4,6 +4,8 @@ use std::rc::Rc;
 
 mod access;
 mod interaction;
+mod overlays;
+pub use overlays::{PopupError, PopupFocus, PopupOptions};
 
 use interaction::TextInteraction;
 
@@ -70,6 +72,7 @@ impl std::error::Error for RuntimeError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SceneKey {
     Tree { node: NodeId, op: u32 },
+    TextDecoration { node: NodeId, index: u32 },
     Caret { node: NodeId },
     Selection { node: NodeId, index: u32 },
     ImeUnderline { node: NodeId, index: u32 },
@@ -85,6 +88,7 @@ impl SceneKey {
     fn node(self) -> NodeId {
         match self {
             Self::Tree { node, .. }
+            | Self::TextDecoration { node, .. }
             | Self::Caret { node }
             | Self::Selection { node, .. }
             | Self::ImeUnderline { node, .. }
@@ -151,6 +155,10 @@ pub struct FrameWork {
 
 pub struct Runtime {
     interaction: TextInteraction,
+    tooltip_pending: Option<overlays::PendingTooltip>,
+    tooltip_popup: Option<(NodeId, aqua_ui::overlay::OverlayId)>,
+    bound_popups: HashMap<aqua_ui::overlay::OverlayId, overlays::BoundPopup>,
+    select_popups: HashMap<NodeId, aqua_ui::overlay::OverlayId>,
     tree: UiTree,
     runtime: ReactiveRuntime,
     scope: Scope,
@@ -183,6 +191,10 @@ impl Runtime {
         let scope = runtime.create_scope();
         Self {
             interaction: TextInteraction::default(),
+            tooltip_pending: None,
+            tooltip_popup: None,
+            bound_popups: HashMap::new(),
+            select_popups: HashMap::new(),
             tree: UiTree::new(),
             runtime,
             scope,
@@ -215,6 +227,12 @@ impl Runtime {
         }
         self.disposed = true;
         self.interaction = TextInteraction::default();
+        for (_, popup) in self.bound_popups.drain() {
+            popup.view.dispose();
+        }
+        self.select_popups.clear();
+        self.tooltip_pending = None;
+        self.tooltip_popup = None;
         if let Some(view) = self.view.take() {
             view.dispose();
         }
@@ -236,6 +254,7 @@ impl Runtime {
     pub fn advance_clock(&mut self, now: Seconds) {
         if now.is_finite() && now > self.clock {
             self.clock = now;
+            self.tree.advance_control_clock(now);
         }
     }
 
@@ -307,6 +326,7 @@ impl Runtime {
         view.set_content(&mut self.tree, vec![element])
             .map_err(RuntimeError::Mount)?;
         self.view = Some(view);
+        self.tree.drain_commands();
         Ok(())
     }
 
@@ -348,6 +368,7 @@ impl Runtime {
         };
         view.set_content(&mut self.tree, elements)
             .map_err(RuntimeError::Mount)?;
+        self.tree.drain_commands();
         Ok(())
     }
 
@@ -356,24 +377,118 @@ impl Runtime {
             return Err(RuntimeError::Disposed);
         }
         self.runtime.flush();
-        self.drain_structural()
+        self.drain_structural()?;
+        self.tree.drain_commands();
+        Ok(())
     }
 
     pub fn layout(&mut self) -> Result<(), String> {
+        self.refresh_reactive_popups()?;
         let measurer = CosmicMeasurer {
             fonts: self.fonts.clone(),
             scale: self.scale,
         };
         let viewport = Size::new(self.viewport.w, self.viewport.h);
         if let Some(view) = self.view.as_mut() {
-            view.compute_layout(&mut self.tree, viewport, &measurer)
+            view.compute_layout(&mut self.tree, viewport, &measurer)?
         } else {
-            self.tree.compute_layout(viewport, &measurer)
+            self.tree.compute_layout(viewport, &measurer)?
         }
+        for popup in self.bound_popups.values_mut() {
+            popup
+                .view
+                .compute_layout(&mut self.tree, viewport, &measurer)?;
+        }
+        Ok(())
+    }
+
+    pub fn cursor(&self) -> aqua_core::CursorIcon {
+        self.inline_cursor().unwrap_or_else(|| self.tree.cursor())
+    }
+
+    pub fn drop_files(&mut self, paths: Vec<std::path::PathBuf>) -> bool {
+        self.drop_files_at(paths, None)
+    }
+
+    pub fn drop_files_at(&mut self, paths: Vec<std::path::PathBuf>, at: Option<Point>) -> bool {
+        if self.disposed {
+            return false;
+        }
+        let host = &self.host;
+        let routed = aqua_ui::input::route_files(&mut self.tree, paths, at, |tree, node| {
+            host.input_allowed(tree, node)
+        });
+        self.tree.drain_commands();
+        self.host.sync_lifecycle(&mut self.tree);
+        routed.handled || routed.default_prevented
     }
 
     pub fn handle_input(&mut self, event: &CoreInputEvent) -> bool {
-        if self.handle_text_interaction(event) {
+        self.handle_input_with_default(event, |_| None)
+    }
+
+    pub fn step_input_with_default(
+        &mut self,
+        event: &CoreInputEvent,
+        default: impl FnOnce(&mut Self) -> Option<bool>,
+    ) -> Output {
+        let consumed = self.handle_input_with_default(event, default);
+        Output {
+            redraw: self.input_redraw(consumed),
+            ..Output::IDLE
+        }
+    }
+
+    pub fn handle_input_with_default(
+        &mut self,
+        event: &CoreInputEvent,
+        default: impl FnOnce(&mut Self) -> Option<bool>,
+    ) -> bool {
+        if self.disposed {
+            return false;
+        }
+        if matches!(event, CoreInputEvent::Focused(false)) {
+            self.blur_text_interaction();
+        }
+        if self.host.prepare_input(&mut self.tree, event) {
+            self.cancel_text_interaction();
+            self.tree.drain_commands();
+            self.process_control_requests();
+            return true;
+        }
+        if matches!(
+            event,
+            CoreInputEvent::PointerDown(..)
+                | CoreInputEvent::KeyDown(_)
+                | CoreInputEvent::Focused(false)
+        ) {
+            self.dismiss_tooltip();
+        }
+        let host = &self.host;
+        aqua_ui::controls::cancel_blocked(&mut self.tree, |tree, node| {
+            host.input_allowed(tree, node)
+        });
+        self.tree
+            .cancel_blocked_presses(|tree, node| host.input_allowed(tree, node));
+        let routed = aqua_ui::input::route_input(&mut self.tree, event, |tree, node| {
+            host.input_allowed(tree, node)
+        });
+        if routed.default_prevented {
+            self.cancel_text_interaction();
+            self.tree.drain_commands();
+            self.host.sync_lifecycle(&mut self.tree);
+            self.process_control_requests();
+            return true;
+        }
+        if let Some(consumed) = default(self) {
+            self.tree.drain_commands();
+            self.host.sync_lifecycle(&mut self.tree);
+            self.process_control_requests();
+            return consumed || routed.handled;
+        }
+        if self.handle_inline_input(event) || self.handle_text_interaction(event) {
+            self.tree.drain_commands();
+            self.process_control_requests();
             return true;
         }
         let consumed = match event {
@@ -391,11 +506,14 @@ impl Runtime {
                     true
                 }
             }
-            _ => self.host.handle_input(&mut self.tree, event),
+            _ => self.host.handle_prepared_input(&mut self.tree, event),
         };
         self.host.sync_lifecycle(&mut self.tree);
         let selected = self.begin_text_interaction(event);
-        consumed || selected
+        self.tree.drain_commands();
+        self.host.sync_lifecycle(&mut self.tree);
+        self.process_control_requests();
+        consumed || selected || routed.handled
     }
 
     fn text_input_allowed(&self) -> bool {
@@ -438,18 +556,26 @@ impl Runtime {
             return None;
         }
         let caret_position = text_caret_position(t)?;
-        let origin = self.text_origin(focused)?;
+        let padding = rec.style.padding;
+        let scroll_x = self
+            .text_runs
+            .get(&focused)
+            .map_or(0.0, |entry| entry.scroll_x);
+        let transform = self.tree.visual_transform(focused)?;
         let entry = self.text_runs.get(&focused)?;
         let guard = self.runs.lock();
         let handle = guard.resolve(entry.run)?;
         let layout = handle.layout;
         let caret = layout.caret_position(caret_position)?;
-        Some(Rect::from_edges(
-            origin.x + caret.x / self.scale,
-            origin.y + caret.y_top / self.scale,
-            origin.x + (caret.x + 2.0) / self.scale,
-            origin.y + (caret.y_top + caret.height) / self.scale,
-        ))
+        let start = transform.apply(Point::new(
+            padding.left - scroll_x + caret.x / self.scale,
+            padding.top + caret.y_top / self.scale,
+        ));
+        let end = transform.apply(Point::new(
+            padding.left - scroll_x + (caret.x + 2.0) / self.scale,
+            padding.top + (caret.y_top + caret.height) / self.scale,
+        ));
+        Some(Rect::from_edges(start.x, start.y, end.x, end.y))
     }
 
     pub fn build_frame(&mut self) -> Result<Option<Seconds>, RuntimeError> {
@@ -465,7 +591,7 @@ impl Runtime {
         self.frame_work = FrameWork::default();
         self.runtime.flush();
         self.drain_structural()?;
-        self.host.sync_lifecycle(&mut self.tree);
+        self.process_control_requests();
         let fonts_revision = self.fonts.lock().font_revision();
         if self
             .cached_version
@@ -555,12 +681,14 @@ impl Runtime {
         }
         let now = self.clock;
         self.host.advance_motion(now);
-        Ok(
-            match (self.host.motion_deadline(now), self.selection_deadline()) {
-                (Some(motion), Some(selection)) => Some(motion.min(selection)),
-                (motion, selection) => motion.or(selection),
-            },
-        )
+        Ok([
+            self.host.motion_deadline(now),
+            self.selection_deadline(),
+            self.tooltip_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by(f64::total_cmp))
     }
 
     #[must_use]
@@ -580,11 +708,18 @@ impl Runtime {
 
     fn text_rect(&self, node: NodeId) -> Option<Rect> {
         let mut r = self.tree.rect(node)?;
-        let mut parent = self.tree.get(node)?.parent;
+        let mut parent = if self.tree.is_portal(node) {
+            None
+        } else {
+            self.tree.get(node)?.parent
+        };
         while let Some(id) = parent {
             let record = self.tree.get(id)?;
             if let NodeKind::Scroll(scroll) = &record.kind {
                 r = r.translate(-scroll.offset.x, -scroll.offset.y);
+            }
+            if self.tree.is_portal(id) {
+                break;
             }
             parent = record.parent;
         }
@@ -595,6 +730,31 @@ impl Runtime {
             (r.x + r.w - p.right).max(r.x + p.left),
             (r.y + r.h - p.bottom).max(r.y + p.top),
         ))
+    }
+
+    fn text_local_point(&self, node: NodeId, at: Point) -> Option<Point> {
+        let point = aqua_ui::input::local_position(&self.tree, node, at)?;
+        let padding = self.tree.get(node)?.style.padding;
+        let scroll = self
+            .text_runs
+            .get(&node)
+            .map_or(0.0, |entry| entry.scroll_x);
+        Some(Point::new(
+            (point.x - padding.left + scroll) * self.scale,
+            (point.y - padding.top) * self.scale,
+        ))
+    }
+
+    fn text_world_rect(&self, node: NodeId) -> Option<Rect> {
+        let rect = self.tree.rect(node)?;
+        let padding = self.tree.get(node)?.style.padding;
+        let transform = self.tree.visual_transform(node)?;
+        let start = transform.apply(Point::new(padding.left, padding.top));
+        let end = transform.apply(Point::new(
+            (rect.w - padding.right).max(padding.left),
+            (rect.h - padding.bottom).max(padding.top),
+        ));
+        Some(Rect::from_edges(start.x, start.y, end.x, end.y))
     }
 
     fn text_origin(&self, node: NodeId) -> Option<Point> {
@@ -871,7 +1031,53 @@ impl Runtime {
                     },
                 ));
             }
+            let decorations = match &item {
+                DisplayItem::Text {
+                    at, color, opacity, ..
+                } => self.text_runs.get(&node).and_then(|entry| {
+                    let guard = self.runs.lock();
+                    let layout = guard.resolve(entry.run)?.layout;
+                    Some(
+                        layout
+                            .decorations()
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, decoration)| {
+                                let bounds = decoration.bounds;
+                                let mut fill =
+                                    decoration.color_srgb.map_or(*color, |[r, g, b, a]| {
+                                        Oklch::from_srgb8(r, g, b, a as f32 / 255.0)
+                                    });
+                                fill.alpha *= opacity;
+                                (
+                                    SceneKey::TextDecoration {
+                                        node,
+                                        index: index as u32,
+                                    },
+                                    DisplayItem::Rect {
+                                        bounds: Rect::from_edges(
+                                            at[0] + bounds.x / self.scale,
+                                            at[1] + bounds.y / self.scale,
+                                            at[0] + (bounds.x + bounds.w) / self.scale,
+                                            at[1] + (bounds.y + bounds.h) / self.scale,
+                                        ),
+                                        radius: 0.0,
+                                        fill,
+                                        border_width: 0.0,
+                                        border_color: Oklch::TRANSPARENT,
+                                        shadow: None,
+                                    },
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }),
+                _ => None,
+            };
             out.push((key, item));
+            if let Some(decorations) = decorations {
+                out.extend(decorations);
+            }
             if clip.is_some() {
                 out.push((SceneKey::TextClipEnd { node }, DisplayItem::PopClip));
             }
@@ -1255,7 +1461,7 @@ impl Runtime {
             .emit_semantics()
             .into_iter()
             .map(|semantic| {
-                let bounds = semantic.bounds.map(|bounds| Rect {
+                let bounds = self.tree.visual_rect(semantic.node).map(|bounds| Rect {
                     x: bounds.x * self.scale,
                     y: bounds.y * self.scale,
                     w: bounds.w * self.scale,
@@ -1284,7 +1490,32 @@ impl Runtime {
         {
             return;
         }
+        if let Some(control) = self.tree.control(request.node) {
+            let numeric = match control {
+                aqua_ui::controls::Control::Slider(control) => Some((control.value, control.range)),
+                aqua_ui::controls::Control::Resize(control) => Some((control.value, control.range)),
+                _ => None,
+            };
+            if let Some((value, range)) = numeric {
+                let next = match (&request.action, &request.data) {
+                    (A11yAction::SetValue, A11yActionData::Numeric(value)) => Some(*value),
+                    (A11yAction::SetValue, A11yActionData::Value(value)) => value.parse().ok(),
+                    (A11yAction::Increment, _) => Some(value + range.step),
+                    (A11yAction::Decrement, _) => Some(value - range.step),
+                    _ => None,
+                };
+                if let Some(next) = next.filter(|value| value.is_finite()) {
+                    self.tree.set_control_value(request.node, next);
+                    return;
+                }
+            }
+        }
         match request.action {
+            A11yAction::Expand | A11yAction::Collapse => {
+                self.tree
+                    .set_control_expanded(request.node, request.action == A11yAction::Expand);
+                self.process_control_requests();
+            }
             A11yAction::Focus => {
                 let _ = self.tree.set_focused(Some(request.node));
             }
@@ -1299,6 +1530,14 @@ impl Runtime {
             }
             A11yAction::SetValue | A11yAction::ReplaceSelectedText => {
                 if let A11yActionData::Value(value) = &request.data {
+                    if request.action == A11yAction::SetValue
+                        && self.tree.control(request.node).is_some()
+                    {
+                        if let Ok(number) = value.parse::<f64>() {
+                            self.tree.set_control_value(request.node, number);
+                        }
+                        return;
+                    }
                     let replace_all = request.action == A11yAction::SetValue;
                     let normalized: String = value
                         .replace("\r\n", "\n")

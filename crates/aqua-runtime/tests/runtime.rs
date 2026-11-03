@@ -165,3 +165,6 @@ fn time_never_runs_backwards() {
 
 #[path = "runtime/selection-sources.rs"]
 mod selection_sources;
+
+#[path = "runtime/controls.rs"]
+mod controls;

@@ -4,7 +4,9 @@
 //! resources through IDs and descriptors, never through native handles.
 
 pub mod arena;
+pub mod click;
 pub mod color;
+pub mod cursor;
 pub mod event;
 pub mod geometry;
 pub mod id;
@@ -14,7 +16,9 @@ pub mod semantic;
 pub mod vector;
 
 pub use arena::Arena;
+pub use click::ClickSettings;
 pub use color::Oklch;
+pub use cursor::CursorIcon;
 pub use event::{
     ImeEvent, InputEvent, Key, KeyEvent, Modifiers, NamedKey, PointerButton, PointerEvent,
     PointerKind, ScrollDelta,
@@ -25,6 +29,6 @@ pub use scene::{
     decode_layer, media_layer, viewport_layer, DisplayItem, LayerKind, TextRun,
     LAYER_MAX_GENERATION, LAYER_TAG_MASK, LAYER_TAG_MEDIA, LAYER_TAG_VIEWPORT,
 };
-pub use semantic::{CollectionSemantics, Role, SemanticNode};
+pub use semantic::{CollectionSemantics, NumericRangeSemantics, Role, SemanticNode};
 
 pub use image::ImageRef;

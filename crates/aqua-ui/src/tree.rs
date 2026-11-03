@@ -37,17 +37,17 @@
 use aqua_text::document::SelectionBinding;
 use aqua_text::{StyledSpan, TextStyle};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use aqua_core::{
-    media_layer, Arena, CollectionSemantics, DisplayItem, ImageId, NodeId, Oklch, Point, RawId,
-    Rect, Role, SemanticNode, Size, TextRun, ViewportId,
+    media_layer, Arena, CollectionSemantics, DisplayItem, NodeId, Oklch, Point, RawId, Rect, Role,
+    SemanticNode, Size, TextRun, Transform2D, ViewportId,
 };
 use aqua_text::{LineMode, Selection, TextEditor, TextModel};
-use taffy::{AvailableSpace, LayoutInput, LayoutOutput, TaffyTree};
+use taffy::{AvailableSpace, LayoutInput, TaffyTree};
 
 use crate::layout::TextMeasurer;
 use crate::style::{LayoutStyle, Paint};
@@ -79,6 +79,7 @@ pub struct TextContent {
     pub text_style: TextStyle,
     pub spans: Vec<StyledSpan>,
     pub selection_source: Option<SelectionBinding>,
+    pub interaction_ranges: Vec<aqua_text::TextInteractionRange>,
     /// Content store.
     pub backing: TextBacking,
     /// Font size in logical px.
@@ -111,20 +112,22 @@ impl TextContent {
     }
 
     pub fn shaping_spans(&self) -> &[StyledSpan] {
-        match &self.backing {
-            TextBacking::Static(model)
-                if !self.password
-                    && self.spans.iter().map(|span| span.text.len()).sum::<usize>()
-                        == model.text().len()
-                    && self
-                        .spans
-                        .iter()
-                        .flat_map(|span| span.text.chars())
-                        .eq(model.text().chars()) =>
-            {
-                &self.spans
-            }
-            _ => &[],
+        let source = self.text();
+        let composing =
+            matches!(&self.backing, TextBacking::Editable(editor) if editor.is_composing());
+        if !self.password
+            && !composing
+            && !self.is_placeholder()
+            && self.spans.iter().map(|span| span.text.len()).sum::<usize>() == source.len()
+            && self
+                .spans
+                .iter()
+                .flat_map(|span| span.text.chars())
+                .eq(source.chars())
+        {
+            &self.spans
+        } else {
+            &[]
         }
     }
 
@@ -139,6 +142,7 @@ impl TextContent {
             },
             spans: Vec::new(),
             selection_source: None,
+            interaction_ranges: Vec::new(),
             font_size: 14.0,
             color: Oklch::WHITE,
             selectable: false,
@@ -167,6 +171,7 @@ impl TextContent {
             },
             spans: Vec::new(),
             selection_source: None,
+            interaction_ranges: Vec::new(),
             font_size: 14.0,
             color: Oklch::WHITE,
             selectable: true,
@@ -329,13 +334,25 @@ pub struct BoxContent {
     pub paint: Paint,
 }
 
-/// Media presentation state.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MediaContent {
-    /// Image asset (`None` = not yet loaded; node keeps layout, paints nothing).
-    pub image: Option<ImageId>,
-    /// Opacity multiplier.
+    pub image: Option<aqua_core::ImageRef>,
     pub opacity: f32,
+    pub fit: aqua_core::image::ImageFit,
+    pub position: Point,
+    pub source: Rect,
+}
+
+impl Default for MediaContent {
+    fn default() -> Self {
+        Self {
+            image: None,
+            opacity: 1.0,
+            fit: aqua_core::image::ImageFit::Fill,
+            position: Point::new(0.5, 0.5),
+            source: Rect::from_edges(0.0, 0.0, 1.0, 1.0),
+        }
+    }
 }
 
 /// Scroll viewport state. Content size is derived from laid-out children.
@@ -410,6 +427,7 @@ impl fmt::Debug for NodeKind {
 /// that conversion); the tree never imports macro-owned types.
 #[derive(Debug)]
 pub struct NodeSpec {
+    pub control: Option<Box<crate::controls::Control>>,
     /// Node properties.
     pub kind: NodeKind,
     /// Typed style.
@@ -438,6 +456,7 @@ impl NodeSpec {
             paint: Paint::default(),
             key: None,
             collection_managed: false,
+            control: None,
             children: Vec::new(),
         }
     }
@@ -462,6 +481,7 @@ impl NodeSpec {
 /// host (facade/reactive), which routes back through [`UiCommand`]s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActionKind {
+    Custom(u64),
     /// Activation gesture (click/tap/Enter on an activatable node).
     Activate,
     /// Editable text content changed (carries the new committed text).
@@ -495,6 +515,31 @@ pub type ActionCallback = Box<dyn Fn(ActionEvent)>;
 /// dropped (never panics, never resurrects).
 #[derive(Debug)]
 pub enum UiCommand {
+    EditText {
+        node: NodeId,
+        revision: Option<u64>,
+        edit: crate::input::TextEdit,
+    },
+    OpenPopup {
+        node: NodeId,
+        content: Box<crate::element::Element>,
+        options: crate::popup::PopupOptions,
+    },
+    ArmTooltip {
+        node: NodeId,
+        tooltip: crate::popup::Tooltip,
+    },
+    HideTooltip {
+        node: NodeId,
+    },
+    ChooseOption {
+        node: NodeId,
+        index: usize,
+    },
+    SetControlValue {
+        node: NodeId,
+        value: f64,
+    },
     /// Replace text content (editor state preserved).
     SetText {
         /// Target node.
@@ -631,6 +676,7 @@ impl Default for NodeSemantics {
 
 /// One retained node.
 pub struct NodeRecord {
+    pub control: Option<Box<crate::controls::Control>>,
     /// Node kind + properties.
     pub kind: NodeKind,
     /// Typed style.
@@ -651,6 +697,7 @@ pub struct NodeRecord {
     pub paint_rev: u64,
     /// Whether the node can take keyboard focus.
     pub focusable: bool,
+    pub tab_index: i32,
     /// Stable key for keyed reconciliation (`None` = positional).
     pub key: Option<KeyHash>,
     /// Accessibility metadata (explicit roles; see [`NodeSemantics`]).
@@ -719,6 +766,10 @@ pub struct FrameStats {
 /// - layout runs headless through Taffy;
 /// - scene emission produces renderer-neutral [`DisplayItem`]s.
 pub struct UiTree {
+    portal_roots: std::collections::HashSet<NodeId>,
+    portal_order: Vec<NodeId>,
+    pub(crate) control_router: crate::controls::ControlRouter,
+    pub(crate) input: crate::input::InputRouter,
     nodes: Arena<NodeRecord>,
     root: Option<NodeId>,
     taffy: TaffyTree<LeafCtx>,
@@ -739,6 +790,7 @@ pub struct UiTree {
     next_painter: u64,
     /// Action callbacks by (node, action kind).
     actions: HashMap<(RawId, ActionKind), ActionCallback>,
+    bound_actions: HashSet<(RawId, ActionKind)>,
     /// Armed press per pointer contact: contact id → activatable node.
     /// Set on primary down, consumed on up/cancel. Cleared when the node is
     /// removed or the window loses focus, so a stale arm can never fire.
@@ -770,6 +822,10 @@ impl UiTree {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            portal_roots: std::collections::HashSet::new(),
+            portal_order: Vec::new(),
+            control_router: crate::controls::ControlRouter::default(),
+            input: crate::input::InputRouter::default(),
             nodes: Arena::new(),
             root: None,
             taffy: TaffyTree::new(),
@@ -781,6 +837,7 @@ impl UiTree {
             painters: HashMap::new(),
             next_painter: 1,
             actions: HashMap::new(),
+            bound_actions: HashSet::new(),
             press_captures: HashMap::new(),
             layout_version: 0,
             committed_layout: 0,
@@ -870,46 +927,48 @@ impl UiTree {
 
     /// Move keyboard focus (validates liveness + focusability). Fires
     /// [`ActionKind::FocusChanged`] on both ends when the focus changes.
-    pub fn set_focused(&mut self, id: Option<NodeId>) -> bool {
-        match id {
-            None => {
-                let prev = self.focused;
-                self.focused = None;
-                if let Some(p) = prev {
-                    self.fire_action(ActionEvent {
-                        node: p,
-                        kind: ActionKind::FocusChanged,
-                        text: None,
-                        focused: Some(false),
-                    });
-                }
-                true
-            }
-            Some(n) => match self.nodes.get(n.raw()) {
-                Some(rec) if rec.focusable && !rec.semantics.disabled => {
-                    let prev = self.focused;
-                    self.focused = Some(n);
-                    if prev != Some(n) {
-                        if let Some(p) = prev {
-                            self.fire_action(ActionEvent {
-                                node: p,
-                                kind: ActionKind::FocusChanged,
-                                text: None,
-                                focused: Some(false),
-                            });
-                        }
-                        self.fire_action(ActionEvent {
-                            node: n,
-                            kind: ActionKind::FocusChanged,
-                            text: None,
-                            focused: Some(true),
-                        });
-                    }
-                    true
-                }
-                _ => false,
-            },
+    pub fn cancel_blocked_presses(&mut self, allowed: impl Fn(&Self, NodeId) -> bool) {
+        let blocked: Vec<_> = self
+            .press_captures
+            .iter()
+            .filter(|(_, node)| {
+                self.get(**node).is_none() || self.is_disabled(**node) || !allowed(self, **node)
+            })
+            .map(|(contact, _)| *contact)
+            .collect();
+        for contact in blocked {
+            self.press_captures.remove(&contact);
         }
+    }
+
+    pub fn set_focused(&mut self, id: Option<NodeId>) -> bool {
+        if id.is_some_and(|node| {
+            self.get(node).is_none_or(|record| !record.focusable) || self.is_disabled(node)
+        }) {
+            return false;
+        }
+        let previous = self.focused;
+        if previous == id {
+            return true;
+        }
+        self.focused = id;
+        for (node, focused) in [(previous, false), (id, true)] {
+            if let Some(node) = node {
+                if self
+                    .get(node)
+                    .is_some_and(|record| record.paint.focus_ring.is_some())
+                {
+                    self.touch_paint(node);
+                }
+                self.fire_action(ActionEvent {
+                    node,
+                    kind: ActionKind::FocusChanged,
+                    text: None,
+                    focused: Some(focused),
+                });
+            }
+        }
+        true
     }
 
     /// Assign accessibility metadata (role, label, disabled, ...). Bumps
@@ -970,18 +1029,30 @@ impl UiTree {
                     });
                 }
             }
-            let mut bounds = self.rects.get(&id.raw()).copied();
-            let mut parent = rec.parent;
-            while let Some(node) = parent {
-                let Some(record) = self.get(node) else {
-                    break;
-                };
-                if let NodeKind::Scroll(scroll) = &record.kind {
-                    bounds =
-                        bounds.map(|bounds| bounds.translate(-scroll.offset.x, -scroll.offset.y));
+            let bounds = self.visual_rect(id);
+            let numeric_range = match rec.control.as_deref() {
+                Some(crate::controls::Control::Slider(control)) => {
+                    Some(aqua_core::NumericRangeSemantics {
+                        min: control.range.min,
+                        max: control.range.max,
+                        step: control.range.step,
+                        value: control.value,
+                    })
                 }
-                parent = record.parent;
-            }
+                Some(crate::controls::Control::Resize(control)) => {
+                    Some(aqua_core::NumericRangeSemantics {
+                        min: control.range.min,
+                        max: control.range.max,
+                        step: control.range.step,
+                        value: control.value,
+                    })
+                }
+                _ => None,
+            };
+            let expanded = match rec.control.as_deref() {
+                Some(crate::controls::Control::Select(control)) => Some(control.is_open()),
+                _ => None,
+            };
             out.push(SemanticNode {
                 node: id,
                 role: rec.semantics.role,
@@ -990,6 +1061,8 @@ impl UiTree {
                 disabled: self.is_disabled(id),
                 selected: rec.semantics.selected,
                 value_text,
+                numeric_range,
+                expanded,
                 children: rec.children.clone(),
                 bounds,
                 collection: rec.semantics.collection,
@@ -1026,8 +1099,33 @@ impl UiTree {
         if !self.nodes.contains(node.raw()) {
             return false;
         }
+        self.bound_actions.remove(&(node.raw(), kind));
         self.actions.insert((node.raw(), kind), cb);
         true
+    }
+
+    pub(crate) fn set_bound_action_callback(
+        &mut self,
+        node: NodeId,
+        kind: ActionKind,
+        callback: ActionCallback,
+    ) {
+        if self.set_action_callback(node, kind, callback) {
+            self.bound_actions.insert((node.raw(), kind));
+        }
+    }
+
+    pub(crate) fn retain_bound_actions(&mut self, node: NodeId, kinds: &[ActionKind]) {
+        let stale: Vec<_> = self
+            .bound_actions
+            .iter()
+            .copied()
+            .filter(|(raw, kind)| *raw == node.raw() && !kinds.contains(kind))
+            .collect();
+        for key in stale {
+            self.bound_actions.remove(&key);
+            self.actions.remove(&key);
+        }
     }
 
     /// Fire an action: invoke the registered callback with event data only.
@@ -1133,42 +1231,80 @@ impl UiTree {
     /// start of `compute_layout`; call directly in tests to observe effects
     /// without laying out.
     pub fn drain_commands(&mut self) -> usize {
-        let queue = self.sink.take();
-        let n = queue.len();
-        for cmd in queue {
-            match cmd {
-                UiCommand::SetText { node, text } => {
-                    self.set_text(node, text);
-                }
-                UiCommand::SetStyle { node, style } => {
-                    self.set_style(node, style);
-                }
-                UiCommand::SetScroll { node, offset } => {
-                    self.scroll_to(node, offset);
-                }
-                UiCommand::RequestFocus { node } => {
-                    self.set_focused(node);
-                }
-                UiCommand::Insert {
-                    parent,
-                    index,
-                    spec,
-                } => {
-                    self.insert_spec(parent, index, *spec);
-                }
-                UiCommand::Remove { node } => {
-                    self.remove(node);
-                }
-                UiCommand::Move {
-                    parent,
-                    child,
-                    index,
-                } => {
-                    self.move_child(parent, child, index);
+        let mut queue = self.sink.take();
+        let mut count = 0;
+        while !queue.is_empty() {
+            count += queue.len();
+            for cmd in queue {
+                match cmd {
+                    UiCommand::EditText {
+                        node,
+                        revision,
+                        edit,
+                    } => {
+                        self.apply_text_edit(node, revision, edit);
+                    }
+                    UiCommand::OpenPopup {
+                        node,
+                        content,
+                        options,
+                    } => self
+                        .control_router
+                        .request(crate::controls::ControlRequest::OpenPopup {
+                            owner: node,
+                            content,
+                            options,
+                        }),
+                    UiCommand::ArmTooltip { node, tooltip } => {
+                        self.control_router
+                            .request(crate::controls::ControlRequest::ArmTooltip {
+                                owner: node,
+                                tooltip,
+                            })
+                    }
+                    UiCommand::HideTooltip { node } => self
+                        .control_router
+                        .request(crate::controls::ControlRequest::HideTooltip { owner: node }),
+                    UiCommand::ChooseOption { node, index } => {
+                        self.choose_control_option(node, index);
+                    }
+                    UiCommand::SetControlValue { node, value } => {
+                        self.set_control_value(node, value);
+                    }
+                    UiCommand::SetText { node, text } => {
+                        self.set_text(node, text);
+                    }
+                    UiCommand::SetStyle { node, style } => {
+                        self.set_style(node, style);
+                    }
+                    UiCommand::SetScroll { node, offset } => {
+                        self.scroll_to(node, offset);
+                    }
+                    UiCommand::RequestFocus { node } => {
+                        self.set_focused(node);
+                    }
+                    UiCommand::Insert {
+                        parent,
+                        index,
+                        spec,
+                    } => {
+                        self.insert_spec(parent, index, *spec);
+                    }
+                    UiCommand::Remove { node } => {
+                        self.remove(node);
+                    }
+                    UiCommand::Move {
+                        parent,
+                        child,
+                        index,
+                    } => {
+                        self.move_child(parent, child, index);
+                    }
                 }
             }
+            queue = self.sink.take();
         }
-        n
+        count
     }
 
     /// Mount a descriptor tree as the root, replacing any previous root.
@@ -1184,6 +1320,83 @@ impl UiTree {
         id
     }
 
+    pub fn is_portal(&self, node: NodeId) -> bool {
+        self.portal_roots.contains(&node)
+    }
+
+    pub fn visual_transform(&self, node: NodeId) -> Option<Transform2D> {
+        let mut path = Vec::new();
+        let mut current = Some(node);
+        while let Some(id) = current {
+            path.push(id);
+            if self.is_portal(id) {
+                break;
+            }
+            current = self.get(id)?.parent;
+        }
+        let mut offset = Point::ZERO;
+        let mut world = Transform2D::IDENTITY;
+        let mut origin = Point::ZERO;
+        for id in path.into_iter().rev() {
+            let record = self.get(id)?;
+            let rect = self.rect(id)?.translate(offset.x, offset.y);
+            origin = rect.origin();
+            if let Some(transform) = self.paint(id)?.transform {
+                let anchored = Transform2D::translate(-rect.x, -rect.y)
+                    .then(transform)
+                    .then(Transform2D::translate(rect.x, rect.y));
+                world = anchored.then(world);
+            }
+            if id != node {
+                if let NodeKind::Scroll(scroll) = &record.kind {
+                    offset.x -= scroll.offset.x;
+                    offset.y -= scroll.offset.y;
+                }
+            }
+        }
+        Some(Transform2D::translate(origin.x, origin.y).then(world))
+    }
+
+    pub fn visual_rect(&self, node: NodeId) -> Option<Rect> {
+        let rect = self.rect(node)?;
+        let transform = self.visual_transform(node)?;
+        let start = transform.apply(Point::ZERO);
+        let end = transform.apply(Point::new(rect.w, rect.h));
+        Some(Rect::from_edges(
+            start.x.min(end.x),
+            start.y.min(end.y),
+            start.x.max(end.x),
+            start.y.max(end.y),
+        ))
+    }
+
+    pub fn portal_roots_in_paint_order(&self) -> &[NodeId] {
+        &self.portal_order
+    }
+
+    pub fn mark_portal(&mut self, node: NodeId) -> bool {
+        if self.get(node).is_none_or(|record| record.parent.is_none())
+            || !self.portal_roots.insert(node)
+        {
+            return false;
+        }
+        self.portal_order.push(node);
+        true
+    }
+
+    pub(crate) fn content_children(&self, node: NodeId) -> Vec<NodeId> {
+        self.get(node)
+            .map(|record| {
+                record
+                    .children
+                    .iter()
+                    .copied()
+                    .filter(|child| !self.portal_roots.contains(child))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Keyed reconciliation of a parent's children against new descriptors:
     /// nodes with equal keys are reused in place (editing state, focus, and
     /// per-row effect scopes keyed by [`NodeId`] survive), new keys insert,
@@ -1195,10 +1408,18 @@ impl UiTree {
     /// mount-time default; explicit changes flow through `SetText`
     /// bindings), while static labels take the descriptor text.
     pub fn sync_children(&mut self, parent: NodeId, children: Vec<NodeSpec>) -> Vec<NodeId> {
-        let old: Vec<NodeId> = self
+        let portals: Vec<_> = self
             .get(parent)
-            .map(|r| r.children.clone())
+            .map(|record| {
+                record
+                    .children
+                    .iter()
+                    .copied()
+                    .filter(|child| self.portal_roots.contains(child))
+                    .collect()
+            })
             .unwrap_or_default();
+        let old = self.content_children(parent);
         // Index old children by key; unkeyed fall back to positional reuse.
         let mut by_key: HashMap<KeyHash, NodeId> = HashMap::with_capacity(old.len());
         let mut unkeyed: Vec<NodeId> = Vec::new();
@@ -1282,7 +1503,8 @@ impl UiTree {
                 }
             }
         }
-        // Reorder: rebuild the child list and taffy order in one pass.
+        let content = built.clone();
+        built.extend(portals.into_iter().filter(|node| self.get(*node).is_some()));
         if let Some(&pt) = self.tmap.get(&parent.raw()) {
             let attached: Vec<taffy::NodeId> = self
                 .get(parent)
@@ -1310,7 +1532,7 @@ impl UiTree {
             rec.dirty_layout = true;
         }
         self.mark_layout_dirty(parent);
-        built
+        content
     }
 
     /// Whether a live node's kind discriminant matches `kind`.
@@ -1353,6 +1575,7 @@ impl UiTree {
                             cur.text_style = t.text_style;
                             cur.spans = t.spans;
                             cur.selection_source = t.selection_source;
+                            cur.interaction_ranges = t.interaction_ranges;
                             cur.font_size = t.font_size;
                             cur.color = t.color;
                             cur.selectable = t.selectable;
@@ -1381,6 +1604,7 @@ impl UiTree {
                             cur.text_style = t.text_style;
                             cur.spans = t.spans;
                             cur.selection_source = t.selection_source;
+                            cur.interaction_ranges = t.interaction_ranges;
                             cur.font_size = t.font_size;
                             cur.color = t.color;
                             cur.selectable = t.selectable;
@@ -1435,6 +1659,11 @@ impl UiTree {
         }
         if let Some(rec) = self.nodes.get_mut(id.raw()) {
             rec.key = spec.key;
+            let mut next = spec.control;
+            if let (Some(next), Some(previous)) = (&mut next, &rec.control) {
+                next.preserve(previous);
+            }
+            rec.control = next;
         }
         if managed {
             // Window-managed: children and scroll stay with the driver.
@@ -1446,12 +1675,21 @@ impl UiTree {
 
     /// Build a descriptor subtree detached (no parent yet); caller attaches.
     fn build_detached(&mut self, spec: NodeSpec) -> NodeId {
+        let control = spec.control;
         let key = spec.key;
         let style = spec.style;
         let paint = spec.paint;
         let kind = spec.kind;
         let children = spec.children;
-        let focusable = matches!(kind, NodeKind::Text(ref t) if t.is_editable());
+        let focusable = matches!(kind, NodeKind::Text(ref t) if t.is_editable())
+            || control.as_deref().is_some_and(|control| {
+                matches!(
+                    control,
+                    crate::controls::Control::Slider(_)
+                        | crate::controls::Control::Select(_)
+                        | crate::controls::Control::Resize(_)
+                )
+            });
         let ctx = match kind {
             NodeKind::Text(ref t) => LeafCtx {
                 text: Some(LeafText {
@@ -1471,6 +1709,7 @@ impl UiTree {
         // Canvas painters referenced by id stay registered across rebuilds;
         // only node records are fresh.
         let id = NodeId::from_raw(self.nodes.insert(NodeRecord {
+            control,
             kind,
             style,
             paint,
@@ -1480,6 +1719,7 @@ impl UiTree {
             dirty_paint: true,
             paint_rev: self.content_version + 1,
             focusable,
+            tab_index: 0,
             key,
             semantics: NodeSemantics::default(),
         }));
@@ -1598,6 +1838,7 @@ impl UiTree {
             paint: Paint::default(),
             key: None,
             collection_managed: false,
+            control: None,
             children: Vec::new(),
         });
         if let Some(p) = parent {
@@ -1664,9 +1905,14 @@ impl UiTree {
                 let _ = self.taffy.remove(t);
                 self.tmap.remove(&n.raw());
             }
+            self.portal_roots.remove(&n);
+            self.portal_order.retain(|node| *node != n);
+            self.control_router.remove_node(n);
+            self.cancel_input_node(n);
             self.rects.remove(&n.raw());
             self.content.remove(&n.raw());
             self.actions.retain(|(raw, _), _| *raw != n.raw());
+            self.bound_actions.retain(|(raw, _)| *raw != n.raw());
             let _ = self.nodes.remove(n.raw());
         }
         // A removed node can never fire: drop arms targeting dead nodes.
@@ -1974,6 +2220,9 @@ impl UiTree {
         let applied = match self.nodes.get_mut(id.raw()) {
             Some(rec) => match rec.kind {
                 NodeKind::Scroll(ref mut s) => {
+                    if s.offset == clamped {
+                        return false;
+                    }
                     s.offset = clamped;
                     rec.dirty_paint = true;
                     true
@@ -2032,9 +2281,16 @@ impl UiTree {
                     width: AvailableSpace::Definite(viewport.w),
                     height: AvailableSpace::Definite(viewport.h),
                 },
-                |input: LayoutInput, _node, ctx, _style| {
+                |input: LayoutInput, _node, ctx, style| {
                     measured.set(measured.get() + 1);
-                    measure_leaf(input, ctx, measurer)
+                    taffy::compute_leaf_layout(
+                        input,
+                        style,
+                        |_, _| 0.0,
+                        |known_dimensions, available_space| {
+                            measure_leaf(known_dimensions, available_space, ctx, measurer)
+                        },
+                    )
                 },
             )
             .map_err(|e| format!("taffy layout failed: {e:?}"))?;
@@ -2111,7 +2367,10 @@ impl UiTree {
     pub fn emit_scene(&mut self) -> Vec<(NodeId, DisplayItem)> {
         let mut out = Vec::new();
         if let Some(root) = self.root {
-            self.emit_node(root, Point::ZERO, None, &mut out);
+            self.emit_node(root, Point::ZERO, None, Transform2D::IDENTITY, &mut out);
+        }
+        for portal in &self.portal_order {
+            self.emit_node(*portal, Point::ZERO, None, Transform2D::IDENTITY, &mut out);
         }
         self.last_stats.scene_ops = out.len();
         self.last_stats.content_version = self.content_version;
@@ -2123,6 +2382,7 @@ impl UiTree {
         id: NodeId,
         offset: Point,
         clip: Option<Rect>,
+        inherited_transform: Transform2D,
         out: &mut Vec<(NodeId, DisplayItem)>,
     ) {
         let Some(rec) = self.nodes.get(id.raw()) else {
@@ -2132,17 +2392,40 @@ impl UiTree {
             return;
         };
         rect = rect.translate(offset.x, offset.y);
-        // Clipped out entirely: skip the subtree (occlusion, not disposal).
-        if let Some(c) = clip {
-            if c.intersect(rect).is_empty() {
-                return;
-            }
-        }
         let paint = match &rec.kind {
-            NodeKind::Box(b) => b.paint,
+            NodeKind::Box(content) => content.paint,
             _ => rec.paint,
         };
-        // Opacity encloses the node's surface AND all of its content.
+        let transform = paint.transform.map(|transform| {
+            Transform2D::translate(-rect.x, -rect.y)
+                .then(transform)
+                .then(Transform2D::translate(rect.x, rect.y))
+        });
+        let world = transform.map_or(inherited_transform, |transform| {
+            transform.then(inherited_transform)
+        });
+        let start = world.apply(rect.origin());
+        let end = world.apply(Point::new(rect.right(), rect.bottom()));
+        let visual_rect = Rect::from_edges(start.x, start.y, end.x, end.y);
+        if clip.is_some_and(|clip| clip.intersect(visual_rect).is_empty()) && Some(id) != self.root
+        {
+            return;
+        }
+        if let Some(transform) = transform {
+            out.push((id, DisplayItem::PushTransform(transform)));
+        }
+        if let Some(radius) = paint.content_blur {
+            out.push((
+                id,
+                DisplayItem::PushContentBlur {
+                    bounds: rect,
+                    radius,
+                },
+            ));
+        }
+        if let Some(map) = paint.text_color_map {
+            out.push((id, DisplayItem::PushTextColorMap(map)));
+        }
         if let Some(opacity) = paint.opacity {
             out.push((id, DisplayItem::PushOpacity(opacity)));
         }
@@ -2161,7 +2444,7 @@ impl UiTree {
         }
         let clips = paint.clip || matches!(&rec.kind, NodeKind::Scroll(_));
         let child_clip = if clips {
-            Some(clip.map_or(rect, |c| c.intersect(rect)))
+            Some(clip.map_or(visual_rect, |c| c.intersect(visual_rect)))
         } else {
             clip
         };
@@ -2194,14 +2477,17 @@ impl UiTree {
                 ));
             }
             NodeKind::Media(m) => {
-                if let Some(image) = m.image {
+                if let Some(image) = &m.image {
                     out.push((
                         id,
-                        DisplayItem::External {
+                        DisplayItem::Image {
                             bounds: rect,
-                            layer: media_layer(image),
+                            layer: media_layer(image.id()),
+                            fit: m.fit,
+                            position: m.position,
+                            source: m.source,
                             opacity: m.opacity,
-                            rounded_clip: 0.0,
+                            rounded_clip: paint.corners.map_or(paint.radius, |r| r.top_left),
                         },
                     ));
                 }
@@ -2230,13 +2516,39 @@ impl UiTree {
             _ => offset,
         };
         for &child in &rec.children {
-            self.emit_node(child, child_offset, child_clip, out);
+            if !self.is_portal(child) {
+                self.emit_node(child, child_offset, child_clip, world, out);
+            }
         }
         if clips {
             out.push((id, DisplayItem::PopClip));
         }
+        if self.focused == Some(id) && !self.is_disabled(id) {
+            if let Some(ring) = paint.focus_ring {
+                out.push((
+                    id,
+                    DisplayItem::Rect {
+                        bounds: rect,
+                        radius: paint.radius,
+                        fill: Oklch::TRANSPARENT,
+                        border_width: ring.width,
+                        border_color: ring.color,
+                        shadow: None,
+                    },
+                ));
+            }
+        }
         if paint.opacity.is_some() {
             out.push((id, DisplayItem::PopOpacity));
+        }
+        if paint.text_color_map.is_some() {
+            out.push((id, DisplayItem::PopTextColorMap));
+        }
+        if paint.content_blur.is_some() {
+            out.push((id, DisplayItem::PopContentBlur));
+        }
+        if transform.is_some() {
+            out.push((id, DisplayItem::PopTransform));
         }
     }
 
@@ -2261,16 +2573,15 @@ impl UiTree {
     }
 }
 
-/// Leaf measurement: text leaves ask the provider; anything else resolves
-/// from known dimensions (style) or collapses to zero (content-less leaf).
 fn measure_leaf(
-    input: LayoutInput,
+    known_dimensions: taffy::geometry::Size<Option<f32>>,
+    available_space: taffy::geometry::Size<AvailableSpace>,
     ctx: Option<&mut LeafCtx>,
     measurer: &dyn TextMeasurer,
-) -> LayoutOutput {
+) -> taffy::geometry::Size<f32> {
     let mut size = taffy::geometry::Size {
-        width: input.known_dimensions.width.unwrap_or(0.0),
-        height: input.known_dimensions.height.unwrap_or(0.0),
+        width: known_dimensions.width.unwrap_or(0.0),
+        height: known_dimensions.height.unwrap_or(0.0),
     };
     if let Some(LeafCtx {
         text:
@@ -2283,26 +2594,23 @@ fn measure_leaf(
             }),
     }) = ctx
     {
-        // Single-line text never wraps: pass no width so every provider
-        // measures one line. Multiline wraps at the definite available width.
         let max_width = if *multiline {
-            match input.available_space.width {
+            match available_space.width {
                 AvailableSpace::Definite(w) => Some(w),
                 AvailableSpace::MaxContent | AvailableSpace::MinContent => None,
             }
         } else {
             None
         };
-        let measured: Size =
-            measurer.measure_styled(text, text_style, spans, max_width, *multiline);
-        if input.known_dimensions.width.is_none() {
+        let measured = measurer.measure_styled(text, text_style, spans, max_width, *multiline);
+        if known_dimensions.width.is_none() {
             size.width = measured.w;
         }
-        if input.known_dimensions.height.is_none() {
+        if known_dimensions.height.is_none() {
             size.height = measured.h;
         }
     }
-    LayoutOutput::from_outer_size(size)
+    size
 }
 
 #[cfg(test)]
@@ -2315,10 +2623,7 @@ mod tests {
     fn every_primitive_paints_without_wrapper_nodes() {
         let kinds = [
             NodeKind::Text(TextContent::label("painted")),
-            NodeKind::Media(MediaContent {
-                image: None,
-                opacity: 1.0,
-            }),
+            NodeKind::Media(MediaContent::default()),
             NodeKind::Scroll(ScrollContent::default()),
             NodeKind::Canvas(CanvasContent::default()),
             NodeKind::Viewport3D(ViewportContent::default()),

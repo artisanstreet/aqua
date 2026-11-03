@@ -1,13 +1,15 @@
 use std::hash::Hash;
 
-use aqua_core::{
-    CollectionSemantics, DisplayItem, ImageId, NodeId, Oklch, Point, Rect, Role, ViewportId,
-};
+use aqua_core::{CollectionSemantics, DisplayItem, NodeId, Oklch, Point, Rect, Role, ViewportId};
 use aqua_reactive::{ReadSignal, WriteSignal};
 
 use crate::collection_runtime::{
     validate_descriptor, validate_snapshot, CollectionDescriptor, CollectionError, CollectionRole,
 };
+use crate::controls::{
+    Control, SelectControl, SelectOption, SliderControl, SliderRange, TabsControl,
+};
+use crate::input::{EventPhase, InputCallback, InputKind, InputResponse, RoutedEvent, Shortcut};
 use crate::style::{Axis, LayoutStyle, Length, Paint, Style, Typography};
 use crate::tree::{
     hash_key, ActionCallback, ActionEvent, ActionKind, BoxContent, CanvasContent,
@@ -390,6 +392,23 @@ impl TextSource for ReadSignal<String> {
 /// [`crate::binding::View`]; effects reference the [`NodeId`], never rebuilt
 /// subtrees.
 pub enum ElementBinding {
+    Popup {
+        options: crate::popup::PopupOptions,
+        content: std::rc::Rc<dyn Fn() -> Element>,
+    },
+    ContextMenu(std::rc::Rc<dyn Fn() -> Element>),
+    Tooltip(crate::popup::Tooltip),
+    Disabled(bool),
+    Focusability(bool),
+    TabIndex(i32),
+    Label(String),
+    OnInput {
+        kind: InputKind,
+        phase: EventPhase,
+        callback: InputCallback,
+    },
+    Cursor(aqua_core::CursorIcon),
+    Shortcut(Shortcut),
     /// Subscribe a text source: effect pushes `UiCommand::SetText`.
     SubscribeText(ReadSignal<String>),
     /// Two-way editable binding: effect pushes `SetText`; `TextChanged`
@@ -515,6 +534,7 @@ macro_rules! layout_sugar {
 /// Box (container) builder. `Box::builder()` starts it; `.build()` finishes.
 /// `Box::new()` is the same starting point (canonical builders stay).
 pub struct Box {
+    control: Option<std::boxed::Box<Control>>,
     style: LayoutStyle,
     paint: Paint,
     typo: TypoChain,
@@ -525,6 +545,7 @@ impl Box {
     /// Start a box builder.
     pub fn builder() -> Self {
         Self {
+            control: None,
             style: LayoutStyle::default(),
             paint: Paint::default(),
             typo: TypoChain::default(),
@@ -535,6 +556,11 @@ impl Box {
     /// Alias for [`Box::builder`].
     pub fn new() -> Self {
         Self::builder()
+    }
+
+    pub fn control(mut self, control: Control) -> Self {
+        self.control = Some(std::boxed::Box::new(control));
+        self
     }
 
     layout_sugar!();
@@ -582,6 +608,7 @@ pub struct Text {
     initial: String,
     spans: Vec<StyledSpan>,
     selection_source: Option<SelectionBinding>,
+    interaction_ranges: Vec<aqua_text::TextInteractionRange>,
     font_size: f32,
     color: Oklch,
     editable: bool,
@@ -603,6 +630,7 @@ impl Default for Text {
             initial: String::new(),
             spans: Vec::new(),
             selection_source: None,
+            interaction_ranges: Vec::new(),
             font_size: 14.0,
             color: Oklch::WHITE,
             editable: false,
@@ -676,6 +704,19 @@ impl Text {
         self
     }
 
+    pub fn interaction_range(mut self, id: u64, range: std::ops::Range<usize>) -> Self {
+        self.interaction_ranges
+            .push(aqua_text::TextInteractionRange { id, range });
+        self.selectable = true;
+        self
+    }
+
+    pub fn interaction_ranges(mut self, ranges: Vec<aqua_text::TextInteractionRange>) -> Self {
+        self.interaction_ranges = ranges;
+        self.selectable = true;
+        self
+    }
+
     pub fn selection_source(self, slice: SourceSlice) -> Self {
         self.selection_source_in(SelectionDocumentId::default(), slice)
     }
@@ -692,6 +733,7 @@ impl Text {
 
     pub fn spans(mut self, spans: Vec<StyledSpan>) -> Self {
         self.initial = spans.iter().map(|span| span.text.as_str()).collect();
+        self.selectable |= spans.iter().any(|span| span.interaction.is_some());
         self.spans = spans;
         self
     }
@@ -805,19 +847,19 @@ impl Text {
     }
 }
 
-/// Media builder: visual asset presentation (raster/vector/video via image
-/// layers; audio is out of scope for this visual primitive).
 pub struct Media {
     style: LayoutStyle,
     paint: Paint,
     typo: TypoChain,
-    image: Option<ImageId>,
+    image: Option<aqua_core::ImageRef>,
     opacity: f32,
+    fit: aqua_core::image::ImageFit,
+    position: Point,
+    source: Rect,
     children: Vec<Element>,
 }
 
 impl Media {
-    /// Start a media builder.
     pub fn builder() -> Self {
         Self {
             style: LayoutStyle::default(),
@@ -825,38 +867,49 @@ impl Media {
             typo: TypoChain::default(),
             image: None,
             opacity: 1.0,
+            fit: aqua_core::image::ImageFit::Fill,
+            position: Point::new(0.5, 0.5),
+            source: Rect::from_edges(0.0, 0.0, 1.0, 1.0),
             children: Vec::new(),
         }
     }
 
-    /// Start a media builder with its asset: `Media::new(image_id)`.
-    pub fn new(image: ImageId) -> Self {
+    pub fn new(image: impl Into<aqua_core::ImageRef>) -> Self {
         Self::builder().arg(image)
     }
 
     layout_sugar!();
 
-    /// Positional asset: `Media(image_id)`.
-    pub fn arg(mut self, image: ImageId) -> Self {
-        self.image = Some(image);
+    pub fn arg(mut self, image: impl Into<aqua_core::ImageRef>) -> Self {
+        self.image = Some(image.into());
         self
     }
 
-    /// Asset layer to present (`None` = reserve layout, paint nothing).
-    pub fn image(mut self, image: ImageId) -> Self {
-        self.image = Some(image);
+    pub fn image(mut self, image: impl Into<aqua_core::ImageRef>) -> Self {
+        self.image = Some(image.into());
         self
     }
 
-    /// Append a child element.
+    pub fn fit(mut self, fit: aqua_core::image::ImageFit) -> Self {
+        self.fit = fit;
+        self
+    }
+
+    pub fn position(mut self, position: Point) -> Self {
+        self.position = position;
+        self
+    }
+
+    pub fn source_rect(mut self, source: Rect) -> Self {
+        self.source = source;
+        self
+    }
+
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.push(child.into());
         self
     }
 
-    /// Append several children in call order (arrays, `Vec`s, and lazy
-    /// iterators all work). Repeated calls append; existing single-child
-    /// calls remain valid.
     pub fn children<I, E>(mut self, children: I) -> Self
     where
         I: IntoIterator<Item = E>,
@@ -868,7 +921,6 @@ impl Media {
         self
     }
 
-    /// Finish as an [`Element`].
     pub fn build(mut self) -> Element {
         let children = std::mem::take(&mut self.children);
         Element {
@@ -1323,23 +1375,17 @@ impl Checkbox {
     }
 }
 
-/// Slider builder: visual track + fill from a 0..=1 `value` prop.
-///
-/// Honest limit: drag/click-to-value interaction is `[UNIMPLEMENTED]` —
-/// [`ActionEvent`] carries no pointer position, so no callback can compute a
-/// value from a gesture yet. This builder renders real, mounted geometry;
-/// value changes flow host → prop → sync. No fake `on_change` is offered.
 pub struct Slider {
     style: LayoutStyle,
     paint: Paint,
     typo: TypoChain,
-    value: f32,
+    value: f64,
+    range: SliderRange,
+    on_change: Option<std::rc::Rc<dyn Fn(f64)>>,
     children: Vec<Element>,
 }
 
 impl Slider {
-    /// Start a slider builder. Track size defaults to 160x24px (set once
-    /// here, so an explicit `width(auto())` or style width stays as set).
     pub fn builder() -> Self {
         Self {
             style: LayoutStyle {
@@ -1350,38 +1396,43 @@ impl Slider {
             paint: Paint::default(),
             typo: TypoChain::default(),
             value: 0.0,
+            range: SliderRange::default(),
+            on_change: None,
             children: Vec::new(),
         }
     }
 
-    /// Start a slider builder with its value: `Slider::new(0.5)`.
     pub fn new(value: impl NumberArg) -> Self {
         Self::builder().arg(value)
     }
 
     layout_sugar!();
 
-    /// Positional value 0..=1 (clamped at conversion).
     pub fn arg(mut self, value: impl NumberArg) -> Self {
-        self.value = value.into_f32();
+        self.value = value.into_f32() as f64;
         self
     }
 
-    /// Value 0..=1 (clamped at conversion). App-owned; re-sync to update.
     pub fn value(mut self, value: impl NumberArg) -> Self {
-        self.value = value.into_f32();
+        self.value = value.into_f32() as f64;
         self
     }
 
-    /// Append a child element.
+    pub fn range(mut self, min: f64, max: f64, step: f64) -> Self {
+        self.range = SliderRange::new(min, max, step);
+        self
+    }
+
+    pub fn on_change(mut self, on_change: impl Fn(f64) + 'static) -> Self {
+        self.on_change = Some(std::rc::Rc::new(on_change));
+        self
+    }
+
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.push(child.into());
         self
     }
 
-    /// Append several children in call order (arrays, `Vec`s, and lazy
-    /// iterators all work). Repeated calls append; existing single-child
-    /// calls remain valid.
     pub fn children<I, E>(mut self, children: I) -> Self
     where
         I: IntoIterator<Item = E>,
@@ -1393,13 +1444,9 @@ impl Slider {
         self
     }
 
-    /// Finish as an [`Element`]. The fill bar is a synthetic child sized
-    /// from the clamped value; re-sync with a new value rebuilds it. Track
-    /// size defaults (160x24) live in the builder initializer, so an
-    /// explicit `auto()` is never coerced back here.
     pub fn build(mut self) -> Element {
         let children = std::mem::take(&mut self.children);
-        let value = self.value.clamp(0.0, 1.0);
+        let value = self.range.fraction(self.value);
         let fill = Box::builder()
             .width(Length::Pct(value * 100.0))
             .height(Length::Pct(100.0))
@@ -1413,27 +1460,24 @@ impl Slider {
             collection_semantics: None,
             children,
             synth: vec![fill],
-            // Deliberately no bindings: without pointer position in
-            // ActionEvent there is no honest gesture callback to offer.
-            bindings: Vec::new(),
+            bindings: vec![ElementBinding::Focusable],
         }
     }
 }
 
-/// Dropdown builder: activator rendering + open notification. The popup list
-/// itself integrates with the overlays agent's overlay service (pending);
-/// this builder mounts the activator only, honestly labeled.
 pub struct Dropdown {
     style: LayoutStyle,
     paint: Paint,
     typo: TypoChain,
     label: String,
+    options: Vec<SelectOption>,
+    selected: Option<usize>,
+    on_select: Option<std::rc::Rc<dyn Fn(usize)>>,
     on_open: Option<ActionCallback>,
     children: Vec<Element>,
 }
 
 impl Dropdown {
-    /// Start a dropdown builder.
     pub fn builder() -> Self {
         Self {
             style: LayoutStyle::default(),
@@ -1444,45 +1488,55 @@ impl Dropdown {
             },
             typo: TypoChain::default(),
             label: String::new(),
+            options: Vec::new(),
+            selected: None,
+            on_select: None,
             on_open: None,
             children: Vec::new(),
         }
     }
 
-    /// Start a dropdown builder with its activator label.
     pub fn new(label: impl Into<String>) -> Self {
         Self::builder().arg(label)
     }
 
     layout_sugar!();
 
-    /// Positional activator label.
     pub fn arg(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
     }
 
-    /// Activator label.
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
     }
 
-    /// Fires on activation (host opens the popup through the overlay service).
+    pub fn options(mut self, options: Vec<SelectOption>) -> Self {
+        self.options = options;
+        self
+    }
+
+    pub fn selected(mut self, selected: usize) -> Self {
+        self.selected = Some(selected);
+        self
+    }
+
+    pub fn on_select(mut self, on_select: impl Fn(usize) + 'static) -> Self {
+        self.on_select = Some(std::rc::Rc::new(on_select));
+        self
+    }
+
     pub fn on_open(mut self, handler: impl Fn() + 'static) -> Self {
         self.on_open = Some(std::boxed::Box::new(move |_| handler()));
         self
     }
 
-    /// Append a child element.
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.push(child.into());
         self
     }
 
-    /// Append several children in call order (arrays, `Vec`s, and lazy
-    /// iterators all work). Repeated calls append; existing single-child
-    /// calls remain valid.
     pub fn children<I, E>(mut self, children: I) -> Self
     where
         I: IntoIterator<Item = E>,
@@ -1494,8 +1548,6 @@ impl Dropdown {
         self
     }
 
-    /// Finish as an [`Element`]. The activator label (when non-empty) is a
-    /// synthetic child; `on_open` binds to the row's `Activate` action.
     pub fn build(mut self) -> Element {
         let children = std::mem::take(&mut self.children);
         let mut bindings = vec![ElementBinding::Focusable];
@@ -1506,7 +1558,10 @@ impl Dropdown {
             });
         }
         let mut synth = Vec::new();
-        if !self.label.is_empty() {
+        if let Some(option) = self.selected.and_then(|index| self.options.get(index)) {
+            self.label.clone_from(&option.label);
+        }
+        if !self.label.is_empty() || !self.options.is_empty() {
             synth.push(Text::builder().arg(self.label.clone()).build());
         }
         Element {
@@ -1521,67 +1576,69 @@ impl Dropdown {
     }
 }
 
-/// Tabs builder: a row of tab buttons. Selection is an app-owned prop;
-/// `on_select(index)` fires real activation per tab (index known statically).
-/// Panel switching is the host's sync (show the selected panel's subtree).
 pub struct Tabs {
     style: LayoutStyle,
     paint: Paint,
     typo: TypoChain,
     tabs: Vec<String>,
+    tab_style: std::boxed::Box<Style>,
+    selected_tab_style: std::boxed::Box<Style>,
     selected: usize,
     on_select: Option<std::rc::Rc<dyn Fn(usize)>>,
     children: Vec<Element>,
 }
 
 impl Tabs {
-    /// Start a tabs builder.
     pub fn builder() -> Self {
         Self {
             style: LayoutStyle::default(),
             paint: Paint::default(),
             typo: TypoChain::default(),
             tabs: Vec::new(),
+            tab_style: std::boxed::Box::new(Style::new()),
+            selected_tab_style: std::boxed::Box::new(Style::new()),
             selected: 0,
             on_select: None,
             children: Vec::new(),
         }
     }
 
-    /// Alias for [`Tabs::builder`].
     pub fn new() -> Self {
         Self::builder()
     }
 
     layout_sugar!();
 
-    /// Tab labels.
+    pub fn tab_style(mut self, style: Style) -> Self {
+        self.tab_style = std::boxed::Box::new(style);
+        self
+    }
+
+    pub fn selected_tab_style(mut self, style: Style) -> Self {
+        self.selected_tab_style = std::boxed::Box::new(style);
+        self
+    }
+
     pub fn tabs(mut self, tabs: Vec<String>) -> Self {
         self.tabs = tabs;
         self
     }
 
-    /// Selected tab index (app-owned; re-sync to update).
     pub fn selected(mut self, selected: usize) -> Self {
         self.selected = selected;
         self
     }
 
-    /// Fires with the tab index on activation.
     pub fn on_select(mut self, handler: impl Fn(usize) + 'static) -> Self {
         self.on_select = Some(std::rc::Rc::new(handler));
         self
     }
 
-    /// Append a child element (after the tab row).
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.push(child.into());
         self
     }
 
-    /// Append several children in call order (arrays, `Vec`s, and lazy
-    /// iterators all work). Repeated calls append; existing single-child
-    /// calls remain valid.
     pub fn children<I, E>(mut self, children: I) -> Self
     where
         I: IntoIterator<Item = E>,
@@ -1593,16 +1650,13 @@ impl Tabs {
         self
     }
 
-    /// Finish as an [`Element`]. Tab buttons become synthetic children —
-    /// real button elements with per-tab `Activate` bindings carrying the
-    /// static tab index — followed by any explicit children.
     pub fn build(mut self) -> Element {
         let children = std::mem::take(&mut self.children);
         let mut synth = Vec::new();
         for (i, label) in self.tabs.iter().enumerate() {
-            let mut tab = Button::builder();
+            let mut tab = Button::builder().style(self.tab_style.as_ref().clone());
             if i == self.selected {
-                tab = tab.fill(Oklch::WHITE);
+                tab = tab.style(self.selected_tab_style.as_ref().clone());
             }
             if let Some(on_select) = &self.on_select {
                 let notify = std::rc::Rc::clone(on_select);
@@ -1625,10 +1679,6 @@ impl Tabs {
     }
 }
 
-/// Dynamic builder: explicit dynamic text. `Dynamic(value: source)` snapshots
-/// the source at mount and subscribes `SetText` updates — the spelled-out
-/// equivalent of passing a signal to [`Text::value`]. No implicit tracking:
-/// the input is declared by passing the handle.
 pub struct Dynamic {
     style: LayoutStyle,
     paint: Paint,
@@ -1638,7 +1688,6 @@ pub struct Dynamic {
 }
 
 impl Dynamic {
-    /// Start a dynamic builder.
     pub fn builder() -> Self {
         Self {
             style: LayoutStyle::default(),
@@ -1649,48 +1698,37 @@ impl Dynamic {
         }
     }
 
-    /// Start a dynamic builder with its source: `Dynamic::new(label_signal)`.
     pub fn new(source: ReadSignal<String>) -> Self {
         Self::builder().value(source)
     }
 
     layout_sugar!();
 
-    /// The dynamic source (required; snapshots at mount, subscribes after).
     pub fn value(mut self, source: ReadSignal<String>) -> Self {
         self.source = Some(source);
         self
     }
 
-    /// Font size in logical px. Explicit: wins over inherited styles,
-    /// and is itself inherited by descendant text.
     pub fn font_size(mut self, size: impl NumberArg) -> Self {
         self.typo.font_size = Some(size.into_f32());
         self
     }
 
-    /// Text color. Explicit: wins over inherited styles, and is itself
-    /// inherited by descendant text.
     pub fn text_color(mut self, color: Oklch) -> Self {
         self.typo.color = Some(color);
         self
     }
 
-    /// Static-label wrapping. Explicit: wins over inherited styles.
     pub fn text_wrap(mut self, wrap: bool) -> Self {
         self.typo.wrap = Some(wrap);
         self
     }
 
-    /// Append a child element.
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.push(child.into());
         self
     }
 
-    /// Append several children in call order (arrays, `Vec`s, and lazy
-    /// iterators all work). Repeated calls append; existing single-child
-    /// calls remain valid.
     pub fn children<I, E>(mut self, children: I) -> Self
     where
         I: IntoIterator<Item = E>,
@@ -1702,8 +1740,6 @@ impl Dynamic {
         self
     }
 
-    /// Finish as an [`Element`]. The source subscribes `SetText` updates at
-    /// mount; lowering without `.value(source)` fails loudly instead.
     pub fn build(mut self) -> Element {
         let children = std::mem::take(&mut self.children);
         let mut bindings = Vec::new();
@@ -1727,27 +1763,21 @@ pub struct Fragment {
 }
 
 impl Fragment {
-    /// Start a fragment builder.
     pub fn builder() -> Self {
         Self {
             children: Vec::new(),
         }
     }
 
-    /// Alias for [`Fragment::builder`].
     pub fn new() -> Self {
         Self::builder()
     }
 
-    /// Append a child element.
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.push(child.into());
         self
     }
 
-    /// Append several children in call order (arrays, `Vec`s, and lazy
-    /// iterators all work). Repeated calls append; existing single-child
-    /// calls remain valid.
     pub fn children<I, E>(mut self, children: I) -> Self
     where
         I: IntoIterator<Item = E>,
@@ -1759,7 +1789,6 @@ impl Fragment {
         self
     }
 
-    /// Collect an iterator of elements (macro `for` loops target this).
     pub fn from_nodes<I, E>(iter: I) -> Fragment
     where
         I: IntoIterator<Item = E>,
@@ -1770,7 +1799,6 @@ impl Fragment {
         }
     }
 
-    /// Finish as an [`Element`].
     pub fn build(self) -> Element {
         Element {
             kind: ElementKind::Fragment,
@@ -1790,9 +1818,6 @@ impl From<Fragment> for Element {
     }
 }
 
-/// `Stylable` plumbing: every builder resolves to its own stored parts, so
-/// `.style(...)`/`.styles([...])` mutate in call order with zero allocation
-/// for scalar styles.
 macro_rules! stylable {
     ($t:ty) => {
         impl Stylable for $t {
@@ -1821,8 +1846,6 @@ impl Stylable for Text {
     }
 
     fn post_style(&mut self, style: &Style) {
-        // The builder's own text fields mirror its explicit overrides, so
-        // direct setters and styles compose in call order.
         if let Some(v) = style.font_size_opt() {
             self.font_size = v;
         }
@@ -1835,8 +1858,6 @@ impl Stylable for Text {
     }
 }
 
-/// `Default` for no-arg builders delegates to `builder()` (clippy
-/// `new_without_default`): `Box::default()` == `Box::builder()`.
 macro_rules! default_via_builder {
     ($t:ty) => {
         impl Default for $t {
@@ -1902,6 +1923,88 @@ impl Element {
         }
     }
 
+    pub fn popup(
+        mut self,
+        options: crate::popup::PopupOptions,
+        content: impl Fn() -> Element + 'static,
+    ) -> Self {
+        self.bindings.push(ElementBinding::Popup {
+            options,
+            content: std::rc::Rc::new(content),
+        });
+        self
+    }
+
+    pub fn popup_reactive<D: aqua_reactive::DepTuple>(
+        self,
+        mut options: crate::popup::PopupOptions,
+        deps: D,
+        render: impl Fn(D::Values) -> Element + 'static,
+    ) -> Self {
+        let reactive = crate::popup::ReactivePopup::new(deps, render);
+        options.reactive = Some(reactive.clone());
+        self.popup(options, move || reactive.initial())
+    }
+
+    pub fn context_menu(mut self, content: impl Fn() -> Element + 'static) -> Self {
+        self.bindings
+            .push(ElementBinding::ContextMenu(std::rc::Rc::new(content)));
+        self
+    }
+
+    pub fn tooltip(mut self, delay: f64, content: impl Fn() -> Element + 'static) -> Self {
+        self.bindings
+            .push(ElementBinding::Tooltip(crate::popup::Tooltip {
+                delay,
+                content: std::rc::Rc::new(content),
+            }));
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.bindings.push(ElementBinding::Disabled(disabled));
+        self
+    }
+
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.bindings.push(ElementBinding::Focusability(focusable));
+        self
+    }
+
+    pub fn tab_index(mut self, tab_index: i32) -> Self {
+        self.bindings.push(ElementBinding::TabIndex(tab_index));
+        self
+    }
+
+    pub fn aria_label(mut self, label: impl Into<String>) -> Self {
+        self.bindings.push(ElementBinding::Label(label.into()));
+        self
+    }
+
+    pub fn on_input(
+        mut self,
+        kind: InputKind,
+        phase: EventPhase,
+        handler: impl Fn(&RoutedEvent) -> InputResponse + 'static,
+    ) -> Self {
+        self.bindings.push(ElementBinding::OnInput {
+            kind,
+            phase,
+            callback: std::rc::Rc::new(handler),
+        });
+        self
+    }
+
+    pub fn cursor(mut self, cursor: aqua_core::CursorIcon) -> Self {
+        self.bindings.push(ElementBinding::Cursor(cursor));
+        self
+    }
+
+    pub fn shortcut(mut self, shortcut: Shortcut) -> Self {
+        self.bindings.push(ElementBinding::Shortcut(shortcut));
+        self
+    }
+
     /// Set explicit accessibility semantics for the mounted node (applied at
     /// bind time; fragments propagate to children that lack one). Setting a
     /// role alone never implements behavior — but a wrong role misinforms
@@ -1944,6 +2047,7 @@ impl Element {
             ElementKind::Button(_) => Some(Role::Button),
             ElementKind::Checkbox(_) => Some(Role::Checkbox),
             ElementKind::Slider(_) => Some(Role::Slider),
+            ElementKind::Dropdown(_) => Some(Role::ComboBox),
             ElementKind::Tabs(_) => Some(Role::TabList),
             ElementKind::Media(_) => Some(Role::Image),
             ElementKind::Scroll(_) => Some(Role::ScrollRegion),
@@ -2338,8 +2442,11 @@ impl Element {
             ElementKind::Media(m) => {
                 if let Some(rec) = tree.get_mut(id) {
                     if let NodeKind::Media(ref mut cur) = rec.kind {
-                        cur.image = m.image;
+                        cur.image = m.image.clone();
                         cur.opacity = m.opacity;
+                        cur.fit = m.fit;
+                        cur.position = m.position;
+                        cur.source = m.source;
                     }
                 }
             }
@@ -2441,10 +2548,11 @@ impl Element {
                 tc.text_style = eff.text_style.clone();
                 tc.spans = t.spans.clone();
                 tc.selection_source = t.selection_source.clone();
+                tc.interaction_ranges = t.interaction_ranges.clone();
                 tc.font_size = eff.font_size;
                 tc.color = eff.color;
                 tc.selectable = t.selectable;
-                tc.wrap = eff.wrap;
+                tc.wrap = eff.wrap || t.multiline;
                 tc.password = t.password;
                 tc.placeholder = t.placeholder.clone();
             }
@@ -2455,6 +2563,7 @@ impl Element {
         if !preserve_editing {
             tree.set_text(id, initial);
         }
+        tree.sync_text_leaf(id);
     }
 
     fn tree_discriminant(kind: &NodeKind) -> u8 {
@@ -2563,6 +2672,11 @@ pub(crate) fn splice_top_level(elements: Vec<Element>) -> Result<Vec<Element>, L
 /// fallback to the uniform radius.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LowerError {
+    InvalidTransform,
+    InvalidContentBlur,
+    InvalidTextColorMap,
+    InvalidMediaSource,
+    InvalidFocusRing,
     /// A keyed fragment flattened to other than exactly one child.
     KeyedFragment {
         /// Flattened child count.
@@ -2584,6 +2698,24 @@ pub enum LowerError {
 impl std::fmt::Display for LowerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            LowerError::InvalidTransform => write!(
+                f,
+                "subtree transform requires finite positive uniform scale and translation"
+            ),
+            LowerError::InvalidFocusRing => {
+                write!(f, "focus ring requires a finite nonnegative width")
+            }
+            LowerError::InvalidMediaSource => write!(
+                f,
+                "media requires finite position and a nonempty source rectangle within 0..=1"
+            ),
+            LowerError::InvalidTextColorMap => write!(
+                f,
+                "text color map requires finite ordered bounds and strength in 0..=1"
+            ),
+            LowerError::InvalidContentBlur => {
+                write!(f, "content blur requires a finite nonnegative radius")
+            }
             LowerError::KeyedFragment { children } => write!(
                 f,
                 "keyed fragment flattened to {children} children (expected exactly 1); \
@@ -2626,6 +2758,47 @@ impl std::error::Error for LowerError {
 /// the emitter; direct [`UiTree::set_paint`] applies without validation
 /// (authored values are validated here, at lowering/refresh).
 fn check_paint(paint: &Paint) -> Result<(), LowerError> {
+    if let Some(transform) = paint.transform {
+        if ![
+            transform.a,
+            transform.b,
+            transform.c,
+            transform.d,
+            transform.tx,
+            transform.ty,
+        ]
+        .into_iter()
+        .all(f32::is_finite)
+            || transform.a <= 0.0
+            || transform.a != transform.d
+            || transform.b != 0.0
+            || transform.c != 0.0
+        {
+            return Err(LowerError::InvalidTransform);
+        }
+    }
+    if paint
+        .focus_ring
+        .is_some_and(|ring| !ring.width.is_finite() || ring.width < 0.0)
+    {
+        return Err(LowerError::InvalidFocusRing);
+    }
+    if paint.text_color_map.is_some_and(|map| {
+        ![map.start, map.end, map.strength]
+            .iter()
+            .all(|value| value.is_finite())
+            || map.start >= map.end
+            || !(0.0..=1.0).contains(&map.strength)
+    }) {
+        return Err(LowerError::InvalidTextColorMap);
+    }
+    if paint
+        .content_blur
+        .is_some_and(|radius| !radius.is_finite() || radius < 0.0)
+    {
+        return Err(LowerError::InvalidContentBlur);
+    }
+
     if let Some(c) = paint.corners {
         if !(c.top_left == c.top_right
             && c.top_left == c.bottom_right
@@ -2707,19 +2880,48 @@ fn lower_collection(
 fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError> {
     let paint = el.resolved_paint();
     check_paint(&paint)?;
+    if let ElementKind::Media(media) = &el.kind {
+        let source = media.source;
+        if ![
+            media.position.x,
+            media.position.y,
+            source.x,
+            source.y,
+            source.w,
+            source.h,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
+            || source.x < 0.0
+            || source.y < 0.0
+            || source.w <= 0.0
+            || source.h <= 0.0
+            || source.right() > 1.0
+            || source.bottom() > 1.0
+        {
+            return Err(LowerError::InvalidMediaSource);
+        }
+    }
     let mut spec = match &el.kind {
-        ElementKind::Box(b) => NodeSpec::new(
-            NodeKind::Box(BoxContent { paint: b.paint }),
-            b.style.clone(),
-        ),
+        ElementKind::Box(b) => {
+            let mut spec = NodeSpec::new(
+                NodeKind::Box(BoxContent { paint: b.paint }),
+                b.style.clone(),
+            );
+            spec.control = b.control.clone();
+            spec
+        }
         ElementKind::Text(t) => {
             let eff = inherited.child(&t.typo).resolve();
             NodeSpec::new(NodeKind::Text(text_content(t, &eff)), t.style.clone())
         }
         ElementKind::Media(m) => NodeSpec::new(
             NodeKind::Media(MediaContent {
-                image: m.image,
+                image: m.image.clone(),
                 opacity: m.opacity,
+                fit: m.fit,
+                position: m.position,
+                source: m.source,
             }),
             m.style.clone(),
         ),
@@ -2746,18 +2948,44 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
             NodeKind::Box(BoxContent { paint: c.paint }),
             c.style.clone(),
         ),
-        ElementKind::Slider(s) => NodeSpec::new(
-            NodeKind::Box(BoxContent { paint: s.paint }),
-            s.style.clone(),
-        ),
-        ElementKind::Dropdown(d) => NodeSpec::new(
-            NodeKind::Box(BoxContent { paint: d.paint }),
-            d.style.clone(),
-        ),
-        ElementKind::Tabs(t) => NodeSpec::new(
-            NodeKind::Box(BoxContent { paint: t.paint }),
-            t.style.clone(),
-        ),
+        ElementKind::Slider(s) => {
+            let mut spec = NodeSpec::new(
+                NodeKind::Box(BoxContent { paint: s.paint }),
+                s.style.clone(),
+            );
+            spec.control = Some(std::boxed::Box::new(Control::Slider(SliderControl {
+                range: s.range,
+                value: s.range.snap(s.value),
+                on_change: s.on_change.clone(),
+            })));
+            spec
+        }
+        ElementKind::Dropdown(d) => {
+            let mut spec = NodeSpec::new(
+                NodeKind::Box(BoxContent { paint: d.paint }),
+                d.style.clone(),
+            );
+            if !d.options.is_empty() {
+                spec.control = Some(std::boxed::Box::new(Control::Select(SelectControl::new(
+                    d.options.clone(),
+                    d.selected,
+                    d.on_select.clone(),
+                ))));
+            }
+            spec
+        }
+        ElementKind::Tabs(t) => {
+            let mut spec = NodeSpec::new(
+                NodeKind::Box(BoxContent { paint: t.paint }),
+                t.style.clone(),
+            );
+            spec.control = Some(std::boxed::Box::new(Control::Tabs(TabsControl {
+                count: t.tabs.len(),
+                selected: t.selected.min(t.tabs.len().saturating_sub(1)),
+                on_select: t.on_select.clone(),
+            })));
+            spec
+        }
         ElementKind::Dynamic(d) => {
             let Some(source) = &d.source else {
                 return Err(LowerError::DynamicWithoutSource);
@@ -2845,10 +3073,11 @@ fn text_content(t: &Text, eff: &Typography) -> TextContent {
     tc.text_style = eff.text_style.clone();
     tc.spans = t.spans.clone();
     tc.selection_source = t.selection_source.clone();
+    tc.interaction_ranges = t.interaction_ranges.clone();
     tc.font_size = eff.font_size;
     tc.color = eff.color;
     tc.selectable = t.selectable;
-    tc.wrap = eff.wrap;
+    tc.wrap = eff.wrap || t.multiline;
     tc.password = t.password;
     tc.placeholder = t.placeholder.clone();
     tc
@@ -2870,6 +3099,7 @@ pub mod ui {
     pub use super::Tabs;
     pub use super::Text;
     pub use super::Viewport3D;
+    pub use crate::controls::ResizeHandle;
     pub use crate::style::Axis;
     pub use crate::style::{auto, pct, px, Length, Style, Typography};
 }
@@ -3232,7 +3462,7 @@ mod tests {
         let _ = Checkbox::new("done");
         let _ = Slider::new(0.5);
         let _ = Dropdown::new("open");
-        let _ = Media::new(ImageId::from_raw(aqua_core::RawId {
+        let _ = Media::new(aqua_core::ImageId::from_raw(aqua_core::RawId {
             index: 1,
             generation: 0,
         }));

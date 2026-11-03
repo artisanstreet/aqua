@@ -52,6 +52,10 @@ pub fn map_role(role: &CoreRole) -> AkRole {
     match role {
         CoreRole::Text => AkRole::Label,
         CoreRole::PasswordField => AkRole::PasswordInput,
+        CoreRole::ComboBox => AkRole::ComboBox,
+        CoreRole::Option => AkRole::ListBoxOption,
+        CoreRole::Separator => AkRole::Splitter,
+        CoreRole::Tooltip => AkRole::Tooltip,
         CoreRole::Group => AkRole::Group,
         CoreRole::Button => AkRole::Button,
         CoreRole::Checkbox => AkRole::CheckBox,
@@ -99,9 +103,25 @@ pub(crate) fn build_base_tree_update(
         }
         if !item.semantic.disabled {
             match item.semantic.role {
-                CoreRole::Button | CoreRole::Checkbox | CoreRole::Tab | CoreRole::MenuItem => {
+                CoreRole::Button
+                | CoreRole::Checkbox
+                | CoreRole::Tab
+                | CoreRole::MenuItem
+                | CoreRole::Option => {
                     node.add_action(Action::Click);
                     node.add_action(Action::Focus);
+                }
+                CoreRole::ComboBox => {
+                    node.add_action(Action::Click);
+                    node.add_action(Action::Focus);
+                    node.add_action(Action::Expand);
+                    node.add_action(Action::Collapse);
+                }
+                CoreRole::Slider | CoreRole::Separator if item.semantic.numeric_range.is_some() => {
+                    node.add_action(Action::Focus);
+                    node.add_action(Action::SetValue);
+                    node.add_action(Action::Increment);
+                    node.add_action(Action::Decrement);
                 }
                 CoreRole::TextField | CoreRole::PasswordField => {
                     node.add_action(Action::Focus);
@@ -119,6 +139,22 @@ pub(crate) fn build_base_tree_update(
         }
         if item.semantic.selected {
             node.set_selected(true);
+        }
+        if let Some(expanded) = item.semantic.expanded {
+            node.set_expanded(expanded);
+        }
+        if let Some(range) = item.semantic.numeric_range.filter(|range| {
+            range.min.is_finite()
+                && range.max.is_finite()
+                && range.min <= range.max
+                && range.value.is_finite()
+                && range.step.is_finite()
+                && range.step > 0.0
+        }) {
+            node.set_min_numeric_value(range.min);
+            node.set_max_numeric_value(range.max);
+            node.set_numeric_value(range.value.clamp(range.min, range.max));
+            node.set_numeric_value_step(range.step);
         }
         if let Some(v) = &item.semantic.value_text {
             node.set_value(v.clone());

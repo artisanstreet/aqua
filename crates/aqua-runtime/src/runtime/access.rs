@@ -17,7 +17,25 @@ impl Runtime {
             true => String::new(),
             false => text.display_text(),
         };
-        let origin = self.text_origin(node)?;
+        let padding = self.tree.get(node)?.style.padding;
+        let transform = self.tree.visual_transform(node)?;
+        let origin = Point::new(padding.left - entry.scroll_x, padding.top);
+        let world_rect = |left: f32, top: f32, right: f32, bottom: f32| {
+            let start = transform.apply(Point::new(
+                origin.x + left / self.scale,
+                origin.y + top / self.scale,
+            ));
+            let end = transform.apply(Point::new(
+                origin.x + right / self.scale,
+                origin.y + bottom / self.scale,
+            ));
+            Rect::from_edges(
+                start.x * self.scale,
+                start.y * self.scale,
+                end.x * self.scale,
+                end.y * self.scale,
+            )
+        };
         let mut units = Vec::new();
         for (offset, grapheme) in source.grapheme_indices(true) {
             match u8::try_from(grapheme.len()) {
@@ -56,13 +74,8 @@ impl Runtime {
                 .copied();
             let left = rect.map_or(caret.x, |rect| rect.x);
             let right = rect.map_or(caret.x, |rect| rect.x + rect.w);
-            let top = origin.y * self.scale + caret.y_top;
-            let bounds = Rect {
-                x: origin.x * self.scale + left,
-                y: top,
-                w: (right - left).max(0.0),
-                h: caret.height,
-            };
+            let bounds = world_rect(left, caret.y_top, right, caret.y_top + caret.height);
+            let top = bounds.y;
             let new_run = runs.last().is_none_or(|run| {
                 run.character_lengths.len() >= 255
                     || run.rtl != rtl
@@ -96,12 +109,7 @@ impl Runtime {
             runs.push(A11yTextRun {
                 text: String::new(),
                 byte_start: 0,
-                bounds: Rect {
-                    x: origin.x * self.scale + caret.x,
-                    y: origin.y * self.scale + caret.y_top,
-                    w: 0.0,
-                    h: caret.height,
-                },
+                bounds: world_rect(caret.x, caret.y_top, caret.x, caret.y_top + caret.height),
                 word_starts: Vec::new(),
                 character_lengths: Vec::new(),
                 character_positions: Vec::new(),

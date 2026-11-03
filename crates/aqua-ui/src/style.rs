@@ -2,7 +2,7 @@
 //! layout subset to `taffy::Style` at the layout boundary. No CSS strings,
 //! no stringly-typed properties. Paint properties travel to scene emission.
 
-use aqua_core::{CornerRadii, Insets, Oklch};
+use aqua_core::{CornerRadii, Insets, Oklch, Transform2D};
 use aqua_text::TextStyle;
 use taffy::prelude::TaffyAuto as _;
 use taffy::style::{
@@ -288,6 +288,9 @@ pub struct Shadow {
 /// Paint properties shared by box-like nodes.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Paint {
+    pub transform: Option<Transform2D>,
+    pub content_blur: Option<f32>,
+    pub text_color_map: Option<aqua_core::scene::TextColorMap>,
     /// Background fill (`None` = transparent).
     pub fill: Option<Oklch>,
     /// Uniform corner radius.
@@ -296,6 +299,7 @@ pub struct Paint {
     pub corners: Option<CornerRadii>,
     /// Border (`None` = no border).
     pub border: Option<Border>,
+    pub focus_ring: Option<Border>,
     /// Drop shadow (`None` = no shadow).
     pub shadow: Option<Shadow>,
     /// Clip children to this node's bounds (rounded by `radius`).
@@ -409,9 +413,13 @@ pub struct Style {
     radius: Option<f32>,
     corners: Option<Option<CornerRadii>>,
     border: Option<Option<Border>>,
+    focus_ring: Option<Option<Border>>,
     shadow: Option<Option<Shadow>>,
     clip: Option<bool>,
     opacity: Option<Option<f32>>,
+    transform: Option<Option<Transform2D>>,
+    content_blur: Option<Option<f32>>,
+    text_color_map: Option<Option<aqua_core::scene::TextColorMap>>,
     font_size: Option<f32>,
     text_style: Option<TextStyle>,
     text_color: Option<Oklch>,
@@ -448,9 +456,13 @@ impl Style {
             radius: None,
             corners: None,
             border: None,
+            focus_ring: None,
             shadow: None,
             clip: None,
             opacity: None,
+            transform: None,
+            content_blur: None,
+            text_color_map: None,
             font_size: None,
             text_style: None,
             text_color: None,
@@ -486,9 +498,13 @@ impl Style {
             && self.radius.is_none()
             && self.corners.is_none()
             && self.border.is_none()
+            && self.focus_ring.is_none()
             && self.shadow.is_none()
             && self.clip.is_none()
             && self.opacity.is_none()
+            && self.transform.is_none()
+            && self.content_blur.is_none()
+            && self.text_color_map.is_none()
             && self.text_style.is_none()
             && self.font_size.is_none()
             && self.text_color.is_none()
@@ -814,6 +830,16 @@ impl Style {
 
     /// Border from width + color.
     #[must_use]
+    pub const fn focus_ring(mut self, width: f32, color: Oklch) -> Self {
+        self.focus_ring = Some(Some(Border { width, color }));
+        self
+    }
+
+    pub const fn clear_focus_ring(mut self) -> Self {
+        self.focus_ring = Some(None);
+        self
+    }
+
     pub const fn border_of(mut self, width: f32, color: Oklch) -> Self {
         self.border = Some(Some(Border { width, color }));
         self
@@ -856,6 +882,36 @@ impl Style {
     #[must_use]
     pub const fn clip(mut self, clip: bool) -> Self {
         self.clip = Some(clip);
+        self
+    }
+
+    pub const fn transform(mut self, transform: Transform2D) -> Self {
+        self.transform = Some(Some(transform));
+        self
+    }
+
+    pub const fn clear_transform(mut self) -> Self {
+        self.transform = Some(None);
+        self
+    }
+
+    pub const fn text_color_map(mut self, map: aqua_core::scene::TextColorMap) -> Self {
+        self.text_color_map = Some(Some(map));
+        self
+    }
+
+    pub const fn clear_text_color_map(mut self) -> Self {
+        self.text_color_map = Some(None);
+        self
+    }
+
+    pub const fn content_blur(mut self, radius: f32) -> Self {
+        self.content_blur = Some(Some(radius));
+        self
+    }
+
+    pub const fn clear_content_blur(mut self) -> Self {
+        self.content_blur = Some(None);
         self
     }
 
@@ -961,9 +1017,13 @@ impl Style {
         take!(radius);
         take!(corners);
         take!(border);
+        take!(focus_ring);
         take!(shadow);
         take!(clip);
         take!(opacity);
+        take!(transform);
+        take!(content_blur);
+        take!(text_color_map);
         take!(font_size);
         take!(text_style);
         take!(text_color);
@@ -1066,6 +1126,9 @@ impl Style {
         if let Some(v) = self.corners {
             paint.corners = v;
         }
+        if let Some(v) = self.focus_ring {
+            paint.focus_ring = v;
+        }
         if let Some(v) = self.border {
             paint.border = v;
         }
@@ -1074,6 +1137,15 @@ impl Style {
         }
         if let Some(v) = self.clip {
             paint.clip = v;
+        }
+        if let Some(v) = self.transform {
+            paint.transform = v;
+        }
+        if let Some(v) = self.content_blur {
+            paint.content_blur = v;
+        }
+        if let Some(v) = self.text_color_map {
+            paint.text_color_map = v;
         }
         if let Some(v) = self.opacity {
             paint.opacity = v;

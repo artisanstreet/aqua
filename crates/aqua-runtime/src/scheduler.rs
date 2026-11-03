@@ -23,6 +23,7 @@ pub struct FrameStats {
 
 pub struct Scheduler {
     fps_target: Option<NonZeroU32>,
+    window_fps: HashMap<WindowId, Option<NonZeroU32>>,
     max_in_flight: u32,
     pending: HashMap<WindowId, Pending>,
     in_flight: HashMap<WindowId, u32>,
@@ -40,6 +41,7 @@ impl Scheduler {
     pub fn new() -> Self {
         Self {
             fps_target: None,
+            window_fps: HashMap::new(),
             max_in_flight: DEFAULT_MAX_IN_FLIGHT,
             pending: HashMap::new(),
             in_flight: HashMap::new(),
@@ -50,7 +52,25 @@ impl Scheduler {
 
     pub fn set_fps_target(&mut self, target: Option<NonZeroU32>) {
         self.fps_target = target;
-        self.pacing_gate.clear();
+        self.pacing_gate
+            .retain(|window, _| self.window_fps.contains_key(window));
+    }
+
+    pub fn set_window_fps_target(&mut self, window: WindowId, target: Option<NonZeroU32>) {
+        self.window_fps.insert(window, target);
+        self.pacing_gate.remove(&window);
+    }
+
+    pub fn reset_window_fps_target(&mut self, window: WindowId) {
+        self.window_fps.remove(&window);
+        self.pacing_gate.remove(&window);
+    }
+
+    pub fn window_fps_target(&self, window: WindowId) -> Option<NonZeroU32> {
+        self.window_fps
+            .get(&window)
+            .copied()
+            .unwrap_or(self.fps_target)
     }
 
     pub fn clear_fps_target(&mut self) {
@@ -62,7 +82,11 @@ impl Scheduler {
     }
 
     pub fn min_frame_interval(&self) -> Option<Duration> {
-        self.fps_target.map(|fps| {
+        Self::frame_interval(self.fps_target)
+    }
+
+    fn frame_interval(target: Option<NonZeroU32>) -> Option<Duration> {
+        target.map(|fps| {
             let ideal = Duration::from_secs_f64(1.0 / f64::from(fps.get()));
             ideal.max(MIN_FRAME_INTERVAL)
         })
@@ -157,8 +181,8 @@ impl Scheduler {
     }
 
     pub fn mark_produced(&mut self, windows: &[WindowId], now: Instant) {
-        let interval = self.min_frame_interval();
         for id in windows {
+            let interval = Self::frame_interval(self.window_fps_target(*id));
             if self.pending.remove(id).is_some() {
                 self.stats.produced += 1;
             }
@@ -218,6 +242,7 @@ impl Scheduler {
         self.pending.remove(&window);
         self.in_flight.remove(&window);
         self.pacing_gate.remove(&window);
+        self.window_fps.remove(&window);
     }
 
     pub fn stats(&self) -> &FrameStats {

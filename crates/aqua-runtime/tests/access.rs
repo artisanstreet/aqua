@@ -277,3 +277,67 @@ fn accessible_empty_editor_keeps_placeholder_out_of_text_ranges() {
     runtime.build_frame().unwrap();
     assert_eq!(value(&runtime), "");
 }
+
+#[test]
+fn transformed_accessibility_bounds_and_character_geometry_follow_visual_positions() {
+    use aqua_core::{Point, Transform2D};
+    use aqua_ui::style::{px, Style};
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime.set_viewport(600.0, 200.0, 1.5);
+    runtime
+        .mount(|_| {
+            Text::new("Aéאב")
+                .editable(true)
+                .style(Style::new().width(px(200.0)).height(px(40.0)))
+                .build()
+        })
+        .unwrap();
+    runtime.build_frame().unwrap();
+    let node = field(&runtime);
+    let snapshot = |runtime: &Runtime| {
+        runtime
+            .a11y_nodes()
+            .unwrap()
+            .2
+            .into_iter()
+            .find(|item| item.semantic.node == node)
+            .unwrap()
+    };
+    let before = snapshot(&runtime);
+    let mut paint = runtime.tree().paint(node).unwrap();
+    paint.transform = Some(Transform2D::scale(2.0, 2.0).then(Transform2D::translate(30.0, 10.0)));
+    runtime.tree_mut().set_paint(node, paint);
+    runtime.build_frame().unwrap();
+    let after = snapshot(&runtime);
+    let original = before.bounds.unwrap();
+    let transformed = after.bounds.unwrap();
+    assert!((transformed.x - (original.x * 2.0 + 45.0)).abs() < 0.01);
+    assert!((transformed.y - (original.y * 2.0 + 15.0)).abs() < 0.01);
+    assert!((transformed.w - original.w * 2.0).abs() < 0.01);
+    let a = before.text.unwrap();
+    let b = after.text.unwrap();
+    for (a, b) in a.runs.iter().zip(&b.runs) {
+        assert!((b.bounds.x - (a.bounds.x * 2.0 + 45.0)).abs() < 0.01);
+        assert!((b.bounds.y - (a.bounds.y * 2.0 + 15.0)).abs() < 0.01);
+        assert!((b.bounds.h - a.bounds.h * 2.0).abs() < 0.01);
+        for (a, b) in a.character_positions.iter().zip(&b.character_positions) {
+            assert!((b - a * 2.0).abs() < 0.01);
+        }
+        for (a, b) in a.character_widths.iter().zip(&b.character_widths) {
+            assert!((b - a * 2.0).abs() < 0.01);
+        }
+    }
+    runtime.tree_mut().set_focused(Some(node));
+    let caret = runtime.ime_anchor().unwrap();
+    let first = &b.runs[0];
+    assert!((first.bounds.x - caret.x * 1.5).abs() < 0.01);
+    assert!((first.bounds.y - caret.y * 1.5).abs() < 0.01);
+    assert_eq!(
+        runtime
+            .tree()
+            .visual_transform(node)
+            .unwrap()
+            .apply(Point::ZERO),
+        Point::new(30.0, 10.0)
+    );
+}

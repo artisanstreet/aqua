@@ -1,37 +1,3 @@
-//! Window-level overlay host: the wiring between [`OverlayService`] and the
-//! retained [`UiTree`].
-//!
-//! The service owns placement, stacking, modality, dismissal and focus
-//! save/restore; the tree owns nodes, layout, hit-testing and paint. This
-//! host is the single bridge — the facade consumes the host, never the
-//! service directly, so there is exactly one overlay system:
-//!
-//! - Popups mount as **absolute-positioned children of the window root**
-//!   (the top layer). They escape ancestor clips (a menu owned by a button
-//!   inside a scroller renders under the root, not inside the scroller)
-//!   with no renderer z-hacks: normal paint order, last child topmost.
-//! - **Logical ownership stays in the service** (`OverlayRequest::owner`):
-//!   removing an owner closes its popups via [`sync_lifecycle`](OverlayHost::sync_lifecycle).
-//!   The same [`UiTree`] arena holds popup nodes, so [`NodeId`]s never
-//!   alias across trees.
-//! - Anchor rects come from the owner's **committed** rect, adjusted for
-//!   ancestor scroll offsets (visible rect). Popup content roots must
-//!   declare fixed `Px` width/height — placement needs a size before
-//!   mount, and content-sized popups are `[UNIMPLEMENTED]` (see §8 of
-//!   `docs/OVERLAYS_AND_MOTION.md`).
-//! - Focus crosses the bridge through the service's [`FocusControl`]
-//!   adapter over [`UiTree::focused`]/[`UiTree::set_focused`]. Modal Tab
-//!   trapping cycles the modal subtree here (the tree owns Tab order for
-//!   the main UI via `events::dispatch_key`; the host constrains it under
-//!   modality). Removal order is close-first (service restores focus while
-//!   nodes are live) then `tree.remove` — never a dangling focus.
-//! - Motion travels with the host too: [`OverlayHost`] owns the
-//!   [`MotionController`] and exposes scheduler deadlines
-//!   ([`motion_deadline`](OverlayHost::motion_deadline)), so popup
-//!   animations use the same clock and the same demand-driven wakeups as
-//!   everything else. The facade still owns the event loop; this host is
-//!   the usage pattern, not a second scheduler.
-
 use crate::events::{self, dispatch_scroll};
 use crate::motion::{
     MotionController, MotionHandle, MotionKind, MotionValue, ReducedMotion, Seconds,
@@ -41,69 +7,34 @@ use crate::overlay::{
     OverlayKind, OverlayRequest, OverlayService, Placement, PointerOutcome, RenderEntry,
 };
 use crate::style::{Absolute, Length};
-use crate::tree::{NodeKind, NodeSpec, UiTree};
+use crate::tree::{NodeSpec, UiTree};
 use aqua_core::id::RawId;
 use aqua_core::{InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Point, Rect, Size};
 use std::collections::HashMap;
 use std::time::Duration;
 
-// ---------------------------------------------------------------------------
-// Request / error
-// ---------------------------------------------------------------------------
-
-/// Everything needed to open a tree-backed popup.
 #[derive(Debug)]
 pub struct PopupRequest {
-    /// Logical owner: the visible anchor rect comes from this node's
-    /// committed rect. Removing it closes the popup via `sync_lifecycle`.
     pub owner: NodeId,
-    /// Nesting parent overlay for cascading dismissal.
     pub parent: Option<OverlayId>,
-    /// What the popup is.
     pub kind: OverlayKind,
-    /// Input blocking.
     pub modality: Modality,
-    /// Ambient-input dismissal.
     pub dismiss: DismissPolicy,
-    /// Popup content. The **root must declare `Px` width and height** (the
-    /// builder knows intrinsic menu/dialog sizes); the host overwrites its
-    /// `absolute` insets with the placed bounds.
     pub content: NodeSpec,
-    /// Placement preference + fallback.
     pub placement: Placement,
-    /// Live, focusable node to focus on open (`None` = leave focus alone,
-    /// unless `focus_root`). Popup-internal nodes exist only after mount,
-    /// so prefer `focus_root` for focusing inside the popup.
     pub autofocus: Option<NodeId>,
-    /// Focus the popup root itself on open (host marks it focusable first).
-    /// Backs modal dialogs and menus without a pre-known item id.
     pub focus_root: bool,
 }
 
-/// Error opening or re-anchoring a popup. No partial state: failures leave
-/// the tree and the service unchanged (a provisional mount is rolled back).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostError {
-    /// The tree has no window root.
     NoRoot,
-    /// `owner` names a dead or never-issued node.
     UnknownOwner,
-    /// The owner has no committed rect — run `compute_layout` first.
     NoCommittedRect,
-    /// Popup content root lacks fixed `Px` width/height.
     ContentSizeNotFixed,
-    /// `parent` names an overlay that is not open.
     UnknownParentOverlay,
 }
 
-// ---------------------------------------------------------------------------
-// Focus adapter
-// ---------------------------------------------------------------------------
-
-/// [`FocusControl`] over the shared tree. Stale nodes are the tree's
-/// domain: [`UiTree::set_focused`] validates liveness + focusability and
-/// [`UiTree::focused`] filters dead nodes, so focus can never dangle
-/// through this adapter.
 struct TreeFocus<'a> {
     tree: &'a mut UiTree,
 }
@@ -118,106 +49,89 @@ impl<'a> FocusControl for TreeFocus<'a> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Host
-// ---------------------------------------------------------------------------
-
-/// Overlay + motion wiring for one window over one [`UiTree`].
-///
-/// The facade owns the event loop and calls, per frame, in order:
-/// `handle_input` (or the granular routers) → `sync_lifecycle` → mutate →
-/// `compute_layout` → `reanchor_all` → paint. Motion: `advance_motion` on
-/// wake, `motion_deadline[_duration]` to schedule the wake.
 pub struct OverlayHost {
+    closed: Vec<ClosedOverlay>,
+    pointer_anchors: HashMap<RawId, Point>,
     service: OverlayService,
     motion: MotionController,
-    /// Overlay handle (raw) → mounted popup root node. Same-tree invariant:
-    /// every popup node lives in the single shared [`UiTree`].
     mounts: HashMap<RawId, NodeId>,
-    /// Focus saved by the host when a popup moves it. The service only
-    /// saves around its own autofocus; host-driven focus (notably
-    /// `focus_root`, whose target node does not exist until after mount)
-    /// is restored here, deepest-first, after subtree removal.
     saved_focus: HashMap<RawId, Option<NodeId>>,
     viewport: Rect,
 }
 
 impl OverlayHost {
-    /// Create a host for a viewport (window content bounds, logical units).
     #[must_use]
     pub fn new(viewport: Rect) -> Self {
         Self {
             service: OverlayService::new(viewport),
             motion: MotionController::new(ReducedMotion::Full),
+            closed: Vec::new(),
+            pointer_anchors: HashMap::new(),
             mounts: HashMap::new(),
             saved_focus: HashMap::new(),
             viewport,
         }
     }
 
-    /// Window content bounds this host places against.
     #[must_use]
     pub fn viewport(&self) -> Rect {
         self.viewport
     }
 
-    /// Read-only service access (stacking, bounds, render plan queries).
-    /// Mutation goes through the host so tree mounts never leak.
     #[must_use]
     pub fn service(&self) -> &OverlayService {
         &self.service
     }
 
-    /// Read-only motion access.
     #[must_use]
     pub fn motion(&self) -> &MotionController {
         &self.motion
     }
 
-    /// Motion access for spawning/retargeting popup animations. Prefer
-    /// [`animate_popup`](OverlayHost::animate_popup) so animation ownership
-    /// follows overlay ownership; closing a popup does NOT auto-dispose
-    /// motion (fade-outs may outlive the popup) — call
-    /// [`dispose_owner_motion`](OverlayHost::dispose_owner_motion) when done.
     pub fn motion_mut(&mut self) -> &mut MotionController {
         &mut self.motion
     }
 
-    /// Popup root mounted for an open overlay.
+    pub fn take_closed(&mut self) -> Vec<ClosedOverlay> {
+        std::mem::take(&mut self.closed)
+    }
+
     #[must_use]
     pub fn popup_root(&self, overlay: OverlayId) -> Option<NodeId> {
         self.mounts.get(&overlay.raw()).copied()
     }
 
-    /// Whether an overlay is open and mounted.
     #[must_use]
     pub fn is_open(&self, overlay: OverlayId) -> bool {
         self.service.is_open(overlay) && self.mounts.contains_key(&overlay.raw())
     }
 
-    /// Ordered draw plan for the window-level overlay host (delegates to
-    /// the service; popup nodes paint through the normal tree scene).
     pub fn render_plan(&self) -> Vec<RenderEntry> {
         self.service.render_plan()
     }
 
-    /// Open a popup: validate, place via the service, mount as an
-    /// absolute-positioned last child of the window root, focus.
-    ///
-    /// Order: provisional mount at the anchor (so popup nodes exist before
-    /// focus moves), service open (placement + focus save), final insets.
-    /// A failed service open rolls the provisional mount back — no
-    /// half-open state.
     pub fn open_popup(
         &mut self,
         tree: &mut UiTree,
         request: PopupRequest,
     ) -> Result<OverlayId, HostError> {
+        self.open_popup_at(tree, request, None)
+    }
+
+    pub fn open_popup_at(
+        &mut self,
+        tree: &mut UiTree,
+        request: PopupRequest,
+        at: Option<Point>,
+    ) -> Result<OverlayId, HostError> {
         let root = tree.root().ok_or(HostError::NoRoot)?;
         if tree.get(request.owner).is_none() {
             return Err(HostError::UnknownOwner);
         }
-        let anchor = visible_rect(tree, request.owner).ok_or(HostError::NoCommittedRect)?;
+        let owner_anchor = visible_rect(tree, request.owner).ok_or(HostError::NoCommittedRect)?;
+        let anchor = at.map_or(owner_anchor, |point| {
+            Rect::from_origin_size(point, Size::ZERO)
+        });
         let (w, h) = fixed_size(&request.content).ok_or(HostError::ContentSizeNotFixed)?;
         let size = Size::new(w, h);
 
@@ -228,12 +142,6 @@ impl OverlayHost {
             right: None,
             bottom: None,
         });
-        // NOTE: mounted via `insert`+`attach`, not `insert_spec`: core's
-        // `insert_spec` currently panics inside taffy's `remove_child` for
-        // the fresh detached child (reported to parent/core — see §9 of
-        // `docs/OVERLAYS_AND_MOTION.md`). Fresh popups need no
-        // reconciliation, so attach-by-construction is the right primitive
-        // here regardless.
         let popup_root = mount_detached(tree, Some(root), provisional);
 
         let service_request = OverlayRequest {
@@ -261,9 +169,6 @@ impl OverlayHost {
         if request.focus_root {
             tree.set_focusable(popup_root, true);
         }
-        // Explicit autofocus wins; otherwise the popup root itself. The
-        // service runs with autofocus None (its target must pre-exist);
-        // the host saves focus around its own move instead.
         let saved_before = tree.focused();
         let target = match request.autofocus {
             Some(n) => Some(n),
@@ -275,7 +180,6 @@ impl OverlayHost {
             self.saved_focus.insert(id.raw(), saved_before);
         }
 
-        // Final insets from the service placement.
         if let Some(bounds) = self.service.bounds(id) {
             if let Some(rec) = tree.get(popup_root) {
                 let mut style = rec.style.clone();
@@ -288,14 +192,14 @@ impl OverlayHost {
                 tree.set_style(popup_root, style);
             }
         }
+        tree.mark_portal(popup_root);
         self.mounts.insert(id.raw(), popup_root);
+        if let Some(point) = at {
+            self.pointer_anchors.insert(id.raw(), point);
+        }
         Ok(id)
     }
 
-    /// Close a popup and its nested descendants: service first (restores
-    /// focus while nodes are live), then remove mounted subtrees. Never
-    /// leaves a dangling focus — [`UiTree`] falls back to the parent and
-    /// [`focused`](UiTree::focused) filters dead nodes.
     pub fn close_popup(
         &mut self,
         tree: &mut UiTree,
@@ -309,17 +213,8 @@ impl OverlayHost {
         closed
     }
 
-    /// Reconcile service state with the tree. Call after external tree
-    /// edits (reconciliation, owner removal) and once per frame:
-    ///
-    /// - overlays whose **owner is gone** close via owner disposal
-    ///   (`OwnerRemoved`) with mount cleanup;
-    /// - overlays whose **popup root is gone** (reconciler dropped the
-    ///   subtree) close the same way — no headless overlays;
-    /// - stale mount entries (service already closed) are dropped.
     pub fn sync_lifecycle(&mut self, tree: &mut UiTree) -> Vec<ClosedOverlay> {
         let mut closed = Vec::new();
-        // Owner-gone pass: snapshot first, disposal mutates.
         let mut dead_owners = Vec::new();
         for id in self.service.stack() {
             if let Some(owner) = self.service.owner_of(id) {
@@ -335,7 +230,6 @@ impl OverlayHost {
             closed.extend(batch);
         }
         self.finish_close(tree, &closed);
-        // Popup-root-gone pass.
         let orphaned: Vec<OverlayId> = self
             .mounts
             .iter()
@@ -347,18 +241,18 @@ impl OverlayHost {
         for id in orphaned {
             closed.extend(self.close_popup(tree, id, CloseReason::OwnerRemoved));
         }
-        // Stale mount entries.
         self.mounts
             .retain(|raw, _| self.service.is_open(OverlayId::from_raw(*raw)));
         closed
     }
 
-    /// Re-anchor one popup from its owner's current visible rect (call
-    /// after scroll/reflow moves the anchor). Updates service placement
-    /// and mount insets. `None` for unknown overlays or missing rects.
     pub fn reanchor_popup(&mut self, tree: &mut UiTree, overlay: OverlayId) -> Option<Rect> {
         let owner = self.service.owner_of(overlay)?;
-        let anchor = visible_rect(tree, owner)?;
+        let anchor = self
+            .pointer_anchors
+            .get(&overlay.raw())
+            .map(|point| Rect::from_origin_size(*point, Size::ZERO))
+            .or_else(|| visible_rect(tree, owner))?;
         let bounds = self.service.reposition(overlay, anchor)?;
         if let Some(root) = self.mounts.get(&overlay.raw()).copied() {
             if let Some(rec) = tree.get(root) {
@@ -375,8 +269,6 @@ impl OverlayHost {
         Some(bounds)
     }
 
-    /// Re-anchor every open popup (call after `compute_layout`/scroll).
-    /// Returns overlays whose bounds changed.
     pub fn reanchor_all(&mut self, tree: &mut UiTree) -> Vec<OverlayId> {
         let stack = self.service.stack();
         let mut moved = Vec::new();
@@ -389,8 +281,6 @@ impl OverlayHost {
         moved
     }
 
-    /// Resize the viewport: service re-clamps, mount insets follow.
-    /// Returns overlays whose bounds changed.
     pub fn set_viewport(&mut self, tree: &mut UiTree, viewport: Rect) -> Vec<OverlayId> {
         self.viewport = viewport;
         let moved = self.service.set_viewport(viewport);
@@ -411,8 +301,6 @@ impl OverlayHost {
         moved
     }
 
-    /// Route a press: overlay policy first, tree dispatch for captured or
-    /// ignored presses. Dismissals clean up mounts inline.
     pub fn handle_pointer_down(&mut self, tree: &mut UiTree, at: Point) -> PointerOutcome {
         let outcome = self
             .service
@@ -426,16 +314,14 @@ impl OverlayHost {
                 self.finish_close(tree, closed);
                 outcome
             }
-            _ => {
+            PointerOutcome::Ignored => {
                 press_at(tree, at);
                 outcome
             }
+            PointerOutcome::BlockedByModal { .. } => outcome,
         }
     }
 
-    /// Route scroll: overlays under the point scroll first, modals block
-    /// the rest, otherwise the main UI scrolls. A consumed scroll
-    /// re-anchors popups (anchors move with content).
     pub fn handle_scroll(
         &mut self,
         tree: &mut UiTree,
@@ -455,10 +341,6 @@ impl OverlayHost {
         consumed
     }
 
-    /// Route a key: Tab/Shift-Tab under modality traps focus in the topmost
-    /// modal subtree; Escape dismisses via the service (with mount
-    /// cleanup); other keys go to the service, falling through to tree
-    /// dispatch when the service ignores them.
     pub fn handle_key(&mut self, tree: &mut UiTree, key: &KeyEvent) -> KeyOutcome {
         self.route_key(tree, key).0
     }
@@ -484,15 +366,41 @@ impl OverlayHost {
             }
             KeyOutcome::CapturedByModal { .. } => {
                 if self.focused_in_modal_domain(tree) {
-                    events::dispatch_key(tree, key);
+                    events::dispatch_default(tree, &InputEvent::KeyDown(*key));
                 }
                 (outcome, true)
             }
             KeyOutcome::Ignored => {
-                let consumed = events::dispatch_key(tree, key);
+                let consumed = events::dispatch_default(tree, &InputEvent::KeyDown(*key));
                 (outcome, consumed)
             }
         }
+    }
+
+    pub fn input_allowed(&self, tree: &UiTree, mut node: NodeId) -> bool {
+        let Some(modal) = self.service.modal_blocker() else {
+            return true;
+        };
+        loop {
+            let Some(parent) = tree.get(node).and_then(|record| record.parent) else {
+                return false;
+            };
+            if Some(parent) == tree.root() {
+                break;
+            }
+            node = parent;
+        }
+        let Some(overlay) = self.overlay_of_root(node) else {
+            return false;
+        };
+        let stack = self.service.stack();
+        let Some(modal_index) = stack.iter().position(|item| *item == modal) else {
+            return false;
+        };
+        stack
+            .iter()
+            .position(|item| *item == overlay)
+            .is_some_and(|index| index >= modal_index)
     }
 
     fn focused_in_modal_domain(&self, tree: &UiTree) -> bool {
@@ -524,14 +432,53 @@ impl OverlayHost {
             .is_some_and(|index| index >= modal_index)
     }
 
-    /// Convenience router for full input events. Returns `true` when
-    /// consumed (overlay-handled or tree-handled).
     pub fn handle_input(&mut self, tree: &mut UiTree, event: &InputEvent) -> bool {
+        if self.prepare_input(tree, event) {
+            return true;
+        }
+        tree.cancel_blocked_presses(|tree, node| self.input_allowed(tree, node));
+        crate::controls::cancel_blocked(tree, |tree, node| self.input_allowed(tree, node));
+        let routed =
+            crate::input::route_input(tree, event, |tree, node| self.input_allowed(tree, node));
+        let handled = if routed.default_prevented {
+            true
+        } else {
+            self.handle_prepared_input(tree, event) || routed.handled
+        };
+        tree.drain_commands();
+        handled
+    }
+
+    pub fn prepare_input(&mut self, tree: &mut UiTree, event: &InputEvent) -> bool {
+        let InputEvent::PointerDown(pointer, _) = event else {
+            return false;
+        };
+        let blocked = match self
+            .service
+            .handle_pointer_down(&mut TreeFocus { tree: &mut *tree }, pointer.position)
+        {
+            PointerOutcome::Dismissed { closed } => {
+                self.finish_close(tree, &closed);
+                true
+            }
+            PointerOutcome::BlockedByModal { .. } => true,
+            PointerOutcome::Ignored | PointerOutcome::Captured { .. } => false,
+        };
+        if blocked {
+            tree.cancel_blocked_presses(|tree, node| self.input_allowed(tree, node));
+            crate::controls::cancel_blocked(tree, |tree, node| self.input_allowed(tree, node));
+            crate::input::cancel_blocked(tree, |tree, node| self.input_allowed(tree, node));
+        }
+        blocked
+    }
+
+    pub fn handle_input_default(&mut self, tree: &mut UiTree, event: &InputEvent) -> bool {
+        self.prepare_input(tree, event) || self.handle_prepared_input(tree, event)
+    }
+
+    pub fn handle_prepared_input(&mut self, tree: &mut UiTree, event: &InputEvent) -> bool {
         match event {
-            InputEvent::PointerDown(pe, _) => match self.handle_pointer_down(tree, pe.position) {
-                PointerOutcome::Ignored => events::dispatch_input(tree, event),
-                _ => true,
-            },
+            InputEvent::PointerDown(..) => events::dispatch_default(tree, event),
             InputEvent::KeyDown(key) => self.route_key(tree, key).1,
             InputEvent::Scroll { at, delta } => self.handle_scroll(tree, *at, *delta),
             InputEvent::TextInput { .. } | InputEvent::Ime(_)
@@ -539,14 +486,10 @@ impl OverlayHost {
             {
                 true
             }
-            _ => events::dispatch_input(tree, event),
+            _ => events::dispatch_default(tree, event),
         }
     }
 
-    /// Which overlay (if any) owns the already-mounted popup `root`
-    /// (a direct child of the window root). `None` for main-UI nodes.
-    /// Used for focus-based policy (text input under modality) without
-    /// re-hit-testing.
     #[must_use]
     pub fn overlay_of_root(&self, root: NodeId) -> Option<OverlayId> {
         self.mounts
@@ -555,10 +498,6 @@ impl OverlayHost {
             .map(|(raw, _)| OverlayId::from_raw(*raw))
     }
 
-    /// Which overlay (if any) owns the node under `at`: hit-test, then walk
-    /// to the window root's direct child and match it against mounts.
-    /// Lets the facade attribute input to overlays without duplicating hit
-    /// logic.
     pub fn overlay_at_point(&self, tree: &UiTree, at: Point) -> Option<OverlayId> {
         let mut node = events::hit_test(tree, at)?;
         loop {
@@ -575,11 +514,6 @@ impl OverlayHost {
             .map(|(raw, _)| OverlayId::from_raw(*raw))
     }
 
-    // -- motion -----------------------------------------------------------
-
-    /// Spawn a popup animation owned by the overlay's owner node. Closing
-    /// the popup does NOT dispose it (fade-outs may outlive the popup) —
-    /// call [`dispose_owner_motion`](OverlayHost::dispose_owner_motion).
     pub fn animate_popup(
         &mut self,
         initial: MotionValue,
@@ -591,38 +525,29 @@ impl OverlayHost {
         Some(self.motion.spawn(Some(owner), initial, kind, now))
     }
 
-    /// Advance all motion; returns newly completed handles.
     pub fn advance_motion(&mut self, now: Seconds) -> Vec<MotionHandle> {
         self.motion.advance(now)
     }
 
-    /// Earliest time motion needs a frame (`None` when settled). Feed to
-    /// the platform scheduler — demand-driven, no fixed tick.
     #[must_use]
     pub fn motion_deadline(&self, now: Seconds) -> Option<Seconds> {
         self.motion.next_deadline(now)
     }
 
-    /// [`motion_deadline`](OverlayHost::motion_deadline) as a [`Duration`].
     #[must_use]
     pub fn motion_deadline_duration(&self, now: Duration) -> Option<Duration> {
         self.motion.next_deadline_duration(now)
     }
 
-    /// Drop motion owned by `owner` (silent completions — see motion docs).
     pub fn dispose_owner_motion(&mut self, owner: NodeId) -> Vec<MotionHandle> {
         self.motion.dispose_owner(owner)
     }
 
-    // -- internals --------------------------------------------------------
-
-    /// Remove mounted subtrees for closed overlays, then restore host-saved
-    /// focus (deepest-first cascade walk) when nothing live holds it.
-    /// Entries whose focus moved on to a live node are dropped silently.
     fn finish_close(&mut self, tree: &mut UiTree, closed: &[ClosedOverlay]) {
-        // Removing a focused subtree installs a live parent fallback. That
-        // fallback is not a deliberate focus move and must not suppress
-        // restoration to the control that opened the popup.
+        self.closed.extend_from_slice(closed);
+        for entry in closed {
+            self.pointer_anchors.remove(&entry.id.raw());
+        }
         let mut ancestor = tree.focused();
         let mut removed_focus = false;
         while let Some(node) = ancestor {
@@ -651,7 +576,6 @@ impl OverlayHost {
         }
     }
 
-    /// Remove mounted subtrees for closed overlays; drop stale entries.
     fn remove_mounts(&mut self, tree: &mut UiTree, closed: &[ClosedOverlay]) {
         for entry in closed {
             if let Some(root) = self.mounts.remove(&entry.id.raw()) {
@@ -660,8 +584,6 @@ impl OverlayHost {
         }
     }
 
-    /// Cycle Tab/Shift-Tab inside the modal popup subtree (paint order,
-    /// skipping disabled). Empty scope consumes Tab and keeps focus.
     fn trap_tab(&mut self, tree: &mut UiTree, modal: OverlayId, reverse: bool) {
         let Some(scope) = self.mounts.get(&modal.raw()).copied() else {
             return;
@@ -707,9 +629,8 @@ impl OverlayHost {
     }
 }
 
-/// Forward a press to normal tree dispatch (focus + activate the hit node).
 fn press_at(tree: &mut UiTree, at: Point) {
-    events::dispatch_input(
+    events::dispatch_default(
         tree,
         &InputEvent::PointerDown(
             aqua_core::PointerEvent {
@@ -723,38 +644,19 @@ fn press_at(tree: &mut UiTree, at: Point) {
     );
 }
 
-/// Mount a spec subtree by construction (`insert` + `attach`), preserving
-/// keys. Used for fresh popups, which carry host identity (the OverlayId)
-/// and never need reconciling insertion.
 fn mount_detached(tree: &mut UiTree, parent: Option<NodeId>, spec: NodeSpec) -> NodeId {
-    let NodeSpec {
-        kind,
-        style,
-        paint,
-        key,
-        children,
-        // Window-managed collection containers never mount through overlays;
-        // the driver owns their children/scroll, so plain construction drops
-        // the marker here (overlays agent: keep in sync if that changes).
-        ..
-    } = spec;
-    let is_box = matches!(&kind, crate::tree::NodeKind::Box(_));
-    let id = tree.insert(parent, kind, style);
-    if !is_box {
-        tree.set_paint(id, paint);
+    match parent {
+        Some(parent) => tree
+            .insert_spec(
+                parent,
+                tree.get(parent).map_or(0, |record| record.children.len()),
+                spec,
+            )
+            .expect("live overlay parent"),
+        None => tree.mount_spec(spec),
     }
-    if key.is_some() {
-        if let Some(rec) = tree.get_mut(id) {
-            rec.key = key;
-        }
-    }
-    for child in children {
-        mount_detached(tree, Some(id), child);
-    }
-    id
 }
 
-/// Fixed `Px` width/height of a popup content root.
 fn fixed_size(spec: &NodeSpec) -> Option<(f32, f32)> {
     match (spec.style.width, spec.style.height) {
         (Length::Px(w), Length::Px(h)) => Some((w, h)),
@@ -762,22 +664,8 @@ fn fixed_size(spec: &NodeSpec) -> Option<(f32, f32)> {
     }
 }
 
-/// Committed rect adjusted for ancestor scroll offsets (the visible
-/// anchor). `None` when the node is dead or layout never ran.
 fn visible_rect(tree: &UiTree, id: NodeId) -> Option<Rect> {
-    let mut rect = tree.rect(id)?;
-    let mut cursor = id;
-    while let Some(parent) = tree.get(cursor).and_then(|r| r.parent) {
-        if let Some(rec) = tree.get(parent) {
-            if let NodeKind::Scroll(ref s) = rec.kind {
-                rect = rect.translate(-s.offset.x, -s.offset.y);
-            }
-            cursor = parent;
-        } else {
-            break;
-        }
-    }
-    Some(rect)
+    tree.visual_rect(id)
 }
 
 #[cfg(test)]
@@ -785,7 +673,7 @@ mod tests {
     use super::*;
     use crate::layout::NaiveMeasurer;
     use crate::style::{Axis, LayoutStyle};
-    use crate::tree::{BoxContent, ScrollContent, TextContent};
+    use crate::tree::{BoxContent, NodeKind, ScrollContent, TextContent};
     use aqua_core::{Modifiers, ScrollDelta};
 
     fn viewport() -> Rect {
@@ -830,8 +718,6 @@ mod tests {
         }
     }
 
-    /// Window with a 300x100 scroller; `owner` sits at content y=300.
-    /// Returns (tree, root, scroller, owner).
     fn scrolled_tree() -> (UiTree, NodeId, NodeId, NodeId) {
         let content_style = LayoutStyle {
             axis: Axis::Column,
@@ -882,16 +768,11 @@ mod tests {
         tree.compute_layout(Size::new(300.0, 300.0), &NaiveMeasurer)
             .unwrap();
 
-        // Mounted under the window root, NOT inside the scroller.
         let popup_root = host.popup_root(id).unwrap();
         assert_eq!(tree.get(popup_root).unwrap().parent, Some(root));
-        // Placed below the visible anchor: owner visible at y 50..80.
         let bounds = host.service().bounds(id).unwrap();
         assert_eq!((bounds.x, bounds.y), (8.0, 84.0));
-        // Committed tree rect matches the service placement.
         assert_eq!(tree.rect(popup_root), Some(bounds));
-        // The popup overlaps y 100..144, outside the scroller's 0..100 clip
-        // box: hit-testing still finds it (clip escaped via the root mount).
         assert_eq!(
             host.overlay_at_point(&tree, Point::new(10.0, 120.0)),
             Some(id)
@@ -924,19 +805,16 @@ mod tests {
         tree.compute_layout(Size::new(300.0, 300.0), &NaiveMeasurer)
             .unwrap();
 
-        // Background press is swallowed by the modal barrier.
         assert_eq!(
             host.handle_pointer_down(&mut tree, Point::new(10.0, 280.0)),
             PointerOutcome::BlockedByModal { overlay: modal }
         );
         assert!(host.is_open(modal));
-        // Press inside the dialog is captured.
         let bounds = host.service().bounds(modal).unwrap();
         assert_eq!(
             host.handle_pointer_down(&mut tree, Point::new(bounds.x + 4.0, bounds.y + 4.0)),
             PointerOutcome::Captured { overlay: modal }
         );
-        // Scroll over the background is blocked; the tree never sees it.
         assert!(host.handle_scroll(
             &mut tree,
             Point::new(10.0, 280.0),
@@ -986,7 +864,6 @@ mod tests {
             repeat: false,
         };
         let kids = tree.get(popup_root).unwrap().children.clone();
-        // Tab walks root -> field0 -> field1 -> root, never the background.
         assert_eq!(
             host.handle_key(&mut tree, &tab),
             KeyOutcome::CapturedByModal { overlay: modal }
@@ -1000,7 +877,6 @@ mod tests {
         assert_eq!(tree.focused(), Some(kids[1]));
         assert_ne!(tree.focused(), Some(background));
 
-        // Escape closes the dialog and restores the background focus.
         let escape = KeyEvent {
             key: Key::Named(NamedKey::Escape),
             modifiers: Modifiers::NONE,
@@ -1058,7 +934,6 @@ mod tests {
         assert_eq!(closed[0].reason, CloseReason::OwnerRemoved);
         assert!(!host.is_open(id));
         assert!(tree.get(popup_root).is_none());
-        // Focus is live-or-cleared, never dangling.
         assert!(tree.focused().is_none_or(|n| tree.get(n).is_some()));
     }
 
@@ -1116,8 +991,6 @@ mod tests {
             .unwrap();
         assert_eq!(host.motion_deadline(0.0), Some(0.0));
 
-        // Advance mid-flight, then dispose the owner: the pending
-        // completion is dropped silently and never fires.
         host.advance_motion(0.05);
         assert!(host.motion_deadline(0.05).is_some());
         host.dispose_owner_motion(owner);
@@ -1139,7 +1012,6 @@ mod tests {
             generation: 0,
         });
 
-        // Unknown owner.
         assert_eq!(
             host.open_popup(
                 &mut tree,
@@ -1147,7 +1019,6 @@ mod tests {
             ),
             Err(HostError::UnknownOwner)
         );
-        // Content-sized root.
         let auto_style = LayoutStyle {
             width: Length::Auto,
             height: Length::Px(50.0),
@@ -1159,7 +1030,6 @@ mod tests {
             host.open_popup(&mut tree, bad),
             Err(HostError::ContentSizeNotFixed)
         );
-        // Nothing mounted, nothing open.
         assert_eq!(tree.get(root).unwrap().children.len(), 0);
         assert!(host.service().stack().is_empty());
     }

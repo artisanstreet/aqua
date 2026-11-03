@@ -949,3 +949,28 @@ fn empty_preedit_restores_replaced_selection_before_following_commit() {
     };
     assert_eq!(text.text(), "original");
 }
+
+#[test]
+fn multi_click_uses_configured_time_and_spatial_limits_without_losing_single_clicks() {
+    let (mut runtime, nodes, fonts) = fixture(true, &["hello   world"]);
+    let at = position(&runtime, nodes[0], &fonts, 2);
+    runtime.set_click_settings(
+        aqua_core::ClickSettings::new(std::time::Duration::from_millis(250), Point::new(1.0, 1.0))
+            .unwrap(),
+    );
+    down(&mut runtime, at, 1.0);
+    up(&mut runtime, at);
+    down(&mut runtime, at, 1.2);
+    up(&mut runtime, at);
+    assert_eq!(runtime.selected_text().as_deref(), Some("hello   "));
+    down(&mut runtime, at, 1.6);
+    up(&mut runtime, at);
+    assert!(runtime.selected_text().is_none());
+    let moved = Point::new(at.x + 2.0, at.y);
+    down(&mut runtime, moved, 1.7);
+    up(&mut runtime, moved);
+    assert!(runtime.selected_text().is_none());
+    down(&mut runtime, moved, 1.8);
+    up(&mut runtime, moved);
+    assert_eq!(runtime.selected_text().as_deref(), Some("hello   "));
+}

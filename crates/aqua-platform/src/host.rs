@@ -72,7 +72,7 @@ pub fn window_attributes(options: &WindowOptions) -> winit::window::WindowAttrib
 pub fn to_winit_cursor(icon: CursorIcon) -> winit::window::CursorIcon {
     use winit::window::CursorIcon as W;
     match icon {
-        CursorIcon::Default => W::Default,
+        CursorIcon::Default | CursorIcon::Hidden => W::Default,
         CursorIcon::Text => W::Text,
         CursorIcon::Pointer => W::Pointer,
         CursorIcon::Crosshair => W::Crosshair,
@@ -80,7 +80,71 @@ pub fn to_winit_cursor(icon: CursorIcon) -> winit::window::CursorIcon {
         CursorIcon::NotAllowed => W::NotAllowed,
         CursorIcon::EwResize => W::EwResize,
         CursorIcon::NsResize => W::NsResize,
+        CursorIcon::Help => W::Help,
+        CursorIcon::Progress => W::Progress,
+        CursorIcon::Wait => W::Wait,
+        CursorIcon::NwseResize => W::NwseResize,
+        CursorIcon::NeswResize => W::NeswResize,
+        CursorIcon::Grabbing => W::Grabbing,
+        CursorIcon::Grab => W::Grab,
+        CursorIcon::RowResize => W::RowResize,
+        CursorIcon::ColResize => W::ColResize,
     }
+}
+
+#[cfg(windows)]
+pub fn cursor_position(window: &winit::window::Window) -> Option<aqua_core::Point> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::{HWND, POINT};
+    use windows::Win32::Graphics::Gdi::ScreenToClient;
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+    let mut position = POINT::default();
+    unsafe {
+        GetCursorPos(&mut position).ok()?;
+        if !ScreenToClient(HWND(handle.hwnd.get() as *mut _), &mut position).as_bool() {
+            return None;
+        }
+    }
+    let scale = window.scale_factor();
+    Some(aqua_core::Point::new(
+        (f64::from(position.x) / scale) as f32,
+        (f64::from(position.y) / scale) as f32,
+    ))
+}
+
+#[cfg(not(windows))]
+pub fn cursor_position(_: &winit::window::Window) -> Option<aqua_core::Point> {
+    None
+}
+
+#[cfg(windows)]
+pub fn click_settings(window: &winit::window::Window) -> aqua_core::ClickSettings {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
+    use windows::Win32::UI::WindowsAndMessaging::{SM_CXDOUBLECLK, SM_CYDOUBLECLK};
+    let Some(RawWindowHandle::Win32(handle)) =
+        window.window_handle().ok().map(|handle| handle.as_raw())
+    else {
+        return aqua_core::ClickSettings::default();
+    };
+    let dpi = unsafe { GetDpiForWindow(HWND(handle.hwnd.get() as *mut _)) }.max(96);
+    let scale = window.scale_factor() as f32;
+    let distance = aqua_core::Point::new(
+        unsafe { GetSystemMetricsForDpi(SM_CXDOUBLECLK, dpi) } as f32 / (2.0 * scale),
+        unsafe { GetSystemMetricsForDpi(SM_CYDOUBLECLK, dpi) } as f32 / (2.0 * scale),
+    );
+    let interval = std::time::Duration::from_millis(u64::from(unsafe { GetDoubleClickTime() }));
+    aqua_core::ClickSettings::new(interval, distance).unwrap_or_default()
+}
+
+#[cfg(not(windows))]
+pub fn click_settings(_: &winit::window::Window) -> aqua_core::ClickSettings {
+    aqua_core::ClickSettings::default()
 }
 
 impl ImeAreaWindow for winit::window::Window {

@@ -6,59 +6,60 @@ use aqua_core::{
 
 #[must_use]
 pub fn hit_test(tree: &UiTree, at: Point) -> Option<NodeId> {
-    let root = tree.root()?;
-    hit_node(tree, root, at, None, Point::ZERO)
-}
-
-fn hit_node(
-    tree: &UiTree,
-    id: NodeId,
-    at: Point,
-    clip: Option<Rect>,
-    offset: Point,
-) -> Option<NodeId> {
-    let rect = tree.rect(id)?.translate(offset.x, offset.y);
-    let rec = tree.get(id)?;
-    let child_offset = match rec.kind {
-        NodeKind::Scroll(ref s) => Point::new(offset.x - s.offset.x, offset.y - s.offset.y),
-        _ => offset,
-    };
-    let mut child_clip = clip;
-    if let NodeKind::Box(ref b) = rec.kind {
-        if b.paint.clip {
-            child_clip = Some(match child_clip {
-                Some(c) => c.intersect(rect),
-                None => rect,
-            });
-        }
-    }
-    if matches!(rec.kind, NodeKind::Scroll(_)) {
-        child_clip = Some(match child_clip {
-            Some(c) => c.intersect(rect),
-            None => rect,
-        });
-    }
-    for &c in rec.children.iter().rev() {
-        if let Some(hit) = hit_node(tree, c, at, child_clip, child_offset) {
+    for &portal in tree.portal_roots_in_paint_order().iter().rev() {
+        if let Some(hit) = hit_node(tree, portal, at, None) {
             return Some(hit);
         }
     }
-    if rect.contains(at) && child_clip.is_none_or(|c| c.contains(at)) {
-        Some(id)
+    let root = tree.root()?;
+    hit_node(tree, root, at, None)
+}
+
+fn hit_node(tree: &UiTree, id: NodeId, at: Point, clip: Option<Rect>) -> Option<NodeId> {
+    let rect = tree.visual_rect(id)?;
+    let rec = tree.get(id)?;
+    let clip = if tree.is_portal(id) { None } else { clip };
+    let clips = matches!(&rec.kind, NodeKind::Box(b) if b.paint.clip)
+        || matches!(rec.kind, NodeKind::Scroll(_));
+    let child_clip = if clips {
+        Some(clip.map_or(rect, |parent| parent.intersect(rect)))
     } else {
-        None
+        clip
+    };
+    for &child in rec.children.iter().rev() {
+        if tree.is_portal(child) {
+            continue;
+        }
+        if let Some(hit) = hit_node(tree, child, at, child_clip) {
+            return Some(hit);
+        }
     }
+    let local = crate::input::local_position(tree, id, at)?;
+    let layout = tree.rect(id)?;
+    (Rect::from_edges(0.0, 0.0, layout.w, layout.h).contains(local)
+        && child_clip.is_none_or(|clip| clip.contains(at)))
+    .then_some(id)
 }
 
 #[must_use]
 pub fn focusable_nodes(tree: &UiTree) -> Vec<NodeId> {
-    tree.traverse()
+    let mut nodes: Vec<_> = tree
+        .traverse()
         .into_iter()
-        .filter(|id| {
-            tree.get(*id)
-                .is_some_and(|r| r.focusable && !r.semantics.disabled)
+        .enumerate()
+        .filter_map(|(order, id)| {
+            let record = tree.get(id)?;
+            (record.focusable && !tree.is_disabled(id) && record.tab_index >= 0).then_some((
+                id,
+                record.tab_index,
+                order,
+            ))
         })
-        .collect()
+        .collect();
+    nodes.sort_by_key(|(_, tab_index, order)| {
+        (if *tab_index > 0 { 0 } else { 1 }, *tab_index, *order)
+    });
+    nodes.into_iter().map(|(id, _, _)| id).collect()
 }
 
 pub fn focus_next(tree: &mut UiTree) -> Option<NodeId> {
@@ -107,7 +108,12 @@ pub fn dispatch_scroll(tree: &mut UiTree, at: Point, delta: ScrollDelta) -> bool
                 },
                 None => return false,
             };
-            return tree.scroll_to(id, Point::new(cur.x + delta.x, cur.y + delta.y));
+            if tree.scroll_to(id, Point::new(cur.x + delta.x, cur.y + delta.y)) {
+                return true;
+            }
+        }
+        if tree.is_portal(id) {
+            break;
         }
         target = tree.get(id).and_then(|r| r.parent);
     }
@@ -425,6 +431,22 @@ fn activatable_ancestor(tree: &UiTree, mut id: NodeId) -> Option<NodeId> {
 }
 
 pub fn dispatch_input(tree: &mut UiTree, event: &InputEvent) -> bool {
+    tree.cancel_blocked_presses(|_, _| true);
+    crate::controls::cancel_blocked(tree, |_, _| true);
+    let routed = crate::input::route_input(tree, event, |_, _| true);
+    let handled = if routed.default_prevented {
+        true
+    } else {
+        dispatch_default(tree, event) || routed.handled
+    };
+    tree.drain_commands();
+    handled
+}
+
+pub fn dispatch_default(tree: &mut UiTree, event: &InputEvent) -> bool {
+    if crate::controls::dispatch(tree, event) {
+        return true;
+    }
     match event {
         InputEvent::PointerDown(pe, btn) => {
             if *btn != PointerButton::Primary {

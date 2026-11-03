@@ -2179,18 +2179,18 @@ impl Element {
     /// This element's resolved paint (every builder carries a real one).
     pub(crate) fn resolved_paint(&self) -> Paint {
         match &self.kind {
-            ElementKind::Box(b) => b.paint,
-            ElementKind::Text(t) => t.paint,
-            ElementKind::Media(m) => m.paint,
-            ElementKind::Scroll(s) => s.paint,
-            ElementKind::Canvas(c) => c.paint,
-            ElementKind::Viewport3D(v) => v.paint,
-            ElementKind::Button(b) => b.paint,
-            ElementKind::Checkbox(c) => c.paint,
-            ElementKind::Slider(s) => s.paint,
-            ElementKind::Dropdown(d) => d.paint,
-            ElementKind::Tabs(t) => t.paint,
-            ElementKind::Dynamic(d) => d.paint,
+            ElementKind::Box(b) => b.paint.clone(),
+            ElementKind::Text(t) => t.paint.clone(),
+            ElementKind::Media(m) => m.paint.clone(),
+            ElementKind::Scroll(s) => s.paint.clone(),
+            ElementKind::Canvas(c) => c.paint.clone(),
+            ElementKind::Viewport3D(v) => v.paint.clone(),
+            ElementKind::Button(b) => b.paint.clone(),
+            ElementKind::Checkbox(c) => c.paint.clone(),
+            ElementKind::Slider(s) => s.paint.clone(),
+            ElementKind::Dropdown(d) => d.paint.clone(),
+            ElementKind::Tabs(t) => t.paint.clone(),
+            ElementKind::Dynamic(d) => d.paint.clone(),
             // Fragments vanish at lowering and carry no paint; collections
             // resolve paint from descriptor styles in `lower_one`.
             ElementKind::Collection(_) | ElementKind::Fragment => Paint::default(),
@@ -2851,7 +2851,12 @@ fn lower_collection(
     let mut root = if is_table || !desc.virtualized {
         // Table root is Box in both modes (header clips wrong under Scroll);
         // a normal list is a plain column. Empty until the driver realizes.
-        NodeSpec::new(NodeKind::Box(BoxContent { paint }), layout)
+        NodeSpec::new(
+            NodeKind::Box(BoxContent {
+                paint: paint.clone(),
+            }),
+            layout,
+        )
     } else {
         NodeSpec::new(
             NodeKind::Scroll(ScrollContent {
@@ -2905,7 +2910,9 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
     let mut spec = match &el.kind {
         ElementKind::Box(b) => {
             let mut spec = NodeSpec::new(
-                NodeKind::Box(BoxContent { paint: b.paint }),
+                NodeKind::Box(BoxContent {
+                    paint: b.paint.clone(),
+                }),
                 b.style.clone(),
             );
             spec.control = b.control.clone();
@@ -2941,16 +2948,22 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
             v.style.clone(),
         ),
         ElementKind::Button(b) => NodeSpec::new(
-            NodeKind::Box(BoxContent { paint: b.paint }),
+            NodeKind::Box(BoxContent {
+                paint: b.paint.clone(),
+            }),
             b.style.clone(),
         ),
         ElementKind::Checkbox(c) => NodeSpec::new(
-            NodeKind::Box(BoxContent { paint: c.paint }),
+            NodeKind::Box(BoxContent {
+                paint: c.paint.clone(),
+            }),
             c.style.clone(),
         ),
         ElementKind::Slider(s) => {
             let mut spec = NodeSpec::new(
-                NodeKind::Box(BoxContent { paint: s.paint }),
+                NodeKind::Box(BoxContent {
+                    paint: s.paint.clone(),
+                }),
                 s.style.clone(),
             );
             spec.control = Some(std::boxed::Box::new(Control::Slider(SliderControl {
@@ -2962,7 +2975,9 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
         }
         ElementKind::Dropdown(d) => {
             let mut spec = NodeSpec::new(
-                NodeKind::Box(BoxContent { paint: d.paint }),
+                NodeKind::Box(BoxContent {
+                    paint: d.paint.clone(),
+                }),
                 d.style.clone(),
             );
             if !d.options.is_empty() {
@@ -2976,7 +2991,9 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
         }
         ElementKind::Tabs(t) => {
             let mut spec = NodeSpec::new(
-                NodeKind::Box(BoxContent { paint: t.paint }),
+                NodeKind::Box(BoxContent {
+                    paint: t.paint.clone(),
+                }),
                 t.style.clone(),
             );
             spec.control = Some(std::boxed::Box::new(Control::Tabs(TabsControl {
@@ -3125,7 +3142,7 @@ mod tests {
 
     fn box_paint_of(spec: &NodeSpec) -> Paint {
         match &spec.kind {
-            NodeKind::Box(b) => b.paint,
+            NodeKind::Box(b) => b.paint.clone(),
             other => panic!("expected box, got {other:?}"),
         }
     }

@@ -23,7 +23,7 @@ pub use aqua_runtime::Scheduler;
 
 pub use aqua_ui::element::ui;
 pub use aqua_ui::style::{auto, pct, px, Axis, Style, Typography};
-pub use aqua_ui::style::{Border, Length, Paint, Shadow};
+pub use aqua_ui::style::{Border, Length, Paint, Shadow, ShadowLayer};
 
 pub mod prelude {
     pub use crate::images::{

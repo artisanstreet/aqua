@@ -113,8 +113,38 @@ pub struct TextColorMap {
     pub strength: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShadowLayer {
+    pub dx: f32,
+    pub dy: f32,
+    pub blur: f32,
+    pub spread: f32,
+    pub inset: bool,
+    pub color: Oklch,
+}
+
+impl ShadowLayer {
+    pub fn bounds(self, bounds: Rect) -> Rect {
+        if self.inset {
+            return bounds;
+        }
+        Rect::from_edges(
+            bounds.x + self.dx - self.spread,
+            bounds.y + self.dy - self.spread,
+            bounds.right() + self.dx + self.spread,
+            bounds.bottom() + self.dy + self.spread,
+        )
+        .inflate(1.5 * self.blur.max(0.0))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum DisplayItem {
+    Shadow {
+        bounds: Rect,
+        corners: crate::geometry::CornerRadii,
+        layer: ShadowLayer,
+    },
     PushTextColorMap(TextColorMap),
     PopTextColorMap,
     PushContentBlur {
@@ -207,6 +237,7 @@ impl DisplayItem {
     #[must_use]
     pub fn bounds(&self) -> Option<Rect> {
         match self {
+            DisplayItem::Shadow { bounds, layer, .. } => Some(layer.bounds(*bounds)),
             DisplayItem::Rect { bounds, shadow, .. } => {
                 let mut r = *bounds;
                 if let Some((ox, oy, blur, _)) = shadow {

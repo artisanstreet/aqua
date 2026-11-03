@@ -198,7 +198,8 @@ impl DamageTracker {
             h: r.h * s,
         };
         match new_item {
-            DisplayItem::Image { .. }
+            DisplayItem::Shadow { .. }
+            | DisplayItem::Image { .. }
             | DisplayItem::Vector { .. }
             | DisplayItem::Rect { .. }
             | DisplayItem::External { .. } => {

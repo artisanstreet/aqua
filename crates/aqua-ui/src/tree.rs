@@ -328,7 +328,7 @@ impl fmt::Debug for TextContent {
 }
 
 /// Box (container) paint.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct BoxContent {
     /// Paint properties.
     pub paint: Paint,
@@ -1942,8 +1942,8 @@ impl UiTree {
     #[must_use]
     pub fn paint(&self, id: NodeId) -> Option<Paint> {
         self.get(id).map(|rec| match &rec.kind {
-            NodeKind::Box(b) => b.paint,
-            _ => rec.paint,
+            NodeKind::Box(b) => b.paint.clone(),
+            _ => rec.paint.clone(),
         })
     }
 
@@ -2393,8 +2393,8 @@ impl UiTree {
         };
         rect = rect.translate(offset.x, offset.y);
         let paint = match &rec.kind {
-            NodeKind::Box(content) => content.paint,
-            _ => rec.paint,
+            NodeKind::Box(content) => content.paint.clone(),
+            _ => rec.paint.clone(),
         };
         let transform = paint.transform.map(|transform| {
             Transform2D::translate(-rect.x, -rect.y)
@@ -2407,7 +2407,29 @@ impl UiTree {
         let start = world.apply(rect.origin());
         let end = world.apply(Point::new(rect.right(), rect.bottom()));
         let visual_rect = Rect::from_edges(start.x, start.y, end.x, end.y);
-        if clip.is_some_and(|clip| clip.intersect(visual_rect).is_empty()) && Some(id) != self.root
+        let footprint = paint
+            .shadows
+            .iter()
+            .fold(rect, |bounds, shadow| bounds.union(shadow.bounds(rect)));
+        let footprint = if let Some(shadow) = paint.shadow {
+            let pad = 3.0 * shadow.blur.max(0.0);
+            footprint.union(Rect::from_edges(
+                rect.x + shadow.dx - pad,
+                rect.y + shadow.dy - pad,
+                rect.right() + shadow.dx + pad,
+                rect.bottom() + shadow.dy + pad,
+            ))
+        } else {
+            footprint
+        };
+        let start = world.apply(footprint.origin());
+        let end = world.apply(Point::new(footprint.right(), footprint.bottom()));
+        let visual_footprint = Rect::from_edges(start.x, start.y, end.x, end.y);
+        if clip.is_some_and(|clip| clip.intersect(visual_footprint).is_empty())
+            && Some(id) != self.root
+            && !paint.shadows.iter().any(|layer| !layer.inset)
+            && paint.shadow.is_none()
+            && (paint.clip || matches!(&rec.kind, NodeKind::Scroll(_)) || rec.children.is_empty())
         {
             return;
         }
@@ -2429,6 +2451,19 @@ impl UiTree {
         if let Some(opacity) = paint.opacity {
             out.push((id, DisplayItem::PushOpacity(opacity)));
         }
+        let corners = paint
+            .corners
+            .unwrap_or_else(|| aqua_core::geometry::CornerRadii::uniform(paint.radius));
+        for layer in paint.shadows.iter().filter(|layer| !layer.inset) {
+            out.push((
+                id,
+                DisplayItem::Shadow {
+                    bounds: rect,
+                    corners,
+                    layer: *layer,
+                },
+            ));
+        }
         if paint.fill.is_some() || paint.border.is_some() || paint.shadow.is_some() {
             out.push((
                 id,
@@ -2436,9 +2471,23 @@ impl UiTree {
                     bounds: rect,
                     radius: paint.corners.map_or(paint.radius, |r| r.top_left),
                     fill: paint.fill.unwrap_or(Oklch::TRANSPARENT),
-                    border_width: paint.border.map_or(0.0, |x| x.width),
+                    border_width: if paint.shadows.is_empty() {
+                        paint.border.map_or(0.0, |x| x.width)
+                    } else {
+                        0.0
+                    },
                     border_color: paint.border.map_or(Oklch::TRANSPARENT, |x| x.color),
                     shadow: paint.shadow.map(|s| (s.dx, s.dy, s.blur, s.color)),
+                },
+            ));
+        }
+        for layer in paint.shadows.iter().filter(|layer| layer.inset) {
+            out.push((
+                id,
+                DisplayItem::Shadow {
+                    bounds: rect,
+                    corners,
+                    layer: *layer,
                 },
             ));
         }
@@ -2522,6 +2571,21 @@ impl UiTree {
         }
         if clips {
             out.push((id, DisplayItem::PopClip));
+        }
+        if !paint.shadows.is_empty() {
+            if let Some(border) = paint.border {
+                out.push((
+                    id,
+                    DisplayItem::Rect {
+                        bounds: rect,
+                        radius: paint.corners.map_or(paint.radius, |r| r.top_left),
+                        fill: Oklch::TRANSPARENT,
+                        border_width: border.width,
+                        border_color: border.color,
+                        shadow: None,
+                    },
+                ));
+            }
         }
         if self.focused == Some(id) && !self.is_disabled(id) {
             if let Some(ring) = paint.focus_ring {
@@ -2688,11 +2752,11 @@ mod tests {
             ..Default::default()
         };
         let version = tree.content_version();
-        assert!(tree.set_paint(id, paint));
+        assert!(tree.set_paint(id, paint.clone()));
         assert!(!tree.get(id).unwrap().dirty_layout);
         assert!(tree.content_version() > version);
         let version = tree.content_version();
-        assert!(!tree.set_paint(id, paint));
+        assert!(!tree.set_paint(id, paint.clone()));
         assert_eq!(tree.content_version(), version);
         let mut updated = field();
         updated.paint = Paint {
@@ -3205,7 +3269,7 @@ mod tests {
             {
                 let rec = tree.get_mut(kids[0]).unwrap();
                 if let NodeKind::Box(ref mut b) = rec.kind {
-                    let mut paint = b.paint;
+                    let mut paint = b.paint.clone();
                     paint.fill = Some(Oklch::from_hex("#123456").unwrap());
                     b.paint = paint;
                 }

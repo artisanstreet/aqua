@@ -1074,7 +1074,12 @@ fn table_host_specs() -> Vec<NodeSpec> {
         clip: true,
         ..Default::default()
     };
-    let mut clip = NodeSpec::new(NodeKind::Box(BoxContent { paint: clip_paint }), clip_style);
+    let mut clip = NodeSpec::new(
+        NodeKind::Box(BoxContent {
+            paint: clip_paint.clone(),
+        }),
+        clip_style,
+    );
     clip.paint = clip_paint;
     clip.collection_managed = true;
     let body_style = LayoutStyle {
@@ -2540,8 +2545,8 @@ mod tests {
             radius: 6.0,
             ..Default::default()
         };
-        assert_eq!(tree.paint(ids[0]), Some(expected));
+        assert_eq!(tree.paint(ids[0]), Some(expected.clone()));
         let btn = tree.get(ids[0]).unwrap().children[0];
-        assert_eq!(tree.paint(btn), Some(expected));
+        assert_eq!(tree.paint(btn), Some(expected.clone()));
     }
 }

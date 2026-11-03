@@ -286,7 +286,9 @@ pub struct Shadow {
 }
 
 /// Paint properties shared by box-like nodes.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub use aqua_core::scene::ShadowLayer;
+
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Paint {
     pub transform: Option<Transform2D>,
     pub content_blur: Option<f32>,
@@ -302,6 +304,7 @@ pub struct Paint {
     pub focus_ring: Option<Border>,
     /// Drop shadow (`None` = no shadow).
     pub shadow: Option<Shadow>,
+    pub shadows: Vec<ShadowLayer>,
     /// Clip children to this node's bounds (rounded by `radius`).
     pub clip: bool,
     /// Group opacity multiplier 0..=1 (`None` = opaque).
@@ -415,6 +418,7 @@ pub struct Style {
     border: Option<Option<Border>>,
     focus_ring: Option<Option<Border>>,
     shadow: Option<Option<Shadow>>,
+    shadows: Option<Vec<ShadowLayer>>,
     clip: Option<bool>,
     opacity: Option<Option<f32>>,
     transform: Option<Option<Transform2D>>,
@@ -458,6 +462,7 @@ impl Style {
             border: None,
             focus_ring: None,
             shadow: None,
+            shadows: None,
             clip: None,
             opacity: None,
             transform: None,
@@ -500,6 +505,7 @@ impl Style {
             && self.border.is_none()
             && self.focus_ring.is_none()
             && self.shadow.is_none()
+            && self.shadows.is_none()
             && self.clip.is_none()
             && self.opacity.is_none()
             && self.transform.is_none()
@@ -871,6 +877,13 @@ impl Style {
         self
     }
 
+    #[must_use]
+    pub fn shadows(mut self, shadows: Vec<ShadowLayer>) -> Self {
+        self.shadow = None;
+        self.shadows = Some(shadows);
+        self
+    }
+
     /// Clear the shadow (explicit none).
     #[must_use]
     pub const fn clear_shadow(mut self) -> Self {
@@ -1018,7 +1031,13 @@ impl Style {
         take!(corners);
         take!(border);
         take!(focus_ring);
-        take!(shadow);
+        if other.shadow.is_some() {
+            self.shadow = other.shadow;
+            self.shadows = None;
+        } else if let Some(shadows) = &other.shadows {
+            self.shadow = None;
+            self.shadows = Some(shadows.clone());
+        }
         take!(clip);
         take!(opacity);
         take!(transform);
@@ -1134,6 +1153,10 @@ impl Style {
         }
         if let Some(v) = self.shadow {
             paint.shadow = v;
+            paint.shadows.clear();
+        } else if let Some(v) = &self.shadows {
+            paint.shadow = None;
+            paint.shadows = v.clone();
         }
         if let Some(v) = self.clip {
             paint.clip = v;

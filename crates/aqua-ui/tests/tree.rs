@@ -131,7 +131,7 @@ fn transformed_subtree_culling_uses_visual_geometry_and_portals_paint_above_late
         .emit_scene()
         .iter()
         .any(|(node, item)| *node == target && matches!(item, DisplayItem::Rect { .. })));
-    let mut paint = tree.get(target).unwrap().paint;
+    let mut paint = tree.get(target).unwrap().paint.clone();
     paint.transform = Some(Transform2D::translate(150.0, 0.0));
     tree.set_paint(target, paint);
     assert!(!tree.emit_scene().iter().any(|(node, _)| *node == target));
@@ -196,4 +196,83 @@ fn media_preserves_asset_lease_and_fit_source_then_releases_on_unmount() {
     assert!(tree.emit_scene().iter().any(|(node, item)| *node == root && matches!(item, DisplayItem::Image { fit: ImageFit::Cover, position, source, .. } if *position == Point::new(1.0, 0.0) && *source == Rect::from_edges(0.25, 0.0, 0.75, 1.0))));
     tree.remove(root);
     assert_eq!(Arc::strong_count(&lease), 1);
+}
+
+#[test]
+fn shadow_stack_emits_outer_then_background_then_inset_and_retains_visible_transformed_shadow() {
+    use aqua_core::{DisplayItem, Oklch, Transform2D};
+    use aqua_ui::element::{lower_specs, ui};
+    use aqua_ui::style::{px, Axis, ShadowLayer, Style};
+    let outer = ShadowLayer {
+        dx: -30.0,
+        dy: 0.0,
+        blur: 0.0,
+        spread: 8.0,
+        inset: false,
+        color: Oklch::BLACK,
+    };
+    let inset = ShadowLayer {
+        dx: 0.0,
+        dy: 1.0,
+        blur: 0.0,
+        spread: 0.0,
+        inset: true,
+        color: Oklch::WHITE,
+    };
+    let element = ui::Box::new()
+        .style(
+            Style::new()
+                .axis(Axis::Row)
+                .width(px(100.0))
+                .height(px(60.0))
+                .clip(true),
+        )
+        .child(
+            ui::Box::new()
+                .style(
+                    Style::new()
+                        .width(px(110.0))
+                        .height(px(20.0))
+                        .flex_shrink(0.0),
+                )
+                .build(),
+        )
+        .child(
+            ui::Box::new()
+                .style(
+                    Style::new()
+                        .width(px(20.0))
+                        .height(px(20.0))
+                        .flex_shrink(0.0)
+                        .background(Oklch::WHITE)
+                        .transform(Transform2D::translate(5.0, 0.0))
+                        .shadows(vec![inset, outer]),
+                )
+                .build(),
+        )
+        .build();
+    let mut tree = UiTree::new();
+    let root = tree.mount_spec(lower_specs(&element).unwrap().remove(0));
+    let target = tree.get(root).unwrap().children[1];
+    tree.compute_layout(Size::new(400.0, 300.0), &NaiveMeasurer)
+        .unwrap();
+    let operations: Vec<_> = tree
+        .emit_scene()
+        .into_iter()
+        .filter(|(node, _)| *node == target)
+        .map(|(_, item)| item)
+        .collect();
+    let outer_index = operations
+        .iter()
+        .position(|item| matches!(item, DisplayItem::Shadow { layer, .. } if *layer == outer))
+        .unwrap();
+    let fill_index = operations
+        .iter()
+        .position(|item| matches!(item, DisplayItem::Rect { .. }))
+        .unwrap();
+    let inset_index = operations
+        .iter()
+        .position(|item| matches!(item, DisplayItem::Shadow { layer, .. } if *layer == inset))
+        .unwrap();
+    assert!(outer_index < fill_index && fill_index < inset_index);
 }

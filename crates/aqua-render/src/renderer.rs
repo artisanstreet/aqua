@@ -392,6 +392,7 @@ pub struct Renderer {
     /// custom content: fast-path value updates can't cover those, and
     /// partial repaint falls back to full (documented, correct).
     has_complex: bool,
+    has_shadows: bool,
     /// Dirty instance slots from the fast path (uploads skip the diff).
     dirty_ranges: Vec<(usize, usize)>,
 
@@ -775,6 +776,7 @@ impl Renderer {
             slot_of: HashMap::new(),
             ctx_of: HashMap::new(),
             has_complex: false,
+            has_shadows: false,
             dirty_ranges: Vec::new(),
             base: None,
             pool: ScratchPool::new(ResourceBudget::default()),
@@ -865,6 +867,7 @@ impl Renderer {
         self.slot_of.clear();
         self.ctx_of.clear();
         self.has_complex = false;
+        self.has_shadows = false;
         self.dirty_ranges.clear();
         self.mirror.clear();
         self.queue.write_buffer(
@@ -1000,7 +1003,7 @@ impl Renderer {
                         self.tracker.record_change(item, None);
                     }
                 }
-                _ => match item_bounds(item) {
+                _ => match item_bounds(item, self.scale) {
                     Some(b) => self.tracker.record_rect_change(b, None),
                     None => self.tracker.record_change(item, None),
                 },
@@ -1051,7 +1054,7 @@ impl Renderer {
                 }
                 _ => {
                     let old = self.last_bounds.get(&id.raw().index).copied();
-                    match item_bounds(item) {
+                    match item_bounds(item, self.scale) {
                         Some(new_footprint) => {
                             self.tracker.record_rect_change(new_footprint, old);
                             self.last_bounds.insert(id.raw().index, new_footprint);
@@ -1102,6 +1105,7 @@ impl Renderer {
             && !structure_changed
             && removed.is_empty()
             && !self.has_complex
+            && !self.has_shadows
             && self.custom_passes.is_empty()
             && !changes.is_empty()
             && changes.iter().all(|(id, item)| {
@@ -1169,6 +1173,7 @@ impl Renderer {
         self.slot_of.clear();
         self.ctx_of.clear();
         self.has_complex = false;
+        self.has_shadows = false;
         plan.nodes_traversed = scene.len();
         plan.mirror_current = false;
         let s = self.scale;
@@ -1247,6 +1252,30 @@ impl Renderer {
                 }
 
                 DisplayItem::PushTransform(_) | DisplayItem::PopTransform => unreachable!(),
+                DisplayItem::Shadow {
+                    bounds,
+                    corners,
+                    layer,
+                } => {
+                    self.has_shadows = true;
+                    if group_stack.is_empty() && !pending_texts.is_empty() {
+                        flush_texts(&mut plan.ops, &mut pending_texts);
+                        top_start = plan.instances.len() as u32;
+                    }
+                    let (clip, clip_r) = clip_stack.last().copied().unwrap_or((
+                        Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            w: -1.0,
+                            h: 0.0,
+                        },
+                        0.0,
+                    ));
+                    let mut inst =
+                        build_shadow_instance(*bounds, *corners, *layer, (clip, clip_r), s);
+                    inst.misc[2] = clip_indices.last().copied().unwrap_or(0) as f32;
+                    emit_rect_instance(&mut plan, &mut group_stack, s, inst);
+                }
                 DisplayItem::Rect {
                     bounds,
                     radius,
@@ -1255,6 +1284,10 @@ impl Renderer {
                     border_color,
                     shadow,
                 } => {
+                    if group_stack.is_empty() && !pending_texts.is_empty() {
+                        flush_texts(&mut plan.ops, &mut pending_texts);
+                        top_start = plan.instances.len() as u32;
+                    }
                     let phys = Rect {
                         x: bounds.x * s,
                         y: bounds.y * s,
@@ -1452,6 +1485,9 @@ impl Renderer {
                     color,
                     opacity,
                 } => {
+                    if group_stack.is_empty() {
+                        flush_rect_run(&mut plan.ops, &plan.instances, &mut top_start);
+                    }
                     // Painter-order clip in logical px (clip_stack is
                     // physical). w < 0 means "no clip" by stack convention.
                     let clip_logical = clip_stack.last().and_then(|(c, _)| {
@@ -3102,9 +3138,66 @@ fn coalesce_ranges(ranges: &mut Vec<(usize, usize)>) {
     *ranges = out;
 }
 
-/// Build one rect instance (physical px) from a scene item and its resolved
-/// clip context. Shared by the slow-path walk and fast-path slot patches so
-/// both produce bit-identical instances.
+fn build_shadow_instance(
+    bounds: Rect,
+    corners: aqua_core::geometry::CornerRadii,
+    layer: aqua_core::scene::ShadowLayer,
+    clip: (Rect, f32),
+    scale: f32,
+) -> RectInstance {
+    let cover = |r: Rect| {
+        let x = (r.x * scale).floor();
+        let y = (r.y * scale).floor();
+        let right = (r.right() * scale).ceil().max(x);
+        let bottom = (r.bottom() * scale).ceil().max(y);
+        [x, y, right - x, bottom - y]
+    };
+    let element = cover(bounds);
+    let spread = if layer.inset {
+        -layer.spread
+    } else {
+        layer.spread
+    };
+    let shadow = cover(Rect::from_edges(
+        bounds.x + layer.dx - spread,
+        bounds.y + layer.dy - spread,
+        bounds.right() + layer.dx + spread,
+        bounds.bottom() + layer.dy + spread,
+    ));
+    let sigma = layer.blur.max(0.0) * scale * 0.5;
+    let margin = 3.0 * sigma;
+    let quad = if layer.inset {
+        element
+    } else {
+        [
+            shadow[0] - margin,
+            shadow[1] - margin,
+            shadow[2] + 2.0 * margin,
+            shadow[3] + 2.0 * margin,
+        ]
+    };
+    RectInstance {
+        rect: quad,
+        rb_pack: [
+            sigma,
+            if layer.inset { 1.0 } else { 0.0 },
+            1.0,
+            layer.spread * scale,
+        ],
+        fill: element,
+        border: [
+            corners.top_left * scale,
+            corners.top_right * scale,
+            corners.bottom_right * scale,
+            corners.bottom_left * scale,
+        ],
+        shadow,
+        shadow_color: layer.color.to_gpu(),
+        clip: [clip.0.x, clip.0.y, clip.0.w, clip.0.h],
+        misc: [clip.1, 1.0, 0.0, 0.0],
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_rect_instance(
     bounds: &Rect,
@@ -3269,8 +3362,9 @@ fn flush_texts(ops: &mut Vec<Op>, pending: &mut Vec<ShapedRun>) {
 /// Effect-inclusive logical footprint for damage: core `bounds()` (which
 /// already unions shadow offset+blur) plus renderer-side sampling padding
 /// for backdrop blur and rounded-clip expansion on external layers.
-fn item_bounds(item: &DisplayItem) -> Option<Rect> {
+fn item_bounds(item: &DisplayItem, scale: f32) -> Option<Rect> {
     match item {
+        DisplayItem::Shadow { .. } => item.bounds().map(|bounds| bounds.inflate(1.0 / scale)),
         DisplayItem::BackdropBlur { bounds, radius } => {
             Some(crate::scene::inflate(*bounds, *radius * 2.0))
         }
@@ -3367,6 +3461,21 @@ fn transform_item(item: &DisplayItem, transform: aqua_core::Transform2D) -> Disp
         DisplayItem::PushTextColorMap(map) => {
             map.start = map.start * transform.a + transform.tx;
             map.end = map.end * transform.a + transform.tx;
+        }
+        DisplayItem::Shadow {
+            bounds: r,
+            corners,
+            layer,
+        } => {
+            *r = bounds(*r);
+            corners.top_left *= transform.a;
+            corners.top_right *= transform.a;
+            corners.bottom_right *= transform.a;
+            corners.bottom_left *= transform.a;
+            layer.dx *= transform.a;
+            layer.dy *= transform.d;
+            layer.blur *= transform.a;
+            layer.spread *= transform.a;
         }
         DisplayItem::Rect {
             bounds: r,

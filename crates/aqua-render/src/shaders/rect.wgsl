@@ -68,6 +68,67 @@ fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
     return length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
+fn corner_radius(point: vec2<f32>, radii: vec4<f32>) -> f32 {
+    if (point.x < 0.0) {
+        return select(radii.w, radii.x, point.y < 0.0);
+    }
+    return select(radii.z, radii.y, point.y < 0.0);
+}
+
+fn quad_distance(point: vec2<f32>, bounds: vec4<f32>, radii: vec4<f32>) -> f32 {
+    let half_size = bounds.zw * 0.5;
+    let relative = point - bounds.xy - half_size;
+    let radius = corner_radius(relative, radii);
+    let q = abs(relative) - half_size + radius;
+    if (radius == 0.0) {
+        return max(q.x, q.y);
+    }
+    return length(max(q, vec2<f32>(0.0))) + min(0.0, max(q.x, q.y)) - radius;
+}
+
+fn error_function(value: vec2<f32>) -> vec2<f32> {
+    let sign_value = sign(value);
+    let a = abs(value);
+    var x = vec2<f32>(1.0) + (vec2<f32>(0.278393) + (vec2<f32>(0.230389) + 0.078108 * a * a) * a) * a;
+    x *= x;
+    return sign_value - sign_value / (x * x);
+}
+
+fn blur_along_x(x: f32, y: f32, sigma: f32, corner: f32, half_size: vec2<f32>) -> f32 {
+    let delta = min(half_size.y - corner - abs(y), 0.0);
+    let curved = half_size.x - corner + sqrt(max(0.0, corner * corner - delta * delta));
+    let integral = vec2<f32>(0.5) + 0.5 * error_function((vec2<f32>(x) + vec2<f32>(-curved, curved)) * (sqrt(0.5) / sigma));
+    return integral.y - integral.x;
+}
+
+fn shadow_alpha(point: vec2<f32>, element: vec4<f32>, bounds: vec4<f32>, radii: vec4<f32>, sigma: f32, inset: bool, spread: f32) -> f32 {
+    let hole_radii = select(radii, max(radii - vec4<f32>(spread), vec4<f32>(0.0)), inset);
+    let half_size = bounds.zw * 0.5;
+    let relative = point - bounds.xy - half_size;
+    let corner = corner_radius(relative, hole_radii);
+    var alpha = 0.0;
+    if (sigma == 0.0) {
+        alpha = clamp(0.5 - quad_distance(point, bounds, hole_radii), 0.0, 1.0);
+    } else {
+        let low = relative.y - half_size.y;
+        let high = relative.y + half_size.y;
+        let start = clamp(-3.0 * sigma, low, high);
+        let end = clamp(3.0 * sigma, low, high);
+        let step = (end - start) / 4.0;
+        var y = start + step * 0.5;
+        for (var i = 0; i < 4; i++) {
+            let gaussian = exp(-(y * y) / (2.0 * sigma * sigma)) / (sqrt(2.0 * 3.141592653589793) * sigma);
+            alpha += blur_along_x(relative.x, relative.y - y, sigma, corner, half_size) * gaussian * step;
+            y += step;
+        }
+    }
+    let element_distance = quad_distance(point, element, radii);
+    if (inset) {
+        return (1.0 - alpha) * clamp(0.5 - element_distance, 0.0, 1.0);
+    }
+    return alpha * clamp(0.5 + element_distance, 0.0, 1.0);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let inst = Instance(in.rect, in.rb_pack.xy, in.rb_pack.zw, in.fill,
@@ -86,6 +147,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         clip_cover *= 1.0 - smoothstep(-clip_aa, clip_aa, distance);
         clip_id = u32(clip.state.y);
     }
+    if (inst.pad0.x > 0.5) {
+        let coverage = shadow_alpha(in.px, inst.fill, inst.shadow, inst.border_color, inst.radius_bw.x, inst.radius_bw.y > 0.5, inst.pad0.y);
+        let alpha = coverage * inst.shadow_color.a * clip_cover * opacity;
+        return vec4<f32>(inst.shadow_color.rgb * alpha, alpha);
+    }
     let rc = inst.rect.xy + inst.rect.zw * 0.5;
     let half = inst.rect.zw * 0.5;
     let rad = min(inst.radius_bw.x, min(half.x, half.y));
@@ -100,7 +166,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let d_in = sd_round_box(in.px - rc, half - vec2<f32>(bw, bw), max(rad - bw, 0.0));
         let inner_cover = min(fill_cover, 1.0 - smoothstep(-aa, aa, d_in));
         let band = max(fill_cover - inner_cover, 0.0);
-        fill_rgb = inst.fill.rgb * inner_cover + inst.border_color.rgb * band;
+        fill_rgb = inst.fill.rgb * inst.fill.a * inner_cover + inst.border_color.rgb * inst.border_color.a * band;
         fill_a = inst.fill.a * inner_cover + inst.border_color.a * band;
     } else {
         fill_rgb = inst.fill.rgb * fill_cover;

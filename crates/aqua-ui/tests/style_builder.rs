@@ -97,3 +97,34 @@ fn merge_with_builder_form_chains() {
     assert_eq!(layout.height, aqua_ui::style::Length::Px(60.0));
     assert!(s.resolve_paint().clip);
 }
+
+#[test]
+fn shadow_styles_replace_and_clear_legacy_and_stack_forms_in_order() {
+    use aqua_core::Oklch;
+    use aqua_ui::style::{ShadowLayer, Style};
+    let layer = ShadowLayer {
+        dx: 1.0,
+        dy: 2.0,
+        blur: 3.0,
+        spread: -1.0,
+        inset: true,
+        color: Oklch::BLACK,
+    };
+    let stack = Style::new().shadows(vec![layer]);
+    let legacy = Style::new().shadow_of(0.0, 1.0, 2.0, Oklch::WHITE);
+    let mut style = legacy.clone();
+    style.merge(&stack);
+    let paint = style.resolve_paint();
+    assert_eq!(paint.shadows, vec![layer]);
+    assert!(paint.shadow.is_none());
+    style.merge(&legacy);
+    let paint = style.resolve_paint();
+    assert!(paint.shadows.is_empty());
+    assert!(paint.shadow.is_some());
+    let paint = Style::new()
+        .shadows(vec![layer])
+        .clear_shadow()
+        .resolve_paint();
+    assert!(paint.shadows.is_empty());
+    assert!(paint.shadow.is_none());
+}

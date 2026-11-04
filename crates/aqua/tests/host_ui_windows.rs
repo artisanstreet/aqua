@@ -96,9 +96,7 @@ fn has_name(automation: &IUIAutomation, hwnd: HWND, wanted: &str) -> bool {
 }
 
 fn client() -> Result<(), String> {
-    let first = wait_for("first window", || {
-        find_window(w!("aqua ui windows first"))
-    })?;
+    let first = wait_for("first window", || find_window(w!("aqua ui windows first")))?;
     let second = wait_for("second window", || {
         find_window(w!("aqua ui windows second"))
     })?;
@@ -159,6 +157,7 @@ fn client() -> Result<(), String> {
 
 fn main() {
     std::env::set_var("AQUA_SMOKE_MS", "90000");
+    std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1");
     let (done, outcome) = mpsc::channel();
     thread::spawn(move || {
         let _ = done.send(client());

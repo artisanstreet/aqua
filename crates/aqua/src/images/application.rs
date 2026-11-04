@@ -5,8 +5,8 @@ use std::sync::Arc;
 use aqua_core::DisplayItem;
 use aqua_core::{ImageId, InputEvent, NodeId, Rect};
 use aqua_protocol::{A11yActionRequest, AquaWindowId, ObservedWindowState, WindowEvent};
-use aqua_runtime::Runtime;
 use aqua_protocol::{FrameReason, Instant};
+use aqua_runtime::Runtime;
 
 use crate::{
     mailbox::Mailbox,
@@ -284,9 +284,7 @@ impl ImageState {
         let released: Vec<_> = self
             .resident
             .keys()
-            .filter(|id| {
-                !self.visible.contains(id) || images.ready(self.source_id(**id)).is_none()
-            })
+            .filter(|id| !self.visible.contains(id) || images.ready(self.source_id(**id)).is_none())
             .copied()
             .collect();
         for id in released {
@@ -319,8 +317,7 @@ impl ImageState {
                 > budget.gpu_bytes
                 || new_count > budget.gpu_images
             {
-                images
-                    .fail_upload(source, "visible image GPU budget exceeded".into());
+                images.fail_upload(source, "visible image GPU budget exceeded".into());
                 self.release_gpu(id);
                 failure = Some(ImageAssetError::OverBudget);
                 continue;
@@ -333,8 +330,7 @@ impl ImageState {
             });
             self.resident.insert(id, (index, bytes));
         }
-        self.started
-            .retain(|id, _| images.ready(*id).is_some());
+        self.started.retain(|id, _| images.ready(*id).is_some());
         match failure {
             Some(error) if frames.is_empty() => Err(error),
             _ => Ok(frames),
@@ -486,7 +482,11 @@ impl Application for ManagedUiApp {
     fn a11y_nodes_for(
         &self,
         id: AquaWindowId,
-    ) -> Option<(aqua_core::NodeId, aqua_core::NodeId, Vec<aqua_protocol::A11yNode>)> {
+    ) -> Option<(
+        aqua_core::NodeId,
+        aqua_core::NodeId,
+        Vec<aqua_protocol::A11yNode>,
+    )> {
         self.ui.a11y_nodes_for(id)
     }
     fn step_input(&mut self, id: AquaWindowId, input: aqua_protocol::RuntimeInput) {

@@ -22,6 +22,7 @@ use aqua_shell_win32::{
 use super::d3d12;
 use super::hook::TsfHook;
 use super::inspector::HostInspector;
+use super::wakes::{self, WakeLedger};
 use super::window::{UiaSink, Win32Window};
 use crate::coalesce::{merge, Coalescible, Held, Merge};
 use crate::inbox::AquaUserEvent;
@@ -37,6 +38,7 @@ struct Host<A: Application> {
     inspector: Option<HostInspector>,
     pending: Option<Held>,
     occlusion: HashMap<AquaWindowId, Occlusion>,
+    wakes: Option<WakeLedger>,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -81,6 +83,27 @@ fn shell_options(options: &WindowOptions, aqua: &Aqua) -> ShellOptions {
         maximizable: options.maximizable,
         visible: false,
         alpha_surface: options.transparent,
+    }
+}
+
+fn message_label(event: &ShellEvent) -> &'static str {
+    match event {
+        ShellEvent::Resized { .. } => "resized",
+        ShellEvent::Moved { .. } => "moved",
+        ShellEvent::ScaleChanged { .. } => "scale",
+        ShellEvent::CloseRequested => "close",
+        ShellEvent::Focused(_) => "focus",
+        ShellEvent::Minimized(_) => "minimized",
+        ShellEvent::Covered(_) => "covered",
+        ShellEvent::Maximized(_) => "maximized",
+        ShellEvent::Input(_) => "input",
+        ShellEvent::FileDrag(_) => "file-drag",
+        ShellEvent::PointerEntered | ShellEvent::PointerLeft => "pointer-edge",
+        ShellEvent::CaptionHover(_) => "caption-hover",
+        ShellEvent::RawMouse { .. } => "raw-mouse",
+        ShellEvent::PreferencesChanged => "preferences",
+        ShellEvent::Redraw => "redraw",
+        ShellEvent::Destroyed => "destroyed",
     }
 }
 
@@ -360,6 +383,9 @@ impl<A: Application + 'static> Handler for Host<A> {
             }
         }
         self.flush_pending();
+        if let Some(ledger) = &mut self.wakes {
+            ledger.message(message_label(&event));
+        }
         match event {
             ShellEvent::Resized { width, height } if width > 0 && height > 0 => {
                 let size = LogicalSize::new(f64::from(width) / scale, f64::from(height) / scale);
@@ -406,13 +432,19 @@ impl<A: Application + 'static> Handler for Host<A> {
     }
 
     fn woken(&mut self) {
+        if let Some(ledger) = &mut self.wakes {
+            ledger.woken();
+        }
         self.flush_pending();
         self.aqua.pump_inbox(&mut self.app);
     }
 
     fn tick(&mut self, now: Instant) -> Option<Instant> {
         self.aqua.wakeups += 1;
+        let presented_before = self.aqua.frames_presented;
         self.flush_pending();
+        self.aqua.drain_text(&mut self.app);
+        self.aqua.draw_input_frames(&mut self.app, now);
         self.aqua.pump_inbox(&mut self.app);
         self.process_requests();
         self.poll_dialogs();
@@ -440,10 +472,15 @@ impl<A: Application + 'static> Handler for Host<A> {
             .smoke_deadline
             .map(|deadline| now + deadline.saturating_duration_since(std::time::Instant::now()));
         let dialogs = (!self.dialogs.is_empty()).then(|| now + Duration::from_millis(50));
-        [self.aqua.next_wake(now), smoke, dialogs]
+        let next = [self.aqua.next_wake(now), smoke, dialogs]
             .into_iter()
             .flatten()
-            .min()
+            .min();
+        let presented = self.aqua.frames_presented != presented_before;
+        if let Some(ledger) = &mut self.wakes {
+            ledger.tick(now, presented, next);
+        }
+        next
     }
 }
 
@@ -451,7 +488,11 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
     if aqua_shell_win32::dialogs::run_helper_if_requested() {
         return Ok(());
     }
+    d3d12::prewarm();
+    super::opt_out_of_throttling();
+    super::raise_thread_priority();
     aqua.mark_native_loop();
+    let inbox = aqua.inbox();
     aqua.align_clock(aqua_shell_win32::now());
     let options = aqua.config().window.clone();
     let mut host = Host {
@@ -462,6 +503,7 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
         inspector: HostInspector::from_env(),
         pending: None,
         occlusion: HashMap::new(),
+        wakes: wakes::enabled().then(|| WakeLedger::new(inbox)),
     };
     aqua_shell_win32::set_message_hook(TsfHook::new());
     if let Err(message) = host.create_window(options.clone()) {

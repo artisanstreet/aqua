@@ -11,9 +11,9 @@ use aqua_runtime::{emit_scene_diff, RenderSide};
 use aqua_scene::Scene;
 use aqua_transport::{channel_with_notify, Notify, Sender as RingSender};
 
-use super::transition::Settings;
 use super::host::{Clock, RenderStats, TargetInit};
 use super::service::{NewSlot, RenderService, ServiceHandle};
+use super::transition::Settings;
 
 const RING_CAPACITY: usize = 4096;
 
@@ -52,6 +52,7 @@ pub struct RenderLink {
     viewport: Option<(Size, f32)>,
     stats: Arc<RenderStats>,
     submitted: u64,
+    scenes_queued: u64,
 }
 
 impl RenderLink {
@@ -91,6 +92,7 @@ impl RenderLink {
             viewport: None,
             stats,
             submitted: 0,
+            scenes_queued: 0,
         }
     }
 
@@ -107,6 +109,13 @@ impl RenderLink {
         self.service.wake();
     }
 
+    pub fn set_hidden(&self, hidden: bool) {
+        self.stats
+            .hidden
+            .store(hidden, std::sync::atomic::Ordering::Release);
+        self.service.wake();
+    }
+
     pub fn inject_device_loss(&self) {
         self.stats
             .inject_loss
@@ -120,6 +129,10 @@ impl RenderLink {
 
     pub fn submitted(&self) -> u64 {
         self.submitted
+    }
+
+    pub fn scenes_queued(&self) -> u64 {
+        self.scenes_queued
     }
 
     pub fn backlog(&self) -> usize {
@@ -142,6 +155,7 @@ impl RenderLink {
             false => {
                 self.backlog.push_back(RenderCommand::Scene(diff));
                 self.submitted += 1;
+                self.scenes_queued += 1;
                 self.flush();
                 true
             }
@@ -152,12 +166,16 @@ impl RenderLink {
         if !diff.is_empty() {
             self.backlog.push_back(RenderCommand::Scene(diff));
             self.submitted += 1;
+            self.scenes_queued += 1;
         }
         self.flush();
     }
 
     pub fn push_commands(&mut self, commands: impl IntoIterator<Item = RenderCommand>) {
-        self.backlog.extend(commands);
+        for command in commands {
+            self.scenes_queued += u64::from(matches!(command, RenderCommand::Scene(_)));
+            self.backlog.push_back(command);
+        }
         self.flush();
     }
 

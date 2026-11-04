@@ -40,6 +40,10 @@ pub trait FrameTarget {
     fn wait_frame(&mut self);
     fn present(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback>;
     fn invalidate(&mut self) {}
+    fn idle_trim_in(&mut self) -> Option<Duration> {
+        None
+    }
+    fn visibility(&mut self, _hidden: bool) {}
     fn repaint(&self) -> Repaint {
         Repaint::Settled
     }
@@ -72,10 +76,28 @@ pub struct RenderStats {
     pub service_thread: AtomicU64,
     pub device_sharers: AtomicU64,
     pub inject_loss: std::sync::atomic::AtomicBool,
+    pub hidden: std::sync::atomic::AtomicBool,
     pub atlas_mask_bytes: AtomicU64,
     pub atlas_color_bytes: AtomicU64,
     pub atlas_pages: AtomicU64,
     pub slug_bytes: AtomicU64,
+    pub atlas_created: AtomicU64,
+    pub atlas_upload_bytes: AtomicU64,
+    pub glyph_rasterized: AtomicU64,
+    pub slug_created: AtomicU64,
+    pub slug_upload_bytes: AtomicU64,
+    pub scenes_applied: AtomicU64,
+    pub scenes_presented: AtomicU64,
+    pub picked_ns: AtomicU64,
+    pub waited_ns: AtomicU64,
+    pub stepped_ns: AtomicU64,
+    pub presented_ns: AtomicU64,
+}
+
+pub fn epoch_ns() -> u64 {
+    static EPOCH: std::sync::OnceLock<WallInstant> = std::sync::OnceLock::new();
+    let nanos = EPOCH.get_or_init(WallInstant::now).elapsed().as_nanos();
+    u64::try_from(nanos).unwrap_or(u64::MAX)
 }
 
 impl RenderStats {
@@ -89,6 +111,8 @@ impl RenderStats {
 }
 
 type Maintenance<B> = Box<dyn FnMut(&mut B)>;
+type Pressure<B> = Box<dyn FnMut(&mut B) -> bool>;
+type Visibility<B> = Box<dyn FnMut(&mut B, bool) -> bool>;
 
 struct DamageStage {
     planner: DamagePlanner,
@@ -102,6 +126,8 @@ pub struct GpuFrames<B: GpuBackend<Error = GpuError> + 'static> {
     stats: Arc<RenderStats>,
     hint: PresentHint,
     maintenance: Option<Maintenance<B>>,
+    pressure: Option<Pressure<B>>,
+    visibility: Option<Visibility<B>>,
     since_maintenance: u64,
     counted: HostCounters,
     damage: Option<DamageStage>,
@@ -131,6 +157,8 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
             stats,
             hint: PresentHint::Vsync,
             maintenance: None,
+            pressure: None,
+            visibility: None,
             since_maintenance: 0,
             counted: HostCounters::default(),
             damage: None,
@@ -158,6 +186,19 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
 
     pub fn with_maintenance(mut self, maintenance: impl FnMut(&mut B) + 'static) -> Self {
         self.maintenance = Some(Box::new(maintenance));
+        self
+    }
+
+    pub fn with_pressure(mut self, pressure: impl FnMut(&mut B) -> bool + 'static) -> Self {
+        self.pressure = Some(Box::new(pressure));
+        self
+    }
+
+    pub fn with_visibility(
+        mut self,
+        visibility: impl FnMut(&mut B, bool) -> bool + 'static,
+    ) -> Self {
+        self.visibility = Some(Box::new(visibility));
         self
     }
 
@@ -227,6 +268,12 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
         if let Some(maintenance) = self.maintenance.as_mut() {
             maintenance(self.host.backend_mut());
         }
+        if let Some(pressure) = self.pressure.as_mut() {
+            if pressure(self.host.backend_mut()) {
+                self.host.trim_handle().request();
+                self.stats.trims.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 
     fn account(&mut self) {
@@ -286,6 +333,10 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
         self.host.wait_frame();
     }
 
+    fn idle_trim_in(&mut self) -> Option<Duration> {
+        self.host.idle_trim_in()
+    }
+
     fn present(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback> {
         let hint = match self.stats.immediate.load(Ordering::Relaxed) {
             true => PresentHint::Immediate,
@@ -311,6 +362,15 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
     fn invalidate(&mut self) {
         if let Some(stage) = self.damage.as_mut() {
             stage.planner.invalidate();
+        }
+    }
+
+    fn visibility(&mut self, hidden: bool) {
+        if let Some(visibility) = self.visibility.as_mut() {
+            if visibility(self.host.backend_mut(), hidden) {
+                self.host.trim_handle().request();
+                self.stats.trims.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 

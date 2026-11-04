@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use aqua_protocol::AquaWindowId;
@@ -14,10 +16,27 @@ pub enum AquaUserEvent {
 
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
 
+impl AquaUserEvent {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ReactiveWake(_) => "reactive",
+            Self::Messages(_) => "messages",
+            Self::WindowRequests => "window-requests",
+            Self::A11yActions(_) => "a11y",
+            Self::RenderEvents(_) => "render-events",
+            Self::Tsf(_) => "tsf",
+        }
+    }
+}
+
+pub type PostCounts = BTreeMap<(&'static str, String), u32>;
+
 #[derive(Default)]
 struct Shared {
     events: Mutex<Vec<AquaUserEvent>>,
     waker: Mutex<Option<Waker>>,
+    accounting: AtomicBool,
+    posts: Mutex<PostCounts>,
 }
 
 #[derive(Clone, Default)]
@@ -38,7 +57,24 @@ fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Inbox {
+    pub fn account_posts(&self, enabled: bool) {
+        self.shared.accounting.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn take_post_counts(&self) -> PostCounts {
+        std::mem::take(&mut *locked(&self.shared.posts))
+    }
+
     pub fn post(&self, event: AquaUserEvent) {
+        self.post_labeled(event, event.label(), "");
+    }
+
+    pub fn post_labeled(&self, event: AquaUserEvent, label: &'static str, origin: &str) {
+        if self.shared.accounting.load(Ordering::Relaxed) {
+            let thread = std::thread::current();
+            let name = format!("{}{origin}", thread.name().unwrap_or("unnamed"));
+            *locked(&self.shared.posts).entry((label, name)).or_default() += 1;
+        }
         {
             let mut events = locked(&self.shared.events);
             if !events.contains(&event) {

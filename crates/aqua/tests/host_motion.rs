@@ -9,21 +9,22 @@ use aqua::render::lower::Lowering;
 use aqua::render::transition::{Settings, Sweep};
 use aqua::UiApp;
 use aqua::{Aqua, AquaConfig};
-use aqua_core::{Oklch, Point};
+use aqua_core::{Oklch, Point, Transform2D};
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
 use aqua_graph::Extent;
+use aqua_motion::Easing;
 use aqua_protocol::geometry::{AquaWindowId, LogicalSize};
 use aqua_protocol::window::{ObservedWindowState, WindowEvent};
-use aqua_protocol::{
-    Feedback, FrameId, GpuBackend, GpuError, GpuReadback, SurfaceTarget,
-};
+use aqua_protocol::{Feedback, FrameId, GpuBackend, GpuError, GpuReadback, SurfaceTarget};
 use aqua_reactive::WriteSignal;
 use aqua_runtime::{PopupOptions, RenderSide};
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::element::ui::Box as UiBox;
 use aqua_ui::motion::{Animate, Motion, Presence};
 use aqua_ui::style::{px, Axis, Style};
-use aqua_motion::Easing;
+
+#[path = "../../aqua-verify/tests/support/exclusive.rs"]
+mod exclusive;
 
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 480;
@@ -33,7 +34,31 @@ const WIDE_Y: usize = 220;
 const POPUP_X: usize = 340;
 const MOTION: Motion = Motion::tween(0.4, Easing::Linear);
 
+const SHAPE_POINTS: [(usize, usize); 20] = [
+    (20, 312),
+    (20, 290),
+    (40, 312),
+    (20, 335),
+    (66, 312),
+    (75, 275),
+    (20, 266),
+    (210, 300),
+    (230, 300),
+    (310, 300),
+    (330, 300),
+    (203, 285),
+    (210, 285),
+    (380, 330),
+    (380, 370),
+    (395, 285),
+    (380, 385),
+    (405, 330),
+    (355, 330),
+    (420, 285),
+];
+
 struct Probes {
+    shapes: Vec<[u8; 4]>,
     row: Vec<[u8; 4]>,
     wide: Vec<[u8; 4]>,
     popup: Vec<[u8; 4]>,
@@ -42,6 +67,14 @@ struct Probes {
 }
 
 impl Probes {
+    fn shape(&self, x: usize, y: usize) -> [u8; 4] {
+        let at = SHAPE_POINTS
+            .iter()
+            .position(|point| *point == (x, y))
+            .expect("sampled point");
+        self.shapes[at]
+    }
+
     fn left(&self, line: &[[u8; 4]]) -> Option<usize> {
         line.iter().position(|pixel| pixel[3] > 8)
     }
@@ -81,6 +114,7 @@ impl<B: GpuBackend<Error = GpuError> + GpuReadback + 'static> FrameTarget for Ta
                 ]
             };
             let probes = Probes {
+                shapes: SHAPE_POINTS.iter().map(|(x, y)| pixel(*x, *y)).collect(),
                 row: (0..480).map(|x| pixel(x, ROW_Y)).collect(),
                 wide: (0..480).map(|x| pixel(x, WIDE_Y)).collect(),
                 popup: (0..height).map(|y| pixel(POPUP_X, y)).collect(),
@@ -164,6 +198,25 @@ fn observed() -> ObservedWindowState {
     }
 }
 
+fn shape(
+    left: f32,
+    top: f32,
+    width: f32,
+    height: f32,
+    transform: Transform2D,
+) -> aqua_ui::element::Element {
+    UiBox::new()
+        .style(
+            Style::new()
+                .width(px(width))
+                .height(px(height))
+                .absolute_at(Some(left), Some(top), None, None)
+                .transform(transform),
+        )
+        .fill(Oklch::from_hex("#00ff00").unwrap())
+        .build()
+}
+
 fn mount(app: &mut UiApp) -> Signals {
     let (rows, set_rows) = app.scope().signal(vec![1u32, 2, 3]);
     let (wide, set_wide) = app.scope().signal(false);
@@ -191,7 +244,12 @@ fn mount(app: &mut UiApp) -> Signals {
                     )
                     .children(rows.iter().map(|id| {
                         UiBox::new()
-                            .style(Style::new().width(px(200.0)).height(px(40.0)).flex_shrink(0.0))
+                            .style(
+                                Style::new()
+                                    .width(px(200.0))
+                                    .height(px(40.0))
+                                    .flex_shrink(0.0),
+                            )
                             .fill(red())
                             .presence(Presence::new().enter(MOTION).exit(MOTION).slide(SLIDE, 0.0))
                             .build()
@@ -211,6 +269,48 @@ fn mount(app: &mut UiApp) -> Signals {
                     .animate(Animate::new().frame(MOTION))
                     .build(),
             )
+            .child(shape(
+                20.0,
+                270.0,
+                60.0,
+                60.0,
+                Transform2D {
+                    a: std::f32::consts::FRAC_1_SQRT_2,
+                    b: std::f32::consts::FRAC_1_SQRT_2,
+                    c: -std::f32::consts::FRAC_1_SQRT_2,
+                    d: std::f32::consts::FRAC_1_SQRT_2,
+                    tx: 0.0,
+                    ty: 0.0,
+                },
+            ))
+            .child(shape(
+                200.0,
+                280.0,
+                100.0,
+                40.0,
+                Transform2D {
+                    a: 1.0,
+                    b: 0.0,
+                    c: 1.0,
+                    d: 1.0,
+                    tx: 0.0,
+                    ty: 0.0,
+                },
+            ))
+            .child(shape(
+                360.0,
+                280.0,
+                100.0,
+                40.0,
+                Transform2D {
+                    a: 0.0,
+                    b: 1.0,
+                    c: -1.0,
+                    d: 0.0,
+                    tx: 40.0,
+                    ty: 0.0,
+                },
+            ))
             .child(
                 UiBox::new()
                     .style(
@@ -233,6 +333,9 @@ fn mount(app: &mut UiApp) -> Signals {
 }
 
 fn open(preference: AdapterPreference) -> Host {
+    if preference == AdapterPreference::Warp {
+        exclusive::hold_exclusive();
+    }
     let mut aqua = Aqua::new(AquaConfig::default()).unwrap();
     let mut app = UiApp::new(aqua.fonts().clone(), aqua.runs().clone());
     let signals = mount(&mut app);
@@ -320,7 +423,11 @@ fn distinct(values: &[usize]) -> usize {
 }
 
 fn assert_glide(label: &str, positions: &[usize], from: usize, to: usize) {
-    assert_eq!(positions.last().copied(), Some(to), "{label}: {positions:?}");
+    assert_eq!(
+        positions.last().copied(),
+        Some(to),
+        "{label}: {positions:?}"
+    );
     assert!(
         distinct(positions) >= 5,
         "{label}: only {} distinct positions: {positions:?}",
@@ -374,7 +481,11 @@ fn keyed_presence_slides_in_and_out_across_many_presented_frames() {
             "{label}: exit not monotonic {lefts:?}"
         );
         assert!(distinct(&lefts) >= 4, "{label}: {lefts:?}");
-        assert_eq!(series.last().copied().flatten(), None, "{label}: row stayed");
+        assert_eq!(
+            series.last().copied().flatten(),
+            None,
+            "{label}: row stayed"
+        );
         assert!(host.app.tree().exiting_nodes().is_empty());
     }
 }
@@ -400,7 +511,10 @@ fn only_the_moving_edge_animates_and_the_stationary_edge_never_jiggles() {
             .collect();
         eprintln!("{label} right edge: {rights:?}");
         assert_glide(&format!("{label} edge"), &rights, 99, 299);
-        assert!(lefts.iter().all(|left| *left == 0), "{label}: left edge moved {lefts:?}");
+        assert!(
+            lefts.iter().all(|left| *left == 0),
+            "{label}: left edge moved {lefts:?}"
+        );
     }
 }
 
@@ -427,7 +541,9 @@ fn a_popup_slides_in_and_out_through_the_host() {
         host.poke();
         assert!(host.settle(Duration::from_secs(20)));
         let tops: Vec<usize> = host
-            .series(from, |p| p.popup.iter().skip(250).position(|pixel| pixel[3] > 8))
+            .series(from, |p| {
+                p.popup.iter().skip(250).position(|pixel| pixel[3] > 8)
+            })
             .into_iter()
             .flatten()
             .collect();
@@ -438,10 +554,15 @@ fn a_popup_slides_in_and_out_through_the_host() {
         assert!(host.app.close_popup(popup));
         host.poke();
         assert!(host.settle(Duration::from_secs(20)));
-        let series = host.series(from, |p| p.popup.iter().skip(250).position(|pixel| pixel[3] > 8));
+        let series = host.series(from, |p| {
+            p.popup.iter().skip(250).position(|pixel| pixel[3] > 8)
+        });
         let tops: Vec<usize> = series.iter().copied().flatten().collect();
         eprintln!("{label} popup out: {tops:?}");
-        assert!(tops.windows(2).all(|pair| pair[1] >= pair[0]), "{label}: {tops:?}");
+        assert!(
+            tops.windows(2).all(|pair| pair[1] >= pair[0]),
+            "{label}: {tops:?}"
+        );
         assert!(distinct(&tops) >= 4, "{label}: {tops:?}");
         assert_eq!(series.last().copied().flatten(), None, "{label}");
     }
@@ -473,15 +594,75 @@ fn a_snapshot_transition_crossfades_from_the_old_frame_to_the_new_one_through_th
         let is_red = |c: &[u8; 4]| c[0] > 200 && c[2] < 40;
         let is_blue = |c: &[u8; 4]| c[2] > 200 && c[0] < 40;
         let first = pairs.first().unwrap();
-        assert!(is_red(&first.0) && is_red(&first.1), "{label}: first frame {first:?}");
+        assert!(
+            is_red(&first.0) && is_red(&first.1),
+            "{label}: first frame {first:?}"
+        );
         let between = pairs
             .iter()
             .filter(|(near, far)| is_blue(near) && is_red(far))
             .count();
-        eprintln!("{label} sweep: {between} frames with the near edge new and the far edge old of {}", pairs.len());
-        assert!(between >= 2, "{label}: no diagonal sweep was presented ({between})");
+        eprintln!(
+            "{label} sweep: {between} frames with the near edge new and the far edge old of {}",
+            pairs.len()
+        );
+        assert!(
+            between >= 2,
+            "{label}: no diagonal sweep was presented ({between})"
+        );
         let last = pairs.last().unwrap();
         assert!(is_blue(&last.0) && is_blue(&last.1), "{label}: {last:?}");
         assert!(host.aqua.next_wake(host.aqua.clock()).is_none());
+    }
+}
+
+fn green(pixel: [u8; 4]) -> bool {
+    pixel[1] > 200 && pixel[0] < 60 && pixel[2] < 60 && pixel[3] > 200
+}
+
+#[test]
+fn rotated_and_skewed_boxes_land_on_their_transformed_footprint_on_d3d12() {
+    for preference in adapters() {
+        let host = open(preference);
+        let label = format!("{preference:?}");
+        let last = host.sink.lock().unwrap().pop().unwrap();
+        let inside = [
+            (20, 312),
+            (20, 290),
+            (40, 312),
+            (20, 335),
+            (230, 300),
+            (310, 300),
+            (210, 285),
+            (380, 330),
+            (380, 370),
+            (395, 285),
+        ];
+        let outside = [
+            (66, 312),
+            (75, 275),
+            (20, 266),
+            (210, 300),
+            (330, 300),
+            (203, 285),
+            (380, 385),
+            (405, 330),
+            (355, 330),
+            (420, 285),
+        ];
+        for (x, y) in inside {
+            assert!(
+                green(last.shape(x, y)),
+                "{label}: ({x},{y}) {:?}",
+                last.shape(x, y)
+            );
+        }
+        for (x, y) in outside {
+            assert!(
+                !green(last.shape(x, y)),
+                "{label}: ({x},{y}) {:?}",
+                last.shape(x, y)
+            );
+        }
     }
 }

@@ -6,6 +6,9 @@ use aqua_gpu_ref::conformance::{compare, Session, Tolerance};
 use aqua_gpu_ref::RefBackend;
 use aqua_verify::differential::{scenes, variant_case, VARIANTS};
 
+#[path = "support/exclusive.rs"]
+mod exclusive;
+
 const SEED: u64 = 0xD3D1_2D1F;
 const SAME_DEVICE: Tolerance = Tolerance {
     interior: 1,
@@ -34,6 +37,9 @@ fn count() -> usize {
 }
 
 fn backend(preference: AdapterPreference, limit: TierLimit) -> OffscreenBackend {
+    if preference == AdapterPreference::Warp {
+        exclusive::hold_exclusive();
+    }
     OffscreenBackend::with_tiers(preference, SurfaceFormat::Rgba16Float, limit)
         .unwrap_or_else(|error| panic!("no adapter {preference:?}: {error}"))
 }

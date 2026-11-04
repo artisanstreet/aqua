@@ -20,6 +20,7 @@ struct Probe {
     frames: Mutex<Vec<FrameId>>,
     script: Mutex<Vec<Repaint>>,
     thread: AtomicU64,
+    visibility: Mutex<Vec<bool>>,
 }
 
 struct Fake {
@@ -47,6 +48,10 @@ impl FrameTarget for Fake {
 
     fn invalidate(&mut self) {
         self.probe.invalidations.fetch_add(1, Relaxed);
+    }
+
+    fn visibility(&mut self, hidden: bool) {
+        self.probe.visibility.lock().unwrap().push(hidden);
     }
 
     fn repaint(&self) -> Repaint {
@@ -190,7 +195,7 @@ fn continuous_animation_keeps_presenting_until_it_stops() {
     wait_until("thirteen presents", || probe.presents.load(Relaxed) >= 13);
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(probe.presents.load(Relaxed), 13);
-    assert_eq!(presented_events(&mut link), 1);
+    assert_eq!(presented_events(&mut link), 13);
 }
 
 #[test]
@@ -214,8 +219,8 @@ fn an_arriving_image_forces_one_full_repaint() {
     assert_eq!(probe.invalidations.load(Relaxed), 1);
     assert_eq!(
         presented_events(&mut link),
-        1,
-        "forced frames are not reported as new frames"
+        2,
+        "forced frames report their presentation"
     );
 }
 
@@ -253,4 +258,20 @@ fn closing_one_window_leaves_the_others_running() {
     let closed_at = a.presents.load(Relaxed);
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(a.presents.load(Relaxed), closed_at);
+}
+
+#[test]
+fn hiding_and_showing_a_window_reaches_its_target_once_per_change() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let link = link(&service, &probe);
+    link.set_hidden(true);
+    wait_until("the hide", || *probe.visibility.lock().unwrap() == [true]);
+    link.set_hidden(true);
+    link.set_hidden(false);
+    wait_until("the show", || {
+        *probe.visibility.lock().unwrap() == [true, false]
+    });
+    std::thread::sleep(Duration::from_millis(60));
+    assert_eq!(*probe.visibility.lock().unwrap(), vec![true, false]);
 }

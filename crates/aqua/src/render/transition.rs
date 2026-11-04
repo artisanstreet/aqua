@@ -237,7 +237,10 @@ fn weights(parameters: &[f32], x: f32, y: f32) -> (f32, f32) {
         true => {
             let edge = -band + progress * (1.0 + 2.0 * band);
             let reveal = 1.0 - smoothstep(edge - band * 0.5, edge + band * 0.5, t);
-            (1.0 - reveal, (1.0 - (2.0 * reveal - 1.0).abs()) * tint_alpha)
+            (
+                1.0 - reveal,
+                (1.0 - (2.0 * reveal - 1.0).abs()) * tint_alpha,
+            )
         }
         false => {
             let edge = -band + progress * (1.0 + 2.0 * band);

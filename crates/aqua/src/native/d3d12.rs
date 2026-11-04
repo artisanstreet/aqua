@@ -1,10 +1,13 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Once};
+use std::time::Duration;
 
 use aqua_core::{Oklch, Rect};
+use aqua_gpu_d3d12::hal::budget::Visibility;
 use aqua_gpu_d3d12::window::{TextureRecovery, WindowBackend, WindowOptions};
 use aqua_graph::{Extent, FramePlan};
 use aqua_protocol::{
@@ -30,10 +33,42 @@ struct Hub {
     signals: Signals,
     namespaces: RefCell<Namespaces>,
     keys: Cell<u64>,
+    hidden: RefCell<HashSet<u64>>,
 }
 
 thread_local! {
     static HUB: RefCell<Weak<Hub>> = const { RefCell::new(Weak::new()) };
+}
+
+fn since_process_start() -> Option<Duration> {
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let (mut created, mut exited, mut kernel, mut user) = (
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+    );
+    unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &mut created,
+            &mut exited,
+            &mut kernel,
+            &mut user,
+        )
+    }
+    .ok()?;
+    let ticks = ((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64;
+    let since_epoch = Duration::from_nanos(ticks.checked_sub(116_444_736_000_000_000)? * 100);
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .checked_sub(since_epoch)
+}
+
+pub fn prewarm() {
+    WindowBackend::begin_early(WindowOptions::from_env(), persist::load_pipeline_cache);
 }
 
 fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
@@ -43,10 +78,23 @@ fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
     TEXT_SERVICES.call_once(|| {
         persist::start_text_services(fonts);
     });
-    let cache = persist::load_pipeline_cache();
-    let mut backend =
-        WindowBackend::with_pipeline_cache(WindowOptions::from_env(), cache.as_deref())
-            .map_err(|e| e.to_string())?;
+    let device_started = std::time::Instant::now();
+    let early = WindowBackend::take_early().and_then(Result::ok);
+    let mut backend = match early {
+        Some(backend) => backend,
+        None => {
+            let cache = persist::load_pipeline_cache();
+            WindowBackend::with_pipeline_cache(WindowOptions::from_env(), cache.as_deref())
+                .map_err(|e| e.to_string())?
+        }
+    };
+    if crate::profile::enabled() {
+        eprintln!(
+            "aqua-startup device_ready device_ms={:.1} process_ms={:.1}",
+            device_started.elapsed().as_secs_f64() * 1000.0,
+            since_process_start().map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
+        );
+    }
     let signals: Signals = Rc::default();
     let fan_out = signals.clone();
     backend.set_recovery_listener(Box::new(move |notice| {
@@ -62,6 +110,7 @@ fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
         signals,
         namespaces: RefCell::default(),
         keys: Cell::new(0),
+        hidden: RefCell::default(),
     });
     HUB.with(|slot| *slot.borrow_mut() = Rc::downgrade(&hub));
     Ok(hub)
@@ -75,6 +124,7 @@ pub struct WindowHandle {
     capabilities: GpuCapabilities,
     damage: DamageSlot,
     presenting: Option<Vec<Rect>>,
+    profile_mark: Cell<(u32, u32, u64)>,
 }
 
 impl WindowHandle {
@@ -99,6 +149,7 @@ impl WindowHandle {
             capabilities,
             damage,
             presenting: None,
+            profile_mark: Cell::new((0, 0, 0)),
         })
     }
 
@@ -113,6 +164,82 @@ impl WindowHandle {
                 Err(GpuError::DeviceFailure(
                     "device was recovered for another window".into(),
                 ))
+            }
+        }
+    }
+
+    fn profile_backend(&self) {
+        if !crate::profile::enabled() {
+            return;
+        }
+        let backend = self.hub.backend.borrow();
+        let pipelines = backend.pipeline_stats().unwrap_or_default();
+        let resident = backend
+            .persistent_stats()
+            .map_or(0, |stats| stats.resident_bytes);
+        let (compiled, loaded, before) = self.profile_mark.get();
+        self.profile_mark
+            .set((pipelines.compiled, pipelines.loaded, resident));
+        use aqua_protocol::probe::{count, Metric};
+        count(
+            Metric::PsoCompiled,
+            u64::from(pipelines.compiled.saturating_sub(compiled)),
+        );
+        count(
+            Metric::PsoLoaded,
+            u64::from(pipelines.loaded.saturating_sub(loaded)),
+        );
+        count(Metric::AtlasGrowthBytes, resident.saturating_sub(before));
+        crate::profile::note(|| {
+            let passes: Vec<String> = backend
+                .gpu_pass_times()
+                .iter()
+                .map(|pass| format!("{}={:.3}", pass.label, pass.duration.as_secs_f64() * 1000.0))
+                .collect();
+            let phases = backend.phases();
+            format!(
+                "d3d12 gpu_ms={:.3} passes_ms=[{}] slot_wait_us={} reserve_us={} transients_recreated={} late_pso={:?}",
+                backend
+                    .gpu_frame_time()
+                    .map_or(0.0, |time| time.as_secs_f64() * 1000.0),
+                passes.join(","),
+                phases.slot_wait.as_micros(),
+                phases.reserve.as_micros(),
+                phases.reserve_created,
+                backend.late_pipelines()
+            )
+        });
+    }
+
+    fn set_hidden(&self, hidden: bool) -> bool {
+        let all_hidden = {
+            let mut set = self.hub.hidden.borrow_mut();
+            match hidden {
+                true => set.insert(self.key),
+                false => set.remove(&self.key),
+            };
+            !set.is_empty() && set.len() >= self.sharers()
+        };
+        let visibility = match all_hidden {
+            true => Visibility::Hidden,
+            false => Visibility::Visible,
+        };
+        match self.hub.backend.borrow_mut().set_visibility(visibility) {
+            Ok(trim) => trim.evict_idle_resources,
+            Err(error) => {
+                eprintln!("aqua: visibility change failed: {error}");
+                false
+            }
+        }
+    }
+
+    fn service_budget(&self) -> bool {
+        match self.hub.backend.borrow_mut().service_budget() {
+            Ok(Some(status)) => status.applied.evict_idle_resources,
+            Ok(None) => false,
+            Err(error) => {
+                eprintln!("aqua: budget service failed: {error}");
+                false
             }
         }
     }
@@ -160,6 +287,7 @@ impl Drop for WindowHandle {
             .signals
             .borrow_mut()
             .retain(|(key, _)| *key != self.key);
+        self.hub.hidden.borrow_mut().remove(&self.key);
     }
 }
 
@@ -270,6 +398,7 @@ struct WindowTarget {
     surface: SurfaceId,
     composition: Option<CompositionSink>,
     delivered: Option<u32>,
+    announced: bool,
 }
 
 impl WindowTarget {
@@ -305,6 +434,14 @@ impl FrameTarget for WindowTarget {
             self.frames.backend().inject_removal();
         }
         let feedback = self.frames.present(side, frame);
+        if !self.announced && crate::profile::enabled() {
+            self.announced = true;
+            eprintln!(
+                "aqua-startup first_present process_ms={:.1}",
+                since_process_start().map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
+            );
+        }
+        self.frames.backend().profile_backend();
         self.stats
             .device_sharers
             .store(self.frames.backend().sharers() as u64, Ordering::Relaxed);
@@ -314,6 +451,14 @@ impl FrameTarget for WindowTarget {
 
     fn invalidate(&mut self) {
         self.frames.invalidate();
+    }
+
+    fn idle_trim_in(&mut self) -> Option<std::time::Duration> {
+        self.frames.idle_trim_in()
+    }
+
+    fn visibility(&mut self, hidden: bool) {
+        self.frames.visibility(hidden);
     }
 
     fn repaint(&self) -> Repaint {
@@ -368,6 +513,8 @@ pub fn factory(
             let shared_stats = stats.clone();
             let frames = GpuFrames::new(handle, surface, extent, lowering, externals, stats)
                 .with_damage(damage, runs)
+                .with_pressure(|backend: &mut WindowHandle| backend.service_budget())
+                .with_visibility(|backend: &mut WindowHandle, hidden| backend.set_hidden(hidden))
                 .with_maintenance(move |backend: &mut WindowHandle| {
                     saver.save(backend.pipeline_cache());
                     backend.report_memory();
@@ -379,6 +526,7 @@ pub fn factory(
                 surface,
                 composition: transparent.then_some(composition),
                 delivered: None,
+                announced: false,
             };
             target.deliver_composition();
             Ok(Box::new(target) as Box<dyn FrameTarget>)

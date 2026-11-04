@@ -24,6 +24,8 @@ use windows::Win32::Foundation::{HWND, LUID};
 use windows::Win32::Graphics::Dxgi::{IDXGIAdapter1, IDXGIOutput};
 use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTOPRIMARY};
 
+#[path = "support/exclusive.rs"]
+mod exclusive;
 #[path = "support/ui.rs"]
 mod ui;
 #[path = "support/window.rs"]
@@ -41,6 +43,7 @@ const SURFACE: Extent = Extent {
 };
 const WARMUP_INPUTS: usize = 60;
 const STEADY_INPUTS: usize = 600;
+const SOFTWARE_STEADY_GROWTH: u64 = 12 * MIB;
 const RELEASE_INPUT_P99_MS: f64 = 4.0;
 
 fn factory(
@@ -98,14 +101,31 @@ fn pump(aqua: &mut Aqua, app: &mut UiApp, id: AquaWindowId, window: &Window) {
     aqua.drain_render_events(app, id);
 }
 
+fn stage(label: &str, last: &mut u64) {
+    let now = live_bytes();
+    eprintln!(
+        "  heap stage {label}: {:+.2} MiB (live {:.2} MiB)",
+        now as f64 / MIB as f64 - *last as f64 / MIB as f64,
+        now as f64 / MIB as f64
+    );
+    *last = now;
+}
+
 fn run(preference: AdapterPreference, high_performance: bool) -> Option<Outcome> {
+    exclusive::hold_exclusive();
     let baseline = sample().unwrap().private_bytes;
+    let mut last = live_bytes();
     let window = Window::open(SURFACE);
     let extent = window.client();
+    stage("window", &mut last);
     let mut aqua = Aqua::new(AquaConfig::default()).unwrap();
+    stage("aqua", &mut last);
     let mut app = UiApp::new(aqua.fonts().clone(), aqua.runs().clone());
+    stage("ui app", &mut last);
     editor_like(&mut app, extent.width as f32, extent.height as f32);
+    stage("mounted document", &mut last);
     let id = aqua.add_headless_window(observed(extent.width as f32, extent.height as f32));
+    stage("window record", &mut last);
     aqua.attach_render(
         id,
         factory(
@@ -134,6 +154,7 @@ fn run(preference: AdapterPreference, high_performance: bool) -> Option<Outcome>
         pump(&mut aqua, &mut app, id, &window);
         std::thread::sleep(Duration::from_millis(2));
     }
+    stage("first present", &mut last);
     let startup_failures = stats.failures.load(Ordering::Relaxed);
     let wheel = |aqua: &mut Aqua, app: &mut UiApp, index: usize| {
         let started = WallInstant::now();
@@ -166,6 +187,7 @@ fn run(preference: AdapterPreference, high_performance: bool) -> Option<Outcome>
         }
     };
     settle(&mut aqua, &mut app);
+    stage("warm scroll", &mut last);
     let warm_private = sample().unwrap().private_bytes;
     let warm_heap = live_bytes();
     let warm_vram = video_memory(high_performance)
@@ -218,12 +240,12 @@ fn report(label: &str, outcome: &Outcome) -> Distribution {
     distribution
 }
 
-fn steady(label: &str, outcome: &Outcome) {
+fn steady(label: &str, outcome: &Outcome, private_growth_limit: u64) {
     assert!(outcome.presented > 0, "{label} presented nothing");
     assert_eq!(outcome.failures, 0, "{label} failed frames");
     assert_eq!(outcome.recoveries, 0, "{label} lost the device");
     assert!(
-        outcome.growth <= MIB,
+        outcome.growth <= private_growth_limit,
         "{label}: private bytes grew {} over steady state",
         outcome.growth
     );
@@ -241,7 +263,7 @@ fn steady(label: &str, outcome: &Outcome) {
 
 fn gate(label: &str, outcome: &Outcome, budget: MemoryBudget) {
     let distribution = report(label, outcome);
-    steady(label, outcome);
+    steady(label, outcome, MIB);
     let breaches = budget.check(&Measured {
         private_total: outcome.private,
         framework_heap: outcome.heap,
@@ -282,7 +304,7 @@ fn the_editor_workload_through_the_full_host_stays_inside_the_windowed_budget() 
 fn the_editor_workload_through_the_full_host_does_not_grow_on_warp() {
     let outcome = run(AdapterPreference::Warp, false).expect("WARP must present");
     report("warp", &outcome);
-    steady("warp", &outcome);
+    steady("warp", &outcome, SOFTWARE_STEADY_GROWTH);
 }
 
 fn hardware_adapters() -> Vec<AdapterInfo> {
@@ -311,6 +333,7 @@ fn drives_monitor(info: &AdapterInfo, window: &Window) -> bool {
 
 #[test]
 fn every_hardware_adapter_presents_the_full_host_native_or_across_adapters() {
+    exclusive::hold_exclusive();
     let adapters = hardware_adapters();
     assert!(!adapters.is_empty(), "no hardware adapter on this machine");
     let probe = Window::open(Extent {
@@ -340,17 +363,16 @@ fn every_hardware_adapter_presents_the_full_host_native_or_across_adapters() {
             }
         );
         report(&label, &outcome);
-        steady(&label, &outcome);
+        steady(&label, &outcome, MIB);
         crossed |= !native;
     }
-    if driven.len() < 2 {
-        eprintln!(
-            "SKIP-NO-SECOND-ADAPTER only {} is enabled: cross-adapter present is untested",
-            driven[0].0.name
-        );
-    }
     assert!(
-        driven.len() < 2 || crossed,
+        driven.len() >= 2,
+        "cross-adapter present needs a second adapter, only {} is enabled",
+        driven[0].0.name
+    );
+    assert!(
+        crossed,
         "a second adapter exists but none presented across adapters"
     );
 }

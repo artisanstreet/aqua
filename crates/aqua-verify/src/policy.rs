@@ -111,7 +111,14 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
     (
         "aqua-gpu-d3d12",
         &[
-            "hal", "half", "pack", "placement", "policy", "sprite", "window", "scene",
+            "hal",
+            "half",
+            "pack",
+            "placement",
+            "policy",
+            "sprite",
+            "window",
+            "scene",
         ],
     ),
     (
@@ -228,14 +235,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "weight_distance_order",
         ],
     ),
-    (
-        "aqua-shaders",
-        &[
-            "Stage",
-            "Blob",
-            "find",
-        ],
-    ),
+    ("aqua-shaders", &["Stage", "Blob", "find"]),
     (
         "aqua-oracle-dwrite",
         &[
@@ -261,6 +261,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "GpuRenderHost",
             "HostConfig",
             "HostCounters",
+            "IDLE_TRIM_AFTER",
             "Inspector",
             "InspectorError",
             "InspectorServer",

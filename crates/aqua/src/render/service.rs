@@ -11,7 +11,7 @@ use aqua_protocol::{
 use aqua_runtime::RenderSide;
 use aqua_transport::{Notify, Receiver, RecvError, Sender};
 
-use super::host::{Clock, FrameTarget, RenderStats, Repaint, TargetInit};
+use super::host::{epoch_ns, Clock, FrameTarget, RenderStats, Repaint, TargetInit};
 
 const DRAIN_LIMIT: usize = 4096;
 const MAX_PENDING_POLLS: u32 = 60;
@@ -184,6 +184,8 @@ struct Slot {
     paced: bool,
     seen_arrivals: u64,
     last_frame: FrameId,
+    hidden_seen: bool,
+    cause: super::runs::RunCause,
 }
 
 fn thread_token() -> u64 {
@@ -227,6 +229,8 @@ impl Slot {
             paced: false,
             seen_arrivals: 0,
             last_frame: 0,
+            hidden_seen: false,
+            cause: super::runs::RunCause::default(),
         }
     }
 
@@ -266,6 +270,13 @@ impl Slot {
         }
     }
 
+    fn idle_trim_deadline(&mut self, now: WallInstant) -> Option<WallInstant> {
+        match &mut self.stage {
+            Stage::Running(target) => target.idle_trim_in().map(|after| now + after),
+            _ => None,
+        }
+    }
+
     fn tick(&mut self, now: WallInstant) -> Status {
         let closed = drain(&mut self.commands, &mut self.inbox);
         if closed && self.inbox.is_empty() {
@@ -274,42 +285,82 @@ impl Slot {
         let arrivals = self.stats.arrivals.load(Ordering::Acquire);
         let arrived = arrivals != self.seen_arrivals;
         let trim = self.stats.trim.load(Ordering::Acquire);
+        let visibility = self.stats.hidden.load(Ordering::Acquire) != self.hidden_seen;
         let repaint_at = match self.pending {
             Pending::Settled => None,
             Pending::Continuous => Some(now),
             Pending::At(at) => Some(at),
         };
         let wake_at = self.wake_deadline(now);
+        let idle_at = self.idle_trim_deadline(now);
+        let idle_due = idle_at.is_some_and(|at| at <= now);
+        if idle_due {
+            self.stats.trim.store(true, Ordering::Release);
+        }
+        let trim = trim || idle_due;
         let due = |at: Option<WallInstant>| at.is_some_and(|at| at <= now);
         let urgent = !self.inbox.is_empty()
             || !self.feedback.is_empty()
             || arrived
             || trim
+            || visibility
             || due(repaint_at)
             || due(wake_at);
         if !urgent {
-            let earliest = [repaint_at, wake_at].into_iter().flatten().min();
+            let earliest = [repaint_at, wake_at, idle_at].into_iter().flatten().min();
             return Status::Waiting(earliest);
         }
         if let Some(not_before) = self.not_before.filter(|at| *at > now) {
             return Status::Waiting(Some(not_before));
         }
+        self.cause = super::runs::RunCause {
+            arrived,
+            forced: false,
+            trim,
+            repaint: due(repaint_at),
+            wake_due: due(wake_at),
+            inbox: !self.inbox.is_empty(),
+            feedback: !self.feedback.is_empty(),
+            visibility,
+            framed: false,
+            presented: false,
+        };
         self.run(now, arrived, trim, due(repaint_at));
         Status::Ran
     }
 
     fn run(&mut self, started: WallInstant, arrived: bool, trim: bool, repaint: bool) {
+        crate::profile::begin_frame();
         self.stats.waits.fetch_add(1, Ordering::Relaxed);
+        self.stats.picked_ns.store(epoch_ns(), Ordering::Relaxed);
         self.stats
             .service_thread
             .store(thread_token(), Ordering::Relaxed);
         if self.start() {
+            let hidden = self.stats.hidden.load(Ordering::Acquire);
             if let Stage::Running(target) = &mut self.stage {
+                if hidden != self.hidden_seen {
+                    target.visibility(hidden);
+                }
+            }
+            self.hidden_seen = hidden;
+            if let Stage::Running(target) = &mut self.stage {
+                let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Wait);
                 target.wait_frame();
             }
         }
+        self.stats.waited_ns.store(epoch_ns(), Ordering::Relaxed);
         let mut commands = std::mem::take(&mut self.inbox);
         drain(&mut self.commands, &mut commands);
+        let scenes = commands
+            .iter()
+            .filter(|command| matches!(command, RenderCommand::Scene(_)))
+            .count() as u64;
+        let applied = self
+            .stats
+            .scenes_applied
+            .fetch_add(scenes, Ordering::Relaxed)
+            + scenes;
         if !commands.is_empty() {
             self.polls = 0;
         }
@@ -319,7 +370,10 @@ impl Slot {
             feedback: std::mem::take(&mut self.feedback),
             present_at: self.present_time(),
         };
+        let step_span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Input);
         let output = self.side.step(input);
+        drop(step_span);
+        self.stats.stepped_ns.store(epoch_ns(), Ordering::Relaxed);
         self.wake = output.wake;
         for event in output.events {
             if self.events.send(event).is_err() {
@@ -342,23 +396,50 @@ impl Slot {
                 self.stats.forced.fetch_add(1, Ordering::Relaxed);
             }
             let feedback = self.execute(frame, arrived || (forced && !trim));
-            if forced {
-                self.feedback = feedback
-                    .into_iter()
-                    .filter(|item| !matches!(item, Feedback::Presented(_)))
-                    .collect();
-                self.presented_last = true;
-            } else {
-                self.presented_last = feedback
+            let maintenance = forced && trim;
+            self.presented_last = maintenance
+                || feedback
                     .iter()
                     .any(|item| matches!(item, Feedback::Presented(_)));
-                self.feedback = feedback;
-            }
+            self.feedback = match maintenance {
+                true => feedback
+                    .into_iter()
+                    .filter(|item| !matches!(item, Feedback::Presented(_)))
+                    .collect(),
+                false => feedback,
+            };
             self.settle_pending(started);
+            if self.presented_last {
+                self.stats.presented_ns.store(epoch_ns(), Ordering::Relaxed);
+                self.stats
+                    .scenes_presented
+                    .store(applied, Ordering::Release);
+            }
         }
         if trim {
             self.stats.trim.store(false, Ordering::Release);
+            crate::mem_probe::return_memory_to_os();
+            if crate::mem_probe::memory_report_enabled() {
+                eprintln!(
+                    "aqua-trim: window {} trim pass {:.2} ms",
+                    self.id,
+                    started.elapsed().as_secs_f64() * 1e3
+                );
+            }
         }
+        crate::profile::note(|| {
+            format!(
+                "render_cause=arrived:{arrived},forced:{forced},trim:{trim},repaint:{repaint},presented:{}",
+                self.presented_last
+            )
+        });
+        super::runs::record(super::runs::RunCause {
+            forced,
+            framed: frame.is_some(),
+            presented: self.presented_last,
+            ..self.cause
+        });
+        crate::profile::end_frame(crate::profile::Role::Render, self.id);
         self.not_before = match self.paced || !self.presented_last {
             true => Some(started + self.interval),
             false => None,
@@ -411,6 +492,7 @@ impl Slot {
 }
 
 fn serve(shared: &Shared) {
+    crate::native::raise_thread_priority();
     let mut slots: Vec<Slot> = Vec::new();
     loop {
         let mut shutdown = false;

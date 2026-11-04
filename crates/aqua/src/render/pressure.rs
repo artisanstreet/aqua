@@ -30,7 +30,10 @@ static INJECTED: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize
 
 #[cfg(windows)]
 pub fn watch_notification(handle: Option<windows::Win32::Foundation::HANDLE>) {
-    INJECTED.store(handle.map_or(0, |handle| handle.0 as isize), Ordering::Release);
+    INJECTED.store(
+        handle.map_or(0, |handle| handle.0 as isize),
+        Ordering::Release,
+    );
 }
 
 #[cfg(windows)]

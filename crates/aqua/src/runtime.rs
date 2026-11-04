@@ -15,7 +15,8 @@ use aqua_protocol::{
     RuntimeInput, RuntimeOutput, ShellCommand, WindowOp,
 };
 use aqua_protocol::{
-    AquaWindowId, FrameReason, ObservedWindowState, WindowError, WindowEvent, WindowOptions, WindowRequest,
+    AquaWindowId, FrameReason, ObservedWindowState, WindowError, WindowEvent, WindowOptions,
+    WindowRequest,
 };
 use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
 use aqua_runtime::Scheduler;
@@ -28,9 +29,9 @@ use crate::inbox::{AquaUserEvent, Inbox};
 use crate::native_window::NativeWindow;
 use crate::render::host::Clock;
 use crate::render::link::{CompositionSink, ExternalUpdate, InitFactory, RenderLink};
-use crate::render::transition::{Invalid, Settings};
 use crate::render::pressure::MemoryPressure;
 use crate::render::service::RenderService;
+use crate::render::transition::{Invalid, Settings};
 
 pub use aqua_ui::input::ExternalFileDragEvent as ExternalFileDrag;
 
@@ -209,10 +210,17 @@ impl AppCtx<'_> {
         self.windows.get(&id)?.native.as_ref()?.display()
     }
 
+    #[track_caller]
     pub fn bind_mailbox<T>(&self, window: AquaWindowId, mailbox: &crate::mailbox::Mailbox<T>) {
         let inbox = self.inbox.clone();
+        let location = std::panic::Location::caller();
+        let origin = format!(
+            "#{}:{}",
+            location.file().rsplit(['/', '\\']).next().unwrap_or(""),
+            location.line()
+        );
         mailbox.set_waker(Arc::new(move || {
-            inbox.post(AquaUserEvent::Messages(window));
+            inbox.post_labeled(AquaUserEvent::Messages(window), "messages", &origin);
         }));
     }
 
@@ -577,6 +585,7 @@ pub struct Aqua {
     smoke_frames: Option<u64>,
     pub(crate) frames_presented: u64,
     frame_stats: Option<FrameStats>,
+    input_latency: Option<crate::latency::InputLatency>,
     pub(crate) smoke_deadline: Option<WallInstant>,
     epoch: WallInstant,
     pub(crate) wakeups: u64,
@@ -596,6 +605,7 @@ impl Aqua {
         mut config: AquaConfig,
         prefs: OsPreferences,
     ) -> Result<Self, String> {
+        crate::profile::init_from_environment();
         config
             .validated()
             .map_err(|e| format!("invalid window options: {e:?}"))?;
@@ -656,6 +666,7 @@ impl Aqua {
             smoke_frames,
             frames_presented: 0,
             frame_stats: FrameStats::from_environment(),
+            input_latency: crate::latency::InputLatency::from_environment(),
             native_loop: false,
             last_host_report: None,
             render_service: None,
@@ -1213,12 +1224,24 @@ impl Aqua {
         id: AquaWindowId,
         event: &CoreInputEvent,
     ) -> bool {
+        let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Input);
         let count_activity = !matches!(event, CoreInputEvent::Focused(_));
+        crate::profile::note(|| {
+            let text = format!("{event:?}");
+            let kind = text.split(['(', ' ', '{']).next().unwrap_or("");
+            format!("input={kind}")
+        });
         let started = WallInstant::now();
+        if let Some(probe) = self.input_latency.as_mut() {
+            probe.begin_input();
+        }
         let result = self.dispatch_attributed_input(app, id, count_activity, |app, ctx| {
             app.on_input(ctx, id, event)
         });
         self.flush_output(app, id);
+        if let Some(probe) = self.input_latency.as_mut() {
+            probe.end_input(event);
+        }
         if self.frame_stats.is_some() {
             let elapsed = started.elapsed();
             if elapsed >= Duration::from_millis(2) {
@@ -1307,6 +1330,9 @@ impl Aqua {
                 if let Some(rec) = self.windows.get_mut(&id) {
                     rec.observed.occluded = *o;
                 }
+                if let Some(link) = self.windows.get(&id).and_then(|r| r.link.as_ref()) {
+                    link.set_hidden(*o);
+                }
                 if *o {
                     self.request_trim(id);
                 }
@@ -1370,6 +1396,7 @@ impl Aqua {
             match event {
                 AquaUserEvent::Messages(id) => self.dispatch_wake(app, id),
                 AquaUserEvent::ReactiveWake(id) => {
+                    let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Reactive);
                     let ran = self
                         .flushers
                         .get_mut(&id)
@@ -1412,6 +1439,7 @@ impl Aqua {
     }
 
     pub fn drain_ime(&mut self, app: &mut impl Application, id: AquaWindowId) {
+        let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Input);
         let mut events = Vec::new();
         if let Some(sink) = self
             .windows
@@ -1423,10 +1451,16 @@ impl Aqua {
         if events.is_empty() {
             return;
         }
+        if let Some(probe) = self.input_latency.as_mut() {
+            probe.begin_input();
+        }
         for event in events {
             app.step_input(id, RuntimeInput::Ime(event));
         }
         self.flush_output(app, id);
+        if let Some(probe) = self.input_latency.as_mut() {
+            probe.end_text();
+        }
     }
 
     fn attach_compositions(&mut self, id: AquaWindowId) {
@@ -1476,6 +1510,7 @@ impl Aqua {
     }
 
     pub fn drain_render_events(&mut self, app: &mut impl Application, id: AquaWindowId) {
+        let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Input);
         self.attach_compositions(id);
         let events = self
             .windows
@@ -1490,6 +1525,16 @@ impl Aqua {
                         record.presented += 1;
                     }
                     self.frames_presented += 1;
+                    if let Some(probe) = self.input_latency.as_mut() {
+                        if let Some(stats) = self
+                            .windows
+                            .get(&id)
+                            .and_then(|r| r.link.as_ref())
+                            .map(|link| link.stats().clone())
+                        {
+                            probe.presented(&stats);
+                        }
+                    }
                     if let Some(budget) = self.smoke_frames {
                         if self.frames_presented >= budget {
                             eprintln!(
@@ -1522,7 +1567,30 @@ impl Aqua {
     }
 
     pub fn draw_ready(&mut self, app: &mut impl Application, now: Instant) {
-        let ready = self.scheduler.ready_windows(now);
+        self.draw_windows(app, now, FrameReason::all());
+    }
+
+    pub fn draw_input_frames(&mut self, app: &mut impl Application, now: Instant) {
+        self.draw_windows(app, now, FrameReason::INPUT);
+    }
+
+    pub fn drain_text(&mut self, app: &mut impl Application) {
+        let mut ids = std::mem::take(&mut self.window_scratch);
+        ids.clear();
+        ids.extend(self.windows.keys().copied());
+        for id in ids.iter().copied() {
+            self.drain_ime(app, id);
+        }
+        self.window_scratch = ids;
+    }
+
+    fn draw_windows(&mut self, app: &mut impl Application, now: Instant, only: FrameReason) {
+        let ready: Vec<_> = self
+            .scheduler
+            .ready_windows(now)
+            .into_iter()
+            .filter(|(_, reasons)| reasons.intersects(only))
+            .collect();
         if ready.is_empty() {
             return;
         }
@@ -1532,7 +1600,10 @@ impl Aqua {
             if self.frame_stats.is_some() {
                 eprintln!("aqua-reason: {reasons:?}");
             }
+            crate::profile::begin_frame();
+            crate::profile::note(|| format!("rebuild_reason={reasons:?}"));
             self.produce_frame(app, id, now);
+            crate::profile::end_frame(crate::profile::Role::App, id.raw());
             self.scheduler.mark_presented(id);
         }
     }
@@ -1540,6 +1611,9 @@ impl Aqua {
     fn produce_frame(&mut self, app: &mut impl Application, id: AquaWindowId, now: Instant) {
         self.check_memory_pressure();
         let frame_started = WallInstant::now();
+        if let Some(probe) = self.input_latency.as_mut() {
+            probe.frame_started();
+        }
         let Some(record) = self.windows.get(&id) else {
             return;
         };
@@ -1552,6 +1626,7 @@ impl Aqua {
             return;
         }
         if let Some(flusher) = self.flushers.get_mut(&id) {
+            let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Reactive);
             let _report = flusher();
         }
         let Some(observed) = self.windows.get(&id).map(|r| r.observed.clone()) else {
@@ -1563,12 +1638,17 @@ impl Aqua {
         }
         self.sync_access_client(app, id);
         let build_started = WallInstant::now();
+        let build_span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Build);
         let deadline = app.build_scene(&observed, now);
+        drop(build_span);
         if let Some(deadline) = deadline.filter(|_| !hidden) {
             self.scheduler.request_animation_deadline(id, deadline);
         }
         self.flush_output(app, id);
         let build_time = build_started.elapsed();
+        if let Some(probe) = self.input_latency.as_mut() {
+            probe.build_finished();
+        }
         self.sync_chrome(app, id, &observed);
         self.sync_access(app, id);
         if hidden {
@@ -1587,6 +1667,7 @@ impl Aqua {
         let Some(link) = record.link.as_mut() else {
             return;
         };
+        let submit_span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Submit);
         link.set_viewport(observed.inner_size.as_core_size(), scale);
         if !motion.is_empty() {
             link.push_commands(motion.into_iter().map(RenderCommand::Motion));
@@ -1594,7 +1675,11 @@ impl Aqua {
         if let Some(scene) = app.scene_mut(id) {
             link.push_scene(scene);
         }
+        if let Some(probe) = self.input_latency.as_mut() {
+            probe.scene_pushed(link.scenes_queued());
+        }
         let submit_time = submit_started.elapsed();
+        drop(submit_span);
         let cpu_time = frame_started.elapsed();
         if let Some(stats) = self.frame_stats.as_mut() {
             stats.record(cpu_time, submit_time, build_time);
@@ -1719,10 +1804,29 @@ impl Aqua {
                 stats.atlas_color_bytes.load(Relaxed) / 1024,
                 stats.atlas_pages.load(Relaxed),
             );
+            let shapes = self.fonts().lock().shape_cache_stats();
+            eprintln!(
+                "aqua-text-stats: window={} atlas_created={} atlas_upload_kb={} glyph_rasterized={} slug_created={} slug_upload_kb={} slug_kb={} shape_hits={} shape_misses={} shape_entries={} shape_kb={}",
+                id.raw(),
+                stats.atlas_created.load(Relaxed),
+                stats.atlas_upload_bytes.load(Relaxed) / 1024,
+                stats.glyph_rasterized.load(Relaxed),
+                stats.slug_created.load(Relaxed),
+                stats.slug_upload_bytes.load(Relaxed) / 1024,
+                stats.slug_bytes.load(Relaxed) / 1024,
+                shapes.hits,
+                shapes.misses,
+                shapes.entries,
+                shapes.bytes / 1024,
+            );
             if crate::mem_probe::memory_report_enabled() {
                 eprintln!("aqua-heap: {:?}", crate::mem_probe::process_heap());
+                eprintln!("{}", crate::mem_probe::address_space_summary());
                 #[cfg(feature = "probe-allocator")]
-                eprintln!("aqua-heap-sites (allocations >= 4 KiB):\n{}\n{}", crate::mem_probe::site_report(), crate::mem_probe::summary());
+                {
+                    eprintln!("aqua-heap-summary: {}", crate::mem_probe::summary());
+                    crate::mem_probe::dump_chains();
+                }
             }
         }
     }
@@ -1746,6 +1850,10 @@ pub fn physical_extent(window: &ObservedWindowState) -> Extent {
         height: ((window.inner_size.height as f32) * scale).round().max(1.0) as u32,
     }
 }
+
+#[cfg(test)]
+#[path = "../../aqua-verify/tests/support/desktop.rs"]
+mod desktop;
 
 #[cfg(test)]
 mod tests {
@@ -1908,17 +2016,78 @@ mod tests {
     }
 
     #[test]
+    fn a_signal_set_outside_an_input_event_requests_a_frame() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        struct Reactive {
+            probe: Probe,
+            runtime: aqua_reactive::Runtime,
+        }
+        impl Application for Reactive {
+            fn on_window_event(&mut self, c: &mut AppCtx, id: AquaWindowId, e: &WindowEvent) {
+                self.probe.on_window_event(c, id, e)
+            }
+            fn on_input(&mut self, c: &mut AppCtx, id: AquaWindowId, e: &CoreInputEvent) {
+                self.probe.on_input(c, id, e)
+            }
+            fn build_scene(&mut self, w: &ObservedWindowState, n: Instant) -> Option<Instant> {
+                self.probe.build_scene(w, n)
+            }
+            fn reactive_runtime_for(&self, _id: AquaWindowId) -> Option<&ReactiveRuntime> {
+                Some(&self.runtime)
+            }
+        }
+        let (mut aqua, probe, id) = headless();
+        let runtime = aqua_reactive::Runtime::new();
+        let mut app = Reactive { probe, runtime };
+        aqua.bind_app_reactive(&app, id);
+        let scope = app.runtime.create_scope();
+        let (value, set_value) = scope.signal(0i32);
+        let seen = Rc::new(Cell::new(-1i32));
+        let seen_fx = seen.clone();
+        let _fx = scope.subscribe(&value, move |v| seen_fx.set(v));
+        let now = Instant::from_secs_f64(1.0);
+        let ids: Vec<_> = aqua
+            .scheduler
+            .ready_windows(now)
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        aqua.scheduler.mark_produced(&ids, now);
+        assert!(!aqua.scheduler.has_pending());
+        set_value.set(7);
+        aqua.pump_inbox(&mut app);
+        assert_eq!(seen.get(), 7);
+        assert!(aqua.scheduler.has_pending());
+    }
+
+    #[test]
     fn clipboard_round_trips_through_ctx_and_reports_backend() {
+        if !super::desktop::require("clipboard_round_trips_through_ctx") {
+            return;
+        }
         let (mut aqua, _, _) = headless();
         let _ = aqua.clipboard_backend();
+        fn contended<T, E: std::fmt::Debug>(mut operation: impl FnMut() -> Result<T, E>) -> T {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                match operation() {
+                    Ok(value) => return value,
+                    Err(error) if std::time::Instant::now() >= deadline => {
+                        panic!("clipboard stayed busy: {error:?}")
+                    }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+                }
+            }
+        }
         aqua.with_ctx(|ctx| {
-            ctx.clipboard().set_text("copy me".to_string()).unwrap();
+            contended(|| ctx.clipboard().set_text("copy me".to_string()));
             assert_eq!(
-                ctx.clipboard().get_text().unwrap().as_deref(),
+                contended(|| ctx.clipboard().get_text()).as_deref(),
                 Some("copy me")
             );
-            ctx.clipboard().clear().unwrap();
-            assert_eq!(ctx.clipboard().get_text().unwrap(), None);
+            contended(|| ctx.clipboard().clear());
+            assert_eq!(contended(|| ctx.clipboard().get_text()), None);
         });
     }
 

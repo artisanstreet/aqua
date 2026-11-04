@@ -16,6 +16,8 @@ use aqua_verify::process::{sample, video_memory};
 use aqua_verify::stats::{intervals, jank, Distribution};
 use aqua_verify::workload::editor_workload;
 
+#[path = "support/exclusive.rs"]
+mod exclusive;
 #[path = "support/window.rs"]
 mod window;
 
@@ -51,6 +53,7 @@ fn stage(name: &'static str, high_performance: bool) -> Stage {
 }
 
 fn run(preference: AdapterPreference, high_performance: bool, budget: Option<MemoryBudget>) {
+    exclusive::hold_exclusive();
     let mut stages = vec![stage("process", high_performance)];
     let options = WindowOptions {
         device: DeviceOptions::from_env().with_preference(preference),

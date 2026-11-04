@@ -17,7 +17,7 @@ pub const RENDERER_WINDOWED: MemoryBudget = MemoryBudget {
 };
 
 pub const HOST_WINDOWED: MemoryBudget = MemoryBudget {
-    framework_heap: 16 * MIB,
+    framework_heap: 12 * MIB,
     ..RENDERER_WINDOWED
 };
 

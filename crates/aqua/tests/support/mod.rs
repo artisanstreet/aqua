@@ -112,19 +112,22 @@ pub fn reference(fonts: SharedFonts, runs: SharedRuns) -> Painter {
 }
 
 #[cfg(windows)]
+#[path = "../../../aqua-verify/tests/support/exclusive.rs"]
+mod exclusive;
+
+#[cfg(windows)]
 pub fn hardware(fonts: SharedFonts, runs: SharedRuns) -> Vec<Painter> {
     use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend};
     [AdapterPreference::HighPerformance, AdapterPreference::Warp]
         .into_iter()
-        .filter_map(|preference| {
-            let backend = OffscreenBackend::new(preference).ok()?;
+        .map(|preference| {
+            if preference == AdapterPreference::Warp {
+                exclusive::hold_exclusive();
+            }
+            let backend = OffscreenBackend::new(preference)
+                .unwrap_or_else(|error| panic!("no adapter {preference:?}: {error}"));
             let label = format!("d3d12 {preference:?} software={}", backend.is_software());
-            Some(Painter::new(
-                label,
-                Box::new(backend),
-                fonts.clone(),
-                runs.clone(),
-            ))
+            Painter::new(label, Box::new(backend), fonts.clone(), runs.clone())
         })
         .collect()
 }

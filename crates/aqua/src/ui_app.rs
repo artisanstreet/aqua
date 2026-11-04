@@ -388,7 +388,11 @@ impl Application for UiApp {
     fn a11y_nodes_for(
         &self,
         id: AquaWindowId,
-    ) -> Option<(aqua_core::NodeId, aqua_core::NodeId, Vec<aqua_protocol::A11yNode>)> {
+    ) -> Option<(
+        aqua_core::NodeId,
+        aqua_core::NodeId,
+        Vec<aqua_protocol::A11yNode>,
+    )> {
         self.slot(id).and_then(|slot| slot.runtime.a11y_nodes())
     }
 

@@ -93,6 +93,7 @@ struct Showcase {
     fonts: SharedFonts,
     runs: SharedRuns,
     header_run: Option<(RunId, u64)>,
+    filter_run: Option<(RunId, u64)>,
     input_run: Option<(RunId, u64)>,
     input_layout: TextLayout,
     input_revision_seen: u64,
@@ -200,6 +201,7 @@ impl Showcase {
             fonts,
             runs,
             header_run: None,
+            filter_run: None,
             input_run: None,
             input_layout,
             input_revision_seen: u64::MAX,
@@ -443,6 +445,16 @@ impl Showcase {
             scale,
         );
         let _ = (id, rev);
+        let filter_label = format!("Filter: {}", self.filter_r.get().label());
+        Self::ensure_run(
+            &self.fonts,
+            &self.runs,
+            &mut self.filter_run,
+            &filter_label,
+            &row_style,
+            Some(160.0),
+            scale,
+        );
         if self.editor.revision() != self.input_revision_seen {
             self.input_revision_seen = self.editor.revision();
             let display = self.editor.display_text();
@@ -865,6 +877,10 @@ impl Application for Showcase {
         if let Some(run) = self.header_run {
             items.push(self.text_item([16.0, 16.0], run));
         }
+        if let Some(run) = self.filter_run {
+            let button = Self::menu_button_rect(w);
+            items.push(self.text_item([button.x + 14.0, button.y + 8.0], run));
+        }
         if let Some(run) = self.input_run {
             items.push(self.text_item([24.0, INPUT_Y + 8.0], run));
             let caret_byte = self
@@ -1009,14 +1025,14 @@ impl Application for Showcase {
         self.sync_items(items);
 
         let elapsed = self.motion_start.elapsed();
-        if !self.motion.is_settled(self.pulse_handle) {
+        if self.pulse_row.is_some() && !self.motion.is_settled(self.pulse_handle) {
             if let Some(deadline) = self.motion.next_deadline_duration(elapsed) {
                 return Some(now + deadline.saturating_sub(elapsed));
             }
             return Some(now + Duration::from_millis(16));
         }
         self.pulse_row = None;
-        Some(now + Duration::from_millis(16))
+        None
     }
 
     fn scene_mut(&mut self, _id: AquaWindowId) -> Option<&mut Scene> {

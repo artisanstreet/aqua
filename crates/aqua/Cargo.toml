@@ -26,10 +26,11 @@ aqua-shell-win32 = { path = "../aqua-shell-win32" }
 [target.'cfg(windows)'.dependencies]
 aqua-gpu-d3d12 = { path = "../aqua-gpu-d3d12" }
 aqua-a11y-uia = { path = "../aqua-a11y-uia" }
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_Diagnostics_Debug"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_Diagnostics_Debug", "Win32_System_LibraryLoader"] }
 
 [features]
 probe-allocator = []
+profile-alloc = []
 
 [dev-dependencies]
 taffy = { workspace = true }
@@ -79,4 +80,8 @@ harness = false
 
 [[test]]
 name = "host_material"
+harness = false
+
+[[test]]
+name = "host_swapchain"
 harness = false

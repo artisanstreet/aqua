@@ -13,6 +13,9 @@ use aqua_verify::process::{sample, video_memory};
 use aqua_verify::stats::{jank, Distribution};
 use aqua_verify::workload::editor_workload;
 
+#[path = "support/exclusive.rs"]
+mod exclusive;
+
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
@@ -42,6 +45,7 @@ fn stage(name: &'static str, high_performance: bool) -> Stage {
 }
 
 fn run(preference: AdapterPreference, high_performance: bool, budget: Option<MemoryBudget>) {
+    exclusive::hold_exclusive();
     let mut stages = vec![stage("process", high_performance)];
     let mut backend = match OffscreenBackend::with_format(preference, SurfaceFormat::Bgra8Unorm) {
         Ok(backend) => backend,

@@ -203,6 +203,7 @@ fn client(log: Arc<Mutex<Log>>) -> Result<(), String> {
 
 fn main() {
     std::env::set_var("AQUA_SMOKE_MS", "60000");
+    std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1");
     let log = Arc::new(Mutex::new(Log::default()));
     let (done, outcome) = std::sync::mpsc::channel();
     let shared = log.clone();

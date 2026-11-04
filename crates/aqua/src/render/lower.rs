@@ -14,13 +14,14 @@ use aqua_graph::{
     GradientStop, Image, Linear2, PaintCommand, PlanError, PlanLimits, Quad, Shadow, SlugInstance,
     SlugRun,
 };
-use aqua_media::atlas::{AtlasConfig, ImageKey, Placement, Slot, StreamBudget};
+use aqua_media::atlas::{AtlasConfig, ImageKey, PageId, Placement, Slot, StreamBudget};
 use aqua_media::reduce::{reduce, reduction_level};
 use aqua_media::residency::{GlyphSlot, Residency, ResidencyConfig, VectorMode};
 use aqua_media::upload::texture_handle;
 use aqua_protocol::{Instant, UploadBatch};
 use aqua_scene::Scene;
-use aqua_text::raster::{quantize_size, quantize_x, raster_key};
+use aqua_text::layout::LaidOut;
+use aqua_text::raster::{quantize_size, quantize_x, raster_key, SUBPIXEL_STEPS};
 use aqua_text::residency::GlyphResolver;
 use aqua_text::runs::RunId;
 use aqua_text::slug::{SlugCache, SlugStore, StoreLookup, STORE_HANDLE};
@@ -43,6 +44,7 @@ const SLUG_TEXT_PX: f32 = 160.0;
 const OPAQUE_FILL: f32 = 0.98;
 const FILL_MEMORY: usize = 256;
 const FILL_SEARCH: usize = 64;
+const RUN_CACHE_BYTES: usize = 3 << 20;
 
 static PULSE_EPOCH: LazyLock<WallInstant> = LazyLock::new(WallInstant::now);
 
@@ -69,6 +71,11 @@ pub struct LowerReport {
     pub curves: u32,
     pub approximated: u32,
     pub pending: u32,
+    pub atlas_created: u32,
+    pub atlas_upload_bytes: u64,
+    pub glyph_rasterized: u32,
+    pub slug_created: u32,
+    pub slug_upload_bytes: u64,
     pub pulsing: bool,
     pub shimmering: bool,
     pub skipped: BTreeMap<Unsupported, u32>,
@@ -116,6 +123,77 @@ struct RetainedImage {
     width: u32,
     height: u32,
     premultiplied: Arc<[u8]>,
+}
+
+struct RunEntry {
+    signature: [u32; 14],
+    laid: Arc<LaidOut>,
+    epoch: u64,
+    origin: (i32, i32),
+    commands: Vec<PaintCommand>,
+    pages: Vec<PageId>,
+    glyphs: u32,
+    bytes: usize,
+}
+
+#[derive(Default)]
+struct RunCache {
+    entries: HashMap<u64, RunEntry>,
+    bytes: usize,
+}
+
+impl RunCache {
+    fn insert(&mut self, run: u64, entry: RunEntry) {
+        if self.bytes + entry.bytes > RUN_CACHE_BYTES {
+            self.clear();
+        }
+        self.bytes += entry.bytes;
+        if let Some(old) = self.entries.insert(run, entry) {
+            self.bytes -= old.bytes;
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.bytes = 0;
+    }
+}
+
+fn shifted(command: &PaintCommand, dx: f32, dy: f32) -> PaintCommand {
+    let place = |bounds: Rect| Rect {
+        x: bounds.x + dx,
+        y: bounds.y + dy,
+        ..bounds
+    };
+    match command {
+        PaintCommand::Glyphs(run) => PaintCommand::Glyphs(GlyphRun {
+            atlas: run.atlas,
+            glyphs: run
+                .glyphs
+                .iter()
+                .map(|glyph| Glyph {
+                    bounds: place(glyph.bounds),
+                    ..*glyph
+                })
+                .collect(),
+        }),
+        PaintCommand::Image(image) => PaintCommand::Image(Image {
+            bounds: place(image.bounds),
+            ..*image
+        }),
+        other => other.clone(),
+    }
+}
+
+fn run_bytes(commands: &[PaintCommand]) -> usize {
+    commands
+        .iter()
+        .map(|command| match command {
+            PaintCommand::Glyphs(run) => run.glyphs.len() * std::mem::size_of::<Glyph>(),
+            _ => std::mem::size_of::<PaintCommand>(),
+        })
+        .sum::<usize>()
+        + std::mem::size_of::<RunEntry>()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -233,11 +311,13 @@ pub struct Lowering {
     resolver: GlyphResolver,
     slug_cache: SlugCache,
     slug_store: SlugStore,
+    glyph_inserts: u64,
     retained: HashMap<u64, RetainedImage>,
     meshes: HashMap<u64, ImageKey>,
     reduced: HashMap<u64, Vec<ImageKey>>,
     vectors: VectorCache,
     text: TextStack,
+    run_cache: RunCache,
     shimmer: ShimmerClocks,
     externals: Option<Receiver<ExternalUpdate>>,
     recovery: RecoverySignal,
@@ -420,11 +500,13 @@ impl Lowering {
             resolver: GlyphResolver::new(),
             slug_cache: SlugCache::new(),
             slug_store: SlugStore::new(),
+            glyph_inserts: 0,
             retained: HashMap::new(),
             meshes: HashMap::new(),
             reduced: HashMap::new(),
             vectors: VectorCache::default(),
             text: TextStack::default(),
+            run_cache: RunCache::default(),
             shimmer: ShimmerClocks::default(),
             externals: None,
             recovery: RecoverySignal::default(),
@@ -493,9 +575,13 @@ impl Lowering {
         if let Some(image) = self.retained.remove(&layer) {
             self.residency.remove_image(&image_key(layer, &image));
         }
-        self.reduced.remove(&layer).into_iter().flatten().for_each(|key| {
-            self.residency.remove_image(&key);
-        });
+        self.reduced
+            .remove(&layer)
+            .into_iter()
+            .flatten()
+            .for_each(|key| {
+                self.residency.remove_image(&key);
+            });
     }
 
     pub fn reset(&mut self) {
@@ -506,6 +592,7 @@ impl Lowering {
         self.meshes.clear();
         self.reduced.clear();
         self.vectors.clear();
+        self.run_cache.clear();
     }
 
     pub fn trim(&mut self, idle_frames: u64) -> usize {
@@ -576,14 +663,31 @@ impl Lowering {
         self.last_commands = previous;
         walk.report.shimmering |= self.overlay_transition(&mut walk.out, walk.surface, now);
         walk.report.commands = walk.out.len() as u32;
+        let inserts_before = self.glyph_inserts;
         let updates = self.residency.finish_frame();
+        walk.report.atlas_created = updates.created.len() as u32;
+        walk.report.atlas_upload_bytes = updates.upload_bytes();
+        let resident_now = self.residency.stats();
+        self.glyph_inserts = resident_now.masks.inserts + resident_now.colors.inserts;
+        walk.report.glyph_rasterized =
+            (self.glyph_inserts - inserts_before.min(self.glyph_inserts)) as u32;
         let mut uploads = aqua_media::upload::upload_batch(updates);
-        uploads.textures.extend(self.slug_store.uploads().textures);
+        let slug_uploads = self.slug_store.uploads();
+        for upload in &slug_uploads.textures {
+            match &upload.op {
+                aqua_protocol::TextureOp::Create { .. } => walk.report.slug_created += 1,
+                aqua_protocol::TextureOp::Write { data, .. } => {
+                    walk.report.slug_upload_bytes += data.len() as u64;
+                }
+                aqua_protocol::TextureOp::Release => {}
+            }
+        }
+        uploads.textures.extend(slug_uploads.textures);
         if let Some(stats) = &self.stats {
             record_lowering(stats, &walk.report, started.elapsed());
             let resident = self.residency.stats();
-            let report_signature = resident.colors.pages
-                + (self.slug_store.resident_bytes() / 16384) as u32 * 64;
+            let report_signature =
+                resident.colors.pages + (self.slug_store.resident_bytes() / 16384) as u32 * 64;
             if self.report_pages != report_signature && crate::mem_probe::memory_report_enabled() {
                 self.report_pages = report_signature;
                 eprintln!("aqua-atlas-pages: {:?}", self.residency.page_layouts());
@@ -598,6 +702,9 @@ impl Lowering {
                     resident.streaming_bytes,
                 );
             }
+            stats
+                .slug_bytes
+                .store(self.slug_store.resident_bytes(), Ordering::Relaxed);
             stats
                 .atlas_mask_bytes
                 .store(resident.masks.resident_bytes, Ordering::Relaxed);
@@ -1022,14 +1129,69 @@ impl Lowering {
         let first_baseline = laid.lines.first().map_or(0.0, |line| line.baseline_y);
         let backdrop = walk.backdrop_at(base_x + 1.0, base_y + first_baseline * s * 0.5);
         let mut curves: Vec<SlugInstance> = Vec::new();
+        let signature = self
+            .text
+            .cache_signature()
+            .filter(|_| !moving && !self.outline_text && phase == 0.0)
+            .map(|text| {
+                [
+                    (base_x - base_x.floor()).to_bits(),
+                    (base_y - base_y.floor()).to_bits(),
+                    s.to_bits(),
+                    scene_color.l.to_bits(),
+                    scene_color.c.to_bits(),
+                    scene_color.h.to_bits(),
+                    scene_color.alpha.to_bits(),
+                    opacity.to_bits(),
+                    backdrop.map_or(0, f32::to_bits),
+                    u32::from(backdrop.is_some()),
+                    text[0] ^ (text[1] << 1),
+                    text[2],
+                    text[3],
+                    text[4],
+                ]
+            });
+        let origin_cell = (base_x.floor() as i32, base_y.floor() as i32);
+        let epoch = self.residency.eviction_epoch();
+        if let Some(signature) = signature {
+            if let Some(entry) = self.run_cache.entries.get(&run_id).filter(|entry| {
+                entry.signature == signature
+                    && entry.epoch == epoch
+                    && Arc::ptr_eq(&entry.laid, &laid)
+            }) {
+                let dx = (origin_cell.0 - entry.origin.0) as f32;
+                let dy = (origin_cell.1 - entry.origin.1) as f32;
+                walk.out.extend(
+                    entry
+                        .commands
+                        .iter()
+                        .map(|command| shifted(command, dx, dy)),
+                );
+                walk.report.glyphs += entry.glyphs;
+                for page in &entry.pages {
+                    self.residency.touch_page(*page);
+                }
+                return;
+            }
+        }
+        let started = walk.out.len();
+        let glyphs_before = walk.report.glyphs;
+        let skipped_before = walk.report.unsupported();
+        let mut pages: Vec<PageId> = Vec::new();
+        let mut curved = false;
+        let fonts_revision = self.fonts.revision();
         for line in &laid.lines {
             for glyph in &line.glyphs {
                 if moving || self.outline_text || glyph.font_size_px * s >= SLUG_TEXT_PX {
+                    curved = true;
                     let key = raster_key(glyph, 0);
-                    let looked = {
-                        let mut fonts = self.fonts.lock();
-                        self.slug_store
-                            .lookup(&mut self.slug_cache, &mut fonts, &key)
+                    let looked = match self.slug_store.resident(&key, fonts_revision) {
+                        Some(found) => found,
+                        None => {
+                            let mut fonts = self.fonts.lock();
+                            self.slug_store
+                                .lookup(&mut self.slug_cache, &mut fonts, &key)
+                        }
                     };
                     match looked {
                         StoreLookup::Stored(stored) => {
@@ -1071,10 +1233,9 @@ impl Lowering {
                     (base_y + (line.baseline_y + glyph.y - glyph.y_offset) * s).round() as i32;
                 let mut key = raster_key(glyph, subpixel);
                 key.size_bits = quantize_size(glyph.font_size_px * s).to_bits();
-                let resolved = {
-                    let mut fonts = self.fonts.lock();
-                    self.resolver.resolve(&mut self.residency, &mut fonts, &key)
-                };
+                let resolved = self
+                    .resolver
+                    .resolve_shared(&mut self.residency, &self.fonts, &key);
                 let slot = match resolved {
                     Ok(slot) => slot,
                     Err(_) => {
@@ -1088,8 +1249,15 @@ impl Lowering {
                     continue;
                 };
                 walk.report.glyphs += 1;
+                if !pages.contains(&placement.page) {
+                    pages.push(placement.page);
+                }
+                let glyph_x = match slot {
+                    GlyphSlot::Color(_) => pixel_x + i32::from(subpixel >= SUBPIXEL_STEPS / 2),
+                    GlyphSlot::Mask(_) => pixel_x,
+                };
                 let bounds = Rect {
-                    x: (pixel_x + placement.bearing[0]) as f32,
+                    x: (glyph_x + placement.bearing[0]) as f32,
                     y: (pen_y - placement.bearing[1]) as f32,
                     w: placement.width as f32,
                     h: placement.height as f32,
@@ -1142,6 +1310,26 @@ impl Lowering {
             }));
         }
         walk.out.extend(color_images);
+        if let Some(signature) = signature.filter(|_| {
+            !curved
+                && walk.report.unsupported() == skipped_before
+                && self.residency.eviction_epoch() == epoch
+        }) {
+            let commands = walk.out[started..].to_vec();
+            self.run_cache.insert(
+                run_id,
+                RunEntry {
+                    signature,
+                    laid: laid.clone(),
+                    epoch,
+                    origin: origin_cell,
+                    bytes: run_bytes(&commands),
+                    commands,
+                    pages,
+                    glyphs: walk.report.glyphs - glyphs_before,
+                },
+            );
+        }
     }
 
     fn tint(
@@ -1526,6 +1714,21 @@ fn record_lowering(stats: &RenderStats, report: &LowerReport, elapsed: std::time
     stats
         .glyphs
         .fetch_add(u64::from(report.glyphs), Ordering::Relaxed);
+    stats
+        .atlas_created
+        .fetch_add(u64::from(report.atlas_created), Ordering::Relaxed);
+    stats
+        .atlas_upload_bytes
+        .fetch_add(report.atlas_upload_bytes, Ordering::Relaxed);
+    stats
+        .glyph_rasterized
+        .fetch_add(u64::from(report.glyph_rasterized), Ordering::Relaxed);
+    stats
+        .slug_created
+        .fetch_add(u64::from(report.slug_created), Ordering::Relaxed);
+    stats
+        .slug_upload_bytes
+        .fetch_add(report.slug_upload_bytes, Ordering::Relaxed);
 }
 
 impl aqua_transport::Lowering for Lowering {

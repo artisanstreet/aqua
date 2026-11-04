@@ -206,6 +206,7 @@ fn main() {
     let port = free_port();
     std::env::set_var("AQUA_INSPECTOR", port.to_string());
     std::env::set_var("AQUA_SMOKE_MS", "60000");
+    std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1");
     let (done, outcome) = mpsc::channel();
     thread::spawn(move || {
         let outcome = client(port);

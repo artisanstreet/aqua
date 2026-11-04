@@ -17,7 +17,8 @@ use windows::Win32::Graphics::Gdi::{
     DIB_RGB_COLORS, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetForegroundWindow, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    GetClientRect, GetForegroundWindow, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE,
 };
 
 const MATERIALS: [(&str, WindowMaterial, i32); 3] = [
@@ -95,10 +96,7 @@ impl Frame {
             let _ = DeleteDC(memory);
             ReleaseDC(None, screen);
             copied.expect("screen capture");
-            Frame {
-                width,
-                bgra,
-            }
+            Frame { width, bgra }
         }
     }
 
@@ -285,6 +283,9 @@ fn expected_quad() -> [f64; 3] {
     [f64::from(rgb[0]), f64::from(rgb[1]), f64::from(rgb[2])]
 }
 
+#[path = "../../aqua-verify/tests/support/desktop.rs"]
+mod desktop;
+
 fn main() {
     if let Ok(name) = std::env::var("AQUA_HOST_MATERIAL") {
         let material = MATERIALS
@@ -292,7 +293,14 @@ fn main() {
             .find(|(label, _, _)| *label == name)
             .map(|(_, material, _)| *material)
             .expect("known material");
-        child(&name, material, std::env::var("AQUA_HOST_MATERIAL_OUT").unwrap());
+        child(
+            &name,
+            material,
+            std::env::var("AQUA_HOST_MATERIAL_OUT").unwrap(),
+        );
+        return;
+    }
+    if !desktop::require("host_material") {
         return;
     }
     let results: Vec<(&str, Result<Measured, String>)> = MATERIALS

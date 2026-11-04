@@ -159,6 +159,23 @@ impl TextStack {
     }
 
     #[must_use]
+    pub fn cache_signature(&self) -> Option<[u32; 5]> {
+        match self.has_map() || !self.opacities.is_empty() {
+            true => None,
+            false => Some(match self.bases.last() {
+                Some(TextBase::Normalized(color) | TextBase::Source(color)) => [
+                    1,
+                    color[0].to_bits(),
+                    color[1].to_bits(),
+                    color[2].to_bits(),
+                    color[3].to_bits(),
+                ],
+                None => [0; 5],
+            }),
+        }
+    }
+
+    #[must_use]
     pub fn has_base(&self) -> bool {
         !self.bases.is_empty()
     }

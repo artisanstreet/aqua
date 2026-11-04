@@ -1,0 +1,6 @@
+[package]
+name = "aqua-shaders"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aqua shader blobs: HLSL compiled to signed DXIL at build time"

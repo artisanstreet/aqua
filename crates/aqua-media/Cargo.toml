@@ -1,0 +1,16 @@
+[package]
+name = "aqua-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aqua media: paged texture atlas bookkeeping, glyph and image residency, vector rasterization"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-graph = { path = "../aqua-graph" }
+aqua-protocol = { path = "../aqua-protocol" }
+tiny-skia = "0.12"
+resvg = "0.48.1"
+kurbo = "0.13"
+roxmltree = "0.21"
+image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif", "webp"] }

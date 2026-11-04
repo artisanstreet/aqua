@@ -26,6 +26,7 @@ pub struct FontManager {
     /// of face count: replacing a font with another of the same face count
     /// still invalidates (face-count proxy would miss it).
     revision: u64,
+    formation_cache: std::collections::HashMap<(String, String), bool>,
 }
 
 impl FontManager {
@@ -35,6 +36,7 @@ impl FontManager {
         Self {
             system: cosmic_text::FontSystem::new(),
             revision: 0,
+            formation_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -51,6 +53,7 @@ impl FontManager {
                 fontdb::Database::new(),
             ),
             revision: 0,
+            formation_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -67,6 +70,7 @@ impl FontManager {
     pub fn load_font_bytes(&mut self, data: Vec<u8>) {
         self.system.db_mut().load_font_data(data);
         self.revision = self.revision.wrapping_add(1);
+        self.formation_cache.clear();
     }
 
     /// Load a font from a file path. Bumps [`FontManager::font_revision`]
@@ -78,6 +82,7 @@ impl FontManager {
         let r = self.system.db_mut().load_font_file(path);
         if r.is_ok() {
             self.revision = self.revision.wrapping_add(1);
+            self.formation_cache.clear();
         }
         r
     }
@@ -117,6 +122,142 @@ impl FontManager {
         self.system
             .db()
             .with_face_data(face, |data, _| data.to_vec())
+    }
+
+    pub(crate) fn fallback_spans(
+        &mut self,
+        text: &str,
+        style: &crate::style::TextStyle,
+    ) -> Vec<(std::ops::Range<usize>, Option<String>)> {
+        use unicode_segmentation::UnicodeSegmentation;
+        if text.is_empty() {
+            return vec![(0..0, None)];
+        }
+        if text.is_ascii() {
+            return vec![(0..text.len(), None)];
+        }
+        let family = style
+            .families
+            .first()
+            .map(crate::style::FontFamily::to_cosmic)
+            .unwrap_or(cosmic_text::Family::SansSerif);
+        let query = fontdb::Query {
+            families: &[family],
+            weight: style.weight.to_cosmic(),
+            stretch: style.stretch.to_cosmic(),
+            style: style.slant.to_cosmic(),
+        };
+        let Some(primary_id) = self.system.db().query(&query) else {
+            return vec![(0..text.len(), None)];
+        };
+        let Some(primary) = self.system.get_font(primary_id, style.weight.to_cosmic()) else {
+            return vec![(0..text.len(), None)];
+        };
+        let names: Vec<String> = if style.families.len() > 1 {
+            style
+                .families
+                .iter()
+                .skip(1)
+                .filter_map(|family| match family {
+                    crate::style::FontFamily::Named(name) => Some(name.clone()),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            [
+                "Segoe UI Emoji",
+                "Noto Color Emoji",
+                "Apple Color Emoji",
+                "Twemoji Mozilla",
+            ]
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect()
+        };
+        let mut candidates = Vec::new();
+        for name in names {
+            let query = fontdb::Query {
+                families: &[fontdb::Family::Name(&name)],
+                weight: style.weight.to_cosmic(),
+                stretch: style.stretch.to_cosmic(),
+                style: style.slant.to_cosmic(),
+            };
+            let Some(id) = self.system.db().query(&query) else {
+                continue;
+            };
+            let Some(face) = self.system.get_font(id, style.weight.to_cosmic()) else {
+                continue;
+            };
+            let known_emoji = self.system.db().face(id).is_some_and(|face| {
+                matches!(
+                    face.post_script_name.as_str(),
+                    "SegoeUIEmoji"
+                        | "NotoColorEmoji"
+                        | "AppleColorEmoji"
+                        | ".AppleColorEmojiUI"
+                        | "TwemojiMozilla"
+                )
+            });
+            candidates.push((name, id, face, known_emoji));
+        }
+        if candidates.is_empty() {
+            return vec![(0..text.len(), None)];
+        }
+        let mut spans = Vec::new();
+        let mut start = 0;
+        let mut slot: Option<usize> = None;
+        for (index, grapheme) in text.grapheme_indices(true) {
+            let next = select_cluster(
+                grapheme,
+                candidates.len(),
+                |ch| primary.as_swash().charmap().map(ch) != 0,
+                |slot, ch| candidates[slot].2.as_swash().charmap().map(ch) != 0,
+                |slot| {
+                    let (name, id, _, emoji) = &candidates[slot];
+                    let key = (name.clone(), grapheme.to_owned());
+                    if let Some(value) = self.formation_cache.get(&key) {
+                        return *value;
+                    }
+                    let metrics = cosmic_text::Metrics::new(
+                        style.size_px.max(1.0),
+                        style.line_height_px.max(1.0),
+                    );
+                    let mut probe = cosmic_text::Buffer::new(&mut self.system, metrics);
+                    let attrs = cosmic_text::Attrs::new().family(cosmic_text::Family::Name(name));
+                    probe.set_text(grapheme, &attrs, cosmic_text::Shaping::Advanced, None);
+                    probe.shape_until_scroll(&mut self.system, false);
+                    let mut count = 0usize;
+                    let mut valid = true;
+                    for glyph in probe.layout_runs().flat_map(|line| line.glyphs) {
+                        if glyph.glyph_id == 0 || glyph.font_id != *id {
+                            valid = false;
+                            break;
+                        }
+                        if *emoji && glyph.glyph_id == 3 {
+                            continue;
+                        }
+                        count += 1;
+                    }
+                    let result = valid && count == 1;
+                    if self.formation_cache.len() < 512 {
+                        self.formation_cache.insert(key, result);
+                    }
+                    result
+                },
+            );
+            if next != slot {
+                if index > start {
+                    spans.push((start..index, slot.map(|slot| candidates[slot].0.clone())));
+                }
+                start = index;
+                slot = next;
+            }
+        }
+        spans.push((
+            start..text.len(),
+            slot.map(|slot| candidates[slot].0.clone()),
+        ));
+        spans
     }
 
     /// Access the shaping engine's font system for layout calls.
@@ -174,6 +315,36 @@ impl Default for FontManager {
     }
 }
 
+pub fn select_cluster(
+    grapheme: &str,
+    candidate_count: usize,
+    primary_covers: impl Fn(char) -> bool,
+    candidate_covers: impl Fn(usize, char) -> bool,
+    mut forms_single: impl FnMut(usize) -> bool,
+) -> Option<usize> {
+    if grapheme.is_ascii() || grapheme.chars().all(&primary_covers) {
+        return None;
+    }
+    let full: Vec<_> = (0..candidate_count)
+        .filter(|index| grapheme.chars().all(|ch| candidate_covers(*index, ch)))
+        .collect();
+    if let Some(&first) = full.first() {
+        if grapheme.chars().count() == 1 {
+            return Some(first);
+        }
+        return full
+            .into_iter()
+            .find(|index| forms_single(*index))
+            .or(Some(first));
+    }
+    let first = grapheme.chars().next()?;
+    if primary_covers(first) {
+        None
+    } else {
+        (0..candidate_count).find(|index| candidate_covers(*index, first))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,8 +352,6 @@ mod tests {
     #[test]
     fn system_fonts_load() {
         let mgr = FontManager::new();
-        // The CI/dev host ships DejaVu at minimum; assert non-empty rather
-        // than a specific family so the test stays portable.
         assert!(mgr.face_count() > 0, "expected system fonts to load");
     }
 
@@ -201,8 +370,6 @@ mod tests {
 
     #[test]
     fn default_path_matches_new() {
-        // Constructors and Default must not differ in validity:
-        // Default loads system fonts exactly like new().
         let via_new = FontManager::new();
         let via_default = FontManager::default();
         assert_eq!(via_new.face_count(), via_default.face_count());
@@ -219,9 +386,6 @@ mod tests {
     fn font_loads_bump_revision() {
         let mut mgr = FontManager::new_without_system_fonts();
         assert_eq!(mgr.font_revision(), 0);
-        // Reload an already-present system font file: face count may be
-        // unchanged on some hosts, but the revision must still advance so
-        // same-count replacement invalidates shaping caches.
         let before = mgr.face_count();
         let r0 = mgr.font_revision();
         mgr.load_font_file("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")

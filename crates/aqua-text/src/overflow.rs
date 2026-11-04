@@ -33,6 +33,17 @@ pub fn single_line_overflow(
     ellipsis_width: f32,
     mode: OverflowMode,
 ) -> OverflowResult {
+    single_line_overflow_with_spacing(text, clusters, available_width, ellipsis_width, 0.0, mode)
+}
+
+pub fn single_line_overflow_with_spacing(
+    text: &str,
+    clusters: &[OverflowCluster],
+    available_width: f32,
+    ellipsis_width: f32,
+    letter_spacing: f32,
+    mode: OverflowMode,
+) -> OverflowResult {
     let full = || OverflowResult {
         source: 0..text.len(),
         ellipsis: None,
@@ -45,11 +56,11 @@ pub fn single_line_overflow(
     let mut overflow = false;
     match mode {
         OverflowMode::EndEllipsis => {
-            for cluster in clusters {
+            for (index, cluster) in clusters.iter().enumerate() {
                 if width + ellipsis_width < available_width {
                     boundary = cluster.bytes.start;
                 }
-                width += cluster.advance;
+                width += cluster.advance + if index == 0 { 0.0 } else { letter_spacing };
                 if width.floor() > available_width {
                     overflow = true;
                     break;
@@ -73,11 +84,11 @@ pub fn single_line_overflow(
         }
         OverflowMode::StartEllipsis => {
             boundary = clusters.first().map_or(0, |cluster| cluster.bytes.end);
-            for cluster in clusters.iter().rev() {
+            for (index, cluster) in clusters.iter().rev().enumerate() {
                 if width + ellipsis_width < available_width {
                     boundary = cluster.bytes.end;
                 }
-                width += cluster.advance;
+                width += cluster.advance + if index == 0 { 0.0 } else { letter_spacing };
                 if width.floor() > available_width {
                     overflow = true;
                     break;

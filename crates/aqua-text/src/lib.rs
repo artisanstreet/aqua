@@ -14,7 +14,8 @@ pub use editor::TextEditor;
 pub use font::{FontManager, SharedFonts};
 pub use layout::{
     measure_text, CaretAffinity, CaretPosition, CaretRect, DecorationKind, LaidGlyph, LaidLine,
-    LaidOut, Rect, SharedLayoutCache, TextDecoration, TextInteractionRange, TextLayout,
+    LaidOut, Rect, SharedLayoutCache, TextBackground, TextDecoration, TextInteractionRange,
+    TextLayout,
 };
 pub use model::TextModel;
 pub use runs::{ResolveError, RunHandle, RunId, RunRegistry, SharedRuns};

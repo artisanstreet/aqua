@@ -47,6 +47,7 @@ pub struct TextEditor {
     selection: Selection,
     line_mode: LineMode,
     ime: Option<Composition>,
+    external_projection: bool,
     undo_stack: Vec<EditRecord>,
     redo_stack: Vec<EditRecord>,
     undo_limit: usize,
@@ -62,6 +63,7 @@ impl TextEditor {
             selection: Selection::default(),
             line_mode,
             ime: None,
+            external_projection: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             undo_limit: 100,
@@ -82,6 +84,9 @@ impl TextEditor {
     }
 
     pub fn display_text(&self) -> String {
+        if self.external_projection {
+            return self.model.text().to_owned();
+        }
         match &self.ime {
             Some(c) => {
                 let mut s = self.model.text().to_string();
@@ -541,6 +546,49 @@ impl TextEditor {
 
     pub fn is_composing(&self) -> bool {
         self.ime.is_some()
+    }
+
+    pub fn set_external_projection(
+        &mut self,
+        text: &str,
+        selection: Selection,
+        marked: Option<std::ops::Range<usize>>,
+    ) -> bool {
+        if selection.anchor > text.len()
+            || selection.caret > text.len()
+            || !text.is_char_boundary(selection.anchor)
+            || !text.is_char_boundary(selection.caret)
+        {
+            return false;
+        }
+        let ime = if let Some(range) = marked {
+            if range.start > range.end
+                || text.get(range.clone()).is_none()
+                || selection.anchor < range.start
+                || selection.anchor > range.end
+                || selection.caret < range.start
+                || selection.caret > range.end
+            {
+                return false;
+            }
+            Some(Composition {
+                start: range.start,
+                text: text[range.clone()].to_owned(),
+                cursor: selection.anchor - range.start..selection.caret - range.start,
+                replaced: None,
+            })
+        } else {
+            None
+        };
+        self.model.set_text(text);
+        self.selection = selection;
+        self.ime = ime;
+        self.external_projection = true;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.merge_typing = false;
+        self.vertical_column = None;
+        true
     }
 
     pub fn set_composition(&mut self, text: &str, cursor: std::ops::Range<usize>) {

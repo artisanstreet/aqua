@@ -80,6 +80,12 @@ impl FontStretch {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct FontFeature {
+    pub tag: [u8; 4],
+    pub value: u32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextStyle {
     pub families: Vec<FontFamily>,
@@ -89,6 +95,9 @@ pub struct TextStyle {
     pub slant: FontSlant,
     pub stretch: FontStretch,
     pub letter_spacing_em: Option<f32>,
+    pub font_features: Vec<FontFeature>,
+    pub gpui_color: Option<[f32; 4]>,
+    pub gpui_source_color: Option<[f32; 4]>,
     pub underline: bool,
     pub strikethrough: bool,
 }
@@ -103,6 +112,9 @@ impl Default for TextStyle {
             slant: FontSlant::Normal,
             stretch: FontStretch::Normal,
             letter_spacing_em: None,
+            font_features: Vec::new(),
+            gpui_color: None,
+            gpui_source_color: None,
             underline: false,
             strikethrough: false,
         }
@@ -124,7 +136,7 @@ impl TextStyle {
             })
             .collect();
         format!(
-            "fam={}|size={:.3}|lh={:.3}|w={}|s={:?}|st={:?}|ls={:?}|u={}|strike={}",
+            "fam={}|size={:.3}|lh={:.3}|w={}|s={:?}|st={:?}|ls={:?}|features={:?}|color={:?}|source_color={:?}|u={}|strike={}",
             families.join(","),
             self.size_px,
             self.line_height_px,
@@ -132,6 +144,9 @@ impl TextStyle {
             self.slant,
             self.stretch,
             self.letter_spacing_em,
+            self.font_features,
+            self.gpui_color.map(|color| color.map(f32::to_bits)),
+            self.gpui_source_color.map(|color| color.map(f32::to_bits)),
             self.underline,
             self.strikethrough,
         )
@@ -150,7 +165,11 @@ impl TextStyle {
         if let Some(ls) = self.letter_spacing_em {
             attrs = attrs.letter_spacing(ls);
         }
-        attrs
+        let mut features = cosmic_text::FontFeatures::new();
+        for feature in &self.font_features {
+            features.set(cosmic_text::FeatureTag::new(&feature.tag), feature.value);
+        }
+        attrs.font_features(features)
     }
 
     pub fn to_cosmic(&self) -> cosmic_text::Attrs<'static> {
@@ -171,7 +190,11 @@ impl TextStyle {
         if let Some(ls) = self.letter_spacing_em {
             attrs = attrs.letter_spacing(ls);
         }
-        attrs
+        let mut features = cosmic_text::FontFeatures::new();
+        for feature in &self.font_features {
+            features.set(cosmic_text::FeatureTag::new(&feature.tag), feature.value);
+        }
+        attrs.font_features(features)
     }
 }
 
@@ -180,6 +203,9 @@ pub struct StyledSpan {
     inline_cell_width: Option<f32>,
     pub interaction: Option<u64>,
     pub color_srgb: Option<[u8; 4]>,
+    pub color_hsla: Option<[f32; 4]>,
+    pub source_color_hsla: Option<[f32; 4]>,
+    pub background_hsla: Option<[f32; 4]>,
     pub text: String,
     pub style: TextStyle,
 }
@@ -211,7 +237,25 @@ impl StyledSpan {
     }
 
     pub fn color(mut self, rgba_srgb: [u8; 4]) -> Self {
+        self.color_hsla = None;
+        self.source_color_hsla = None;
         self.color_srgb = Some(rgba_srgb);
+        self
+    }
+    pub fn gpui_color(mut self, hsla: [f32; 4]) -> Self {
+        self.color_srgb = None;
+        self.source_color_hsla = None;
+        self.color_hsla = Some(hsla);
+        self
+    }
+    pub fn gpui_source_color(mut self, hsla: [f32; 4]) -> Self {
+        self.color_srgb = None;
+        self.color_hsla = None;
+        self.source_color_hsla = Some(hsla);
+        self
+    }
+    pub fn gpui_background(mut self, hsla: [f32; 4]) -> Self {
+        self.background_hsla = Some(hsla);
         self
     }
     pub fn new(text: impl Into<String>, style: TextStyle) -> Self {
@@ -219,6 +263,9 @@ impl StyledSpan {
             inline_cell_width: None,
             interaction: None,
             color_srgb: None,
+            color_hsla: None,
+            source_color_hsla: None,
+            background_hsla: None,
             text: text.into(),
             style,
         }
@@ -229,6 +276,9 @@ impl StyledSpan {
             inline_cell_width: None,
             interaction: None,
             color_srgb: None,
+            color_hsla: None,
+            source_color_hsla: None,
+            background_hsla: None,
             text: text.into(),
             style: TextStyle::default(),
         }

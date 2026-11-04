@@ -8,6 +8,8 @@ use crate::style::{LineMode, StyledSpan, TextAlign, TextStyle, WrapMode};
 
 #[derive(Clone, Debug)]
 pub struct LaidGlyph {
+    pub buffer_line_index: usize,
+    pub buffer_glyph_index: usize,
     pub display_byte_start: usize,
     pub display_byte_end: usize,
     pub src_byte_start: usize,
@@ -19,6 +21,9 @@ pub struct LaidGlyph {
     pub y: f32,
     pub w: f32,
     pub bidi_level: u8,
+    pub color_hsla: Option<[f32; 4]>,
+    pub source_color_hsla: Option<[f32; 4]>,
+    pub font_max_width: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +97,13 @@ pub struct TextDecoration {
     pub kind: DecorationKind,
     pub bounds: Rect,
     pub color_srgb: Option<[u8; 4]>,
+    pub color_hsla: Option<[f32; 4]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextBackground {
+    pub bounds: Rect,
+    pub color_hsla: [f32; 4],
 }
 
 pub struct TextLayout {
@@ -101,6 +113,8 @@ pub struct TextLayout {
     line_mode: LineMode,
     max_width: Option<f32>,
     scale: f32,
+    gpui_line_height: bool,
+    gpui_wrap: bool,
     mask: Option<char>,
     buffer: Option<cosmic_text::Buffer>,
     last_key: Option<InputKey>,
@@ -111,6 +125,7 @@ pub struct TextLayout {
     cluster_map: Vec<(usize, usize)>,
     display_len: usize,
     source_len: usize,
+    overflow_source: Option<(std::ops::Range<usize>, crate::overflow::EllipsisPosition)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -122,6 +137,8 @@ struct InputKey {
     line_mode: LineMode,
     width_bits: Option<u32>,
     scale_bits: u32,
+    gpui_line_height: bool,
+    gpui_wrap: bool,
     mask: Option<char>,
     fonts_rev: u64,
 }
@@ -141,6 +158,8 @@ impl TextLayout {
             line_mode: LineMode::Multi,
             max_width: None,
             scale: 1.0,
+            gpui_line_height: false,
+            gpui_wrap: false,
             mask: None,
             buffer: None,
             last_key: None,
@@ -151,6 +170,7 @@ impl TextLayout {
             cluster_map: Vec::new(),
             display_len: 0,
             source_len: 0,
+            overflow_source: None,
         }
     }
 
@@ -204,11 +224,34 @@ impl TextLayout {
         }
     }
 
+    pub fn set_gpui_line_height(&mut self, enabled: bool) {
+        if self.gpui_line_height != enabled {
+            self.gpui_line_height = enabled;
+            self.last_key = None;
+        }
+    }
+
+    pub fn set_gpui_wrap(&mut self, enabled: bool) {
+        if self.gpui_wrap != enabled {
+            self.gpui_wrap = enabled;
+            self.last_key = None;
+        }
+    }
+
     pub fn set_mask(&mut self, mask: Option<char>) {
         if self.mask != mask {
             self.mask = mask;
             self.last_key = None;
         }
+    }
+
+    pub fn has_gpui_colors(&self) -> bool {
+        self.spans.iter().any(|span| {
+            span.color_hsla.is_some()
+                || span.style.gpui_color.is_some()
+                || span.source_color_hsla.is_some()
+                || span.style.gpui_source_color.is_some()
+        })
     }
 
     pub fn source_len(&self) -> usize {
@@ -217,6 +260,10 @@ impl TextLayout {
 
     pub fn scale(&self) -> f32 {
         self.scale
+    }
+
+    pub fn laid_out(&self) -> Option<&LaidOut> {
+        self.cached.as_deref()
     }
 
     pub fn last_scaled_size(&self) -> Option<(f32, f32)> {
@@ -236,6 +283,128 @@ impl TextLayout {
         }
 
         self.shape(fonts, key, display, cluster_map, source_len, fonts_rev)
+    }
+
+    pub fn layout_single_line_overflow(
+        &mut self,
+        fonts: &mut FontManager,
+        available_width: f32,
+        mode: crate::overflow::OverflowMode,
+    ) -> Arc<LaidOut> {
+        use crate::overflow::{
+            single_line_overflow_with_spacing, EllipsisPosition, OverflowCluster,
+        };
+        let natural = self.layout(fonts);
+        if self.line_mode != LineMode::Single
+            || self.mask.is_some()
+            || mode == crate::overflow::OverflowMode::Clip
+        {
+            return natural;
+        }
+        let source: String = self.spans.iter().map(|span| span.text.as_str()).collect();
+        if natural.size.0 <= available_width * self.scale {
+            return natural;
+        }
+        let Some(first) = self.spans.first() else {
+            return natural;
+        };
+        let mut measure_style = first.style.clone();
+        let letter_spacing =
+            measure_style.letter_spacing_em.unwrap_or(0.0) * measure_style.size_px * self.scale;
+        measure_style.letter_spacing_em = None;
+        let mut character_layout = TextLayout::new();
+        character_layout.set_scale(self.scale);
+        let mut widths = HashMap::new();
+        let mut measure = |character: char| {
+            *widths.entry(character).or_insert_with(|| {
+                character_layout.set_text(&character.to_string(), &measure_style);
+                character_layout.layout(fonts).size.0
+            })
+        };
+        let ellipsis_width = measure('…') + letter_spacing;
+        let clusters: Vec<_> = source
+            .char_indices()
+            .map(|(start, character)| OverflowCluster {
+                bytes: start..start + character.len_utf8(),
+                advance: measure(character),
+            })
+            .collect();
+        let result = single_line_overflow_with_spacing(
+            &source,
+            &clusters,
+            available_width * self.scale,
+            ellipsis_width,
+            letter_spacing,
+            mode,
+        );
+        let Some(position) = result.ellipsis else {
+            return natural;
+        };
+        let original_spans = self.spans.clone();
+        let mut shown = Vec::new();
+        let mut offset = 0;
+        let edge = match position {
+            EllipsisPosition::Start => result.source.start,
+            EllipsisPosition::End => result.source.end.saturating_sub(1),
+        };
+        let mut ellipsis = original_spans
+            .iter()
+            .scan(0, |start, span| {
+                let end = *start + span.text.len();
+                let found = *start <= edge && edge < end;
+                *start = end;
+                Some((found, span))
+            })
+            .find(|(found, _)| *found)
+            .map_or_else(|| original_spans[0].clone(), |(_, span)| span.clone());
+        ellipsis.text = "…".to_owned();
+        if position == EllipsisPosition::Start {
+            shown.push(ellipsis.clone());
+        }
+        for span in &original_spans {
+            let end = offset + span.text.len();
+            let start_in_span = result
+                .source
+                .start
+                .saturating_sub(offset)
+                .min(span.text.len());
+            let end_in_span = result
+                .source
+                .end
+                .saturating_sub(offset)
+                .min(span.text.len());
+            if start_in_span < end_in_span {
+                let mut part = span.clone();
+                part.text = span.text[start_in_span..end_in_span].to_owned();
+                shown.push(part);
+            }
+            offset = end;
+        }
+        if position == EllipsisPosition::End {
+            shown.push(ellipsis);
+        }
+        self.set_spans(shown);
+        let display = self.layout(fonts);
+        let mut remapped = (*display).clone();
+        let ellipsis_len = "…".len();
+        let visible_len = result.source.end - result.source.start;
+        for glyph in remapped.lines.iter_mut().flat_map(|line| &mut line.glyphs) {
+            let map = |byte: usize| match position {
+                EllipsisPosition::Start => {
+                    result.source.start + byte.saturating_sub(ellipsis_len).min(visible_len)
+                }
+                EllipsisPosition::End => result.source.start + byte.min(visible_len),
+            };
+            glyph.src_byte_start = map(glyph.display_byte_start);
+            glyph.src_byte_end = map(glyph.display_byte_end);
+        }
+        self.spans = original_spans;
+        self.source_len = source.len();
+        self.overflow_source = Some((result.source, position));
+        self.last_key = None;
+        let remapped = Arc::new(remapped);
+        self.cached = Some(Arc::clone(&remapped));
+        remapped
     }
 
     pub fn layout_shared(
@@ -259,6 +428,7 @@ impl TextLayout {
             self.display_text = display;
             self.display_len = self.display_text.len();
             self.source_len = source_len;
+            self.overflow_source = None;
             self.cluster_map = cluster_map;
             self.para_starts = para_starts_for(&laid);
             self.last_key = Some(key);
@@ -283,9 +453,12 @@ impl TextLayout {
         let mut style_key = String::new();
         for s in &self.spans {
             style_key.push_str(&format!(
-                "{}:{:?}:{:?}:",
+                "{}:{:?}:{:?}:{:?}:{:?}:{:?}:",
                 s.text.len(),
                 s.color_srgb,
+                s.color_hsla.map(|v| v.map(f32::to_bits)),
+                s.source_color_hsla.map(|v| v.map(f32::to_bits)),
+                s.background_hsla.map(|v| v.map(f32::to_bits)),
                 s.inline_cell_width().map(f32::to_bits)
             ));
             style_key.push_str(&s.style.cache_key());
@@ -299,6 +472,8 @@ impl TextLayout {
             line_mode: self.line_mode,
             width_bits: self.max_width.map(|w| (w * self.scale).to_bits()),
             scale_bits: self.scale.to_bits(),
+            gpui_line_height: self.gpui_line_height,
+            gpui_wrap: self.gpui_wrap,
             mask: self.mask,
             fonts_rev,
         }
@@ -323,7 +498,11 @@ impl TextLayout {
                     .map(|width| {
                         let metrics = cosmic_text::Metrics::new(
                             (span.style.size_px * self.scale).max(1.0),
-                            (span.style.line_height_px * self.scale).max(1.0),
+                            scaled_line_height(
+                                span.style.line_height_px,
+                                self.scale,
+                                self.gpui_line_height,
+                            ),
                         );
                         let mut probe = cosmic_text::Buffer::new(fonts.font_system_mut(), metrics);
                         let attrs = span
@@ -335,22 +514,32 @@ impl TextLayout {
                         probe.shape_until_scroll(fonts.font_system_mut(), false);
                         let natural: f32 = probe.layout_runs().map(|line| line.line_w).sum();
                         let glyphs: usize = probe.layout_runs().map(|line| line.glyphs.len()).sum();
-                        (width * self.scale - natural) / (metrics.font_size * glyphs.max(1) as f32)
+                        (width * self.scale - natural).max(0.0)
+                            / (metrics.font_size * glyphs.max(1) as f32)
                     })
             })
             .collect();
+        let fallback_spans: Vec<_> = self
+            .spans
+            .iter()
+            .map(|span| {
+                let text = masked_span_text(&span.text, self.mask, self.line_mode);
+                let ranges = fonts.fallback_spans(&text, &span.style);
+                (text, ranges)
+            })
+            .collect();
         let buffer = self.buffer.get_or_insert_with(|| {
-            let metrics = first_metrics(&self.spans, self.scale);
+            let metrics = first_metrics(&self.spans, self.scale, self.gpui_line_height);
             cosmic_text::Buffer::new(fonts.font_system_mut(), metrics)
         });
-        if self.line_mode == LineMode::Single {
+        if self.line_mode == LineMode::Single || self.gpui_wrap {
             buffer.set_wrap(cosmic_text::Wrap::None);
         } else {
             buffer.set_wrap(self.wrap.to_cosmic());
         }
         let width_px = self.max_width.map(|w| (w * self.scale).max(1.0));
         buffer.set_size(width_px, None);
-        let metrics = first_metrics(&self.spans, self.scale);
+        let metrics = first_metrics(&self.spans, self.scale, self.gpui_line_height);
         buffer.set_metrics(metrics);
 
         {
@@ -359,25 +548,34 @@ impl TextLayout {
                 .first()
                 .map(|s| s.style.to_cosmic_in())
                 .unwrap_or_else(cosmic_text::Attrs::new);
-            let mut texts: Vec<String> = Vec::with_capacity(self.spans.len());
-            let mut attrs_vec: Vec<cosmic_text::Attrs<'_>> = Vec::with_capacity(self.spans.len());
-            for (index, s) in self.spans.iter().enumerate() {
-                let mut attrs = s.style.to_cosmic_in();
-                if let Some(spacing) = inline_spacings[index] {
-                    attrs = attrs.letter_spacing(spacing);
+            let mut refs: Vec<(&str, cosmic_text::Attrs<'_>)> = Vec::new();
+            for (index, span) in self.spans.iter().enumerate() {
+                let (text, ranges) = &fallback_spans[index];
+                for (range, family) in ranges {
+                    let mut attrs = span.style.to_cosmic_in();
+                    if let Some(family) = family {
+                        attrs = attrs.family(cosmic_text::Family::Name(family));
+                        if span.style.families.len() <= 1 {
+                            attrs = attrs.font_features(cosmic_text::FontFeatures::new());
+                        }
+                    }
+                    if let Some(spacing) = inline_spacings[index] {
+                        attrs = attrs.letter_spacing(spacing);
+                    }
+                    if let Some([r, g, b, a]) = span.color_srgb {
+                        attrs = attrs.color(cosmic_text::Color::rgba(r, g, b, a));
+                    }
+                    attrs = attrs.metrics(cosmic_text::Metrics::new(
+                        (span.style.size_px * self.scale).max(1.0),
+                        scaled_line_height(
+                            span.style.line_height_px,
+                            self.scale,
+                            self.gpui_line_height,
+                        ),
+                    ));
+                    refs.push((&text[range.clone()], attrs));
                 }
-                if let Some([r, g, b, a]) = s.color_srgb {
-                    attrs = attrs.color(cosmic_text::Color::rgba(r, g, b, a));
-                }
-                attrs = attrs.metrics(cosmic_text::Metrics::new(
-                    (s.style.size_px * self.scale).max(1.0),
-                    (s.style.line_height_px * self.scale).max(1.0),
-                ));
-                texts.push(masked_span_text(&s.text, self.mask, self.line_mode));
-                attrs_vec.push(attrs);
             }
-            let refs: Vec<(&str, cosmic_text::Attrs<'_>)> =
-                texts.iter().map(String::as_str).zip(attrs_vec).collect();
             buffer.set_rich_text(
                 refs,
                 &default_attrs,
@@ -396,19 +594,100 @@ impl TextLayout {
         off = off.min(display.len());
         para_starts.push(off);
 
+        let needs_background_metrics = self.spans.iter().any(|span| span.background_hsla.is_some());
+        let mut font_bounds = HashMap::new();
         let mut lines = Vec::new();
         let mut max_w = 0.0f32;
         let mut total_h = 0.0f32;
         let mut first_baseline_y = None;
-        for run in buffer.layout_runs() {
+        for (buffer_line_index, run) in buffer.layout_runs().enumerate() {
             let para = run.line_i;
             let para_start = para_starts.get(para).copied().unwrap_or(0);
             let mut glyphs = Vec::with_capacity(run.glyphs.len());
-            for g in run.glyphs {
+            for (buffer_glyph_index, g) in run.glyphs.iter().enumerate() {
+                let skip_emoji_remnant = g.glyph_id == 3
+                    && fonts
+                        .font_system()
+                        .db()
+                        .face(g.font_id)
+                        .is_some_and(|face| {
+                            matches!(
+                                face.post_script_name.as_str(),
+                                "NotoColorEmoji"
+                                    | "SegoeUIEmoji"
+                                    | "AppleColorEmoji"
+                                    | ".AppleColorEmojiUI"
+                                    | "TwemojiMozilla"
+                            )
+                        });
+                if skip_emoji_remnant {
+                    continue;
+                }
                 let d_start = para_start + g.start;
                 let d_end = para_start + g.end;
                 let (s_start, s_end) = display_range_to_source(&cluster_map, d_start, d_end);
+                let mut span_start = 0;
+                let color_hsla = self
+                    .spans
+                    .iter()
+                    .find_map(|span| {
+                        let end = span_start + span.text.len();
+                        let found = (s_start >= span_start && s_start < end).then_some(
+                            span.color_hsla.or_else(|| {
+                                if span.color_srgb.is_none()
+                                    && span.source_color_hsla.is_none()
+                                    && span.style.gpui_source_color.is_none()
+                                {
+                                    span.style.gpui_color
+                                } else {
+                                    None
+                                }
+                            }),
+                        );
+                        span_start = end;
+                        found
+                    })
+                    .flatten();
+                let mut span_start = 0;
+                let source_color_hsla = self
+                    .spans
+                    .iter()
+                    .find_map(|span| {
+                        let end = span_start + span.text.len();
+                        let found = (s_start >= span_start && s_start < end).then_some(
+                            span.source_color_hsla.or_else(|| {
+                                if span.color_srgb.is_none() && span.color_hsla.is_none() {
+                                    span.style.gpui_source_color
+                                } else {
+                                    None
+                                }
+                            }),
+                        );
+                        span_start = end;
+                        found
+                    })
+                    .flatten();
+                let font_max_width = if needs_background_metrics {
+                    *font_bounds
+                        .entry((g.font_id, g.font_weight, g.font_size.to_bits()))
+                        .or_insert_with(|| {
+                            fonts
+                                .font_system_mut()
+                                .get_font(g.font_id, g.font_weight)
+                                .and_then(|font| {
+                                    let metrics = font.as_swash().metrics(&[]);
+                                    (metrics.units_per_em != 0).then_some(
+                                        metrics.max_width / f32::from(metrics.units_per_em)
+                                            * g.font_size,
+                                    )
+                                })
+                        })
+                } else {
+                    None
+                };
                 glyphs.push(LaidGlyph {
+                    buffer_line_index,
+                    buffer_glyph_index,
                     display_byte_start: d_start,
                     display_byte_end: d_end,
                     src_byte_start: s_start,
@@ -420,6 +699,9 @@ impl TextLayout {
                     y: g.y,
                     w: g.w,
                     bidi_level: g.level.number(),
+                    color_hsla,
+                    source_color_hsla,
+                    font_max_width,
                 });
             }
             if first_baseline_y.is_none() {
@@ -458,6 +740,13 @@ impl TextLayout {
             first_baseline_y = Some(h);
         }
 
+        if self.gpui_wrap && self.line_mode == LineMode::Multi && self.wrap != WrapMode::None {
+            if let Some(width) = width_px {
+                lines = gpui_wrapped_lines(lines, &display, width);
+                max_w = lines.iter().map(|line| line.width).fold(0.0, f32::max);
+                total_h = lines.last().map_or(0.0, |line| line.y_top + line.height);
+            }
+        }
         let laid = Arc::new(LaidOut {
             size: (max_w, total_h),
             constrained_width: width_px,
@@ -467,6 +756,7 @@ impl TextLayout {
         self.display_text = display;
         self.display_len = self.display_text.len();
         self.source_len = source_len;
+        self.overflow_source = None;
         self.para_starts = para_starts;
         self.cluster_map = cluster_map;
         self.last_key = Some(key);
@@ -476,6 +766,13 @@ impl TextLayout {
     }
 
     fn to_display(&self, src: usize) -> usize {
+        if let Some((range, position)) = &self.overflow_source {
+            let offset = src.clamp(range.start, range.end) - range.start;
+            return match position {
+                crate::overflow::EllipsisPosition::Start => "…".len() + offset,
+                crate::overflow::EllipsisPosition::End => offset,
+            };
+        }
         if self.mask.is_none() {
             return src.min(self.display_len);
         }
@@ -493,6 +790,13 @@ impl TextLayout {
     }
 
     fn to_source(&self, display: usize) -> usize {
+        if let Some((range, position)) = &self.overflow_source {
+            let offset = match position {
+                crate::overflow::EllipsisPosition::Start => display.saturating_sub("…".len()),
+                crate::overflow::EllipsisPosition::End => display,
+            };
+            return range.start + offset.min(range.end - range.start);
+        }
         if self.mask.is_none() {
             return display.min(self.source_len);
         }
@@ -585,6 +889,86 @@ impl TextLayout {
             .collect()
     }
 
+    pub fn gpui_backgrounds(&self) -> Result<Vec<TextBackground>, &'static str> {
+        let laid = self.cached.as_ref().ok_or("text has not been shaped")?;
+        let mut output = Vec::new();
+        let mut span_index = 0;
+        let mut run_end = 0;
+        let mut current: Option<(f32, [f32; 4])> = None;
+        for (line_index, line) in laid.lines.iter().enumerate() {
+            for glyph in &line.glyphs {
+                if glyph.src_byte_start < run_end {
+                    continue;
+                }
+                let mut style = None;
+                while let Some(span) = self.spans.get(span_index) {
+                    span_index += 1;
+                    run_end += span.text.len();
+                    if glyph.src_byte_start < run_end {
+                        style = Some(span.background_hsla);
+                        break;
+                    }
+                }
+                let background = style.flatten();
+                if current.as_ref().map(|(_, color)| *color) != background {
+                    if let Some((mut x, color_hsla)) = current.take() {
+                        let width = glyph.x - x;
+                        if width == 0.0 {
+                            x -= glyph
+                                .font_max_width
+                                .ok_or("GPUI background requires font metrics")?
+                                / 2.0;
+                        }
+                        output.push(TextBackground {
+                            bounds: Rect {
+                                x,
+                                y: line.y_top,
+                                w: width,
+                                h: line.height,
+                            },
+                            color_hsla,
+                        });
+                    }
+                    if let Some(color) = background {
+                        current = Some((glyph.x, color));
+                    }
+                }
+            }
+            if let Some((mut x, color_hsla)) = current.take() {
+                let next = laid
+                    .lines
+                    .get(line_index + 1)
+                    .filter(|next| next.paragraph == line.paragraph)
+                    .and_then(|next| next.glyphs.first());
+                let mut width = line.width - x;
+                if width == 0.0 {
+                    let boundary = next
+                        .or_else(|| line.glyphs.last())
+                        .ok_or("GPUI background requires a glyph")?;
+                    let half = boundary
+                        .font_max_width
+                        .ok_or("GPUI background requires font metrics")?
+                        / 2.0;
+                    x -= half;
+                    width = half;
+                }
+                output.push(TextBackground {
+                    bounds: Rect {
+                        x,
+                        y: line.y_top,
+                        w: width,
+                        h: line.height,
+                    },
+                    color_hsla,
+                });
+                if next.is_some_and(|glyph| glyph.src_byte_start < run_end) {
+                    current = Some((0.0, color_hsla));
+                }
+            }
+        }
+        Ok(output)
+    }
+
     pub fn decorations(&self) -> Vec<TextDecoration> {
         let Some(laid) = self.cached.as_ref() else {
             return Vec::new();
@@ -624,6 +1008,7 @@ impl TextLayout {
                                 h: thickness,
                             },
                             color_srgb: span.color_srgb,
+                            color_hsla: span.color_hsla,
                         });
                     }
                 }
@@ -997,7 +1382,7 @@ impl TextLayout {
 
     pub fn single_line_height(&self) -> f32 {
         if let Some(s) = self.spans.first() {
-            (s.style.line_height_px * self.scale).max(1.0)
+            scaled_line_height(s.style.line_height_px, self.scale, self.gpui_line_height)
         } else {
             16.0 * self.scale
         }
@@ -1096,13 +1481,140 @@ fn para_starts_for(laid: &LaidOut) -> Vec<usize> {
     starts
 }
 
-fn first_metrics(spans: &[StyledSpan], scale: f32) -> cosmic_text::Metrics {
+fn gpui_word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(c, '\u{00c0}'..='\u{024f}' | '\u{0400}'..='\u{04ff}' | '\u{1e00}'..='\u{1eff}' | '\u{0300}'..='\u{036f}' | '\u{0980}'..='\u{09ff}')
+        || matches!(
+            c,
+            '-' | '_'
+                | '.'
+                | '\''
+                | '’'
+                | '‘'
+                | '$'
+                | '%'
+                | '@'
+                | '#'
+                | '^'
+                | '~'
+                | ','
+                | '='
+                | ':'
+                | ';'
+                | '!'
+                | ')'
+                | ']'
+                | '}'
+                | '"'
+                | '”'
+                | '»'
+                | '…'
+                | '⋯'
+                | '\u{202f}'
+                | '\u{00a0}'
+                | '\u{2011}'
+        )
+}
+
+fn gpui_wrapped_lines(lines: Vec<LaidLine>, text: &str, width: f32) -> Vec<LaidLine> {
+    let mut result = Vec::new();
+    let mut added_y = 0.0;
+    for line in lines {
+        let mut boundaries = Vec::new();
+        let mut first_non_whitespace = false;
+        let mut candidate = None;
+        let mut previous = '\0';
+        let mut last_boundary = 0;
+        let mut last_x = 0.0;
+        for (index, glyph) in line.glyphs.iter().enumerate() {
+            let Some(ch) = text
+                .get(glyph.display_byte_start..)
+                .and_then(|s| s.chars().next())
+            else {
+                continue;
+            };
+            if ch == '\n' {
+                continue;
+            }
+            if ((gpui_word_char(ch) && previous == ' ') || !gpui_word_char(ch))
+                && ch != ' '
+                && first_non_whitespace
+            {
+                candidate = Some(index);
+            }
+            if ch != ' ' {
+                first_non_whitespace = true;
+            }
+            let next_x = line.glyphs.get(index + 1).map_or(line.width, |next| next.x);
+            if next_x - last_x > width && index > last_boundary {
+                last_boundary = candidate.take().unwrap_or(index);
+                last_x = line.glyphs[last_boundary].x;
+                boundaries.push(last_boundary);
+            }
+            previous = ch;
+        }
+        let mut start = 0;
+        for end in boundaries
+            .iter()
+            .copied()
+            .chain(std::iter::once(line.glyphs.len()))
+        {
+            let origin = if start == 0 {
+                0.0
+            } else {
+                line.glyphs.get(start).map_or(0.0, |glyph| glyph.x)
+            };
+            let end_x = line.glyphs.get(end).map_or(line.width, |glyph| glyph.x);
+            let mut glyphs = line.glyphs[start..end].to_vec();
+            for glyph in &mut glyphs {
+                glyph.x -= origin;
+            }
+            let start_byte = glyphs
+                .iter()
+                .map(|glyph| glyph.display_byte_start)
+                .min()
+                .unwrap_or(line.display_range.start);
+            let end_byte = glyphs
+                .iter()
+                .map(|glyph| glyph.display_byte_end)
+                .max()
+                .unwrap_or(line.display_range.end);
+            let offset = added_y;
+            result.push(LaidLine {
+                paragraph: line.paragraph,
+                display_range: start_byte..end_byte,
+                y_top: line.y_top + offset,
+                height: line.height,
+                baseline_y: line.baseline_y + offset,
+                width: end_x - origin,
+                rtl: line.rtl,
+                glyphs,
+            });
+            start = end;
+            if end < line.glyphs.len() {
+                added_y += line.height;
+            }
+        }
+    }
+    result
+}
+
+fn scaled_line_height(height: f32, scale: f32, gpui: bool) -> f32 {
+    let height = height * scale;
+    if gpui {
+        (height.abs() - 0.5).ceil().copysign(height).max(1.0)
+    } else {
+        height.max(1.0)
+    }
+}
+
+fn first_metrics(spans: &[StyledSpan], scale: f32, gpui: bool) -> cosmic_text::Metrics {
     match spans.first() {
         Some(s) => cosmic_text::Metrics::new(
             (s.style.size_px * scale).max(1.0),
-            (s.style.line_height_px * scale).max(1.0),
+            scaled_line_height(s.style.line_height_px, scale, gpui),
         ),
-        None => cosmic_text::Metrics::new(16.0 * scale, 22.0 * scale),
+        None => cosmic_text::Metrics::new(16.0 * scale, scaled_line_height(22.0, scale, gpui)),
     }
 }
 

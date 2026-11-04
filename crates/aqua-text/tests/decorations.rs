@@ -95,3 +95,59 @@ fn inline_cells_keep_exact_advance_wrapping_and_source_hit_mapping() {
         InlineCellError::InvalidWidth
     );
 }
+
+#[test]
+fn inline_cell_does_not_compress_glyphs_wider_than_the_cell() {
+    let style = TextStyle {
+        size_px: 64.0,
+        line_height_px: 80.0,
+        ..TextStyle::default()
+    };
+    let mut fonts = FontManager::new();
+    for scale in [1.0, 2.0] {
+        let mut natural = TextLayout::new();
+        natural.set_scale(scale);
+        natural.set_spans(vec![StyledSpan::new("@", style.clone())]);
+        let natural_width = natural.layout(&mut fonts).size.0;
+        assert!(natural_width > 20.0 * scale);
+        let mut cell = TextLayout::new();
+        cell.set_scale(scale);
+        cell.set_spans(vec![StyledSpan::new("@", style.clone())
+            .inline_cell(20.0)
+            .unwrap()]);
+        let actual_width = cell.layout(&mut fonts).size.0;
+        assert!((actual_width - natural_width).abs() < 0.01);
+    }
+}
+
+#[test]
+fn gpui_backgrounds_follow_glyph_boundaries_and_preserve_float_colors() {
+    let mut fonts = FontManager::new();
+    let mut layout = TextLayout::new();
+    let color = [0.5123457, 0.31, 0.67, 0.42];
+    layout.set_spans(vec![
+        StyledSpan::plain("plain "),
+        StyledSpan::plain("colored ").gpui_background(color),
+        StyledSpan::plain("run").gpui_background(color),
+        StyledSpan::plain(" tail"),
+    ]);
+    assert!(layout.gpui_backgrounds().is_err());
+    let shaped = layout.layout(&mut fonts);
+    let backgrounds = layout.gpui_backgrounds().unwrap();
+    assert_eq!(backgrounds.len(), 1);
+    let glyphs = &shaped.lines[0].glyphs;
+    let first = glyphs
+        .iter()
+        .find(|glyph| glyph.src_byte_start == 6)
+        .unwrap();
+    let last = glyphs
+        .iter()
+        .find(|glyph| glyph.src_byte_start == 17)
+        .unwrap();
+    assert_eq!(backgrounds[0].bounds.x, first.x);
+    assert_eq!(backgrounds[0].bounds.w, last.x - first.x);
+    assert_eq!(
+        backgrounds[0].color_hsla.map(f32::to_bits),
+        color.map(f32::to_bits)
+    );
+}

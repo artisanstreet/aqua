@@ -32,3 +32,19 @@ fn shared_cache_distinguishes_styled_boundaries_and_colors() {
     assert!(!std::sync::Arc::ptr_eq(&red, &green));
     assert_eq!(cache.misses, 4);
 }
+
+#[test]
+fn gpui_span_color_retains_float_components_through_shaping() {
+    use aqua_text::{FontManager, StyledSpan, TextLayout};
+    let color = [0.312345, 0.876543, 0.421234, 0.781234];
+    let mut layout = TextLayout::new();
+    layout.set_spans(vec![StyledSpan::plain("hello").gpui_color(color)]);
+    assert!(layout.has_gpui_colors());
+    let mut fonts = FontManager::new();
+    let shaped = layout.layout(&mut fonts);
+    assert!(shaped
+        .lines
+        .iter()
+        .flat_map(|line| &line.glyphs)
+        .any(|glyph| glyph.color_hsla == Some(color)));
+}

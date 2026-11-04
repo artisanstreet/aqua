@@ -175,7 +175,7 @@ observable `ResourceState::{Loading, Ready, Failed, Idle}` with generations:
 - `crate::worker::Worker` is the bundled blocking-thread helper:
   `dispatch(ticket, params, work)` runs `work` off-thread, `take_completed()`
   drains type-erased results for owner-thread commitment, and the wake hook
-  fires on arrival. See `examples/resource_worker.rs` (wiring) and
+  fires on arrival. See `crates/aqua/examples/resource_worker.rs` (wiring) and
   `tests/resource.rs` (9 race tests: reload, cancel, dispose, duplicate,
   coalescing, failure/retry, worker end-to-end).
 

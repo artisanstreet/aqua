@@ -162,6 +162,8 @@ pub trait GpuBackend {
 - Bindless texture handles by index, so no backend binding types leak inward.
 - `ShaderId` plus specialization constants. Blobs come from `aqua-shaders` per backend.
 
+Implemented shape (`aqua-graph`, `aqua-protocol`): authors build a `RenderGraph` (or feed `PaintCommand`s to `plan_paint`) and `RenderGraph::plan(PlanLimits)` returns a validated `FramePlan`. The planner culls instances outside the target or clip, culls passes that never reach the surface, hoists independent draws into earlier compatible batches, folds group opacity into instance alpha when children are disjoint, allocates transients by lifetime with first-fit aliasing, sets load ops (a transient's first write clears or discards) and derives transitions plus aliasing barriers. `validate` replays the barrier state machine, so a backend can trust the plan. Backdrop and content blur are graph nodes (`Copy`, a `BlurDown`/`BlurUp` pyramid of `Filter` passes, an `Images` composite) whose effective strength `offset * 2^levels` equals the radius, so animating the radius does not step. `GpuCapabilities::plan_limits()` feeds the planner.
+
 The planner gets alignment, heap limits and feature tiers from `GpuCapabilities`. `FrameReport` returns timings, counters and device status as `Input::Gpu`.
 
 ### 6.2 Rendering methods
@@ -220,8 +222,8 @@ Development machine: Radeon RX 9070 XT and Ryzen 7 9800X3D. The 9800X3D has a 2-
 ## 7. Shell, input, IME, accessibility
 
 - **`aqua-shell-win32`** replaces winit. Win32 windows with per-monitor DPI v2, raw input, non-activating panels, custom chrome and drag regions (today's `chrome.rs`), system backdrop materials (Mica, Acrylic), clipboard, dialogs and OS preferences.
-- **`aqua-ime-tsf`** implements Text Services Framework directly. TSF loads on first text focus, not at startup.
-- **`aqua-a11y-uia`** implements UI Automation (directly or through AccessKit's Windows adapter, decided by measurement). It attaches only when a client connects. The accessibility tree is also the inspector's tree.
+- **`aqua-ime-tsf`** implements Text Services Framework directly. TSF loads on first text focus, not at startup. It is a pull-model `ITextStoreACP` over a windowed UTF-16 mirror of the focused text (`ImeCommand::Enable/Update` carry the window, selection and caret rectangle). TSF edits are translated into `ImeEvent`s (composition start/update/commit/cancel with byte cursors, plus `Replace` and `Select` for edits outside the composition); candidate windows are positioned from the caret rectangle in DPI-scaled screen coordinates; `ImeCommand::Reconvert` drives the system `ITfFnReconversion`. Composition that TSF wraps around programmatic edits is folded into a single insertion.
+- **`aqua-a11y-uia`** implements UI Automation through AccessKit's Windows adapter (section 14.2). The host calls `UiaAdapter::apply(&AccessTreeUpdate)` with each `Output.access` and drains `UiaAdapter::drain_actions()` into `Input::Access`; the waker passed to `attach` must wake the host loop. It attaches only when a client connects. The accessibility tree is also the inspector's tree.
 - **Shell file dialogs** pull many shell components and third-party shell extensions into the process, and they never unload. They run in a short-lived helper process.
 
 ## 8. Text
@@ -238,7 +240,29 @@ Text is a top priority. The pipeline is pure except font discovery.
 | Editing | rope or sum-tree storage, today's `aqua-text` editor model on top |
 | Gate | `aqua-oracle-dwrite` renders the same strings through DirectWrite; CI diffs per string at 1× and 2× |
 
-DirectWrite is only loaded by tests. Matching DirectWrite pixel-for-pixel versus one consistent look on every platform stays an open decision (section 13).
+DirectWrite is only loaded by tests. The look decision is closed in section 14.1.
+
+### 8.1 Implementation (2026-11-04)
+
+`aqua-text` no longer depends on cosmic-text, glyphon or wgpu. Layout is split into pure stages:
+
+| Stage | Module | Notes |
+|---|---|---|
+| Discovery | `aqua-fonts-system` | fontdb index over system fonts; faces are memory-mapped once and shared as `FaceBytes` (the only `unsafe` in the text stack). Fallback is cmap-coverage driven per grapheme: explicit families, emoji families, platform script families, then a lazily cached scan. |
+| Itemization and shaping | `shape.rs` | Spans split at font, bidi level and script boundaries; HarfRust per run with the span's features (ligatures off when tracking is set); `ShapedParagraph` holds clusters, runs and glyphs and is the tier-1 cache. |
+| Line breaking | `lines.rs` | UAX 14 break opportunities from `icu_segmenter` (computed lazily per paragraph), greedy fit over clusters, hanging blanks, `Word`/`Glyph`/`WordOrGlyph`, tab stops, UAX 9 L1/L2 reordering per line, alignment and justification. This is tier 2: changing width, wrap or alignment never re-shapes (`TextLayout::reshape_count` is the exact counter). |
+| Rasterization | `raster.rs` | skrifa outlines, exact-area coverage through zeno, 4 horizontal subpixel positions, y snapped, synthetic italic skew, COLR v0/v1 color glyphs (solid, linear, radial approximated; sweep approximated by its first stop). Bitmap strikes (CBDT/sbix) are not decoded yet. |
+| Atlas | `atlas.rs` | Pure shelf bookkeeping over separate R8 and RGBA8 page sets with LRU eviction that never evicts a glyph used in the current frame; emits `AtlasUpload` records and keeps no CPU mirror. |
+| Tone | `tone.rs` | The Microsoft grayscale contrast and gamma model as a pure function of coverage and text luminance (`ToneCurve::native()` is gamma 1.8, grayscale contrast 1.0). Applied at blend time so one coverage atlas serves every text color. |
+
+Oracle results on the development machine (`aqua-oracle-dwrite`, Segoe UI, run natively on Windows):
+
+- Shaping: glyph ids and advances equal DirectWrite's for five strings at 13, 16, 26, 32 and 48 px (worst advance delta 0.0000 px).
+- Coverage: unhinted per-glyph coverage versus `CreateGlyphRunAnalysis` with grid fitting disabled has a mean absolute error of 2.9 to 7.3 levels (of 255) and an ink ratio of 0.98 to 1.01 at 13 to 32 px.
+- Blending: with the tone curve, total ink versus `IDWriteBitmapRenderTarget` grayscale output (system parameters gamma 1.8, enhanced contrast 0.5, grayscale enhanced contrast 1.0) is within 0.94 to 1.05 (worst case 0.9425 at 13 px) for black, white, gray and colored text on light and dark backgrounds; without it white-on-black text is 20% light and black-on-white 13% heavy. A parameter sweep over gamma 1.0 to 2.2 and contrast 0 to 2.5 puts the optimum at gamma 1.9 and contrast 1.0 with mean error 11.039, against 11.046 for the system values, so the native parameters are kept.
+- Speed (release): 2,000 wrapped paragraphs of about 100 characters shape and break in 56 ms cold and re-wrap in 19 to 24 ms (Linux host 56/24, Windows 66/19). On Windows with 172 system faces, discovery takes 16 ms and the first layout 31 ms (font table parsing for the first face); the second layout of a different string takes 0.04 ms.
+- Memory (Windows, debug build): discovery adds 0.12 MB of private bytes (faces are mapped, not copied); shaping and laying out 401 wrapped lines with 21,600 glyphs adds 6.5 MB, and rasterizing the 61 distinct glyph keys that text needs adds 0.3 MB.
+- Open in the text stack: bitmap color strikes (CBDT, sbix) are not decoded; Slug outlines for scale animation are not built; the on-disk fallback index is not built; `aqua-render`'s wgpu text path is rewired onto the `aqua-text` rasterizer but still carries glyphon and cosmic-text (glyphon requires a cosmic `Buffer` and `FontSystem`, both empty here); they leave the workspace when that crate is deleted.
 
 ## 9. Application API
 
@@ -385,6 +409,8 @@ Estimates for an editor-class app on D3D12, unmeasured:
 
 Target: roughly half of Artisan Editor's 25 MB private working set (estimate). GPU memory is dominated by the swapchain: about 14.7 MB per 2560×1440 BGRA8 buffer, two buffers minimum. Transients are aliased and sized to effect bounds; the atlas is an 8-bit texture grown in pages with eviction. The adapter responds to video memory budget changes and frees transient heaps when minimized.
 
+Implemented residency (`aqua-media`, verified against `aqua-gpu-ref` on WARP and a hardware adapter): one `Atlas<K>` per texel format (8-bit mask for glyphs and single-colour paths, RGBA8 for images, SVG and gradient paths). Shared pages grow 256, 512, 1024 up to a page cap; items larger than a quarter of the maximum edge get a dedicated exact-size page. Allocation is shelf packing without a CPU mirror. When a budget or the page cap is hit, the least recently used page that holds nothing used in the current frame is reset (shared) or released (dedicated), so a page can never be overwritten while an earlier draw of the same frame still reads it; if every page is in use the atlas grows past budget and counts it. `trim_idle` releases pages idle for N frames (minimize, memory pressure), and the D3D12 side frees the matching `ID3D12Resource` behind the frame fence. Large uploads are split into row bands and streamed under a per-frame byte budget. Paths and SVG are rasterized on the CPU (tiny-skia, resvg) into the atlas, not rendered by a GPU path pipeline; Slug-style rendering for scaled text and animated paths is not built. After device recovery the host must call `Residency::clear`, because the GPU textures are not mirrored.
+
 Pure crates get an exact heap gate: a counting allocator in tests reports allocations and bytes per scene, and CI fails on regressions.
 
 ## 12. Verification
@@ -395,6 +421,32 @@ Pure crates get an exact heap gate: a counting allocator in tests reports alloca
 - **Exact counters:** allocations, instances, glyphs, layout nodes, passes per scene.
 - **Text oracle:** DirectWrite pixel diffs (section 8).
 - **Motion checks:** no one-frame jumps, no unmount above zero opacity, no motion on first mount, settle within declared bounds.
+
+### 12.1 Reference semantics (`aqua-gpu-ref`)
+
+`aqua-gpu-ref` defines what every `FramePlan` op means. Backends match it within the tolerances below. Pixel output is premultiplied linear-light RGBA, quantized to 8 bits per channel with round-to-nearest.
+
+| Op | Reference definition |
+|---|---|
+| Frame start | The surface holds `plan.clear` (premultiplied). A plan that never writes the surface therefore yields the clear colour. |
+| `LoadOp` | `Clear(c)` fills the whole target before the pass; `Load` and `DontCare` keep the contents, a never-written transient is transparent. |
+| Quad | Signed-distance coverage `saturate(0.5 - d)` for the rounded rect, the same for the clip rect, border blended over the fill with `saturate(0.5 - inner)`, then `x opacity`. |
+| Gradient | `t` is the projection of the pixel centre on `start -> end` (absolute pixel space), mapped through the two stop offsets and clamped. Colours interpolate in Cartesian Oklab (straight alpha), then premultiply. Backends may dither by at most half an 8-bit step. |
+| Shadow | Exact Gaussian-blurred rounded rect: Gaussian-weighted integral over y of the closed-form erf x-extent of the rounded rect at that row. Spread grows the rect and the corner radius. `sigma < 0.05` is a hard signed-distance edge. |
+| Glyph | Hard pixel-centre inclusion in `bounds`, nearest texel of the R8 atlas inside `texels`, multiplied by clip coverage and opacity. |
+| Image | Quad coverage of `bounds` and `radius`, bilinear sampling clamped to the `texels` sub-rectangle. Persistent RGBA8 data is premultiplied linear. |
+| `LayerOver` | `src * opacity` composited over the target. |
+| Blur down / up | Dual Kawase. Down: 4x centre plus four diagonal taps at `0.5 * offset * (source/dest ratio, at least 1)`, divided by 8. Up: four axis taps at `offset`, four diagonal taps at `offset / 2` with weight 2, divided by 12. All taps are bilinear and clamped to the pass region. |
+| Copy | Texel copy between `source_origin` and `dest_origin` of `size`. |
+| Compute, Custom, ColorMatrix | Unsupported by the reference (`Features::compute` and `custom_passes` are false); a backend must return `Unsupported`, never a silent no-op. |
+
+### 12.2 Conformance suite
+
+- `aqua_gpu_ref::conformance::run_suite(reference, backend, config)` runs hand-written cases (every op, clips, nested and sibling groups, degenerate geometry, odd extents) plus seeded fuzz scenes from one generator, then the backend contract checks (unknown surface, extent mismatch, invalid plan, determinism, surface reuse without residue, `recover`).
+- Each pixel is classified `Interior`, `Soft` (shadow and blur footprints) or `Edge` (within `edge_band` pixels of any shape or clip boundary) and diffed per channel against the limit of its class. Defaults: interior 4, soft 8, edge 24 of 255 (measured on a Radeon RX 9070 XT and WARP: worst 1, 4 and 4).
+- `tolerate_unsupported` turns `Unsupported` errors into reported skips; it exists only for backends that are on their way out (the wgpu adapter).
+- The D3D12 adapter runs the suite on every adapter preference through `aqua-verify/tests/d3d12_conformance.rs`, built with `aqua-win-build -p aqua-verify --test d3d12_conformance` and executed on Windows.
+- The enforcement tests of section 4 live in `aqua-verify` (`tests/enforcement.rs`): `cargo metadata` purity over the Linux and Windows target graphs, `forbid(unsafe_code)`, and a source lint for clocks, threads, filesystem and stdio in pure crates. The lint ignores comments, strings and `#[cfg(test)]` items.
 
 ## 13. Migration order
 
@@ -413,8 +465,10 @@ Each step keeps the app running.
 
 ## 14. Open decisions
 
-1. **Text look:** match DirectWrite/ClearType on Windows, or one consistent rasterizer on every platform.
-2. **UIA:** hand-written or AccessKit's Windows adapter.
-3. **Render thread ownership:** a pure state machine driven by the host (preferred) or an adapter-owned thread.
-4. **Other platforms:** out of scope until Windows ships. Vulkan, Metal and non-Windows shells are not built because they cannot be tested here; the port stays graph-level so they can be added later.
+1. **Text look (decided 2026-11-04):** one consistent rasterizer on every platform: unhinted skrifa outlines, grayscale coverage at 4 horizontal subpixel positions with y snapped, no LCD subpixel rendering. The Windows native look is reproduced at blend time by the Microsoft gamma and contrast model keyed on text luminance (`aqua_text::tone::ToneCurve::native`, gamma 1.8, grayscale contrast 1.0). Evidence (section 8.1): unhinted coverage agrees with DirectWrite to a few percent, shaping agrees exactly, and the tone curve brings blended ink within about 6% of DirectWrite's own grayscale output, where the plain coverage was off by 13 to 22%. DirectWrite grid fitting is deliberately not matched (it moves stems vertically by up to a pixel at 13 px); ClearType color fringing is not offered. DirectWrite stays test-only.
+2. **UIA: decided, AccessKit's Windows adapter** (`accesskit_windows` 0.35 `SubclassingAdapter`, no winit). Evidence, 2026-11-04: the runtime already emits an AccessKit-shaped snapshot (roles, bounds, text runs, selection) and `aqua-a11y-uia` feeds it through unchanged; a real UIA client (`IUIAutomation`, `FindAll` over the descendants, the Invoke pattern) round-trips against it on Windows in `crates/aqua-a11y-uia/tests/uia_windows.rs`: control types, names, bounding rectangles, Invoke arriving as `A11yAction::Press`, and live relabeling after an update. Hand-written UIA would have to reimplement the element, fragment, fragment-root, text, value, toggle, expand-collapse, range-value, selection and grid providers plus the event queue, with no behavior the adapter lacks. The adapter costs nothing until a client connects: attaching installs one window subclass, `request_initial_tree` only flips the bridge to connected and wakes the host, and no tree is built while dormant. Two constraints follow from it: attach before the window is first shown (`UiaAdapter::attach` returns `WindowAlreadyVisible` instead of panicking), and a `Role::Label` node gets its name from `value`, so the snapshot copies the label into the value for text nodes.
+3. **Render thread ownership:** decided 2026-11-04: a pure state machine driven by the host. `aqua_runtime::RenderSide::step(RenderInput) -> RenderOutput` owns the presented scene and a `aqua_motion::TrackSet`, reads no clock and spawns no thread. The host (`aqua-transport::spawn_render_thread` with a `RenderHost` supplying the clock, the frame wait and GPU execution) owns the thread and moves `RenderCommand`/`RenderEvent` over a safe SPSC ring. App side: `aqua_motion::AppMotion` (targets, policy, owners, completions; never samples) plus `aqua_runtime::emit_scene_diff` (drains the app `Scene` into a `SceneDiff`). Completion callbacks fire on the app side when a `Settled { track, generation }` event with the current generation arrives. Motion times are `f64` seconds on the host clock (`Instant::as_secs_f64`); presentation time arrives as `RenderInput::present_at`. Not yet routed through tracks: overlay/popup animations in `OverlayHost` and scroll glide, which still sample on the app side.
+4. **Other platforms:** decided: Windows only (2026-11-04); out of scope until Windows ships. Vulkan, Metal and non-Windows shells are not built because they cannot be tested here; the port stays graph-level so they can be added later.
 5. **`aqua-kernels` scope:** which hot paths justify `unsafe` and SIMD.
+6. **D3D12 device core decisions (2026-11-04, `aqua-gpu-d3d12::hal`):** the Bindless tier requires Shader Model 6.6 and Resource Binding Tier 3; enhanced barriers follow `D3D12_OPTIONS12`; fence barriers and batched copy lists stay off until the `windows` bindings expose their feature queries. A device that fails the baseline (feature level 11_0, SM 6.0) is skipped and the chain ends at WARP. After a device loss the same adapter is re-selected by LUID; a second loss within 10 s falls back to WARP. Recovery consumes the old core so the removed device is released before the replacement is created, which WARP requires. The first `Present` on the RX 9070 XT adds about 40 MB of driver-private commit (WARP: 0.1 MB), so the section 11 budget has to be measured with the real driver in place.
+7. **D3D12 scene pipelines and shaders (2026-11-04, `aqua-shaders`, `aqua-gpu-d3d12::scene`):** HLSL under `crates/aqua-shaders/hlsl` is compiled by `build.rs` to signed DXIL, Shader Model 6.0, with `dxc` found through `AQUA_DXC`, `PATH` or the Windows SDK (`dxc.exe` runs from WSL through `wslpath`); the build fails without it, and the adapter never compiles shaders at run time. The plan carries barriers, load ops and aliasing; the executor translates them against a per-resource tracked state (the plan's `from` and `Undefined` are ignored, so an aliased transient is moved from wherever it last was), emits an aliasing barrier at every transient's first use in a frame, and re-places the planner's heap offsets with real allocation sizes (`placement::place`) because D3D12 tile padding makes RGBA16F textures larger than `texels * 8`. Offscreen surfaces default to RGBA16F; BGRA8 UNORM and sRGB targets are supported by passing the render-target view format in `SceneTarget`, and a `Copy` pass whose source and destination formats differ (backdrop snapshots from an 8-bit window surface) is executed as a draw instead of `CopyTextureRegion`. Pipelines are keyed by (kind, target format), prebuilt through `warm`, and loaded from a serialized `ID3D12PipelineLibrary` that the host persists (a corrupt or foreign library is ignored). Not covered: `ColorMatrix`, `Custom` and `Compute` passes, which the graph IR cannot yet parameterize and the reference does not implement, and the Bindless/enhanced-barrier tiers.

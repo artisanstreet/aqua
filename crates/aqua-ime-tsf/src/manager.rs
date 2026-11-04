@@ -5,16 +5,16 @@ use aqua_protocol::{ImeBackend, ImeCommand, ImeDocument, ImeEvent};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::cell::Cell;
 use std::rc::Rc;
+use windows::core::{Error, Interface, BOOL};
 use windows::Win32::Foundation::{HWND, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::UI::TextServices::{
-    CLSID_TF_ThreadMgr, GUID_SYSTEM_FUNCTIONPROVIDER, ITextStoreACP, ITfContext,
-    ITfContextOwnerCompositionServices, ITfDocumentMgr, ITfFnReconversion, ITfThreadMgr,
+    CLSID_TF_ThreadMgr, ITextStoreACP, ITfContext, ITfContextOwnerCompositionServices,
+    ITfDocumentMgr, ITfFnReconversion, ITfThreadMgr, GUID_SYSTEM_FUNCTIONPROVIDER,
     TF_DEFAULT_SELECTION, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
 };
-use windows::core::{BOOL, Error, Interface};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TsfError {
@@ -140,18 +140,20 @@ impl Active {
                 .map_err(win32("SetFocus"))?;
         }
         self.enabled = true;
+        crate::keystroke::enter_focus();
         Ok(())
     }
 
     fn unfocus(&mut self, hwnd: HWND) -> Result<(), TsfError> {
         self.terminate();
+        crate::keystroke::leave_focus();
+        self.enabled = false;
         unsafe {
             associate(&self.thread_mgr, hwnd, Some(&self.idle_mgr))?;
             self.thread_mgr
                 .SetFocus(&self.idle_mgr)
                 .map_err(win32("SetFocus(idle)"))?;
         }
-        self.enabled = false;
         Ok(())
     }
 
@@ -187,7 +189,7 @@ impl Active {
         let outcome = Rc::new(Cell::new(Err(TsfError::NotReconvertible)));
         let context = self.context.clone();
         let slot = outcome.clone();
-        let session = Session::new(move |cookie| {
+        let session = Session::spawn(move |cookie| {
             let mut selection = [TF_SELECTION::default()];
             let mut fetched = 0u32;
             unsafe {

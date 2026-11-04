@@ -132,6 +132,26 @@ fn empty_composition_ends_as_cancel() {
 }
 
 #[test]
+fn emptying_a_composition_over_a_selection_deletes_the_selected_text() {
+    let mut model = Model::new(&document("hello world", (5, 11)));
+    model.start_composition(Some(5..11));
+    model.update_composition(5..5);
+    model.replace(5, 11, &[]).unwrap();
+    model.end_composition();
+    let events = drain(&mut model);
+    assert_eq!(
+        &events[events.len() - 2..],
+        [
+            ImeEvent::Composition(Composition::Cancel),
+            ImeEvent::Replace {
+                range: Utf16Range::new(5, 11),
+                text: String::new()
+            }
+        ]
+    );
+}
+
+#[test]
 fn discard_removes_composition_text_and_reports_the_change() {
     let mut model = Model::new(&document("ab", (2, 2)));
     model.start_composition(Some(2..2));

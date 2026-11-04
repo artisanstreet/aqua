@@ -1,6 +1,6 @@
 use std::cell::RefCell;
+use windows::core::{implement, Result};
 use windows::Win32::UI::TextServices::{ITfEditSession, ITfEditSession_Impl};
-use windows::core::{Result, implement};
 
 type Body = Box<dyn FnOnce(u32) -> Result<()>>;
 
@@ -10,7 +10,7 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    pub(crate) fn new(body: impl FnOnce(u32) -> Result<()> + 'static) -> ITfEditSession {
+    pub(crate) fn spawn(body: impl FnOnce(u32) -> Result<()> + 'static) -> ITfEditSession {
         Session {
             body: RefCell::new(Some(Box::new(body))),
         }

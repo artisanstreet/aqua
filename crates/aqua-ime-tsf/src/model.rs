@@ -50,6 +50,7 @@ pub struct Model {
     view: Vec<u16>,
     selection: Selection,
     composition: Option<Range<u32>>,
+    replaced: Range<u32>,
     area: Area,
     events: Vec<ImeEvent>,
     last_marked: Option<(Vec<u16>, Selection)>,
@@ -85,6 +86,7 @@ impl Model {
                 end_active: true,
             },
             composition: None,
+            replaced: 0..0,
             area: Area {
                 x: 0.0,
                 y: 0.0,
@@ -291,6 +293,7 @@ impl Model {
             _ => None,
         };
         let anchor = retracted.clone().unwrap_or_else(|| range.clone());
+        let anchor_for_end = anchor.clone();
         let collapsed_at_caret = anchor.is_empty() && anchor.start == self.app_selection.start;
         if anchor != self.app_selection && !collapsed_at_caret {
             self.events.push(ImeEvent::Select {
@@ -299,6 +302,7 @@ impl Model {
             });
             self.app_selection = anchor;
         }
+        self.replaced = anchor_for_end;
         self.composition = Some(range);
         self.last_marked = None;
         self.events.push(ImeEvent::Composition(Composition::Start));
@@ -354,13 +358,21 @@ impl Model {
             return;
         }
         self.last_marked = None;
-        let event = match units.is_empty() {
-            true => Composition::Cancel,
-            false => Composition::Commit {
+        let replaced = std::mem::take(&mut self.replaced);
+        match units.is_empty() {
+            true => {
+                self.events.push(ImeEvent::Composition(Composition::Cancel));
+                if !replaced.is_empty() {
+                    self.events.push(ImeEvent::Replace {
+                        range: Utf16Range::new(replaced.start, replaced.end),
+                        text: String::new(),
+                    });
+                }
+            }
+            false => self.events.push(ImeEvent::Composition(Composition::Commit {
                 text: String::from_utf16_lossy(&units),
-            },
-        };
-        self.events.push(ImeEvent::Composition(event));
+            })),
+        }
     }
 
     pub fn discard_composition(&mut self) -> Option<TextChange> {

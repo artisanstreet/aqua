@@ -128,3 +128,74 @@ fn write_node(out: &mut String, node: &InspectorNode, depth: usize) {
         write_node(out, child, depth + 1);
     }
 }
+
+fn json_string(out: &mut String, text: &str) {
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+fn json_field(out: &mut String, key: &str, value: Option<&str>) {
+    if let Some(value) = value {
+        let _ = write!(out, ",\"{key}\":");
+        json_string(out, value);
+    }
+}
+
+fn write_json(out: &mut String, node: &InspectorNode) {
+    let _ = write!(out, "{{\"id\":{},\"role\":", node.id);
+    json_string(out, &node.role);
+    json_field(out, "label", node.label.as_deref());
+    json_field(out, "value", node.value.as_deref());
+    json_field(out, "description", node.description.as_deref());
+    json_field(out, "toggled", node.toggled.as_deref());
+    if let Some(expanded) = node.expanded {
+        let _ = write!(out, ",\"expanded\":{expanded}");
+    }
+    if let Some(selected) = node.selected {
+        let _ = write!(out, ",\"selected\":{selected}");
+    }
+    if let Some(numeric) = node.numeric.filter(|value| value.is_finite()) {
+        let _ = write!(out, ",\"numeric\":{numeric}");
+    }
+    if let Some([x0, y0, x1, y1]) = node.bounds {
+        let _ = write!(out, ",\"bounds\":[{x0},{y0},{x1},{y1}]");
+    }
+    let _ = write!(
+        out,
+        ",\"focused\":{},\"disabled\":{},\"actions\":[",
+        node.focused, node.disabled
+    );
+    for (index, action) in node.actions.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        json_string(out, action);
+    }
+    out.push_str("],\"children\":[");
+    for (index, child) in node.children.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        write_json(out, child);
+    }
+    out.push_str("]}");
+}
+
+pub fn render_json(root: &InspectorNode) -> String {
+    let mut out = String::new();
+    write_json(&mut out, root);
+    out
+}

@@ -1,4 +1,4 @@
-use aqua_a11y_uia::{inspect, render_text};
+use aqua_a11y_uia::{inspect, render_json, render_text};
 use aqua_core::{NodeId, NumericRangeSemantics, RawId, Rect, Role, SemanticNode};
 use aqua_protocol::{A11yNode, AccessTreeUpdate};
 
@@ -63,4 +63,29 @@ fn inspector_shows_roles_state_and_actions_from_the_tree_uia_sees() {
     let text = render_text(&root);
     assert!(text.contains("CheckBox \"Dark mode\" toggled=true"));
     assert!(text.contains("TextInput value=\"hello\""));
+}
+
+#[test]
+fn json_form_is_valid_and_escapes_labels() {
+    let mut button = SemanticNode::new(id(2), Role::Button);
+    button.label = "say \"hi\"\n\\ \u{1}".into();
+    let update = AccessTreeUpdate {
+        root: id(1),
+        focus: id(2),
+        nodes: vec![
+            node(SemanticNode::new(id(1), Role::Group), vec![id(2)]),
+            node(button, vec![]),
+        ],
+    };
+    let root = inspect(&update).expect("tree");
+    let parsed: serde_json::Value = serde_json::from_str(&render_json(&root)).expect("valid json");
+    let child = &parsed["children"][0];
+    assert_eq!(child["label"], "say \"hi\"\n\\ \u{1}");
+    assert_eq!(child["focused"], true);
+    assert_eq!(child["bounds"], serde_json::json!([0, 0, 10, 10]));
+    assert!(child["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|action| action == "click"));
 }

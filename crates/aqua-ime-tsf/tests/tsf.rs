@@ -5,21 +5,21 @@ use aqua_ime_tsf::TsfIme;
 use aqua_protocol::{ImeBackend, ImeCommand, ImeDocument, ImeEvent, Utf16Range};
 use std::cell::RefCell;
 use std::rc::Rc;
+use windows::core::{implement, Interface, Ref, Result};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
-use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::TextServices::{
-    CLSID_TF_ThreadMgr, INSERT_TEXT_AT_SELECTION_FLAGS, ITfComposition, ITfCompositionSink,
-    ITfCompositionSink_Impl, ITfContext, ITfContextComposition, ITfEditSession,
-    ITfEditSession_Impl, ITfInsertAtSelection, ITfRange, ITfRangeACP, ITfThreadMgr, TF_ANCHOR_END,
-    TF_DEFAULT_SELECTION, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
+    CLSID_TF_ThreadMgr, ITfComposition, ITfCompositionSink, ITfCompositionSink_Impl, ITfContext,
+    ITfContextComposition, ITfEditSession, ITfEditSession_Impl, ITfInsertAtSelection, ITfRange,
+    ITfRangeACP, ITfThreadMgr, INSERT_TEXT_AT_SELECTION_FLAGS, TF_ANCHOR_END, TF_DEFAULT_SELECTION,
+    TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, SW_SHOWNOACTIVATE, ShowWindow, WS_EX_NOACTIVATE,
+    CreateWindowExW, DestroyWindow, ShowWindow, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_POPUP,
 };
-use windows::core::{Interface, Ref, Result, implement};
 
 const AREA: Rect = Rect {
     x: 30.0,
@@ -28,9 +28,11 @@ const AREA: Rect = Rect {
     h: 18.0,
 };
 
+type SessionBody = Box<dyn FnOnce(u32) -> Result<()>>;
+
 #[implement(ITfEditSession)]
 struct Session {
-    body: RefCell<Option<Box<dyn FnOnce(u32) -> Result<()>>>>,
+    body: RefCell<Option<SessionBody>>,
 }
 
 impl ITfEditSession_Impl for Session_Impl {

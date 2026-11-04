@@ -7,7 +7,7 @@ mod tree;
 mod adapter;
 
 pub use bridge::{A11yBridge, BridgeActionHandler, BridgeActivationHandler, Connection, WakeFn};
-pub use inspector::{inspect, render_text, InspectorNode};
+pub use inspector::{inspect, render_json, render_text, InspectorNode};
 pub use tree::{build_tree_update, map_role, pack_node_id, unpack_node_id, A11yTree};
 
 #[cfg(windows)]

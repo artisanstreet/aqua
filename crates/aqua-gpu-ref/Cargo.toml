@@ -1,0 +1,11 @@
+[package]
+name = "aqua-gpu-ref"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aqua GpuBackend on the CPU: the oracle for conformance, headless tests and CI"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-graph = { path = "../aqua-graph" }
+aqua-protocol = { path = "../aqua-protocol" }

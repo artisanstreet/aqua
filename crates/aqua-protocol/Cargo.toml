@@ -7,4 +7,6 @@ description = "Aqua port messages: plain time, window identity, runtime inputs a
 
 [dependencies]
 aqua-core = { path = "../aqua-core" }
+aqua-motion = { path = "../aqua-motion" }
 bitflags = "2"
+aqua-graph = { path = "../aqua-graph" }

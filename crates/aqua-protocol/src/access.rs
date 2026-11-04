@@ -74,3 +74,12 @@ pub struct A11yTextRun {
     pub character_widths: Vec<f32>,
     pub rtl: bool,
 }
+
+#[derive(Debug, Clone)]
+pub struct AccessTreeUpdate {
+    pub root: NodeId,
+    pub focus: NodeId,
+    pub nodes: Vec<A11yNode>,
+}
+
+pub type AccessAction = A11yActionRequest;

@@ -1,0 +1,13 @@
+[package]
+name = "aqua-verify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aqua architecture enforcement: dependency purity, unsafe policy and impurity lints for pure crates"
+
+[dependencies]
+serde_json = "1"
+
+[target.'cfg(windows)'.dev-dependencies]
+aqua-gpu-d3d12 = { path = "../aqua-gpu-d3d12" }
+aqua-gpu-ref = { path = "../aqua-gpu-ref" }

@@ -1,0 +1,16 @@
+[package]
+name = "aqua-gpu-wgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Temporary GpuBackend adapter over the existing wgpu renderer"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-graph = { path = "../aqua-graph" }
+aqua-protocol = { path = "../aqua-protocol" }
+aqua-render = { path = "../aqua-render" }
+pollster = "0.4"
+
+[dev-dependencies]
+aqua-gpu-ref = { path = "../aqua-gpu-ref" }

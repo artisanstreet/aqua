@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use aqua::{ImageAssetBudget, ImageAssetError, ImageAssets, ImageStatus};
 use aqua_core::ImageRef;
-use aqua_render::media::DecodedImage;
+use aqua_media::decode::DecodedImage;
 
 fn image() -> DecodedImage {
     DecodedImage::from_rgba(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 255]).unwrap()

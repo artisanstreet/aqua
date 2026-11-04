@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use aqua::{ImageAssetBudget, ImageAssets, ImageStatus};
 use aqua_core::ImageRef;
-use aqua_render::media::{decode_svg, DecodedImage};
+use aqua_media::decode::{decode_svg, DecodedImage};
 
 fn wait(handle: &aqua::ImageHandle) -> ImageStatus {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -126,7 +126,7 @@ fn preview_resizes_still_images_and_rejects_more_than_120_gif_frames() {
 
 #[test]
 fn preview_gif_keeps_authored_delay_and_loops_forever() {
-    use aqua_render::media::animation::{decode_preview_gif, AnimationLoops};
+    use aqua_media::decode::animation::{decode_preview_gif, AnimationLoops};
     let mut bytes = Vec::new();
     {
         let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);

@@ -6,20 +6,21 @@ use std::time::{Duration, Instant as WallInstant};
 use aqua_core::InputEvent as CoreInputEvent;
 use aqua_core::Modifiers as CoreModifiers;
 use aqua_graph::Extent;
-use aqua_platform::chrome::DragRegions;
-use aqua_platform::{
-    prefs::{prefers_opaque_frame, query_preferences, OsPreferences},
-    services::{app_clipboard, Clipboard, ClipboardBackend},
-    AquaWindowId, FrameReason, ObservedWindowState, WindowEvent, WindowOptions, WindowRequest,
-};
+use aqua_protocol::chrome::DragRegions;
+use aqua_protocol::prefs::{prefers_opaque_frame, SystemPrefs as OsPreferences};
 use aqua_protocol::{
     A11yActionRequest, A11yNode, AccessTreeUpdate, DialogOutcome, DialogSpec, GpuEvent, ImeCommand,
     ImeEvent, Instant, MotionCommand, MotionEvent, RenderCommand, RenderEvent, RequestId,
-    RuntimeInput, RuntimeOutput, ShellCommand, ShellEvent, WindowOp,
+    RuntimeInput, RuntimeOutput, ShellCommand, WindowOp,
+};
+use aqua_protocol::{
+    AquaWindowId, FrameReason, ObservedWindowState, WindowEvent, WindowOptions, WindowRequest,
 };
 use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
 use aqua_runtime::Scheduler;
 use aqua_scene::Scene;
+use aqua_shell_win32::capability::query_preferences;
+use aqua_shell_win32::services::{app_clipboard, Clipboard, ClipboardBackend};
 
 use crate::config::AquaConfig;
 use crate::inbox::{AquaUserEvent, Inbox};
@@ -33,6 +34,9 @@ pub trait AccessSink {
     fn needs_snapshot(&self) -> bool;
     fn connected(&self) -> bool {
         self.needs_snapshot()
+    }
+    fn connection_epoch(&self) -> u64 {
+        0
     }
     fn apply(&mut self, update: &AccessTreeUpdate);
     fn drain_actions(&mut self) -> Vec<A11yActionRequest>;
@@ -106,7 +110,6 @@ pub(crate) struct WindowRecord {
     pub(crate) last_invalidating_input: Option<Instant>,
     pub(crate) vsync: bool,
     pub(crate) last_regions: Option<(DragRegions, f64)>,
-    pub(crate) cursor: Option<(f64, f64)>,
     pub(crate) buttons: u8,
     pub(crate) modifiers: CoreModifiers,
     pub(crate) native: Option<Rc<dyn NativeWindow>>,
@@ -115,6 +118,7 @@ pub(crate) struct WindowRecord {
     pub(crate) ime: Option<Box<dyn ImeSink>>,
     pub(crate) presented: u64,
     pub(crate) access_connected: bool,
+    pub(crate) access_epoch: u64,
 }
 
 impl WindowRecord {
@@ -124,7 +128,6 @@ impl WindowRecord {
             last_invalidating_input: None,
             vsync,
             last_regions: None,
-            cursor: None,
             buttons: 0,
             modifiers: CoreModifiers::NONE,
             native: None,
@@ -133,6 +136,7 @@ impl WindowRecord {
             ime: None,
             presented: 0,
             access_connected: false,
+            access_epoch: 0,
         }
     }
 }
@@ -164,7 +168,7 @@ impl AppCtx<'_> {
         request
     }
 
-    pub fn display(&self, id: AquaWindowId) -> Option<aqua_platform::monitor::DisplayInfo> {
+    pub fn display(&self, id: AquaWindowId) -> Option<aqua_protocol::monitor::DisplayInfo> {
         self.windows.get(&id)?.native.as_ref()?.display()
     }
 
@@ -178,16 +182,16 @@ impl AppCtx<'_> {
     pub fn request_window(
         &mut self,
         request: WindowRequest,
-    ) -> Result<(), aqua_platform::window::WindowError> {
+    ) -> Result<(), aqua_protocol::window::WindowError> {
         match &request {
             WindowRequest::Create(options) => options.validated()?,
             WindowRequest::SetTitle(_, title) if title.contains('\0') => {
-                return Err(aqua_platform::window::WindowError::InvalidTitle);
+                return Err(aqua_protocol::window::WindowError::InvalidTitle);
             }
             WindowRequest::SetInnerSize(_, size)
                 if size.is_empty() || !size.width.is_finite() || !size.height.is_finite() =>
             {
-                return Err(aqua_platform::window::WindowError::EmptySize);
+                return Err(aqua_protocol::window::WindowError::EmptySize);
             }
             _ => {}
         }
@@ -206,10 +210,6 @@ impl AppCtx<'_> {
             eprintln!("req-frame {} {:?}", std::panic::Location::caller(), reason);
         }
         self.requested_frames.insert(id);
-        self.scheduler.request_frame(id, reason);
-    }
-
-    pub(crate) fn request_input_redraw(&mut self, id: AquaWindowId, reason: FrameReason) {
         self.scheduler.request_frame(id, reason);
     }
 
@@ -256,12 +256,20 @@ pub trait Application {
 
     fn on_click_settings(&mut self, _settings: aqua_core::ClickSettings) {}
 
+    fn on_caption_hover(
+        &mut self,
+        _ctx: &mut AppCtx,
+        _id: AquaWindowId,
+        _control: Option<aqua_protocol::CaptionControl>,
+    ) {
+    }
+
     fn on_start(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId) {}
 
     fn on_window_request_error(
         &mut self,
         _request: &WindowRequest,
-        _error: &aqua_platform::window::WindowError,
+        _error: &aqua_protocol::window::WindowError,
     ) {
     }
 
@@ -360,15 +368,15 @@ fn options_from_spec(spec: &aqua_protocol::WindowSpec) -> WindowOptions {
     let _ = SpecMaterial::Solid;
     WindowOptions {
         title: spec.title.clone(),
-        inner_size: aqua_platform::LogicalSize::new(f64::from(spec.size.w), f64::from(spec.size.h)),
+        inner_size: aqua_protocol::LogicalSize::new(f64::from(spec.size.w), f64::from(spec.size.h)),
         min_size: spec
             .min_size
-            .map(|size| aqua_platform::LogicalSize::new(f64::from(size.w), f64::from(size.h))),
+            .map(|size| aqua_protocol::LogicalSize::new(f64::from(size.w), f64::from(size.h))),
         resizable: spec.resizable,
         titlebar: match spec.titlebar {
-            TitlebarMode::Native => aqua_platform::window::Titlebar::Native,
-            TitlebarMode::Overlay => aqua_platform::window::Titlebar::Overlay,
-            TitlebarMode::Hidden => aqua_platform::window::Titlebar::Hidden,
+            TitlebarMode::Native => aqua_protocol::window::Titlebar::Native,
+            TitlebarMode::Overlay => aqua_protocol::window::Titlebar::Overlay,
+            TitlebarMode::Hidden => aqua_protocol::window::Titlebar::Hidden,
         },
         ..WindowOptions::default()
     }
@@ -531,15 +539,15 @@ impl Aqua {
             .map_err(|e| format!("invalid window options: {e:?}"))?;
         let mut scheduler = Scheduler::new();
         config.apply_to_scheduler(&mut scheduler);
-        if aqua_platform::material::material_needs_transparent_window(config.material)
+        if aqua_protocol::material::needs_alpha_surface(config.material)
             && !config.window.transparent
         {
             eprintln!("aqua: material requires a transparent window — enabling window.transparent");
             config.window.transparent = true;
         }
-        if config.material != aqua_platform::WindowMaterial::None && prefers_opaque_frame(&prefs) {
+        if config.material != aqua_protocol::WindowMaterial::Solid && prefers_opaque_frame(&prefs) {
             eprintln!("aqua: high-contrast/transparency-off — material disabled");
-            config.material = aqua_platform::WindowMaterial::None;
+            config.material = aqua_protocol::WindowMaterial::Solid;
         }
         if config.reduced_motion {
             eprintln!("aqua: reduced-motion motion policy requested");
@@ -722,14 +730,10 @@ impl Aqua {
                     }
                 }
                 ShellCommand::ClipboardRead { request } => {
-                    let text = match self.clipboard.get_text() {
-                        Ok(text) => text,
-                        Err(error) => {
-                            eprintln!("aqua: clipboard read failed: {error}");
-                            None
-                        }
-                    };
-                    feedback.push(RuntimeInput::Shell(ShellEvent::Clipboard { request, text }));
+                    feedback.push(RuntimeInput::Shell(crate::paste::clipboard_event(
+                        &mut *self.clipboard,
+                        request,
+                    )));
                 }
                 ShellCommand::Dialog { request, spec } => {
                     self.dialogs.push_back((id, request, spec));
@@ -830,8 +834,8 @@ impl Aqua {
         &mut self,
         app: &mut impl Application,
         request: &WindowRequest,
-    ) -> Result<(), aqua_platform::window::WindowError> {
-        use aqua_platform::window::WindowError;
+    ) -> Result<(), aqua_protocol::window::WindowError> {
+        use aqua_protocol::window::WindowError;
         let id = match request {
             WindowRequest::Create(_) => {
                 return Err(WindowError::Unsupported("requires the native loop"));
@@ -1412,8 +1416,13 @@ impl Aqua {
             return;
         };
         let connected = record.access.as_ref().is_some_and(|sink| sink.connected());
-        if connected != record.access_connected {
+        let epoch = record
+            .access
+            .as_ref()
+            .map_or(0, |sink| sink.connection_epoch());
+        if connected != record.access_connected || (connected && epoch != record.access_epoch) {
             record.access_connected = connected;
+            record.access_epoch = epoch;
             app.step_input(id, RuntimeInput::AccessClient { connected });
             self.flush_output(app, id);
         }
@@ -1538,7 +1547,8 @@ pub fn physical_extent(window: &ObservedWindowState) -> Extent {
 mod tests {
     use super::*;
     use aqua_core::PointerKind;
-    use aqua_platform::geometry::LogicalSize;
+    use aqua_protocol::geometry::LogicalSize;
+    use aqua_protocol::ShellEvent;
 
     struct Probe {
         window_events: Vec<WindowEvent>,
@@ -1753,7 +1763,7 @@ mod tests {
     #[test]
     fn prefs_and_a11y_defaults_are_honest() {
         let (aqua, _, _) = headless();
-        assert!(!aqua_platform::prefs::should_reduce_motion(
+        assert!(!aqua_protocol::prefs::should_reduce_motion(
             aqua.preferences()
         ));
         struct Bare;
@@ -2071,7 +2081,7 @@ mod tests {
         fn click_settings(&self) -> aqua_core::ClickSettings {
             aqua_core::ClickSettings::default()
         }
-        fn display(&self) -> Option<aqua_platform::monitor::DisplayInfo> {
+        fn display(&self) -> Option<aqua_protocol::monitor::DisplayInfo> {
             None
         }
         fn destroy(&self) {

@@ -1,3 +1,10 @@
+pub mod affine;
+pub mod color;
 pub mod host;
 pub mod link;
 pub mod lower;
+pub mod mesh;
+pub mod persist;
+pub mod shape;
+pub mod text;
+pub mod vector;

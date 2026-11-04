@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use aqua_core::DisplayItem;
 use aqua_core::{ImageId, InputEvent, NodeId, Rect};
-use aqua_platform::{a11y::A11yActionRequest, AquaWindowId, ObservedWindowState, WindowEvent};
+use aqua_protocol::{A11yActionRequest, AquaWindowId, ObservedWindowState, WindowEvent};
 use aqua_protocol::{FrameReason, Instant};
 
 use crate::{

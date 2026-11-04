@@ -18,6 +18,9 @@ pub struct FrameRecord {
     pub transient_bytes: u64,
     pub commands: u32,
     pub unsupported_items: u32,
+    pub approximated_items: u32,
+    pub glyphs: u32,
+    pub trimmed_entries: u64,
     pub cpu_micros: u64,
     pub gpu_micros: Option<u64>,
     pub present_queued_micros: u64,
@@ -121,7 +124,7 @@ pub fn stats_json(snapshot: &InspectorSnapshot) -> String {
         || "null".to_owned(),
         |record| {
             format!(
-                "{{\"frame\":{},\"width\":{},\"height\":{},\"passes\":{},\"instances\":{},\"barriers\":{},\"transient_bytes\":{},\"commands\":{},\"unsupported_items\":{},\"cpu_micros\":{},\"gpu_micros\":{},\"present_queued_micros\":{}}}",
+                "{{\"frame\":{},\"width\":{},\"height\":{},\"passes\":{},\"instances\":{},\"barriers\":{},\"transient_bytes\":{},\"commands\":{},\"unsupported_items\":{},\"approximated_items\":{},\"glyphs\":{},\"trimmed_entries\":{},\"cpu_micros\":{},\"gpu_micros\":{},\"present_queued_micros\":{}}}",
                 record.frame,
                 record.extent.0,
                 record.extent.1,
@@ -131,6 +134,9 @@ pub fn stats_json(snapshot: &InspectorSnapshot) -> String {
                 record.transient_bytes,
                 record.commands,
                 record.unsupported_items,
+                record.approximated_items,
+                record.glyphs,
+                record.trimmed_entries,
                 record.cpu_micros,
                 optional(record.gpu_micros),
                 record.present_queued_micros,

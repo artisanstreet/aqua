@@ -1,15 +1,13 @@
 use std::ops::{Deref, DerefMut};
 
 use aqua_core::{InputEvent as CoreInputEvent, Key, Modifiers, NamedKey};
-use aqua_platform::{
-    services::{Clipboard, ClipboardError},
-    AquaWindowId, ObservedWindowState, WindowEvent,
-};
 use aqua_protocol::{
-    A11yActionRequest, Instant, Machine, PixelSize, RuntimeInput, RuntimeOutput, ShellEvent,
+    A11yActionRequest, AquaWindowId, Instant, Machine, ObservedWindowState, PixelSize,
+    RuntimeInput, RuntimeOutput, ShellEvent, WindowEvent,
 };
 use aqua_reactive::{DepTuple, Runtime as ReactiveRuntime, Scope};
 use aqua_runtime::Runtime;
+use aqua_shell_win32::services::{Clipboard, ClipboardError};
 use aqua_ui::element::Element;
 
 use crate::runtime::{AppCtx, Application, Aqua};

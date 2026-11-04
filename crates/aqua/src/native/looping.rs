@@ -7,12 +7,12 @@ use aqua_a11y_uia::UiaAdapter;
 use aqua_core::{InputEvent, Oklch};
 use aqua_graph::Extent;
 use aqua_ime_tsf::TsfIme;
-use aqua_platform::window::Titlebar;
-use aqua_platform::{
+use aqua_protocol::window::Titlebar;
+use aqua_protocol::{
     AquaWindowId, FrameReason, LogicalSize, ObservedWindowState, ThemePreference, WindowEvent,
     WindowOptions, WindowRequest,
 };
-use aqua_protocol::{DialogOutcome, Instant, RequestId};
+use aqua_protocol::{CaptionControl, DialogOutcome, Instant, RequestId, RuntimeInput};
 use aqua_shell_win32::dialogs::DialogJob;
 use aqua_shell_win32::{
     Chrome, FileDrag, Handler, ShellError, ShellEvent, Window, WindowKind,
@@ -20,6 +20,8 @@ use aqua_shell_win32::{
 };
 
 use super::d3d12;
+use super::hook::TsfHook;
+use super::inspector::HostInspector;
 use super::window::{UiaSink, Win32Window};
 use crate::inbox::AquaUserEvent;
 use crate::runtime::{Application, Aqua, ExternalFileDrag};
@@ -31,6 +33,7 @@ struct Host<A: Application> {
     app: A,
     shell: HashMap<AquaWindowId, Window>,
     dialogs: Vec<(AquaWindowId, RequestId, DialogJob)>,
+    inspector: Option<HostInspector>,
 }
 
 fn shell_options(options: &WindowOptions, aqua: &Aqua) -> ShellOptions {
@@ -50,7 +53,7 @@ fn shell_options(options: &WindowOptions, aqua: &Aqua) -> ShellOptions {
         position: None,
         kind: WindowKind::Normal,
         chrome,
-        material: material_of(aqua.config().effective_material(aqua.preferences())),
+        material: aqua.config().effective_material(aqua.preferences()),
         dark,
         topmost: false,
         owner: None,
@@ -59,17 +62,6 @@ fn shell_options(options: &WindowOptions, aqua: &Aqua) -> ShellOptions {
         maximizable: options.maximizable,
         visible: false,
         alpha_surface: false,
-    }
-}
-
-fn material_of(material: aqua_platform::WindowMaterial) -> aqua_protocol::WindowMaterial {
-    use aqua_platform::WindowMaterial as Platform;
-    use aqua_protocol::WindowMaterial as Shell;
-    match material {
-        Platform::None => Shell::Solid,
-        Platform::Mica => Shell::Mica,
-        Platform::MicaAlt => Shell::Tabbed,
-        Platform::Acrylic => Shell::Acrylic,
     }
 }
 
@@ -121,7 +113,13 @@ impl<A: Application + 'static> Host<A> {
                 if let Some(deadline) = self.app.prepare_accessibility(&observed, now) {
                     self.aqua.scheduler.request_animation_deadline(id, deadline);
                 }
-                self.aqua.attach_access(id, Box::new(UiaSink(adapter)));
+                self.aqua.attach_access(
+                    id,
+                    Box::new(UiaSink {
+                        adapter,
+                        inspector: self.inspector.as_ref().map(HostInspector::handle),
+                    }),
+                );
             }
             Err(error) => eprintln!("aqua: uia attach failed: {error:?}"),
         }
@@ -146,6 +144,21 @@ impl<A: Application + 'static> Host<A> {
         Ok(id)
     }
 
+    fn publish_inspector(&self) {
+        let Some(inspector) = &self.inspector else {
+            return;
+        };
+        let stats = self
+            .aqua
+            .windows
+            .values()
+            .find_map(|record| record.link.as_ref())
+            .map(|link| link.stats());
+        if let Some(stats) = stats {
+            inspector.publish_stats(stats);
+        }
+    }
+
     fn rebind_waker(&mut self) {
         let waker = self.shell.values().next().map(|window| window.waker());
         self.aqua
@@ -158,7 +171,7 @@ impl<A: Application + 'static> Host<A> {
         for options in creates {
             if let Err(message) = self.create_window(options.clone()) {
                 self.aqua.render_errors += 1;
-                let error = aqua_platform::window::WindowError::Native(message);
+                let error = aqua_protocol::window::WindowError::Native(message);
                 self.app
                     .on_window_request_error(&WindowRequest::Create(options), &error);
             }
@@ -257,6 +270,19 @@ impl<A: Application + 'static> Host<A> {
         }
     }
 
+    fn caption_hover(&mut self, id: AquaWindowId, control: Option<CaptionControl>) {
+        self.app.step_input(
+            id,
+            RuntimeInput::Shell(aqua_protocol::ShellEvent::CaptionHover {
+                window: id,
+                control,
+            }),
+        );
+        self.aqua
+            .with_ctx(|ctx| self.app.on_caption_hover(ctx, id, control));
+        self.aqua.flush_output(&mut self.app, id);
+    }
+
     fn input(&mut self, id: AquaWindowId, input: InputEvent) {
         if matches!(input, InputEvent::PointerDown(..)) {
             if let Some(native) = self
@@ -312,8 +338,8 @@ impl<A: Application + 'static> Handler for Host<A> {
             ShellEvent::Moved { .. }
             | ShellEvent::PointerEntered
             | ShellEvent::PointerLeft
-            | ShellEvent::CaptionHover(_)
             | ShellEvent::RawMouse { .. } => {}
+            ShellEvent::CaptionHover(control) => self.caption_hover(id, control),
         }
     }
 
@@ -328,6 +354,7 @@ impl<A: Application + 'static> Handler for Host<A> {
         self.poll_dialogs();
         self.aqua.draw_ready(&mut self.app, now);
         self.aqua.report_host_stats();
+        self.publish_inspector();
         if self.aqua.quit_requested() {
             aqua_shell_win32::quit();
             return None;
@@ -368,9 +395,11 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
         app,
         shell: HashMap::new(),
         dialogs: Vec::new(),
+        inspector: HostInspector::from_env(),
     };
+    aqua_shell_win32::set_message_hook(TsfHook::new());
     if let Err(message) = host.create_window(options.clone()) {
-        let error = aqua_platform::window::WindowError::Native(message.clone());
+        let error = aqua_protocol::window::WindowError::Native(message.clone());
         host.app
             .on_window_request_error(&WindowRequest::Create(options), &error);
         return Err(format!("startup window failed: {message}"));

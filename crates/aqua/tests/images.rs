@@ -1,3 +1,5 @@
+mod support;
+
 #[path = "images/composition.rs"]
 mod composition;
 #[path = "images/lifecycle.rs"]

@@ -24,6 +24,9 @@ use aqua::{px, Aqua, Context, IntoView, Style, UiApp};
 use aqua_core::Oklch;
 use taffy::style::{AlignItems, JustifyContent};
 
+#[path = "../tests/support/mod.rs"]
+mod support;
+
 const TOTAL_ROWS: usize = 100_000;
 /// Upper bound for mounted rows in the 220/260px viewports (generous over the
 /// runtime's overscan window; failure means virtualization did not bound).
@@ -279,28 +282,11 @@ fn preview(path: &str) -> Result<(), String> {
         mounted < MOUNTED_BOUND,
         "virtualization must bound mounted rows: {mounted} >= {MOUNTED_BOUND}"
     );
-    let mut renderer =
-        pollster::block_on(aqua_render::Renderer::headless(900, 700)).map_err(|e| e.to_string())?;
-    renderer.set_text_provider(Box::new(aqua_render::GlyphonProvider::new(
-        renderer.device(),
-        renderer.queue(),
-        renderer.format(),
-        aqua_render::TextBackend::new(fonts, runs),
-    )));
-    let plan = renderer.prepare(app.scene_mut());
-    renderer.draw(&plan).map_err(|e| e.to_string())?;
-    let mut pixels = renderer.readback().map_err(|e| e.to_string())?;
-    for rgba in pixels.as_chunks_mut::<4>().0 {
-        for channel in &mut rgba[..3] {
-            let x = f32::from(*channel) / 255.0;
-            let srgb = if x <= 0.0031308 {
-                x * 12.92
-            } else {
-                1.055 * x.powf(1.0 / 2.4) - 0.055
-            };
-            *channel = (srgb.clamp(0.0, 1.0) * 255.0).round() as u8;
-        }
-    }
+    let mut painter = support::painters(&fonts, &runs)
+        .pop()
+        .ok_or_else(|| "no painter available".to_string())?;
+    let frame = painter.paint(app.scene(), aqua_core::Size::new(900.0, 700.0), 1.0);
+    let pixels = frame.rgba8;
     image::RgbaImage::from_raw(900, 700, pixels)
         .unwrap()
         .save(path)

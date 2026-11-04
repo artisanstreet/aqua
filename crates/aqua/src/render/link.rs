@@ -62,6 +62,12 @@ impl RenderLink {
             .store(immediate, std::sync::atomic::Ordering::Relaxed);
     }
 
+    pub fn request_trim(&self) {
+        self.stats
+            .trim
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
     pub fn stats(&self) -> &Arc<RenderStats> {
         &self.stats
     }

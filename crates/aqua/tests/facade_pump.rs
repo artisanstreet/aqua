@@ -14,9 +14,11 @@ use aqua_core::{
     InputEvent, Key, KeyEvent, Modifiers, NamedKey, Oklch, Point, PointerButton, PointerEvent,
     PointerKind, Rect,
 };
-use aqua_platform::geometry::LogicalSize;
-use aqua_platform::{AquaWindowId, FrameReason, ObservedWindowState, WindowEvent};
-use aqua_render::Scene;
+use aqua_protocol::geometry::{AquaWindowId, LogicalSize};
+use aqua_protocol::window::ObservedWindowState;
+use aqua_protocol::window::WindowEvent;
+use aqua_protocol::FrameReason;
+use aqua_scene::Scene;
 
 fn observed(id: u64) -> ObservedWindowState {
     ObservedWindowState {

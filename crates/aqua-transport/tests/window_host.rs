@@ -119,6 +119,7 @@ fn render_thread_paces_on_the_waitable_animates_and_goes_idle() {
         move || {
             let backend = WindowBackend::new(WindowOptions {
                 device: DeviceOptions::default().with_preference(adapter()),
+                ..WindowOptions::default()
             })
             .expect("window backend");
             Tap {
@@ -175,11 +176,9 @@ fn render_thread_paces_on_the_waitable_animates_and_goes_idle() {
     let mut settled = false;
     while started.elapsed() < Duration::from_secs(5) && !settled {
         window.pump();
-        if let Some(event) = thread.wait_event(Duration::from_millis(20)) {
-            if let RenderEvent::Motion(event) = event {
-                app.handle(event);
-                settled = app.is_settled(track);
-            }
+        if let Some(RenderEvent::Motion(event)) = thread.wait_event(Duration::from_millis(20)) {
+            app.handle(event);
+            settled = app.is_settled(track);
         }
         for event in thread.poll() {
             if let RenderEvent::Motion(event) = event {

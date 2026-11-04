@@ -36,7 +36,7 @@ try {
         $down = [IntPtr](($scan -shl 16) -bor 1)
         $up = [IntPtr](($scan -shl 16) -bor 3221225473L)
         if (-not [AquaKeyboardReplay]::PostMessage($window, 0x0100, [IntPtr]$vk, $down)) { throw 'WM_KEYDOWN failed' }
-        if ($null -ne $character) {
+        if ($null -ne $character -and (([int]$character -lt 0x20) -or ([int]$character -eq 0x7f))) {
             if (-not [AquaKeyboardReplay]::PostMessage($window, 0x0102, [IntPtr]([int]$character), $down)) { throw 'WM_CHAR failed' }
         }
         if (-not [AquaKeyboardReplay]::PostMessage($window, 0x0101, [IntPtr]$vk, $up)) { throw 'WM_KEYUP failed' }

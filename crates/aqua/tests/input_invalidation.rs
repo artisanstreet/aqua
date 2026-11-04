@@ -1,7 +1,9 @@
 use aqua::{AppCtx, Application, Aqua, AquaConfig, Instant};
 use aqua_core::InputEvent;
-use aqua_platform::geometry::LogicalSize;
-use aqua_platform::{AquaWindowId, FrameReason, ObservedWindowState, WindowEvent};
+use aqua_protocol::geometry::{AquaWindowId, LogicalSize};
+use aqua_protocol::window::ObservedWindowState;
+use aqua_protocol::window::WindowEvent;
+use aqua_protocol::FrameReason;
 use aqua_ui::style::LayoutStyle;
 use aqua_ui::tree::{BoxContent, NodeKind, UiTree};
 

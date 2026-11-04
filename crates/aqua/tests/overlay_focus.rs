@@ -11,7 +11,8 @@ use std::time::Duration;
 use aqua::{Instant, Scheduler};
 use aqua_core::id::RawId;
 use aqua_core::{NodeId, Point, Rect, Size};
-use aqua_platform::{AquaWindowId, FrameReason};
+use aqua_protocol::geometry::AquaWindowId;
+use aqua_protocol::FrameReason;
 use aqua_ui::motion::{
     Animated, Completion, Easing, MotionController, MotionKind, MotionValue, ReducedMotion,
 };

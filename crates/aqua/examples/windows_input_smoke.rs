@@ -1,5 +1,3 @@
-//! Native keyboard regression child, driven by scripts/windows-input-smoke.ps1.
-//! The script posts messages only to this child's window; it never sends global input.
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 use aqua::prelude::*;
 use aqua::Application;
@@ -50,7 +48,9 @@ impl Application for KeyboardProbe {
                 "",
                 "native Backspace must remove characters without reinserting controls"
             );
-            println!("WINDOWS_INPUT_OK: native Backspace, Delete, Tab and Enter leave no control characters");
+            println!(
+                "WINDOWS_INPUT_OK: native Backspace, Delete, Tab and Enter leave no control characters"
+            );
             ctx.quit();
         }
     }
@@ -63,15 +63,29 @@ impl Application for KeyboardProbe {
     fn reactive_runtime(&self) -> Option<&ReactiveRuntime> {
         self.ui.reactive_runtime()
     }
-    fn ime_cursor_area(&self) -> Option<Rect> {
-        self.ui.ime_anchor()
+    fn step_input(&mut self, id: AquaWindowId, input: RuntimeInput) {
+        self.ui.step_input(id, input);
+    }
+    fn take_output(&mut self, id: AquaWindowId) -> RuntimeOutput {
+        self.ui.take_output(id)
+    }
+    fn on_a11y_action(
+        &mut self,
+        ctx: &mut AppCtx,
+        id: AquaWindowId,
+        request: &aqua_protocol::A11yActionRequest,
+    ) {
+        self.ui.on_a11y_action(ctx, id, request);
+    }
+    fn input_invalidation_epoch(&self, id: AquaWindowId) -> u64 {
+        self.ui.input_invalidation_epoch(id)
     }
 }
 
 fn main() -> Result<(), String> {
     let mut config = AquaConfig::default();
     config.window.title = "Aqua native keyboard regression".into();
-    config.window.inner_size = aqua_platform::geometry::LogicalSize::new(400.0, 160.0);
+    config.window.inner_size = aqua_protocol::geometry::LogicalSize::new(400.0, 160.0);
     let aqua = Aqua::new(config)?;
     let mut app = UiApp::new(aqua.fonts().clone(), aqua.runs().clone());
     let (read, write) = app.scope().signal("AB".to_owned());

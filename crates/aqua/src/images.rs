@@ -5,15 +5,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use aqua_core::{ImageId, ImageRef, RawId};
-use aqua_render::media::{
-    animation::{decode_animation, AnimationBudget, DecodedAnimation},
-    DecodedImage,
-};
+use aqua_media::decode::animation::{decode_animation, AnimationBudget, DecodedAnimation};
 
 static NEXT_IMAGE_INDEX: AtomicU32 = AtomicU32::new(0x8000_0000);
 
 mod application;
 pub use application::ManagedUiApp;
+pub use aqua_media::decode::{DecodedImage, MediaError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImageAssetError {
@@ -501,17 +499,17 @@ fn spawn_worker(shared: &Arc<Mutex<State>>) {
                 Err(ImageAssetError::Decode(
                     "image source exceeds 32 MiB".into(),
                 ))
-            } else if aqua_render::media::is_svg(&job.encoded) {
-                aqua_render::media::decode_svg(&job.encoded, budget)
+            } else if aqua_media::decode::is_svg(&job.encoded) {
+                aqua_media::decode::decode_svg(&job.encoded, budget)
                     .map(|image| Data::Still(Arc::new(image)))
                     .map_err(|error| ImageAssetError::Decode(error.to_string()))
-            } else if job.preview && !aqua_render::media::is_gif(&job.encoded) {
-                aqua_render::media::decode_preview_still(&job.encoded, budget)
+            } else if job.preview && !aqua_media::decode::is_gif(&job.encoded) {
+                aqua_media::decode::decode_preview_still(&job.encoded, budget)
                     .map(|image| Data::Still(Arc::new(image)))
                     .map_err(|error| ImageAssetError::Decode(error.to_string()))
             } else {
                 let result = if job.preview {
-                    aqua_render::media::animation::decode_preview_gif(&job.encoded, budget)
+                    aqua_media::decode::animation::decode_preview_gif(&job.encoded, budget)
                 } else {
                     decode_animation(
                         &job.encoded,

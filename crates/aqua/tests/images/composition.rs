@@ -1,25 +1,35 @@
-use aqua::{px, ui, ImageAssets, Input, Instant, ManagedUiApp, Style, UiApp};
+use aqua::images::DecodedImage;
+use aqua::{px, ui, ImageAssets, Instant, ManagedUiApp, Style, UiApp};
 use aqua_core::{Rect, Size};
-use aqua_render::{media::DecodedImage, RenderError, Renderer};
 use aqua_text::{SharedFonts, SharedRuns};
+
+use crate::support;
 
 #[test]
 fn public_managed_media_uploads_once_crops_renders_and_releases_removed_layers() {
-    let mut renderer = match pollster::block_on(Renderer::headless(64, 64)) {
-        Ok(renderer) => renderer,
-        Err(RenderError::AdapterNotFound(_))
-            if std::env::var("AQUA_REQUIRE_GPU").as_deref() != Ok("1") =>
-        {
-            eprintln!("SKIP-NO-ADAPTER");
-            return;
-        }
-        Err(error) => panic!("{error}"),
-    };
+    let (fonts, runs) = (SharedFonts::new(), SharedRuns::new());
+    let painters = support::painters(&fonts, &runs);
+    #[cfg(windows)]
+    assert!(painters.len() > 1, "no D3D12 adapter available");
+    for painter in painters {
+        public_managed_media_uploads_once_crops_renders_and_releases_removed_layers_on(
+            painter,
+            fonts.clone(),
+            runs.clone(),
+        );
+    }
+}
+
+fn public_managed_media_uploads_once_crops_renders_and_releases_removed_layers_on(
+    mut renderer: support::Painter,
+    fonts: SharedFonts,
+    runs: SharedRuns,
+) {
     let assets = ImageAssets::default();
     let handle = assets
         .insert(DecodedImage::from_rgba(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 255]).unwrap())
         .unwrap();
-    let mut ui = UiApp::new(SharedFonts::new(), SharedRuns::new());
+    let mut ui = UiApp::new(fonts.clone(), runs.clone());
     ui.mount(|_| {
         ui::Media::new(handle.clone())
             .fit(aqua_core::image::ImageFit::Fill)
@@ -33,39 +43,25 @@ fn public_managed_media_uploads_once_crops_renders_and_releases_removed_layers()
             .build()
     })
     .unwrap();
-    ui.step(Input::Viewport {
-        size: Size::new(64.0, 64.0),
-        scale: 1.0,
-    })
-    .unwrap();
-    ui.step(Input::Frame(Instant::ZERO)).unwrap();
+    ui.set_viewport(64.0, 64.0, 1.0);
+    support::frame(&mut ui, Instant::ZERO);
     let mut app = ManagedUiApp::new(ui, assets.clone());
-    let uploaded = app
-        .synchronize_images(renderer.device(), renderer.queue(), Instant::ZERO)
-        .unwrap();
+    let uploaded = app.synchronize_images(Instant::ZERO).unwrap();
     assert_eq!(uploaded.len(), 1);
     for image in uploaded {
-        renderer.register_external(image.layer, image.view, image.width, image.height);
+        renderer.register_image(image.layer, image.width, image.height, &image.rgba);
     }
-    let plan = renderer.prepare(app.ui_mut().scene_mut());
-    renderer.draw(&plan).unwrap();
-    let pixels = renderer.readback().unwrap();
-    let middle = &pixels[(32 * 64 + 32) * 4..][..4];
+    let pixels = renderer.paint(app.ui_mut().scene_mut(), Size::new(64.0, 64.0), 1.0);
+    let middle = &pixels.pixel(32, 32);
     assert!(
         middle[1] > 240 && middle[0] < 16,
         "managed source crop: {middle:?}"
     );
-    assert!(app
-        .synchronize_images(renderer.device(), renderer.queue(), Instant::ZERO)
-        .unwrap()
-        .is_empty());
+    assert!(app.synchronize_images(Instant::ZERO).unwrap().is_empty());
     let root = app.ui().tree().root().unwrap();
     app.ui_mut().tree_mut().remove(root);
-    app.ui_mut()
-        .step(Input::Frame(Instant::from_nanos(1)))
-        .unwrap();
-    app.synchronize_images(renderer.device(), renderer.queue(), Instant::from_nanos(1))
-        .unwrap();
+    support::frame(app.ui_mut(), Instant::from_nanos(1));
+    app.synchronize_images(Instant::from_nanos(1)).unwrap();
     assert_eq!(
         app.take_released_images(),
         vec![aqua_core::scene::media_layer(handle.id())]
@@ -78,20 +74,29 @@ fn public_managed_media_uploads_once_crops_renders_and_releases_removed_layers()
 
 #[test]
 fn managed_gif_selects_frames_by_host_time_and_gpu_admission_reports_failure() {
+    let (fonts, runs) = (SharedFonts::new(), SharedRuns::new());
+    let painters = support::painters(&fonts, &runs);
+    #[cfg(windows)]
+    assert!(painters.len() > 1, "no D3D12 adapter available");
+    for painter in painters {
+        managed_gif_selects_frames_by_host_time_and_gpu_admission_reports_failure_on(
+            painter,
+            fonts.clone(),
+            runs.clone(),
+        );
+    }
+}
+
+fn managed_gif_selects_frames_by_host_time_and_gpu_admission_reports_failure_on(
+    mut renderer: support::Painter,
+    fonts: SharedFonts,
+    runs: SharedRuns,
+) {
     use aqua::{Application, ImageAssetBudget, ImageAssetError, ImageStatus};
-    use aqua_platform::{geometry::LogicalSize, AquaWindowId, ObservedWindowState};
+    use aqua_protocol::geometry::{AquaWindowId, LogicalSize};
+    use aqua_protocol::window::ObservedWindowState;
     use std::sync::Arc;
     use std::time::{Duration, Instant as WallInstant};
-    let mut renderer = match pollster::block_on(Renderer::headless(32, 32)) {
-        Ok(renderer) => renderer,
-        Err(RenderError::AdapterNotFound(_))
-            if std::env::var("AQUA_REQUIRE_GPU").as_deref() != Ok("1") =>
-        {
-            eprintln!("SKIP-NO-ADAPTER");
-            return;
-        }
-        Err(error) => panic!("{error}"),
-    };
     let mut bytes = Vec::new();
     {
         let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
@@ -123,13 +128,14 @@ fn managed_gif_selects_frames_by_host_time_and_gpu_admission_reports_failure() {
             height: 2
         }
     );
-    let mut ui = UiApp::new(SharedFonts::new(), SharedRuns::new());
+    let mut ui = UiApp::new(fonts.clone(), runs.clone());
     ui.mount(|_| {
         ui::Media::new(handle.clone())
             .style(Style::new().width(px(32.0)).height(px(32.0)).opacity(0.0))
             .build()
     })
     .unwrap();
+    ui.set_viewport(32.0, 32.0, 1.0);
     let mut app = ManagedUiApp::new(ui, assets);
     let window = ObservedWindowState::new(
         AquaWindowId::new(1).unwrap(),
@@ -137,10 +143,7 @@ fn managed_gif_selects_frames_by_host_time_and_gpu_admission_reports_failure() {
         LogicalSize::new(32.0, 32.0),
     );
     assert_eq!(app.build_scene(&window, Instant::ZERO), None);
-    assert!(app
-        .synchronize_images(renderer.device(), renderer.queue(), Instant::ZERO)
-        .unwrap()
-        .is_empty());
+    assert!(app.synchronize_images(Instant::ZERO).unwrap().is_empty());
     assert_eq!(app.gpu_image_bytes(), 0);
     let root = app.ui().tree().root().unwrap();
     app.ui_mut().tree_mut().get_mut(root).unwrap().paint.opacity = Some(1.0);
@@ -154,23 +157,14 @@ fn managed_gif_selects_frames_by_host_time_and_gpu_admission_reports_failure() {
             app.build_scene(&window, now),
             Some(Instant::from_nanos(time + 30_000_000))
         );
-        let uploaded = app
-            .synchronize_images(renderer.device(), renderer.queue(), now)
-            .unwrap();
+        let uploaded = app.synchronize_images(now).unwrap();
         assert_eq!(uploaded.len(), 1);
         for image in uploaded {
-            renderer.register_external(image.layer, image.view, image.width, image.height);
+            renderer.register_image(image.layer, image.width, image.height, &image.rgba);
         }
-        let plan = renderer.prepare(app.ui_mut().scene_mut());
-        renderer.draw(&plan).unwrap();
-        assert_eq!(
-            &renderer.readback().unwrap()[(16 * 32 + 16) * 4..][..4],
-            &expected
-        );
-        assert!(app
-            .synchronize_images(renderer.device(), renderer.queue(), now)
-            .unwrap()
-            .is_empty());
+        let pixels = renderer.paint(app.ui_mut().scene_mut(), Size::new(32.0, 32.0), 1.0);
+        assert_eq!(pixels.pixel(16, 16), expected);
+        assert!(app.synchronize_images(now).unwrap().is_empty());
     }
     let assets = ImageAssets::new(ImageAssetBudget {
         gpu_bytes: 1,
@@ -179,17 +173,18 @@ fn managed_gif_selects_frames_by_host_time_and_gpu_admission_reports_failure() {
     let handle = assets
         .insert(DecodedImage::from_rgba(1, 1, vec![255; 4]).unwrap())
         .unwrap();
-    let mut ui = UiApp::new(SharedFonts::new(), SharedRuns::new());
+    let mut ui = UiApp::new(fonts.clone(), runs.clone());
     ui.mount(|_| {
         ui::Media::new(handle.clone())
             .style(Style::new().width(px(32.0)).height(px(32.0)))
             .build()
     })
     .unwrap();
+    ui.set_viewport(32.0, 32.0, 1.0);
     let mut app = ManagedUiApp::new(ui, assets);
     app.build_scene(&window, Instant::ZERO);
     assert!(matches!(
-        app.synchronize_images(renderer.device(), renderer.queue(), Instant::ZERO),
+        app.synchronize_images(Instant::ZERO),
         Err(ImageAssetError::OverBudget)
     ));
     assert!(matches!(
@@ -201,59 +196,50 @@ fn managed_gif_selects_frames_by_host_time_and_gpu_admission_reports_failure() {
 
 #[test]
 fn cancelling_mounted_image_invalidates_retained_pixels_without_scene_changes() {
-    let mut renderer = match pollster::block_on(Renderer::headless(32, 32)) {
-        Ok(renderer) => renderer,
-        Err(RenderError::AdapterNotFound(_))
-            if std::env::var("AQUA_REQUIRE_GPU").as_deref() != Ok("1") =>
-        {
-            eprintln!("SKIP-NO-ADAPTER");
-            return;
-        }
-        Err(error) => panic!("{error}"),
-    };
+    let (fonts, runs) = (SharedFonts::new(), SharedRuns::new());
+    let painters = support::painters(&fonts, &runs);
+    #[cfg(windows)]
+    assert!(painters.len() > 1, "no D3D12 adapter available");
+    for painter in painters {
+        cancelling_mounted_image_invalidates_retained_pixels_without_scene_changes_on(
+            painter,
+            fonts.clone(),
+            runs.clone(),
+        );
+    }
+}
+
+fn cancelling_mounted_image_invalidates_retained_pixels_without_scene_changes_on(
+    mut renderer: support::Painter,
+    fonts: SharedFonts,
+    runs: SharedRuns,
+) {
     let assets = ImageAssets::default();
     let handle = assets
         .insert(DecodedImage::from_rgba(1, 1, vec![255, 0, 0, 255]).unwrap())
         .unwrap();
-    let mut ui = UiApp::new(SharedFonts::new(), SharedRuns::new());
+    let mut ui = UiApp::new(fonts.clone(), runs.clone());
     ui.mount(|_| {
         ui::Media::new(handle.clone())
             .style(Style::new().width(px(32.0)).height(px(32.0)))
             .build()
     })
     .unwrap();
-    ui.step(Input::Viewport {
-        size: Size::new(32.0, 32.0),
-        scale: 1.0,
-    })
-    .unwrap();
-    ui.step(Input::Frame(Instant::ZERO)).unwrap();
+    ui.set_viewport(32.0, 32.0, 1.0);
+    support::frame(&mut ui, Instant::ZERO);
     let mut app = ManagedUiApp::new(ui, assets);
-    for image in app
-        .synchronize_images(renderer.device(), renderer.queue(), Instant::ZERO)
-        .unwrap()
-    {
-        renderer.register_external(image.layer, image.view, image.width, image.height);
+    for image in app.synchronize_images(Instant::ZERO).unwrap() {
+        renderer.register_image(image.layer, image.width, image.height, &image.rgba);
     }
     let revision = app.ui().scene().revision();
-    let plan = renderer.prepare(app.ui_mut().scene_mut());
-    renderer.draw(&plan).unwrap();
-    assert_eq!(
-        &renderer.readback().unwrap()[(16 * 32 + 16) * 4..][..4],
-        &[255, 0, 0, 255]
-    );
+    let pixels = renderer.paint(app.ui_mut().scene_mut(), Size::new(32.0, 32.0), 1.0);
+    assert_eq!(pixels.pixel(16, 16), [255, 0, 0, 255]);
     handle.cancel();
-    app.synchronize_images(renderer.device(), renderer.queue(), Instant::ZERO)
-        .unwrap();
+    app.synchronize_images(Instant::ZERO).unwrap();
     for layer in app.take_released_images() {
-        renderer.unregister_external(layer);
+        renderer.release_image(layer);
     }
     assert_eq!(app.ui().scene().revision(), revision);
-    let plan = renderer.prepare(app.ui_mut().scene_mut());
-    assert!(!plan.is_clean());
-    renderer.draw(&plan).unwrap();
-    assert_eq!(
-        &renderer.readback().unwrap()[(16 * 32 + 16) * 4..][..4],
-        &[0, 0, 0, 0]
-    );
+    let pixels = renderer.paint(app.ui_mut().scene_mut(), Size::new(32.0, 32.0), 1.0);
+    assert_eq!(pixels.pixel(16, 16), [0, 0, 0, 0]);
 }

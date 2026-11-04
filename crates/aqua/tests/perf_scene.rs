@@ -3,11 +3,10 @@ use std::cell::Cell;
 use std::time::Instant;
 
 use aqua_core::{NodeId, Oklch};
-use aqua_render::{Renderer, Scene};
 use aqua_runtime::{FrameWork, Runtime};
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::element::ui::{Box as UiBox, Text as UiText};
-use aqua_ui::style::{Axis, Style, px};
+use aqua_ui::style::{px, Axis, Style};
 use aqua_ui::tree::NodeKind;
 
 thread_local! {
@@ -246,46 +245,11 @@ fn run_phases(rows: usize, repetitions: usize) -> Vec<Row> {
     report
 }
 
-fn render_report(rows: usize, repetitions: usize) -> Option<Row> {
-    let mut renderer = match pollster::block_on(Renderer::headless(1200, 800)) {
-        Ok(renderer) => renderer,
-        Err(error) => {
-            eprintln!("perf-scene render skipped: {error:?}");
-            return None;
-        }
-    };
-    let mut runtime = fresh_runtime();
-    mount_transcript(&mut runtime, rows);
-    runtime.build_frame().unwrap();
-    let scene_items = runtime.scene().ordered().count();
-    let mut frames = Vec::new();
-    for _ in 0..repetitions.min(20) {
-        let mut scene = Scene::new();
-        for (_, item) in runtime.scene().ordered() {
-            scene.insert(item.clone());
-        }
-        frames.push(measure(|| {
-            let plan = renderer.prepare(&mut scene);
-            renderer.draw(&plan).unwrap();
-        }));
-    }
-    Some(Row {
-        phase: "render_full",
-        rows,
-        summary: summarize(&frames),
-        work: runtime.frame_work(),
-        scene_items,
-    })
-}
-
 #[test]
 #[ignore]
 fn perf_scene_report() {
     for rows in [100, 1000, 5000] {
         for row in run_phases(rows, 40) {
-            println!("{}", row.line());
-        }
-        if let Some(row) = render_report(rows, 20) {
             println!("{}", row.line());
         }
     }

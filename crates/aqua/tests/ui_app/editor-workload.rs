@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use aqua::prelude::*;
 use aqua::ui_app::{dispatch_clipboard, ClipboardOutcome};
-use aqua_platform::services::MemoryClipboard;
 use aqua_reactive::{ReadSignal, WriteSignal};
+use aqua_shell_win32::services::MemoryClipboard;
 use aqua_ui::element::Element;
 use aqua_ui::tree::NodeKind;
 
@@ -196,7 +196,8 @@ fn editor_conversation_workload_combines_virtualization_rich_text_selection_stre
         .find(|(_, id)| *id == 0)
         .unwrap()
         .0;
-    app.handle_input(&pointer(Point::new(4.0, visual_y(&app, first) + 8.0)));
+    let target_y = visual_y(&app, first) + 8.0;
+    app.handle_input(&pointer(Point::new(4.0, target_y)));
     app.handle_input(&shortcut(Key::Char('a'), Modifiers::CONTROL));
     let mut clipboard = MemoryClipboard::new();
     dispatch_clipboard(
@@ -313,7 +314,8 @@ fn editor_conversation_workload_combines_virtualization_rich_text_selection_stre
     assert!(text_item.is_some());
 
     let composer = app.tree().traverse().into_iter().find(|node| matches!(&app.tree().get(*node).unwrap().kind, NodeKind::Text(text) if text.is_editable())).unwrap();
-    app.handle_input(&pointer(Point::new(4.0, visual_y(&app, composer) + 8.0)));
+    let target_y = visual_y(&app, composer) + 8.0;
+    app.handle_input(&pointer(Point::new(4.0, target_y)));
     app.handle_input(&shortcut(Key::Named(NamedKey::End), Modifiers::CONTROL));
     app.handle_input(&shortcut(Key::Named(NamedKey::Left), Modifiers::CONTROL));
     app.handle_input(&shortcut(

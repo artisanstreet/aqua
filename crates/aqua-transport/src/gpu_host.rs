@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,8 +11,9 @@ use aqua_protocol::{
 use aqua_runtime::RenderSide;
 
 use crate::inspector::{FrameRecord, Inspector};
-use crate::lower::Lowering;
+use crate::lower::{LowerContext, Lowering, TrimRequest};
 use crate::thread::RenderHost;
+use crate::trim::{TrimAction, TrimInput, TrimPolicy};
 
 pub trait Clock: 'static {
     fn now(&mut self) -> Instant;
@@ -115,6 +116,29 @@ struct Live {
     extent: Extent,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HostCounters {
+    pub presented: u64,
+    pub failed: u64,
+    pub losses: u32,
+    pub trimmed: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TrimHandle {
+    requested: Arc<AtomicBool>,
+}
+
+impl TrimHandle {
+    pub fn request(&self) {
+        self.requested.store(true, Ordering::Release);
+    }
+
+    fn take(&self) -> bool {
+        self.requested.swap(false, Ordering::AcqRel)
+    }
+}
+
 pub struct GpuRenderHost<B: GpuBackend<Error = GpuError>, L: Lowering, C: Clock> {
     backend: B,
     lowering: L,
@@ -127,10 +151,15 @@ pub struct GpuRenderHost<B: GpuBackend<Error = GpuError>, L: Lowering, C: Clock>
     presented: u64,
     failed: u64,
     losses: u32,
+    trimmed: u64,
+    trim: TrimPolicy,
+    trim_handle: TrimHandle,
+    last: Option<FrameRecord>,
+    last_error: Option<String>,
 }
 
 fn extent_of(size: Size, scale: f32) -> Extent {
-    let px = |logical: f32| (logical * scale).ceil().max(1.0) as u32;
+    let px = |logical: f32| (logical * scale).round().max(1.0) as u32;
     Extent {
         width: px(size.w),
         height: px(size.h),
@@ -156,13 +185,66 @@ where
             presented: 0,
             failed: 0,
             losses: 0,
+            trimmed: 0,
+            trim: TrimPolicy::new(),
+            trim_handle: TrimHandle::default(),
+            last: None,
+            last_error: None,
         }
+    }
+
+    #[must_use]
+    pub fn adopting(mut self, surface: SurfaceId, extent: Extent) -> Self {
+        self.live = Some(Live { surface, extent });
+        self
+    }
+
+    #[must_use]
+    pub fn trim_handle(&self) -> TrimHandle {
+        self.trim_handle.clone()
+    }
+
+    #[must_use]
+    pub fn counters(&self) -> HostCounters {
+        HostCounters {
+            presented: self.presented,
+            failed: self.failed,
+            losses: self.losses,
+            trimmed: self.trimmed,
+        }
+    }
+
+    #[must_use]
+    pub fn last_record(&self) -> Option<&FrameRecord> {
+        self.last.as_ref()
+    }
+
+    #[must_use]
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    pub fn set_present(&mut self, hint: PresentHint) {
+        self.config.present = hint;
+    }
+
+    #[must_use]
+    pub fn lowering(&self) -> &L {
+        &self.lowering
+    }
+
+    pub fn lowering_mut(&mut self) -> &mut L {
+        &mut self.lowering
     }
 
     #[must_use]
     pub fn with_inspector(mut self, inspector: Inspector) -> Self {
         self.inspector = Some(inspector);
         self
+    }
+
+    pub fn set_inspector(&mut self, inspector: Inspector) {
+        self.inspector = Some(inspector);
     }
 
     #[must_use]
@@ -212,10 +294,13 @@ where
 
     fn recover(&mut self) -> Option<Feedback> {
         match self.backend.recover() {
-            Ok(_) => {
+            Ok(report) => {
                 self.lost = false;
                 self.slot_acquired = false;
-                self.live = None;
+                if report.rebuilt_surfaces == 0 {
+                    self.live = None;
+                }
+                self.lowering.device_recovered();
                 Some(Feedback::DeviceRecovered)
             }
             Err(_) => None,
@@ -228,8 +313,15 @@ where
             .ok_or(GpuError::Unsupported("frame before viewport"))?;
         let extent = extent_of(size, scale);
         let surface = self.ensure_surface(extent)?;
-        let lowered = self.lowering.lower(side.scene(), scale);
-        if !lowered.uploads.textures.is_empty() {
+        self.lowering.sync();
+        let context = LowerContext {
+            size,
+            scale,
+            now: self.clock.now(),
+        };
+        let lowered = self.lowering.lower(side.scene(), &context);
+        let uploaded = !lowered.uploads.textures.is_empty();
+        if uploaded {
             self.backend.upload(lowered.uploads.clone())?;
         }
         let plan = plan_paint_with(
@@ -242,6 +334,8 @@ where
         let report = self.backend.execute(&plan, &FrameInputs::new(surface))?;
         let times = self.backend.present(surface, self.config.present)?;
         self.slot_acquired = false;
+        self.lowering.frame_reported(&report);
+        let trimmed = self.trim_after(&report, uploaded);
         let record = FrameRecord {
             frame: 0,
             extent: (extent.width, extent.height),
@@ -251,6 +345,9 @@ where
             transient_bytes: report.transient_bytes,
             commands: u32::try_from(lowered.commands.len()).unwrap_or(u32::MAX),
             unsupported_items: lowered.unsupported,
+            approximated_items: lowered.approximated,
+            glyphs: lowered.glyphs,
+            trimmed_entries: trimmed,
             cpu_micros: u64::try_from(report.cpu_time.as_micros()).unwrap_or(u64::MAX),
             gpu_micros: report
                 .gpu_time
@@ -258,6 +355,24 @@ where
             present_queued_micros: u64::try_from(times.queued.as_micros()).unwrap_or(u64::MAX),
         };
         Ok((report, record))
+    }
+
+    fn trim_after(&mut self, report: &FrameReport, uploaded: bool) -> u64 {
+        let action = self.trim.observe(TrimInput {
+            uploaded,
+            cpu_time: report.cpu_time,
+            gpu_time: report.gpu_time,
+            budget: self.config.frame_interval,
+            requested: self.trim_handle.take(),
+        });
+        let freed = match action {
+            TrimAction::Keep => 0,
+            TrimAction::Unused(frames) => self.lowering.trim(TrimRequest::IdleFrames(frames)),
+            TrimAction::Everything => self.lowering.trim(TrimRequest::Everything),
+        };
+        let freed = u64::try_from(freed).unwrap_or(u64::MAX);
+        self.trimmed += freed;
+        freed
     }
 
     fn publish(&self, side: &RenderSide, record: Option<FrameRecord>, error: Option<String>) {
@@ -318,6 +433,7 @@ where
         match outcome {
             Ok((report, mut record)) => {
                 record.frame = frame;
+                self.last = Some(record.clone());
                 self.presented += 1;
                 feedback.push(Feedback::Presented(frame));
                 if report.device == DeviceStatus::Lost {
@@ -333,12 +449,15 @@ where
                 self.losses += 1;
                 self.slot_acquired = false;
                 feedback.push(Feedback::DeviceLost);
+                self.last_error = Some(detail.clone());
                 self.publish(side, None, Some(detail));
             }
             Err(other) => {
                 self.failed += 1;
                 self.slot_acquired = false;
-                self.publish(side, None, Some(other.to_string()));
+                let detail = other.to_string();
+                self.last_error = Some(detail.clone());
+                self.publish(side, None, Some(detail));
             }
         }
         feedback

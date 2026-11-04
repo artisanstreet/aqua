@@ -12,12 +12,12 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use aqua::{Instant, Scheduler};
-use aqua_core::{Oklch, Rect};
-use aqua_platform::{AquaWindowId, FrameReason};
-use aqua_render::damage::{DamageTracker, InvalidationReason};
-use aqua_render::resource::{ResourceBudget, TextureDesc, TexturePoolModel};
-use aqua_render::{DisplayItem, Scene};
+use aqua_core::{DisplayItem, Oklch, Rect};
+use aqua_protocol::geometry::AquaWindowId;
+use aqua_protocol::FrameReason;
 use aqua_runtime::scheduler::MIN_FRAME_INTERVAL;
+use aqua_scene::damage::{DamageTracker, InvalidationReason};
+use aqua_scene::Scene;
 
 fn red() -> Oklch {
     Oklch::from_hex("#ff0000").unwrap()
@@ -296,64 +296,4 @@ fn high_fps_target_accepted_and_clamped_to_usable_interval() {
     assert!(s.min_frame_interval().unwrap() >= MIN_FRAME_INTERVAL);
     s.set_fps_target(Some(NonZeroU32::new(u32::MAX).unwrap()));
     assert!(s.min_frame_interval().unwrap() >= Duration::from_micros(1));
-}
-
-// -- texture residency: bytes, not counts ----------------------------------------
-
-#[test]
-fn residency_cap_counts_live_plus_cached_bytes() {
-    // Budget 1024 B; count cap effectively off. Released textures STAY
-    // resident (cached) and must count against the budget.
-    let mut pool = TexturePoolModel::new(ResourceBudget {
-        max_intermediate_bytes: 1024,
-        max_pooled_textures: 1000,
-    });
-    let small = TextureDesc::rgba8(8, 8); // 256 B
-    let ids: Vec<u64> = (0..4).map(|_| pool.acquire(small).unwrap()).collect();
-    for i in ids {
-        assert!(pool.release(small, i));
-    }
-    assert_eq!(pool.cached_bytes(), 1024);
-    assert_eq!(pool.allocated_bytes(), 1024);
-    // A further small acquisition is admitted by EVICTING cached residents
-    // (LRU), never by exceeding residency: byte cap, not count cap.
-    let extra = pool.acquire(TextureDesc::rgba8(2, 2));
-    assert!(extra.is_some(), "eviction must make room for 16 B");
-    assert!(pool.allocated_bytes() <= 1024);
-    assert!(pool.evictions >= 1);
-    // A single texture over the whole budget is rejected outright.
-    assert!(pool.acquire(TextureDesc::rgba8(64, 64)).is_none());
-    // A 1024 B texture is admitted only by evicting cached residents —
-    // but live entries are never evicted, so release the live 16 B first.
-    assert!(pool.release(TextureDesc::rgba8(2, 2), extra.unwrap()));
-    let big = TextureDesc::rgba8(16, 16);
-    assert!(pool.acquire(big).is_some());
-    assert!(pool.evictions >= 2);
-    assert!(pool.allocated_bytes() <= 1024);
-}
-
-#[test]
-fn count_cap_evicts_lru_cached() {
-    let mut pool = TexturePoolModel::new(ResourceBudget {
-        max_intermediate_bytes: 64 * 1024 * 1024,
-        max_pooled_textures: 2,
-    });
-    let desc = TextureDesc::rgba8(64, 64);
-    let ids: Vec<u64> = (0..4).map(|_| pool.acquire(desc).unwrap()).collect();
-    for i in ids {
-        pool.release(desc, i);
-    }
-    assert!(pool.cached_count() <= 2);
-    assert!(pool.evictions >= 2);
-}
-
-#[test]
-fn duplicate_and_unknown_releases_rejected() {
-    let mut pool = TexturePoolModel::new(ResourceBudget::default());
-    let desc = TextureDesc::rgba8(64, 64);
-    assert!(!pool.release(desc, 999));
-    let live = pool.acquire(desc).unwrap();
-    assert!(pool.release(desc, live));
-    assert!(!pool.release(desc, live), "double release rejected");
-    assert_eq!(pool.bad_releases, 2, "unknown + double release counted");
 }

@@ -5,15 +5,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant as WallInstant};
 
 use aqua_graph::Extent;
-use aqua_protocol::{
-    DeviceStatus, Feedback, FrameId, FrameInputs, GpuBackend, GpuError, Instant, PresentHint,
-    SurfaceId,
-};
+use aqua_protocol::{Feedback, FrameId, GpuBackend, GpuError, Instant, PresentHint, SurfaceId};
 use aqua_runtime::RenderSide;
-use aqua_transport::RenderHost;
+use aqua_transport::{
+    GpuRenderHost, HostConfig, HostCounters, Inspector, MonotonicClock, RenderHost,
+};
 
 use super::link::ExternalUpdate;
 use super::lower::Lowering;
+
+const MAINTENANCE_FRAMES: u64 = 900;
 
 pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
@@ -39,6 +40,8 @@ pub struct RenderStats {
     pub commands: AtomicU64,
     pub glyphs: AtomicU64,
     pub immediate: std::sync::atomic::AtomicBool,
+    pub trim: std::sync::atomic::AtomicBool,
+    pub gpu_ns: AtomicU64,
     pub waits: AtomicU64,
 }
 
@@ -52,17 +55,19 @@ impl RenderStats {
     }
 }
 
-pub struct GpuFrames<B: GpuBackend<Error = GpuError>> {
-    backend: B,
+type Maintenance<B> = Box<dyn FnMut(&mut B)>;
+
+pub struct GpuFrames<B: GpuBackend<Error = GpuError> + 'static> {
+    host: GpuRenderHost<B, Lowering, MonotonicClock>,
     surface: SurfaceId,
-    extent: Extent,
-    lowering: Lowering,
-    externals: Receiver<ExternalUpdate>,
     stats: Arc<RenderStats>,
     hint: PresentHint,
+    maintenance: Option<Maintenance<B>>,
+    since_maintenance: u64,
+    counted: HostCounters,
 }
 
-impl<B: GpuBackend<Error = GpuError>> GpuFrames<B> {
+impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
     pub fn new(
         backend: B,
         surface: SurfaceId,
@@ -71,14 +76,23 @@ impl<B: GpuBackend<Error = GpuError>> GpuFrames<B> {
         externals: Receiver<ExternalUpdate>,
         stats: Arc<RenderStats>,
     ) -> Self {
-        Self {
+        let clear = lowering.clear_color();
+        let lowering = lowering.with_externals(externals).with_stats(stats.clone());
+        let host = GpuRenderHost::new(
             backend,
-            surface,
-            extent,
             lowering,
-            externals,
+            MonotonicClock::from_origin(WallInstant::now()),
+            HostConfig::offscreen(clear),
+        )
+        .adopting(surface, extent);
+        Self {
+            host,
+            surface,
             stats,
             hint: PresentHint::Vsync,
+            maintenance: None,
+            since_maintenance: 0,
+            counted: HostCounters::default(),
         }
     }
 
@@ -87,137 +101,112 @@ impl<B: GpuBackend<Error = GpuError>> GpuFrames<B> {
         self
     }
 
+    pub fn with_inspector(mut self, inspector: Inspector) -> Self {
+        self.host.set_inspector(inspector);
+        self
+    }
+
+    pub fn with_maintenance(mut self, maintenance: impl FnMut(&mut B) + 'static) -> Self {
+        self.maintenance = Some(Box::new(maintenance));
+        self
+    }
+
     pub fn backend(&self) -> &B {
-        &self.backend
+        self.host.backend()
     }
 
     pub fn backend_mut(&mut self) -> &mut B {
-        &mut self.backend
+        self.host.backend_mut()
     }
 
     pub fn surface(&self) -> SurfaceId {
         self.surface
     }
 
-    fn apply_externals(&mut self) {
-        while let Ok(update) = self.externals.try_recv() {
-            match update {
-                ExternalUpdate::Image {
-                    layer,
-                    width,
-                    height,
-                    rgba,
-                } => self.lowering.register_image(layer, width, height, &rgba),
-                ExternalUpdate::Release { layer } => self.lowering.release_image(layer),
-            }
+    pub fn host(&self) -> &GpuRenderHost<B, Lowering, MonotonicClock> {
+        &self.host
+    }
+
+    fn maintain(&mut self) {
+        if let Some(maintenance) = self.maintenance.as_mut() {
+            maintenance(self.host.backend_mut());
         }
     }
 
-    fn recover(&mut self) -> Vec<Feedback> {
-        self.stats.recoveries.fetch_add(1, Ordering::Relaxed);
-        match self.backend.recover() {
-            Ok(_) => {
-                self.lowering.reset();
-                vec![Feedback::DeviceLost, Feedback::DeviceRecovered]
-            }
-            Err(error) => {
-                eprintln!("aqua: device recovery failed: {error}");
-                vec![Feedback::DeviceLost]
+    fn account(&mut self) {
+        let counters = self.host.counters();
+        let stats = &self.stats;
+        stats.recoveries.fetch_add(
+            u64::from(counters.losses - self.counted.losses),
+            Ordering::Relaxed,
+        );
+        if counters.failed > self.counted.failed {
+            stats
+                .failures
+                .fetch_add(counters.failed - self.counted.failed, Ordering::Relaxed);
+            if let Some(error) = self.host.last_error() {
+                eprintln!("aqua: render failed: {error}");
             }
         }
-    }
-
-    fn fail(&mut self, error: &GpuError) -> Vec<Feedback> {
-        self.stats.failures.fetch_add(1, Ordering::Relaxed);
-        eprintln!("aqua: render failed: {error}");
-        match error {
-            GpuError::DeviceFailure(_) => self.recover(),
-            _ => Vec::new(),
+        stats.frames.fetch_add(
+            counters.presented - self.counted.presented,
+            Ordering::Relaxed,
+        );
+        self.counted = counters;
+        if let Some(record) = self.host.last_record() {
+            RenderStats::add(
+                &stats.execute_ns,
+                Some(&stats.execute_max_ns),
+                Duration::from_micros(record.cpu_micros),
+            );
+            RenderStats::add(
+                &stats.present_ns,
+                None,
+                Duration::from_micros(record.present_queued_micros),
+            );
+            if let Some(gpu) = record.gpu_micros {
+                stats
+                    .gpu_ns
+                    .store(gpu.saturating_mul(1000), Ordering::Relaxed);
+            }
         }
     }
 }
 
-fn physical(size: aqua_core::Size, scale: f32) -> Extent {
-    Extent {
-        width: (size.w * scale).round().max(1.0) as u32,
-        height: (size.h * scale).round().max(1.0) as u32,
+impl<B: GpuBackend<Error = GpuError> + 'static> Drop for GpuFrames<B> {
+    fn drop(&mut self) {
+        if let Some(mut maintenance) = self.maintenance.take() {
+            maintenance(self.host.backend_mut());
+        }
     }
 }
 
-impl<B: GpuBackend<Error = GpuError>> FrameTarget for GpuFrames<B> {
+impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
     fn paced(&self) -> bool {
-        !self.backend.capabilities().features.window_surfaces
+        !self.host.backend().capabilities().features.window_surfaces
     }
 
     fn wait_frame(&mut self) {
-        let _ = self.backend.wait_for_frame_slot(self.surface);
+        self.host.wait_frame();
     }
 
     fn present(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback> {
-        self.apply_externals();
-        let Some((size, scale)) = side.viewport() else {
-            return Vec::new();
-        };
-        let extent = physical(size, scale);
-        if extent != self.extent {
-            match self.backend.resize_surface(self.surface, extent) {
-                Ok(()) => self.extent = extent,
-                Err(error) => return self.fail(&error),
-            }
-        }
-        let limits = self.backend.capabilities().plan_limits();
-        let started = WallInstant::now();
-        let lowered = match self.lowering.lower(side.scene(), size, scale, limits) {
-            Ok(lowered) => lowered,
-            Err(error) => return self.fail(&GpuError::PlanRejected(error)),
-        };
-        RenderStats::add(
-            &self.stats.lower_ns,
-            Some(&self.stats.lower_max_ns),
-            started.elapsed(),
-        );
-        let skipped: u32 = lowered.report.skipped.values().sum();
-        self.stats
-            .skipped_items
-            .fetch_add(u64::from(skipped), Ordering::Relaxed);
-        self.stats
-            .commands
-            .fetch_add(u64::from(lowered.report.commands), Ordering::Relaxed);
-        self.stats
-            .glyphs
-            .fetch_add(u64::from(lowered.report.glyphs), Ordering::Relaxed);
-        if let Err(error) = self.backend.upload(lowered.uploads) {
-            return self.fail(&error);
-        }
-        let executed = WallInstant::now();
-        let report = match self
-            .backend
-            .execute(&lowered.plan, &FrameInputs::new(self.surface))
-        {
-            Ok(report) => report,
-            Err(error) => return self.fail(&error),
-        };
-        RenderStats::add(
-            &self.stats.execute_ns,
-            Some(&self.stats.execute_max_ns),
-            executed.elapsed(),
-        );
-        if report.device == DeviceStatus::Lost {
-            return self.recover();
-        }
-        let presented = WallInstant::now();
         let hint = match self.stats.immediate.load(Ordering::Relaxed) {
             true => PresentHint::Immediate,
             false => self.hint,
         };
-        match self.backend.present(self.surface, hint) {
-            Ok(_) => {
-                RenderStats::add(&self.stats.present_ns, None, presented.elapsed());
-                self.stats.frames.fetch_add(1, Ordering::Relaxed);
-                vec![Feedback::Presented(frame)]
-            }
-            Err(error) => self.fail(&error),
+        self.host.set_present(hint);
+        if self.stats.trim.swap(false, Ordering::AcqRel) {
+            self.host.trim_handle().request();
         }
+        let feedback = self.host.execute(side, frame);
+        self.account();
+        self.since_maintenance += 1;
+        if self.since_maintenance >= MAINTENANCE_FRAMES {
+            self.since_maintenance = 0;
+            self.maintain();
+        }
+        feedback
     }
 }
 

@@ -2,16 +2,16 @@
 //!
 //! This module composes peer-owned option types; it defines no competing
 //! windowing, pacing, or presentation semantics. Frame pacing config flows
-//! straight into [`aqua_platform::scheduler::Scheduler`]
+//! straight into [`aqua_runtime::Scheduler`]
 //! (`set_fps_target(Option<NonZeroU32>)`, `None` = unpaced demand-only).
 
 use std::num::NonZeroU32;
 
-use aqua_platform::material::material_capability;
-use aqua_platform::prefs::{prefers_opaque_frame, OsPreferences};
-use aqua_platform::window::ThemePreference;
-pub use aqua_platform::window::{Titlebar, WindowOptions};
-use aqua_platform::WindowMaterial;
+use aqua_protocol::prefs::{prefers_opaque_frame, SystemPrefs as OsPreferences};
+use aqua_protocol::window::ThemePreference;
+pub use aqua_protocol::window::{Titlebar, WindowOptions};
+use aqua_protocol::WindowMaterial;
+use aqua_shell_win32::capability::material_capability;
 use aqua_ui::style::Length;
 
 /// Top-level application configuration.
@@ -32,7 +32,7 @@ pub struct AquaConfig {
     /// honest fallback elsewhere). Non-`None` requires a transparent window +
     /// alpha surface: the runtime forces `window.transparent` (loudly) and
     /// downgrades to `None` under high-contrast/transparency-off prefs.
-    pub material: aqua_platform::WindowMaterial,
+    pub material: aqua_protocol::WindowMaterial,
     /// Headless mode: no window or GPU. Drives the app pump in tests.
     pub headless: bool,
     /// When true, decorative motion snaps instead of animating (also set
@@ -46,7 +46,7 @@ impl Default for AquaConfig {
             window: WindowOptions::default(),
             fps_target: None,
             vsync: true,
-            material: aqua_platform::WindowMaterial::None,
+            material: aqua_protocol::WindowMaterial::Solid,
             headless: false,
             reduced_motion: false,
         }
@@ -56,7 +56,7 @@ impl Default for AquaConfig {
 impl AquaConfig {
     /// Validate window options early (empty sizes rejected before any
     /// window exists). Returns the platform error unchanged.
-    pub fn validated(&self) -> Result<(), aqua_platform::window::WindowError> {
+    pub fn validated(&self) -> Result<(), aqua_protocol::window::WindowError> {
         self.window.validated()
     }
 
@@ -65,12 +65,12 @@ impl AquaConfig {
     /// Returns the downgraded value when policy overrides the request.
     pub fn effective_material(
         &self,
-        prefs: &aqua_platform::prefs::OsPreferences,
-    ) -> aqua_platform::WindowMaterial {
-        use aqua_platform::WindowMaterial as M;
-        if self.material != M::None && aqua_platform::prefs::prefers_opaque_frame(prefs) {
+        prefs: &aqua_protocol::prefs::SystemPrefs,
+    ) -> aqua_protocol::WindowMaterial {
+        use aqua_protocol::WindowMaterial as M;
+        if self.material != M::Solid && aqua_protocol::prefs::prefers_opaque_frame(prefs) {
             eprintln!("aqua: high-contrast/transparency-off — downgrading material to opaque");
-            return M::None;
+            return M::Solid;
         }
         self.material
     }
@@ -440,8 +440,8 @@ impl Config {
             Some(fps) => NonZeroU32::new(fps),
         };
         let (active, reason) = resolve_material(self.window.material, prefs);
-        let transparent = self.window.transparent
-            || aqua_platform::material::material_needs_transparent_window(active);
+        let transparent =
+            self.window.transparent || aqua_protocol::material::needs_alpha_surface(active);
         // Titlebar layering (explicit, no silent coercion beyond this):
         // - legacy `decorations(false)` stays fully frameless and wins over
         //   any titlebar mode (coerced to `Hidden` for the lowered options);
@@ -543,7 +543,7 @@ impl ResolvedMaterial {
     /// that the compositor has applied anything pre-window.
     #[must_use]
     pub fn is_glass(&self) -> bool {
-        self.resolved != WindowMaterial::None
+        self.resolved != WindowMaterial::Solid
     }
 }
 
@@ -598,13 +598,13 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 /// Convert one authoring `(Length, Length)` pair to a platform
-/// [`LogicalSize`](aqua_platform::geometry::LogicalSize): `px()` only,
+/// [`LogicalSize`](aqua_protocol::geometry::LogicalSize): `px()` only,
 /// finite, strictly positive.
 fn px_pair(
     field: &'static str,
     (w, h): (Length, Length),
-) -> Result<aqua_platform::geometry::LogicalSize, ConfigError> {
-    Ok(aqua_platform::geometry::LogicalSize::new(
+) -> Result<aqua_protocol::geometry::LogicalSize, ConfigError> {
+    Ok(aqua_protocol::geometry::LogicalSize::new(
         px_axis(field, w)?,
         px_axis(field, h)?,
     ))
@@ -646,11 +646,11 @@ fn px_axis(field: &'static str, len: Length) -> Result<f64, ConfigError> {
 /// the opaque frame. No macOS/Linux blur backends are invented.
 fn resolve_material(requested: Material, prefs: &OsPreferences) -> (WindowMaterial, &'static str) {
     match requested {
-        Material::Solid => (WindowMaterial::None, "explicit solid frame"),
+        Material::Solid => (WindowMaterial::Solid, "explicit solid frame"),
         Material::Glass => {
             if prefers_opaque_frame(prefs) {
                 return (
-                    WindowMaterial::None,
+                    WindowMaterial::Solid,
                     "high-contrast/transparency-off: solid fallback per Mica guidance",
                 );
             }
@@ -658,7 +658,7 @@ fn resolve_material(requested: Material, prefs: &OsPreferences) -> (WindowMateri
             if cap.supported {
                 (cap.active, cap.reason)
             } else {
-                (WindowMaterial::None, cap.reason)
+                (WindowMaterial::Solid, cap.reason)
             }
         }
     }
@@ -684,35 +684,35 @@ mod tests {
 
     #[test]
     fn material_downgraded_under_opaque_prefs() {
-        use aqua_platform::prefs::{OsPreferences, PrefState};
+        use aqua_protocol::prefs::{PrefState, SystemPrefs as OsPreferences};
         let c = AquaConfig {
-            material: aqua_platform::WindowMaterial::Mica,
+            material: aqua_protocol::WindowMaterial::Mica,
             ..Default::default()
         };
         // Unknown prefs: request stands.
         assert_eq!(
             c.effective_material(&OsPreferences::fallback()),
-            aqua_platform::WindowMaterial::Mica
+            aqua_protocol::WindowMaterial::Mica
         );
         // High contrast: solid fallback.
         let mut p = OsPreferences::fallback();
         p.high_contrast = PrefState::On;
         assert_eq!(
             c.effective_material(&p),
-            aqua_platform::WindowMaterial::None
+            aqua_protocol::WindowMaterial::Solid
         );
     }
 
     #[test]
     fn empty_window_size_rejected_before_window_exists() {
         let mut c = AquaConfig::default();
-        c.window.inner_size = aqua_platform::geometry::LogicalSize::new(0.0, 600.0);
+        c.window.inner_size = aqua_protocol::geometry::LogicalSize::new(0.0, 600.0);
         assert!(c.validated().is_err());
     }
 
     // -- Authoring builder tests (pure supplied prefs; no OS/GPU init) --
 
-    use aqua_platform::prefs::PrefState;
+    use aqua_protocol::prefs::PrefState;
     use aqua_ui::style::{auto, pct, px};
 
     fn glass() -> Config {
@@ -733,11 +733,11 @@ mod tests {
         assert_eq!(r.runtime.window.title, "Aqua — Tasks");
         assert_eq!(
             r.runtime.window.inner_size,
-            aqua_platform::geometry::LogicalSize::new(760.0, 560.0)
+            aqua_protocol::geometry::LogicalSize::new(760.0, 560.0)
         );
         assert_eq!(
             r.runtime.window.min_size,
-            Some(aqua_platform::geometry::LogicalSize::new(480.0, 360.0))
+            Some(aqua_protocol::geometry::LogicalSize::new(480.0, 360.0))
         );
         assert_eq!(r.runtime.window.theme, ThemePreference::Dark);
         // Request is remembered even where the platform cannot do glass.
@@ -746,16 +746,16 @@ mod tests {
         // Expectation comes from the real adapter, never fabricated:
         // supported platforms select the Acrylic candidate, others fall
         // back to solid with the adapter's honest reason.
-        let cap = material_capability(aqua_platform::WindowMaterial::Acrylic);
+        let cap = material_capability(aqua_protocol::WindowMaterial::Acrylic);
         assert_eq!(r.material.is_glass(), cap.supported);
         if cap.supported {
             assert_eq!(
                 r.material.resolved(),
-                aqua_platform::WindowMaterial::Acrylic
+                aqua_protocol::WindowMaterial::Acrylic
             );
             assert!(r.runtime.window.transparent);
         } else {
-            assert_eq!(r.material.resolved(), aqua_platform::WindowMaterial::None);
+            assert_eq!(r.material.resolved(), aqua_protocol::WindowMaterial::Solid);
             assert_eq!(r.material.reason(), cap.reason);
         }
     }
@@ -766,7 +766,7 @@ mod tests {
         assert_eq!(r.runtime.window, WindowOptions::default());
         assert_eq!(r.runtime.fps_target, None);
         assert!(r.runtime.vsync);
-        assert_eq!(r.runtime.material, aqua_platform::WindowMaterial::None);
+        assert_eq!(r.runtime.material, aqua_protocol::WindowMaterial::Solid);
         assert!(!r.runtime.headless);
         assert!(!r.runtime.reduced_motion);
         assert_eq!(r.material.requested(), Material::Solid);
@@ -798,7 +798,7 @@ mod tests {
         assert_eq!(r.runtime.window.title, "second");
         assert_eq!(
             r.runtime.window.inner_size,
-            aqua_platform::geometry::LogicalSize::new(640.0, 480.0)
+            aqua_protocol::geometry::LogicalSize::new(640.0, 480.0)
         );
         assert_eq!(r.runtime.window.theme, ThemePreference::Dark);
         assert_eq!(r.material.requested(), Material::Solid);
@@ -821,7 +821,7 @@ mod tests {
         assert_eq!(r.runtime.window.title, "second");
         assert_eq!(
             r.runtime.window.inner_size,
-            aqua_platform::geometry::LogicalSize::new(320.0, 240.0)
+            aqua_protocol::geometry::LogicalSize::new(320.0, 240.0)
         );
         assert_eq!(r.runtime.fps_target.unwrap().get(), 120);
         assert!(!r.runtime.vsync);
@@ -858,7 +858,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             r.runtime.window.inner_size,
-            aqua_platform::geometry::LogicalSize::new(760.5, 560.25)
+            aqua_protocol::geometry::LogicalSize::new(760.5, 560.25)
         );
         // Limits validate too, with their field names.
         let bad_min = Config::new().window(Window::new().min_size(px(0.0), px(10.0)));
@@ -922,7 +922,7 @@ mod tests {
         let r = ok.resolve(&OsPreferences::fallback()).unwrap();
         assert_eq!(
             r.runtime.window.max_size,
-            Some(aqua_platform::geometry::LogicalSize::new(1024.0, 768.0))
+            Some(aqua_protocol::geometry::LogicalSize::new(1024.0, 768.0))
         );
         // Clearing limits restores the unbounded default.
         let cleared = Config::new().window(
@@ -971,10 +971,10 @@ mod tests {
         ] {
             let r = glass().resolve(&pref).unwrap();
             assert_eq!(r.material.requested(), Material::Glass);
-            assert_eq!(r.material.resolved(), aqua_platform::WindowMaterial::None);
+            assert_eq!(r.material.resolved(), aqua_protocol::WindowMaterial::Solid);
             assert!(!r.material.is_glass());
             assert!(!r.material.reason().is_empty());
-            assert_eq!(r.runtime.material, aqua_platform::WindowMaterial::None);
+            assert_eq!(r.runtime.material, aqua_protocol::WindowMaterial::Solid);
             // A resolved solid frame leaves the explicit transparency alone.
             assert!(!r.runtime.window.transparent);
         }
@@ -982,7 +982,7 @@ mod tests {
         let plain = glass().resolve(&OsPreferences::fallback()).unwrap();
         assert_eq!(
             plain.material.is_glass(),
-            material_capability(aqua_platform::WindowMaterial::Acrylic).supported
+            material_capability(aqua_protocol::WindowMaterial::Acrylic).supported
         );
     }
 

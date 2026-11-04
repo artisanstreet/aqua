@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use aqua::ui_app::dispatch_clipboard;
 use aqua_core::{InputEvent, Key, KeyEvent, Modifiers};
-use aqua_platform::services::{Clipboard, ClipboardError, MemoryClipboard};
+use aqua_shell_win32::services::{Clipboard, ClipboardError, MemoryClipboard};
 use aqua_text::{Selection, SharedFonts, SharedRuns};
 use aqua_ui::element::Text;
 use aqua_ui::input::{EventPhase, InputKind, InputResponse, RoutedInput, TextEdit};

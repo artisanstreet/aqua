@@ -1,34 +1,55 @@
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Receiver;
+use std::sync::{Arc, LazyLock};
+use std::time::Instant as WallInstant;
 
-use aqua_core::geometry::{CornerRadii, Rect};
+use aqua_core::geometry::{snap_device_pixel, snap_device_stroke, CornerRadii, Rect};
 use aqua_core::image::ImagePlacement;
-use aqua_core::scene::DisplayItem;
-use aqua_core::{Oklch, Point, Size, Transform2D};
+use aqua_core::scene::{DisplayItem, GpuiQuadPulse, ShadowLayer};
+use aqua_core::{GpuiBackground, GpuiHsla, Oklch, Point, Size};
 use aqua_graph::{
-    plan_paint_with, BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Image, PaintCommand,
-    PlanError, PlanLimits, Quad, Shadow,
+    plan_paint_with, BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientStop,
+    Image, PaintCommand, PlanError, PlanLimits,
 };
 use aqua_media::atlas::{AtlasConfig, ImageKey, Placement, Slot, StreamBudget};
 use aqua_media::residency::{GlyphSlot, Residency, ResidencyConfig, VectorMode};
 use aqua_media::upload::texture_handle;
-use aqua_protocol::UploadBatch;
+use aqua_protocol::{Instant, UploadBatch};
 use aqua_scene::Scene;
 use aqua_text::raster::{quantize_size, quantize_x, raster_key};
 use aqua_text::residency::GlyphResolver;
 use aqua_text::runs::RunId;
 use aqua_text::{SharedFonts, SharedRuns};
+use aqua_transport::{LowerContext, Lowered as Commands, TrimRequest};
+
+use super::affine::Affine;
+use super::color;
+use super::host::RenderStats;
+use super::link::ExternalUpdate;
+use super::mesh;
+use super::shape::{self, Border, Fidelity, Paint, Radii, ShadowSpec, Sides};
+use super::text::{ShimmerClocks, TextScope, TextStack};
+use super::vector::{gradient_axis, rotation_steps, VectorCache};
+
+const MESH_TAG: u64 = 0xC000_0000_0000_0000;
+const ROUNDED_CLIP_AREA_CAP: f32 = 0.75;
+
+static PULSE_EPOCH: LazyLock<WallInstant> = LazyLock::new(WallInstant::now);
+
+#[must_use]
+pub fn gpui_pulse_clock_ms() -> u32 {
+    PULSE_EPOCH.elapsed().as_millis() as u32
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Unsupported {
-    GpuiItem,
-    InsetShadow,
-    GeneralTransform,
-    DashedBorder,
-    UnresolvedText,
-    UnknownImage,
     VectorFailed,
+    PathFailed,
+    MeshTooLarge,
+    MeshFailed,
     GlyphBudget,
+    UnbalancedScope,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -36,7 +57,18 @@ pub struct LowerReport {
     pub items: u32,
     pub commands: u32,
     pub glyphs: u32,
+    pub approximated: u32,
+    pub pending: u32,
+    pub pulsing: bool,
+    pub shimmering: bool,
     pub skipped: BTreeMap<Unsupported, u32>,
+}
+
+impl LowerReport {
+    #[must_use]
+    pub fn unsupported(&self) -> u32 {
+        self.skipped.values().sum()
+    }
 }
 
 #[derive(Debug)]
@@ -46,42 +78,34 @@ pub struct Lowered {
     pub report: LowerReport,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct RecoverySignal {
+    listened: Arc<AtomicBool>,
+    lost: Arc<AtomicBool>,
+}
+
+impl RecoverySignal {
+    #[must_use]
+    pub fn listener(&self) -> Self {
+        self.listened.store(true, Ordering::Release);
+        self.clone()
+    }
+
+    pub fn textures_lost(&self) {
+        self.lost.store(true, Ordering::Release);
+    }
+
+    fn consume(&self) -> bool {
+        let lost = self.lost.swap(false, Ordering::AcqRel);
+        lost || !self.listened.load(Ordering::Acquire)
+    }
+}
+
 #[derive(Clone)]
 struct RetainedImage {
     width: u32,
     height: u32,
     premultiplied: Arc<[u8]>,
-}
-
-#[derive(Clone, Copy)]
-struct Affine {
-    scale: f32,
-    tx: f32,
-    ty: f32,
-}
-
-impl Affine {
-    fn rect(self, rect: Rect) -> Rect {
-        Rect {
-            x: rect.x * self.scale + self.tx,
-            y: rect.y * self.scale + self.ty,
-            w: rect.w * self.scale,
-            h: rect.h * self.scale,
-        }
-    }
-
-    fn point(self, x: f32, y: f32) -> (f32, f32) {
-        (x * self.scale + self.tx, y * self.scale + self.ty)
-    }
-
-    fn compose(self, local: Transform2D) -> Option<Affine> {
-        let axis_aligned = local.b == 0.0 && local.c == 0.0 && (local.a - local.d).abs() < 1e-6;
-        axis_aligned.then_some(Affine {
-            scale: self.scale * local.a,
-            tx: self.tx + local.tx * self.scale,
-            ty: self.ty + local.ty * self.scale,
-        })
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -91,13 +115,22 @@ enum Scope {
     Blur,
 }
 
-#[derive(Default)]
-struct Scopes {
-    open: Vec<Scope>,
+struct Walk {
+    base: Affine,
     transforms: Vec<Affine>,
+    open: Vec<Scope>,
+    out: Vec<PaintCommand>,
+    report: LowerReport,
+    surface: Rect,
+    now_secs: f64,
+    pulses: Vec<GpuiQuadPulse>,
 }
 
-impl Scopes {
+impl Walk {
+    fn at(&self) -> Affine {
+        self.transforms.last().copied().unwrap_or(self.base)
+    }
+
     fn close(&mut self, kind: Scope) -> bool {
         match self.open.last() {
             Some(top) if *top == kind => {
@@ -105,6 +138,30 @@ impl Scopes {
                 true
             }
             _ => false,
+        }
+    }
+
+    fn skip(&mut self, reason: Unsupported) {
+        *self.report.skipped.entry(reason).or_insert(0) += 1;
+    }
+
+    fn note(&mut self, fidelity: Fidelity) {
+        if fidelity == Fidelity::Approximated {
+            self.report.approximated += 1;
+        }
+    }
+
+    fn pulse_factor(&mut self) -> f32 {
+        match self.pulses.last().copied() {
+            Some(pulse) if pulse.period_ms != 0 => {
+                self.report.pulsing = true;
+                let elapsed = gpui_pulse_clock_ms().wrapping_sub(pulse.start_ms) % pulse.period_ms;
+                let progress = elapsed as f32 / pulse.period_ms as f32;
+                let swing = (progress * std::f32::consts::TAU).cos() * 0.5 + 0.5;
+                let minimum = pulse.min_opacity.clamp(0.0, 1.0);
+                minimum + (1.0 - minimum) * swing
+            }
+            _ => 1.0,
         }
     }
 }
@@ -115,7 +172,16 @@ pub struct Lowering {
     residency: Residency,
     resolver: GlyphResolver,
     retained: HashMap<u64, RetainedImage>,
+    meshes: HashMap<u64, ImageKey>,
+    vectors: VectorCache,
+    text: TextStack,
+    shimmer: ShimmerClocks,
+    externals: Option<Receiver<ExternalUpdate>>,
+    recovery: RecoverySignal,
+    stats: Option<Arc<RenderStats>>,
     clear: Oklch,
+    last_now: Instant,
+    last_report: LowerReport,
 }
 
 fn residency_config() -> ResidencyConfig {
@@ -142,14 +208,6 @@ fn premultiply(rgba: &[u8]) -> Arc<[u8]> {
         .into()
 }
 
-fn max_radius(corners: CornerRadii) -> f32 {
-    corners
-        .top_left
-        .max(corners.top_right)
-        .max(corners.bottom_right)
-        .max(corners.bottom_left)
-}
-
 fn texel_rect(placement: &Placement, source: Rect) -> Rect {
     Rect {
         x: placement.x as f32 + source.x * placement.width as f32,
@@ -166,458 +224,81 @@ fn physical_extent(size: Size, scale: f32) -> Extent {
     }
 }
 
-impl Lowering {
-    pub fn new(fonts: SharedFonts, runs: SharedRuns) -> Self {
-        Self {
-            fonts,
-            runs,
-            residency: Residency::new(residency_config()),
-            resolver: GlyphResolver::new(),
-            retained: HashMap::new(),
-            clear: Oklch::TRANSPARENT,
-        }
-    }
+fn snapped(rect: Rect) -> Rect {
+    let left = snap_device_pixel(rect.x, 1.0);
+    let top = snap_device_pixel(rect.y, 1.0);
+    let right = snap_device_pixel(rect.right(), 1.0).max(left);
+    let bottom = snap_device_pixel(rect.bottom(), 1.0).max(top);
+    Rect::from_edges(left, top, right, bottom)
+}
 
-    pub fn with_clear(mut self, clear: Oklch) -> Self {
-        self.clear = clear;
-        self
-    }
+fn outward(rect: Rect) -> Rect {
+    Rect::from_edges(
+        rect.x.floor(),
+        rect.y.floor(),
+        rect.right().ceil(),
+        rect.bottom().ceil(),
+    )
+}
 
-    pub fn register_image(&mut self, layer: u64, width: u32, height: u32, rgba: &[u8]) {
-        if width == 0 || height == 0 || rgba.len() != (width as usize) * (height as usize) * 4 {
-            return;
-        }
-        self.release_image(layer);
-        self.retained.insert(
-            layer,
-            RetainedImage {
-                width,
-                height,
-                premultiplied: premultiply(rgba),
-            },
-        );
+fn with_factor(color: Oklch, factor: f32) -> Oklch {
+    match factor >= 1.0 {
+        true => color,
+        false => color.with_alpha(color.alpha * factor),
     }
+}
 
-    pub fn release_image(&mut self, layer: u64) {
-        if let Some(image) = self.retained.remove(&layer) {
-            self.residency.remove_image(&image_key(layer, &image));
-        }
+fn scale_paint(paint: Paint, factor: f32) -> Paint {
+    match paint {
+        Paint::Solid(color) => Paint::Solid(with_factor(color, factor)),
+        Paint::Gradient(gradient) => Paint::Gradient(Gradient {
+            stops: gradient.stops.map(|stop| GradientStop {
+                offset: stop.offset,
+                color: with_factor(stop.color, factor),
+            }),
+            ..gradient
+        }),
     }
+}
 
-    pub fn reset(&mut self) {
-        self.residency = Residency::new(residency_config());
-        self.resolver = GlyphResolver::new();
-    }
+fn hsla_oklch(color: GpuiHsla) -> Oklch {
+    color::oklch(color::hsla(color))
+}
 
-    pub fn trim(&mut self, idle_frames: u64) -> usize {
-        self.residency.trim_idle(idle_frames)
-    }
-
-    pub fn residency(&self) -> &Residency {
-        &self.residency
-    }
-
-    pub fn lower(
-        &mut self,
-        scene: &Scene,
-        size: Size,
-        scale: f32,
-        limits: PlanLimits,
-    ) -> Result<Lowered, PlanError> {
-        self.residency.begin_frame();
-        let mut report = LowerReport::default();
-        let mut commands: Vec<PaintCommand> = Vec::with_capacity(scene.len() * 2);
-        let mut scopes = Scopes::default();
-        let base = Affine {
-            scale,
-            tx: 0.0,
-            ty: 0.0,
-        };
-        let extent = physical_extent(size, scale);
-        for (_, item) in scene.ordered() {
-            report.items += 1;
-            self.emit(item, base, &mut scopes, &mut commands, &mut report);
-        }
-        close_scopes(&mut scopes, &mut commands);
-        report.commands = commands.len() as u32;
-        let updates = self.residency.finish_frame();
-        let uploads = aqua_media::upload::upload_batch(updates);
-        let plan = plan_paint_with(extent, self.clear, &commands, limits)?;
-        Ok(Lowered {
-            uploads,
-            plan,
-            report,
-        })
-    }
-
-    fn current(scopes: &Scopes, base: Affine) -> Affine {
-        scopes.transforms.last().copied().unwrap_or(base)
-    }
-
-    fn emit(
-        &mut self,
-        item: &DisplayItem,
-        base: Affine,
-        scopes: &mut Scopes,
-        out: &mut Vec<PaintCommand>,
-        report: &mut LowerReport,
-    ) {
-        let at = Self::current(scopes, base);
-        match item {
-            DisplayItem::Rect {
-                bounds,
-                radius,
-                fill,
-                border_width,
-                border_color,
-                shadow,
-            } => {
-                let bounds = at.rect(*bounds);
-                if let Some((ox, oy, blur, color)) = shadow {
-                    out.push(PaintCommand::Shadow(Shadow {
-                        bounds,
-                        radius: radius * at.scale,
-                        offset: [ox * at.scale, oy * at.scale],
-                        sigma: blur * at.scale * 0.5,
-                        spread: 0.0,
-                        color: *color,
-                    }));
-                }
-                out.push(PaintCommand::Quad(Quad {
-                    bounds,
-                    radius: radius * at.scale,
-                    border_width: border_width * at.scale,
-                    fill: *fill,
-                    border_color: *border_color,
-                }));
-            }
-            DisplayItem::Quad {
-                bounds,
-                corners,
-                fill,
-                border_widths,
-                border_color,
-                dashed,
-            } => {
-                if *dashed {
-                    skip(report, Unsupported::DashedBorder);
-                }
-                let widest = border_widths
-                    .left
-                    .max(border_widths.right)
-                    .max(border_widths.top)
-                    .max(border_widths.bottom);
-                out.push(PaintCommand::Quad(Quad {
-                    bounds: at.rect(*bounds),
-                    radius: max_radius(*corners) * at.scale,
-                    border_width: widest * at.scale,
-                    fill: *fill,
-                    border_color: *border_color,
-                }));
-            }
-            DisplayItem::Shadow {
-                bounds,
-                corners,
-                layer,
-            } => {
-                if layer.inset {
-                    skip(report, Unsupported::InsetShadow);
-                } else {
-                    out.push(PaintCommand::Shadow(Shadow {
-                        bounds: at.rect(*bounds),
-                        radius: max_radius(*corners) * at.scale,
-                        offset: [layer.dx * at.scale, layer.dy * at.scale],
-                        sigma: layer.blur * at.scale * 0.5,
-                        spread: layer.spread * at.scale,
-                        color: layer.color,
-                    }));
-                }
-            }
-            DisplayItem::PushClip { bounds, .. } | DisplayItem::PushRoundedClip { bounds, .. } => {
-                scopes.open.push(Scope::Clip);
-                out.push(PaintCommand::PushClip(at.rect(*bounds)));
-            }
-            DisplayItem::PopClip => {
-                if scopes.close(Scope::Clip) {
-                    out.push(PaintCommand::PopClip);
-                }
-            }
-            DisplayItem::PushOpacity(opacity) => {
-                scopes.open.push(Scope::Opacity);
-                out.push(PaintCommand::PushOpacity(opacity.clamp(0.0, 1.0)));
-            }
-            DisplayItem::PopOpacity => {
-                if scopes.close(Scope::Opacity) {
-                    out.push(PaintCommand::PopOpacity);
-                }
-            }
-            DisplayItem::PushContentBlur { bounds, radius } => {
-                scopes.open.push(Scope::Blur);
-                out.push(PaintCommand::PushContentBlur {
-                    bounds: at.rect(*bounds),
-                    radius: radius * at.scale,
-                });
-            }
-            DisplayItem::PopContentBlur => {
-                if scopes.close(Scope::Blur) {
-                    out.push(PaintCommand::PopContentBlur);
-                }
-            }
-            DisplayItem::BackdropBlur { bounds, radius } => {
-                out.push(PaintCommand::BackdropBlur(BackdropBlur {
-                    bounds: at.rect(*bounds),
-                    radius: radius * at.scale,
-                    corner_radius: 0.0,
-                }));
-            }
-            DisplayItem::BackdropBlurRounded {
-                bounds,
-                radius,
-                corners,
-            } => {
-                out.push(PaintCommand::BackdropBlur(BackdropBlur {
-                    bounds: at.rect(*bounds),
-                    radius: radius * at.scale,
-                    corner_radius: max_radius(*corners) * at.scale,
-                }));
-            }
-            DisplayItem::PushTransform(local) => match at.compose(*local) {
-                Some(next) => scopes.transforms.push(next),
-                None => {
-                    skip(report, Unsupported::GeneralTransform);
-                    scopes.transforms.push(at);
-                }
-            },
-            DisplayItem::PopTransform => {
-                scopes.transforms.pop();
-            }
-            DisplayItem::Text {
-                at: origin,
-                run,
-                color,
-                opacity,
-            } => self.emit_text(*origin, run.id, *color, *opacity, at, out, report),
-            DisplayItem::Image {
-                bounds,
-                layer,
-                fit,
-                position,
-                source,
-                opacity,
-                rounded_clip,
-            } => self.emit_image(
-                *layer,
-                at.rect(*bounds),
-                Some((*fit, *position, *source)),
-                *opacity,
-                *rounded_clip * at.scale,
-                out,
-                report,
-            ),
-            DisplayItem::External {
-                bounds,
-                layer,
-                opacity,
-                rounded_clip,
-            } => self.emit_image(
-                *layer,
-                at.rect(*bounds),
-                None,
-                *opacity,
-                *rounded_clip * at.scale,
-                out,
-                report,
-            ),
-            DisplayItem::Vector {
-                bounds,
-                source,
-                opacity,
-            } => {
-                let physical = at.rect(*bounds);
-                let width = physical.w.round().max(1.0) as u32;
-                let height = physical.h.round().max(1.0) as u32;
-                match self
-                    .residency
-                    .vector(source, width, height, VectorMode::Color)
-                {
-                    Ok(Slot::Resident(placement)) => {
-                        push_image(out, &placement, physical, full_source(), *opacity, 0.0)
-                    }
-                    Ok(Slot::Blank { .. }) => {}
-                    Err(_) => skip(report, Unsupported::VectorFailed),
-                }
-            }
-            DisplayItem::PushTextColorMap(_)
-            | DisplayItem::PopTextColorMap
-            | DisplayItem::PushGpuiTextColorMap(_)
-            | DisplayItem::PushGpuiTextShimmer(_)
-            | DisplayItem::PopGpuiTextColorMap
-            | DisplayItem::PushGpuiTextColor(_)
-            | DisplayItem::PopGpuiTextColor
-            | DisplayItem::PushGpuiTextOpacity(_)
-            | DisplayItem::PopGpuiTextOpacity
-            | DisplayItem::PushGpuiSourceTextColor(_)
-            | DisplayItem::PopGpuiSourceTextColor
-            | DisplayItem::PushGpuiQuadPulse(_)
-            | DisplayItem::PopGpuiQuadPulse
-            | DisplayItem::PushGpuiContentMask { .. }
-            | DisplayItem::GpuiSvg { .. }
-            | DisplayItem::GpuiTransformedSvg { .. }
-            | DisplayItem::GpuiShadow { .. }
-            | DisplayItem::GpuiPath { .. }
-            | DisplayItem::GpuiMesh { .. }
-            | DisplayItem::GpuiBorder { .. }
-            | DisplayItem::GpuiBackground { .. } => skip(report, Unsupported::GpuiItem),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn emit_text(
-        &mut self,
-        origin: [f32; 2],
-        run_id: u64,
-        color: Oklch,
-        opacity: f32,
-        at: Affine,
-        out: &mut Vec<PaintCommand>,
-        report: &mut LowerReport,
-    ) {
-        let runs = self.runs.clone();
-        let guard = runs.lock();
-        let Some(handle) = guard.resolve(RunId(run_id)) else {
-            skip(report, Unsupported::UnresolvedText);
-            return;
-        };
-        let Some(laid) = handle.layout.laid_out() else {
-            skip(report, Unsupported::UnresolvedText);
-            return;
-        };
-        let (base_x, base_y) = at.point(origin[0], origin[1]);
-        let mut batches: Vec<(aqua_media::atlas::PageId, Vec<Glyph>)> = Vec::new();
-        let mut color_images: Vec<PaintCommand> = Vec::new();
-        for line in &laid.lines {
-            for glyph in &line.glyphs {
-                let x = base_x + (glyph.x + glyph.x_offset) * at.scale;
-                let (pixel_x, subpixel) = quantize_x(x);
-                let y = (base_y + (glyph.y - glyph.y_offset) * at.scale).trunc() as i32;
-                let mut key = raster_key(glyph, subpixel);
-                key.size_bits = quantize_size(glyph.font_size_px * at.scale).to_bits();
-                let resolved = {
-                    let mut fonts = self.fonts.lock();
-                    self.resolver.resolve(&mut self.residency, &mut fonts, &key)
-                };
-                let slot = match resolved {
-                    Ok(slot) => slot,
-                    Err(_) => {
-                        skip(report, Unsupported::GlyphBudget);
-                        continue;
-                    }
-                };
-                let (GlyphSlot::Mask(Slot::Resident(placement))
-                | GlyphSlot::Color(Slot::Resident(placement))) = slot
-                else {
-                    continue;
-                };
-                report.glyphs += 1;
-                let glyph_color = glyph
-                    .color_srgb
-                    .map(|[r, g, b, a]| Oklch::from_srgb8(r, g, b, f32::from(a) / 255.0))
-                    .unwrap_or(color);
-                let bounds = Rect {
-                    x: (pixel_x + placement.bearing[0]) as f32,
-                    y: ((line.baseline_y * at.scale).round() as i32 + y - placement.bearing[1])
-                        as f32,
-                    w: placement.width as f32,
-                    h: placement.height as f32,
-                };
-                match slot {
-                    GlyphSlot::Mask(_) => {
-                        let tinted = glyph_color.with_alpha(glyph_color.alpha * opacity);
-                        let entry = Glyph {
-                            bounds,
-                            texels: texel_rect(&placement, full_source()),
-                            color: tinted,
-                        };
-                        match batches.last_mut() {
-                            Some((page, glyphs)) if *page == placement.page => glyphs.push(entry),
-                            _ => batches.push((placement.page, vec![entry])),
-                        }
-                    }
-                    GlyphSlot::Color(_) => {
-                        let mut image = Vec::new();
-                        push_image(&mut image, &placement, bounds, full_source(), opacity, 0.0);
-                        color_images.extend(image);
-                    }
-                }
-            }
-        }
-        for (page, glyphs) in batches {
-            out.push(PaintCommand::Glyphs(GlyphRun {
-                atlas: texture_handle(page),
-                glyphs,
-            }));
-        }
-        out.extend(color_images);
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn emit_image(
-        &mut self,
-        layer: u64,
-        bounds: Rect,
-        fit: Option<(aqua_core::image::ImageFit, Point, Rect)>,
-        opacity: f32,
-        radius: f32,
-        out: &mut Vec<PaintCommand>,
-        report: &mut LowerReport,
-    ) {
-        let Some(image) = self.retained.get(&layer).cloned() else {
-            skip(report, Unsupported::UnknownImage);
-            return;
-        };
-        let key = image_key(layer, &image);
-        let slot = match self.residency.image_resident(&key) {
-            Some(slot) => Ok(slot),
-            None => self.residency.image(key, &image.premultiplied),
-        };
-        let Ok(Slot::Resident(placement)) = slot else {
-            skip(report, Unsupported::UnknownImage);
-            return;
-        };
-        let (destination, source, clipped) = match fit {
-            None => (bounds, full_source(), false),
-            Some((fit, position, source)) => {
-                let natural = Size {
-                    w: image.width as f32,
-                    h: image.height as f32,
-                };
-                match ImagePlacement::resolve(bounds, natural, fit, position, source) {
-                    Ok(placed) => (placed.destination, placed.source, true),
-                    Err(_) => (bounds, source, false),
-                }
-            }
-        };
-        let overflow = clipped
-            && (destination.x < bounds.x
-                || destination.y < bounds.y
-                || destination.right() > bounds.right()
-                || destination.bottom() > bounds.bottom());
-        if overflow {
-            out.push(PaintCommand::PushClip(bounds));
-        }
-        push_image(out, &placement, destination, source, opacity, radius);
-        if overflow {
-            out.push(PaintCommand::PopClip);
+fn background_paint(background: GpuiBackground, bounds: Rect) -> Paint {
+    match background {
+        GpuiBackground::Solid(solid) => Paint::Solid(hsla_oklch(solid)),
+        GpuiBackground::LinearGradient { angle, stops, .. } => {
+            let (start, end) = gradient_axis(bounds, angle);
+            Paint::Gradient(Gradient {
+                start: [start.x, start.y],
+                end: [end.x, end.y],
+                stops: stops.map(|stop| GradientStop {
+                    offset: stop.percentage,
+                    color: hsla_oklch(stop.color),
+                }),
+            })
         }
     }
 }
 
-fn image_key(layer: u64, image: &RetainedImage) -> ImageKey {
-    ImageKey {
-        asset: layer,
-        frame: 0,
-        width: image.width,
-        height: image.height,
+fn border_sides(widths: aqua_core::Insets, scale: f32) -> Sides {
+    Sides {
+        top: snap_device_stroke(widths.top, scale),
+        right: snap_device_stroke(widths.right, scale),
+        bottom: snap_device_stroke(widths.bottom, scale),
+        left: snap_device_stroke(widths.left, scale),
+    }
+}
+
+fn shadow_spec(layer: &ShadowLayer, color: Oklch, scale: f32) -> ShadowSpec {
+    ShadowSpec {
+        dx: layer.dx * scale,
+        dy: layer.dy * scale,
+        sigma: layer.blur.max(0.0) * scale * 0.5,
+        spread: layer.spread * scale,
+        color,
+        inset: layer.inset,
     }
 }
 
@@ -653,17 +334,864 @@ fn push_image(
     }
 }
 
-fn skip(report: &mut LowerReport, reason: Unsupported) {
-    *report.skipped.entry(reason).or_insert(0) += 1;
+fn image_key(layer: u64, image: &RetainedImage) -> ImageKey {
+    ImageKey {
+        asset: layer,
+        frame: 0,
+        width: image.width,
+        height: image.height,
+    }
 }
 
-fn close_scopes(scopes: &mut Scopes, out: &mut Vec<PaintCommand>) {
-    while let Some(kind) = scopes.open.pop() {
-        out.push(match kind {
-            Scope::Clip => PaintCommand::PopClip,
-            Scope::Opacity => PaintCommand::PopOpacity,
-            Scope::Blur => PaintCommand::PopContentBlur,
+impl Lowering {
+    pub fn new(fonts: SharedFonts, runs: SharedRuns) -> Self {
+        Self {
+            fonts,
+            runs,
+            residency: Residency::new(residency_config()),
+            resolver: GlyphResolver::new(),
+            retained: HashMap::new(),
+            meshes: HashMap::new(),
+            vectors: VectorCache::default(),
+            text: TextStack::default(),
+            shimmer: ShimmerClocks::default(),
+            externals: None,
+            recovery: RecoverySignal::default(),
+            stats: None,
+            clear: Oklch::TRANSPARENT,
+            last_now: Instant::ZERO,
+            last_report: LowerReport::default(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_clear(mut self, clear: Oklch) -> Self {
+        self.clear = clear;
+        self
+    }
+
+    #[must_use]
+    pub fn with_externals(mut self, externals: Receiver<ExternalUpdate>) -> Self {
+        self.externals = Some(externals);
+        self
+    }
+
+    #[must_use]
+    pub fn with_stats(mut self, stats: Arc<RenderStats>) -> Self {
+        self.stats = Some(stats);
+        self
+    }
+
+    #[must_use]
+    pub fn with_recovery(mut self, signal: RecoverySignal) -> Self {
+        self.recovery = signal;
+        self
+    }
+
+    #[must_use]
+    pub fn clear_color(&self) -> Oklch {
+        self.clear
+    }
+
+    #[must_use]
+    pub fn last_report(&self) -> &LowerReport {
+        &self.last_report
+    }
+
+    pub fn register_image(&mut self, layer: u64, width: u32, height: u32, rgba: &[u8]) {
+        if width == 0 || height == 0 || rgba.len() != (width as usize) * (height as usize) * 4 {
+            return;
+        }
+        self.release_image(layer);
+        self.retained.insert(
+            layer,
+            RetainedImage {
+                width,
+                height,
+                premultiplied: premultiply(rgba),
+            },
+        );
+    }
+
+    pub fn release_image(&mut self, layer: u64) {
+        if let Some(image) = self.retained.remove(&layer) {
+            self.residency.remove_image(&image_key(layer, &image));
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.residency = Residency::new(residency_config());
+        self.resolver = GlyphResolver::new();
+        self.meshes.clear();
+        self.vectors.clear();
+    }
+
+    pub fn trim(&mut self, idle_frames: u64) -> usize {
+        self.residency.trim_idle(idle_frames)
+    }
+
+    pub fn residency(&self) -> &Residency {
+        &self.residency
+    }
+
+    pub fn at(&mut self, now: Instant) -> &mut Self {
+        self.last_now = now;
+        self
+    }
+
+    pub fn commands(
+        &mut self,
+        scene: &Scene,
+        size: Size,
+        scale: f32,
+        now: Instant,
+    ) -> (Vec<PaintCommand>, UploadBatch, LowerReport) {
+        let started = WallInstant::now();
+        self.last_now = now;
+        self.residency.begin_frame();
+        self.shimmer.begin_frame();
+        self.text.clear();
+        let extent = physical_extent(size, scale);
+        let mut walk = Walk {
+            base: Affine::device(scale),
+            transforms: Vec::new(),
+            open: Vec::new(),
+            out: Vec::with_capacity(scene.len() * 2),
+            report: LowerReport::default(),
+            surface: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: extent.width as f32,
+                h: extent.height as f32,
+            },
+            now_secs: now.as_secs_f64(),
+            pulses: Vec::new(),
+        };
+        for (_, item) in scene.ordered() {
+            walk.report.items += 1;
+            self.emit(item, &mut walk);
+        }
+        while let Some(kind) = walk.open.pop() {
+            walk.out.push(match kind {
+                Scope::Clip => PaintCommand::PopClip,
+                Scope::Opacity => PaintCommand::PopOpacity,
+                Scope::Blur => PaintCommand::PopContentBlur,
+            });
+        }
+        walk.report.shimmering = self.shimmer.active();
+        self.shimmer.end_frame();
+        walk.report.commands = walk.out.len() as u32;
+        let updates = self.residency.finish_frame();
+        let uploads = aqua_media::upload::upload_batch(updates);
+        if let Some(stats) = &self.stats {
+            record_lowering(stats, &walk.report, started.elapsed());
+        }
+        self.last_report = walk.report.clone();
+        (walk.out, uploads, walk.report)
+    }
+
+    pub fn lower(
+        &mut self,
+        scene: &Scene,
+        size: Size,
+        scale: f32,
+        limits: PlanLimits,
+    ) -> Result<Lowered, PlanError> {
+        let now = self.last_now;
+        let (commands, uploads, report) = self.commands(scene, size, scale, now);
+        let plan = plan_paint_with(physical_extent(size, scale), self.clear, &commands, limits)?;
+        Ok(Lowered {
+            uploads,
+            plan,
+            report,
+        })
+    }
+
+    fn emit(&mut self, item: &DisplayItem, walk: &mut Walk) {
+        let at = walk.at();
+        let s = at.scale();
+        match item {
+            DisplayItem::Rect {
+                bounds,
+                radius,
+                fill,
+                border_width,
+                border_color,
+                shadow,
+            } => {
+                let bounds = at.rect(*bounds);
+                let radii = Radii::uniform(radius * s);
+                if let Some((ox, oy, blur, color)) = shadow {
+                    let spec = ShadowSpec {
+                        dx: ox * s,
+                        dy: oy * s,
+                        sigma: blur * s * 0.5,
+                        spread: 0.0,
+                        color: *color,
+                        inset: false,
+                    };
+                    let fidelity = shape::emit_shadow(&mut walk.out, bounds, radii, spec);
+                    walk.note(fidelity);
+                }
+                let border = Border {
+                    widths: Sides::uniform(border_width * s),
+                    color: *border_color,
+                    dashed: false,
+                };
+                shape::emit_box(
+                    &mut walk.out,
+                    bounds,
+                    radii,
+                    Some(Paint::Solid(*fill)),
+                    Some(border),
+                );
+            }
+            DisplayItem::Quad {
+                bounds,
+                corners,
+                fill,
+                border_widths,
+                border_color,
+                dashed,
+            } => {
+                let factor = walk.pulse_factor();
+                let bounds = snapped(at.rect(*bounds));
+                let border = Border {
+                    widths: border_sides(*border_widths, s),
+                    color: with_factor(*border_color, factor),
+                    dashed: *dashed,
+                };
+                shape::emit_box(
+                    &mut walk.out,
+                    bounds,
+                    Radii::scaled(*corners, s),
+                    Some(scale_paint(Paint::Solid(*fill), factor)),
+                    Some(border),
+                );
+            }
+            DisplayItem::GpuiBackground {
+                bounds,
+                corners,
+                background,
+            } => {
+                let factor = walk.pulse_factor();
+                let bounds = snapped(at.rect(*bounds));
+                let paint = scale_paint(background_paint(*background, bounds), factor);
+                shape::emit_box(
+                    &mut walk.out,
+                    bounds,
+                    Radii::scaled(*corners, s),
+                    Some(paint),
+                    None,
+                );
+            }
+            DisplayItem::GpuiBorder {
+                bounds,
+                corners,
+                widths,
+                color,
+                dashed,
+            } => {
+                let factor = walk.pulse_factor();
+                let border = Border {
+                    widths: border_sides(*widths, s),
+                    color: with_factor(hsla_oklch(*color), factor),
+                    dashed: *dashed,
+                };
+                shape::emit_box(
+                    &mut walk.out,
+                    snapped(at.rect(*bounds)),
+                    Radii::scaled(*corners, s),
+                    None,
+                    Some(border),
+                );
+            }
+            DisplayItem::Shadow {
+                bounds,
+                corners,
+                layer,
+            } => {
+                let fidelity = shape::emit_shadow(
+                    &mut walk.out,
+                    outward(at.rect(*bounds)),
+                    Radii::scaled(*corners, s),
+                    shadow_spec(layer, layer.color, s),
+                );
+                walk.note(fidelity);
+            }
+            DisplayItem::GpuiShadow {
+                bounds,
+                corners,
+                layer,
+            } => {
+                let geometry = ShadowLayer {
+                    dx: layer.dx,
+                    dy: layer.dy,
+                    blur: layer.blur,
+                    spread: layer.spread,
+                    inset: layer.inset,
+                    color: Oklch::TRANSPARENT,
+                };
+                let fidelity = shape::emit_shadow(
+                    &mut walk.out,
+                    outward(at.rect(*bounds)),
+                    Radii::scaled(*corners, s),
+                    shadow_spec(&geometry, hsla_oklch(layer.color), s),
+                );
+                walk.note(fidelity);
+            }
+            DisplayItem::PushClip { bounds, radius } => {
+                let rect = at.rect(*bounds);
+                self.push_clip(walk, rect, Radii::uniform(radius * s));
+            }
+            DisplayItem::PushRoundedClip { bounds, corners } => {
+                let rect = at.rect(*bounds);
+                self.push_clip(walk, rect, Radii::scaled(*corners, s));
+            }
+            DisplayItem::PushGpuiContentMask { bounds } => {
+                walk.open.push(Scope::Clip);
+                walk.out
+                    .push(PaintCommand::PushClip(outward(at.rect(*bounds))));
+            }
+            DisplayItem::PopClip => match walk.close(Scope::Clip) {
+                true => walk.out.push(PaintCommand::PopClip),
+                false => walk.skip(Unsupported::UnbalancedScope),
+            },
+            DisplayItem::PushOpacity(opacity) => {
+                walk.open.push(Scope::Opacity);
+                walk.out
+                    .push(PaintCommand::PushOpacity(opacity.clamp(0.0, 1.0)));
+            }
+            DisplayItem::PopOpacity => match walk.close(Scope::Opacity) {
+                true => walk.out.push(PaintCommand::PopOpacity),
+                false => walk.skip(Unsupported::UnbalancedScope),
+            },
+            DisplayItem::PushContentBlur { bounds, radius } => {
+                walk.open.push(Scope::Blur);
+                walk.out.push(PaintCommand::PushContentBlur {
+                    bounds: at.rect(*bounds),
+                    radius: radius * s,
+                });
+            }
+            DisplayItem::PopContentBlur => match walk.close(Scope::Blur) {
+                true => walk.out.push(PaintCommand::PopContentBlur),
+                false => walk.skip(Unsupported::UnbalancedScope),
+            },
+            DisplayItem::BackdropBlur { bounds, radius } => {
+                walk.out.push(PaintCommand::BackdropBlur(BackdropBlur {
+                    bounds: at.rect(*bounds),
+                    radius: radius * s,
+                    corner_radius: 0.0,
+                }));
+            }
+            DisplayItem::BackdropBlurRounded {
+                bounds,
+                radius,
+                corners,
+            } => {
+                let radii = Radii::scaled(*corners, s);
+                walk.note(match radii.is_uniform() {
+                    true => Fidelity::Exact,
+                    false => Fidelity::Approximated,
+                });
+                walk.out.push(PaintCommand::BackdropBlur(BackdropBlur {
+                    bounds: at.rect(*bounds),
+                    radius: radius * s,
+                    corner_radius: radii.max(),
+                }));
+            }
+            DisplayItem::PushTransform(local) => {
+                let next = at.nested(*local);
+                let usable = next.finite() && next.scale() > 0.0;
+                walk.note(match usable && next.is_exact() {
+                    true => Fidelity::Exact,
+                    false => Fidelity::Approximated,
+                });
+                walk.transforms.push(match usable {
+                    true => next,
+                    false => at,
+                });
+            }
+            DisplayItem::PopTransform => {
+                if walk.transforms.pop().is_none() {
+                    walk.skip(Unsupported::UnbalancedScope);
+                }
+            }
+            DisplayItem::Text {
+                at: origin,
+                run,
+                color,
+                opacity,
+            } => self.emit_text(*origin, run.id, *color, *opacity, walk),
+            DisplayItem::Image {
+                bounds,
+                layer,
+                fit,
+                position,
+                source,
+                opacity,
+                rounded_clip,
+            } => self.emit_image(
+                *layer,
+                at.rect(*bounds),
+                Some((*fit, *position, *source)),
+                *opacity,
+                *rounded_clip * s,
+                walk,
+            ),
+            DisplayItem::External {
+                bounds,
+                layer,
+                opacity,
+                rounded_clip,
+            } => self.emit_image(
+                *layer,
+                at.rect(*bounds),
+                None,
+                *opacity,
+                *rounded_clip * s,
+                walk,
+            ),
+            DisplayItem::Vector {
+                bounds,
+                source,
+                opacity,
+            } => self.emit_vector(source.clone(), at.rect(*bounds), *opacity, walk),
+            DisplayItem::GpuiSvg {
+                bounds,
+                source,
+                tint,
+                opacity,
+            } => {
+                let vector = self.vectors.svg(source, tint.map(hsla_oklch), 0);
+                self.emit_vector(vector, at.rect(*bounds), *opacity, walk);
+            }
+            DisplayItem::GpuiTransformedSvg {
+                bounds,
+                source,
+                tint,
+                opacity,
+                transform,
+            } => {
+                let center = bounds.center();
+                let width = bounds.w * transform.scale.x;
+                let height = bounds.h * transform.scale.y;
+                let placed = Rect {
+                    x: center.x + transform.translation.x - width * 0.5,
+                    y: center.y + transform.translation.y - height * 0.5,
+                    w: width,
+                    h: height,
+                };
+                let vector = self.vectors.svg(
+                    source,
+                    Some(hsla_oklch(*tint)),
+                    rotation_steps(transform.rotation_radians),
+                );
+                self.emit_vector(vector, at.rect(placed), *opacity, walk);
+            }
+            DisplayItem::GpuiPath { path, .. } => self.emit_path(path, at, walk),
+            DisplayItem::GpuiMesh {
+                bounds,
+                corners,
+                mesh,
+                style,
+            } => self.emit_mesh(snapped(at.rect(*bounds)), *corners, mesh, style, s, walk),
+            DisplayItem::PushGpuiQuadPulse(pulse) => walk.pulses.push(*pulse),
+            DisplayItem::PopGpuiQuadPulse => {
+                if walk.pulses.pop().is_none() {
+                    walk.skip(Unsupported::UnbalancedScope);
+                }
+            }
+            DisplayItem::PushTextColorMap(map) => self.text.push_legacy(*map),
+            DisplayItem::PopTextColorMap => self.pop_text(TextScope::LegacyMap, walk),
+            DisplayItem::PushGpuiTextColorMap(map) => self.text.push_map(*map, None),
+            DisplayItem::PushGpuiTextShimmer(shimmer) => {
+                self.text.push_map(shimmer.map, Some(*shimmer))
+            }
+            DisplayItem::PopGpuiTextColorMap => self.pop_text(TextScope::Map, walk),
+            DisplayItem::PushGpuiTextColor(color) => self.text.push_color(*color),
+            DisplayItem::PopGpuiTextColor => self.pop_text(TextScope::Color, walk),
+            DisplayItem::PushGpuiTextOpacity(ranges) => self.text.push_opacity(ranges.clone()),
+            DisplayItem::PopGpuiTextOpacity => self.pop_text(TextScope::Opacity, walk),
+            DisplayItem::PushGpuiSourceTextColor(color) => self.text.push_source(*color),
+            DisplayItem::PopGpuiSourceTextColor => self.pop_text(TextScope::SourceColor, walk),
+        }
+    }
+
+    fn pop_text(&mut self, scope: TextScope, walk: &mut Walk) {
+        if !self.text.pop(scope) {
+            walk.skip(Unsupported::UnbalancedScope);
+        }
+    }
+
+    fn push_clip(&mut self, walk: &mut Walk, rect: Rect, radii: Radii) {
+        let fitted = radii.fitted(rect);
+        let radius = fitted.max();
+        let area = rect.w * rect.h;
+        let cheap = area <= walk.surface.w * walk.surface.h * ROUNDED_CLIP_AREA_CAP;
+        walk.open.push(Scope::Clip);
+        match (radius >= 0.75, cheap) {
+            (true, true) => {
+                walk.note(match fitted.is_uniform() {
+                    true => Fidelity::Exact,
+                    false => Fidelity::Approximated,
+                });
+                walk.out
+                    .push(PaintCommand::PushRoundedClip { rect, radius });
+            }
+            (true, false) => {
+                walk.note(Fidelity::Approximated);
+                walk.out.push(PaintCommand::PushClip(rect));
+            }
+            (false, _) => walk.out.push(PaintCommand::PushClip(rect)),
+        }
+    }
+
+    fn emit_text(
+        &mut self,
+        origin: [f32; 2],
+        run_id: u64,
+        scene_color: Oklch,
+        opacity: f32,
+        walk: &mut Walk,
+    ) {
+        let runs = self.runs.clone();
+        let guard = runs.lock();
+        let Some(handle) = guard.resolve(RunId(run_id)) else {
+            walk.report.pending += 1;
+            return;
+        };
+        let Some(laid) = handle.layout.laid_out() else {
+            walk.report.pending += 1;
+            return;
+        };
+        let at = walk.at();
+        let s = at.scale();
+        let (base_x, base_y) = at.point(origin[0], origin[1]);
+        let mapped = self.text.has_map();
+        let plain = !mapped && !self.text.has_base();
+        let phase = match self.text.shimmer() {
+            Some(shimmer) => self.shimmer.phase(&shimmer, walk.now_secs),
+            None => 0.0,
+        };
+        let map_bounds = self
+            .text
+            .top_map()
+            .map_or(walk.surface, |map| at.rect(map.bounds));
+        let mut batches: Vec<(aqua_media::atlas::PageId, Vec<Glyph>)> = Vec::new();
+        let mut color_images: Vec<PaintCommand> = Vec::new();
+        let mut last_color: Option<([f32; 4], Oklch)> = None;
+        for line in &laid.lines {
+            for glyph in &line.glyphs {
+                let x = base_x + (glyph.x + glyph.x_offset) * s;
+                let (pixel_x, subpixel) = quantize_x(x);
+                let pen_y =
+                    (base_y + (line.baseline_y + glyph.y - glyph.y_offset) * s).round() as i32;
+                let mut key = raster_key(glyph, subpixel);
+                key.size_bits = quantize_size(glyph.font_size_px * s).to_bits();
+                let resolved = {
+                    let mut fonts = self.fonts.lock();
+                    self.resolver.resolve(&mut self.residency, &mut fonts, &key)
+                };
+                let slot = match resolved {
+                    Ok(slot) => slot,
+                    Err(_) => {
+                        walk.skip(Unsupported::GlyphBudget);
+                        continue;
+                    }
+                };
+                let (GlyphSlot::Mask(Slot::Resident(placement))
+                | GlyphSlot::Color(Slot::Resident(placement))) = slot
+                else {
+                    continue;
+                };
+                walk.report.glyphs += 1;
+                let bounds = Rect {
+                    x: (pixel_x + placement.bearing[0]) as f32,
+                    y: (pen_y - placement.bearing[1]) as f32,
+                    w: placement.width as f32,
+                    h: placement.height as f32,
+                };
+                match slot {
+                    GlyphSlot::Mask(_) => {
+                        let factor = opacity * self.text.range_opacity(glyph);
+                        let tinted = match plain && glyph_is_plain(glyph) {
+                            true => with_factor(scene_color, factor),
+                            false => {
+                                let base = self.text.base(glyph, scene_color);
+                                let center = x + glyph.w * s * 0.5;
+                                let shaded = self.text.mapped(base, center, phase, map_bounds, s);
+                                let finished = color::with_alpha(shaded, factor);
+                                match last_color {
+                                    Some((previous, converted)) if previous == finished => {
+                                        converted
+                                    }
+                                    _ => {
+                                        let converted = color::oklch(finished);
+                                        last_color = Some((finished, converted));
+                                        converted
+                                    }
+                                }
+                            }
+                        };
+                        let entry = Glyph {
+                            bounds,
+                            texels: texel_rect(&placement, full_source()),
+                            color: tinted,
+                        };
+                        match batches.last_mut() {
+                            Some((page, glyphs)) if *page == placement.page => glyphs.push(entry),
+                            _ => batches.push((placement.page, vec![entry])),
+                        }
+                    }
+                    GlyphSlot::Color(_) => {
+                        push_image(
+                            &mut color_images,
+                            &placement,
+                            bounds,
+                            full_source(),
+                            opacity,
+                            0.0,
+                        );
+                    }
+                }
+            }
+        }
+        drop(guard);
+        for (page, glyphs) in batches {
+            walk.out.push(PaintCommand::Glyphs(GlyphRun {
+                atlas: texture_handle(page),
+                glyphs,
+            }));
+        }
+        walk.out.extend(color_images);
+    }
+
+    fn emit_image(
+        &mut self,
+        layer: u64,
+        bounds: Rect,
+        fit: Option<(aqua_core::image::ImageFit, Point, Rect)>,
+        opacity: f32,
+        radius: f32,
+        walk: &mut Walk,
+    ) {
+        let Some(image) = self.retained.get(&layer).cloned() else {
+            walk.report.pending += 1;
+            return;
+        };
+        let key = image_key(layer, &image);
+        let slot = match self.residency.image_resident(&key) {
+            Some(slot) => Ok(slot),
+            None => self.residency.image(key, &image.premultiplied),
+        };
+        let Ok(Slot::Resident(placement)) = slot else {
+            walk.report.pending += 1;
+            return;
+        };
+        let (destination, source, clipped) = match fit {
+            None => (bounds, full_source(), false),
+            Some((fit, position, source)) => {
+                let natural = Size {
+                    w: image.width as f32,
+                    h: image.height as f32,
+                };
+                match ImagePlacement::resolve(bounds, natural, fit, position, source) {
+                    Ok(placed) => (placed.destination, placed.source, true),
+                    Err(_) => (bounds, source, false),
+                }
+            }
+        };
+        let overflow = clipped
+            && (destination.x < bounds.x
+                || destination.y < bounds.y
+                || destination.right() > bounds.right()
+                || destination.bottom() > bounds.bottom());
+        if overflow {
+            walk.out.push(PaintCommand::PushClip(bounds));
+        }
+        push_image(
+            &mut walk.out,
+            &placement,
+            destination,
+            source,
+            opacity,
+            radius,
+        );
+        if overflow {
+            walk.out.push(PaintCommand::PopClip);
+        }
+    }
+
+    fn emit_vector(
+        &mut self,
+        source: aqua_core::vector::VectorSource,
+        physical: Rect,
+        opacity: f32,
+        walk: &mut Walk,
+    ) {
+        let width = physical.w.round().max(1.0) as u32;
+        let height = physical.h.round().max(1.0) as u32;
+        match self
+            .residency
+            .vector(&source, width, height, VectorMode::Color)
+        {
+            Ok(Slot::Resident(placement)) => push_image(
+                &mut walk.out,
+                &placement,
+                physical,
+                full_source(),
+                opacity,
+                0.0,
+            ),
+            Ok(Slot::Blank { .. }) => {}
+            Err(_) => walk.skip(Unsupported::VectorFailed),
+        }
+    }
+
+    fn emit_path(&mut self, path: &aqua_core::vector::GpuiPath, at: Affine, walk: &mut Walk) {
+        let Some(raster) = self.vectors.path(path, at.0) else {
+            walk.skip(Unsupported::PathFailed);
+            return;
+        };
+        match self.residency.vector(
+            &raster.source,
+            raster.width,
+            raster.height,
+            VectorMode::Color,
+        ) {
+            Ok(Slot::Resident(placement)) => push_image(
+                &mut walk.out,
+                &placement,
+                raster.placement,
+                full_source(),
+                1.0,
+                0.0,
+            ),
+            Ok(Slot::Blank { .. }) => {}
+            Err(_) => walk.skip(Unsupported::PathFailed),
+        }
+    }
+
+    fn emit_mesh(
+        &mut self,
+        bounds: Rect,
+        corners: CornerRadii,
+        mesh: &Arc<aqua_core::GpuiMesh>,
+        style: &aqua_core::GpuiMeshStyle,
+        scale: f32,
+        walk: &mut Walk,
+    ) {
+        let (width, height) = (bounds.w.round() as u32, bounds.h.round() as u32);
+        if width == 0 || height == 0 || mesh.vertices().is_empty() {
+            return;
+        }
+        if mesh.vertices().len() / 3 > mesh::TRIANGLE_LIMIT {
+            walk.skip(Unsupported::MeshTooLarge);
+            return;
+        }
+        let key = ImageKey {
+            asset: MESH_TAG | (mesh.id() & !MESH_TAG),
+            frame: mesh::style_bits(style) as u32,
+            width,
+            height,
+        };
+        if let Some(previous) = self
+            .meshes
+            .get(&mesh.id())
+            .copied()
+            .filter(|old| *old != key)
+        {
+            self.residency.remove_image(&previous);
+        }
+        let slot = match self.residency.image_resident(&key) {
+            Some(slot) => Ok(slot),
+            None => {
+                let pixels = mesh::rasterize(mesh, style, width, height);
+                self.residency.image(key, &pixels)
+            }
+        };
+        self.meshes.insert(mesh.id(), key);
+        match slot {
+            Ok(Slot::Resident(placement)) => {
+                let radius = Radii::scaled(corners, scale).fitted(bounds).max();
+                push_image(
+                    &mut walk.out,
+                    &placement,
+                    bounds,
+                    full_source(),
+                    1.0,
+                    radius,
+                )
+            }
+            _ => walk.skip(Unsupported::MeshFailed),
+        }
+    }
+
+    fn drain_externals(&mut self) {
+        let updates: Vec<ExternalUpdate> = self
+            .externals
+            .as_ref()
+            .map(|receiver| receiver.try_iter().collect())
+            .unwrap_or_default();
+        updates.into_iter().for_each(|update| match update {
+            ExternalUpdate::Image {
+                layer,
+                width,
+                height,
+                rgba,
+            } => self.register_image(layer, width, height, &rgba),
+            ExternalUpdate::Release { layer } => self.release_image(layer),
         });
     }
-    scopes.transforms.clear();
+}
+
+fn glyph_is_plain(glyph: &aqua_text::layout::LaidGlyph) -> bool {
+    glyph.color_srgb.is_none() && glyph.color_hsla.is_none() && glyph.source_color_hsla.is_none()
+}
+
+fn record_lowering(stats: &RenderStats, report: &LowerReport, elapsed: std::time::Duration) {
+    let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
+    stats.lower_ns.fetch_add(nanos, Ordering::Relaxed);
+    stats.lower_max_ns.fetch_max(nanos, Ordering::Relaxed);
+    stats
+        .skipped_items
+        .fetch_add(u64::from(report.unsupported()), Ordering::Relaxed);
+    stats
+        .commands
+        .fetch_add(u64::from(report.commands), Ordering::Relaxed);
+    stats
+        .glyphs
+        .fetch_add(u64::from(report.glyphs), Ordering::Relaxed);
+}
+
+impl aqua_transport::Lowering for Lowering {
+    fn lower(&mut self, scene: &Scene, context: &LowerContext) -> Commands {
+        let (commands, uploads, report) =
+            self.commands(scene, context.size, context.scale, context.now);
+        Commands {
+            commands,
+            uploads,
+            unsupported: report.unsupported(),
+            approximated: report.approximated,
+            glyphs: report.glyphs,
+        }
+    }
+
+    fn sync(&mut self) {
+        self.drain_externals();
+    }
+
+    fn device_recovered(&mut self) {
+        if self.recovery.consume() {
+            self.reset();
+        }
+    }
+
+    fn trim(&mut self, request: TrimRequest) -> usize {
+        match request {
+            TrimRequest::IdleFrames(frames) => self.residency.trim_idle(frames),
+            TrimRequest::Everything => self.residency.trim_idle(0),
+        }
+    }
 }

@@ -11,21 +11,25 @@ pub mod mailbox;
 pub mod mem_probe;
 pub mod native;
 pub mod native_window;
+pub mod paste;
 pub mod render;
 pub mod runtime;
 pub mod ui_app;
 pub mod worker;
 
 pub use app::{App, Context, IntoView, ReactiveView};
-pub use aqua_platform::chrome::{CaptionControl, CaptionRegion, DragRegions};
+pub use aqua_protocol::chrome::{CaptionControl, CaptionRegion, DragRegions};
 #[cfg(windows)]
-pub use aqua_platform::local_time;
+pub use aqua_shell_win32::local_time;
+pub use aqua_ui::motion::{
+    Animate, Easing, Motion, MotionTheme, MotionToken, Presence, SpringParams,
+};
 pub use config::{
     AquaConfig, Config, ConfigError, Material, ResolvedConfig, ResolvedMaterial, Theme, Titlebar,
     Window,
 };
 pub use error::Error;
-pub use factory::{fr, Column, ColumnBuilder, ColumnWidth, List, Table};
+pub use factory::{fr, Column, ColumnBuilder, ColumnWidth, List, MotionKit, Table};
 pub use inbox::AquaUserEvent;
 pub use runtime::{
     run_headless_externals, AccessSink, AppCtx, Application, Aqua, ExternalFileDrag, ExternalFrame,
@@ -63,28 +67,24 @@ pub mod prelude {
         CursorIcon, DisplayItem, ImeEvent, InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId,
         Oklch, Point, PointerButton, PointerEvent, Rect, TextRun,
     };
-    pub use aqua_platform::window::WindowOptions;
-    pub use aqua_platform::{
-        a11y::{a11y_capability, A11yAction, A11yActionRequest, A11yCapability, A11yNode},
-        badge::{BadgeError, TaskbarBadge},
-        dialogs::{DialogCapability, DialogRequest, FileFilter},
-        material::{MaterialCapability, WindowMaterial},
-        monitor::DisplayInfo,
-        notifications::{
-            AppIdentity, Notification, NotificationAction, NotificationCenter, NotificationError,
-            NotificationResponse,
-        },
-        prefs::{OsPreferences, PrefState, PreferenceSource},
-        services::{Clipboard, ClipboardBackend},
-        shell::{OpenTarget, ShellError},
-    };
-    pub use aqua_platform::{
-        AquaWindowId, FrameReason, ObservedWindowState, WindowEvent, WindowRequest,
+    pub use aqua_protocol::prefs::{PrefState, PreferenceSource, SystemPrefs as OsPreferences};
+    pub use aqua_protocol::{
+        A11yAction, A11yActionRequest, A11yNode, AquaWindowId, BadgeError, DisplayInfo,
+        FrameReason, MaterialCapability, ObservedWindowState, TaskbarBadge, WindowEvent,
+        WindowMaterial, WindowOptions, WindowRequest,
     };
     pub use aqua_protocol::{Instant, RuntimeInput, RuntimeOutput};
     pub use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
     pub use aqua_runtime::Scheduler;
     pub use aqua_scene::Scene;
+    #[cfg(windows)]
+    pub use aqua_shell_win32::notifications::NotificationCenter;
+    pub use aqua_shell_win32::notifications::{
+        AppIdentity, Notification, NotificationAction, NotificationError, NotificationResponse,
+    };
+    pub use aqua_shell_win32::open::{OpenError, OpenTarget};
+    pub use aqua_shell_win32::picker::{DialogCapability, DialogRequest, FileFilter};
+    pub use aqua_shell_win32::services::{Clipboard, ClipboardBackend};
     pub use aqua_text::document::{
         CopySubstitution, SelectionBinding, SelectionDocument, SelectionDocumentId,
         SelectionSource, SelectionSourceError, SelectionSourceId, SourcePosition, SourceSlice,

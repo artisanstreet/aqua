@@ -2,11 +2,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant as WallInstant};
 
 use aqua::{px, ui, Application, ImageAssets, ImageStatus, Instant, ManagedUiApp, Style, UiApp};
-use aqua_platform::{geometry::LogicalSize, AquaWindowId, ObservedWindowState};
-use aqua_render::{RenderError, Renderer};
+use aqua_core::Size;
+use aqua_protocol::geometry::{AquaWindowId, LogicalSize};
+use aqua_protocol::window::ObservedWindowState;
 use aqua_text::{SharedFonts, SharedRuns};
+
+mod support;
 use aqua_ui::motion::ReducedMotion;
 use aqua_ui::tree::{MediaContent, NodeKind};
+use support::{Frame, Painter};
 
 fn gif() -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -31,41 +35,40 @@ fn gif() -> Vec<u8> {
 
 fn paint(
     app: &mut ManagedUiApp,
-    renderer: &mut Renderer,
+    painter: &mut Painter,
     window: &ObservedWindowState,
     ms: u64,
-) -> Vec<u8> {
+) -> Frame {
     let now = Instant::from_nanos(ms * 1_000_000);
     app.build_scene(window, now);
-    let images = app
-        .synchronize_images(renderer.device(), renderer.queue(), now)
-        .unwrap();
+    let images = app.synchronize_images(now).unwrap();
     for layer in app.take_released_images() {
-        renderer.unregister_external(layer);
+        painter.release_image(layer);
     }
     for image in images {
-        renderer.register_external(image.layer, image.view, image.width, image.height);
+        painter.register_image(image.layer, image.width, image.height, &image.rgba);
     }
-    let plan = renderer.prepare(app.ui_mut().scene_mut());
-    renderer.draw(&plan).unwrap();
-    renderer.readback().unwrap()
+    painter.paint(app.ui_mut().scene_mut(), Size::new(64.0, 32.0), 1.0)
 }
 
-fn color(pixels: &[u8], x: usize) -> &[u8] {
-    &pixels[(16 * 64 + x) * 4..][..4]
+fn color(frame: &Frame, x: usize) -> [u8; 4] {
+    frame.pixel(x, 16)
 }
 
 #[test]
 fn previews_have_per_mount_clocks_and_pause_and_restart_without_losing_frame() {
-    let mut renderer = match pollster::block_on(Renderer::headless(64, 32)) {
-        Ok(renderer) => renderer,
-        Err(RenderError::AdapterNotFound(_))
-            if std::env::var("AQUA_REQUIRE_GPU").as_deref() != Ok("1") =>
-        {
-            return
-        }
-        Err(error) => panic!("{error}"),
-    };
+    let fonts = SharedFonts::new();
+    let runs = SharedRuns::new();
+    let painters = support::painters(&fonts, &runs);
+    #[cfg(windows)]
+    assert!(painters.len() > 1, "no D3D12 adapter available");
+    for painter in painters {
+        eprintln!("backend {}", painter.label);
+        previews_run(painter, fonts.clone(), runs.clone());
+    }
+}
+
+fn previews_run(mut renderer: Painter, fonts: SharedFonts, runs: SharedRuns) {
     let assets = ImageAssets::default();
     let image = assets.decode_preview(Arc::<[u8]>::from(gif())).unwrap();
     let timeout = WallInstant::now() + Duration::from_secs(5);
@@ -74,7 +77,7 @@ fn previews_have_per_mount_clocks_and_pause_and_restart_without_losing_frame() {
         std::thread::yield_now();
     }
     assert!(matches!(image.status(), ImageStatus::Ready { .. }));
-    let mut ui = UiApp::new(SharedFonts::new(), SharedRuns::new());
+    let mut ui = UiApp::new(fonts, runs);
     ui.mount(|_| {
         ui::Box::new()
             .style(Style::new().row().width(px(64.0)).height(px(32.0)))
@@ -86,6 +89,7 @@ fn previews_have_per_mount_clocks_and_pause_and_restart_without_losing_frame() {
             .build()
     })
     .unwrap();
+    ui.set_viewport(64.0, 32.0, 1.0);
     let mut app = ManagedUiApp::new(ui, assets);
     let mut window = ObservedWindowState::new(
         AquaWindowId::new(1).unwrap(),

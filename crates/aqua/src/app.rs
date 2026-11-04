@@ -30,7 +30,8 @@
 //! Result<ResolvedConfig, ConfigError>` with `ResolvedConfig { runtime:
 //! AquaConfig, material: ResolvedMaterial }`.
 
-use aqua_platform::prefs::{query_preferences, OsPreferences};
+use aqua_protocol::prefs::SystemPrefs as OsPreferences;
+use aqua_shell_win32::capability::query_preferences;
 
 use aqua_reactive::{DepTuple, Scope};
 use aqua_ui::element::Element;
@@ -282,8 +283,8 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
-    use aqua_platform::prefs::PrefState;
-    use aqua_platform::WindowMaterial;
+    use aqua_protocol::prefs::PrefState;
+    use aqua_protocol::WindowMaterial;
     use aqua_reactive::{ReadSignal, WriteSignal};
     use aqua_ui::element::ui::{Box as UiBox, Text as UiText};
     use aqua_ui::style::{pct, px, Style};
@@ -408,7 +409,7 @@ mod tests {
         })
         .expect("config prepares under opaque prefs");
         assert_eq!(prepared.resolved.material.requested(), Material::Glass);
-        assert_eq!(prepared.resolved.material.resolved(), WindowMaterial::None);
+        assert_eq!(prepared.resolved.material.resolved(), WindowMaterial::Solid);
         assert!(!prepared.resolved.material.is_glass());
         build_window_frame(&mut prepared.ui, &prepared.resolved).expect("frame builds");
         assert!(texts(&prepared.ui).iter().any(|t| t == "solid-ui"));

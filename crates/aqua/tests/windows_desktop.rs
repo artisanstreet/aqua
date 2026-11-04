@@ -5,11 +5,11 @@ mod native {
     use aqua::{AppCtx, Application, Aqua, AquaConfig, Instant};
     use aqua_core::scene::{SnapshotTransition, TextRasterMode};
     use aqua_core::{DisplayItem, InputEvent, Oklch, Rect};
-    use aqua_platform::badge::TaskbarBadge;
-    use aqua_platform::geometry::LogicalSize;
-    use aqua_platform::window::{WindowError, WindowOptions};
-    use aqua_platform::{AquaWindowId, ObservedWindowState, WindowEvent, WindowRequest};
-    use aqua_render::Scene;
+    use aqua_protocol::geometry::LogicalSize;
+    use aqua_protocol::window::{WindowError, WindowOptions};
+    use aqua_protocol::TaskbarBadge;
+    use aqua_protocol::{AquaWindowId, ObservedWindowState, WindowEvent, WindowRequest};
+    use aqua_scene::Scene;
     use std::cell::RefCell;
     use std::num::NonZeroUsize;
     use std::rc::Rc;
@@ -280,7 +280,9 @@ mod native {
             report.vetoed,
             report.delivered
         );
-        println!("WINDOWS_DESKTOP_OK: worker wake, native resize, taskbar badges, two-window lifecycle, close veto, snapshot clock and raster modes");
+        println!(
+            "WINDOWS_DESKTOP_OK: worker wake, native resize, taskbar badges, two-window lifecycle, close veto, snapshot clock and raster modes"
+        );
     }
 }
 

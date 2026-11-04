@@ -30,6 +30,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use taffy::style::{AlignItems, JustifyContent};
 
+#[path = "../tests/support/mod.rs"]
+mod support;
+
 #[derive(Clone, Debug, PartialEq)]
 struct Todo {
     id: u64,
@@ -485,29 +488,11 @@ fn preview(path: &str) -> Result<(), String> {
     app.tree_mut().set_focused(Some(input));
     app.set_viewport(760.0, 560.0, 1.0);
     app.build_frame().map_err(|e| e.to_string())?;
-    let mut renderer =
-        pollster::block_on(aqua_render::Renderer::headless(760, 560)).map_err(|e| e.to_string())?;
-    renderer.set_text_provider(Box::new(aqua_render::GlyphonProvider::new(
-        renderer.device(),
-        renderer.queue(),
-        renderer.format(),
-        aqua_render::TextBackend::new(fonts, runs),
-    )));
-    let plan = renderer.prepare(app.scene_mut());
-    renderer.draw(&plan).map_err(|e| e.to_string())?;
-    let mut pixels = renderer.readback().map_err(|e| e.to_string())?;
-    // The offscreen working target is linear. PNG viewers expect sRGB.
-    for rgba in pixels.as_chunks_mut::<4>().0 {
-        for channel in &mut rgba[..3] {
-            let x = f32::from(*channel) / 255.0;
-            let srgb = if x <= 0.0031308 {
-                x * 12.92
-            } else {
-                1.055 * x.powf(1.0 / 2.4) - 0.055
-            };
-            *channel = (srgb.clamp(0.0, 1.0) * 255.0).round() as u8;
-        }
-    }
+    let mut painter = support::painters(&fonts, &runs)
+        .pop()
+        .ok_or_else(|| "no painter available".to_string())?;
+    let frame = painter.paint(app.scene(), aqua_core::Size::new(760.0, 560.0), 1.0);
+    let pixels = frame.rgba8;
     image::RgbaImage::from_raw(760, 560, pixels)
         .unwrap()
         .save(path)

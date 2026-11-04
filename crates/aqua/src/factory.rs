@@ -24,7 +24,42 @@ pub use aqua_ui::collection::{fr, Column, ColumnBuilder, ColumnWidth, List, Tabl
 
 use crate::config::{Config, Window};
 use crate::runtime::Aqua;
+use aqua_ui::motion::{
+    Animate, Easing, Motion, MotionRef, MotionTheme, MotionToken, Presence, SpringParams,
+};
 use aqua_ui::style::Style;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MotionKit;
+
+impl MotionKit {
+    pub const INSTANT: Motion = Motion::INSTANT;
+
+    #[must_use]
+    pub const fn spring(self, params: SpringParams) -> Motion {
+        Motion::spring(params)
+    }
+
+    #[must_use]
+    pub const fn tween(self, duration_secs: f64, easing: Easing) -> Motion {
+        Motion::tween(duration_secs, easing)
+    }
+
+    #[must_use]
+    pub const fn token(self, name: &'static str) -> MotionToken {
+        MotionToken::new(name)
+    }
+
+    #[must_use]
+    pub fn theme(self, fallback: Motion) -> MotionTheme {
+        MotionTheme::new(fallback)
+    }
+
+    #[must_use]
+    pub fn reference(self, motion: impl Into<MotionRef>) -> MotionRef {
+        motion.into()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Canonical factories on the existing concrete runtime struct.
@@ -131,5 +166,17 @@ impl Aqua {
     /// Canonical partial style (all fields unset).
     pub const fn Style() -> Style {
         Style::new()
+    }
+
+    pub fn Animate() -> Animate {
+        Animate::new()
+    }
+
+    pub fn Presence() -> Presence {
+        Presence::new()
+    }
+
+    pub const fn Motion() -> MotionKit {
+        MotionKit
     }
 }

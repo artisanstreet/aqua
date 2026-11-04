@@ -1,11 +1,11 @@
 use aqua::{
     ui::Text,
-    ui_app::{dispatch_clipboard, ClipboardOutcome},
+    ui_app::{dispatch_clipboard, dispatch_input_with_clipboard_outcome, ClipboardOutcome},
     UiApp,
 };
 use aqua_core::{InputEvent, Key, KeyEvent, Modifiers, NamedKey};
-use aqua_platform::services::{Clipboard, ClipboardError, MemoryClipboard};
 use aqua_reactive::ReadSignal;
+use aqua_shell_win32::services::{Clipboard, ClipboardError, MemoryClipboard};
 use aqua_text::{Selection, SharedFonts, SharedRuns};
 
 fn field() -> (UiApp, ReadSignal<String>) {
@@ -113,7 +113,7 @@ fn altgr_shortcuts_are_left_for_text_input_and_disabled_fields_reject_paste() {
 
 #[test]
 fn native_clipboard_defaults_follow_routed_capture_and_do_not_duplicate_delivery() {
-    use aqua::ui_app::dispatch_input_with_clipboard;
+    use aqua::ui_app::dispatch_input_with_clipboard_outcome as dispatch_input_with_clipboard;
     use aqua_ui::input::{EventPhase, InputKind, InputResponse};
     use std::{cell::Cell, rc::Rc};
     let (mut app, text) = field();
@@ -156,8 +156,8 @@ fn native_clipboard_defaults_follow_routed_capture_and_do_not_duplicate_delivery
 
 #[test]
 fn composer_consumes_structured_image_and_file_paste_before_text_fallback() {
-    use aqua::ui_app::dispatch_input_with_clipboard;
-    use aqua_platform::services::ClipboardImage;
+    use aqua::ui_app::dispatch_input_with_clipboard_outcome as dispatch_input_with_clipboard;
+    use aqua_shell_win32::services::ClipboardImage;
     use aqua_ui::input::{EventPhase, InputKind, InputResponse, RoutedInput};
     use std::{cell::RefCell, rc::Rc};
     let (mut app, text) = field();
@@ -218,8 +218,8 @@ fn composer_consumes_structured_image_and_file_paste_before_text_fallback() {
 
 #[test]
 fn clipboard_format_failure_is_reported_before_any_partial_paste() {
-    use aqua::ui_app::dispatch_input_with_clipboard;
-    use aqua_platform::services::ClipboardImage;
+    use aqua::ui_app::dispatch_input_with_clipboard_outcome as dispatch_input_with_clipboard;
+    use aqua_shell_win32::services::ClipboardImage;
     struct FailedImage;
     impl Clipboard for FailedImage {
         fn get_text(&mut self) -> Result<Option<String>, ClipboardError> {
@@ -253,9 +253,7 @@ fn no_op_clipboard_shortcut_is_consumed_without_requesting_redraw() {
     let (mut app, _) = field();
     let mut clipboard = MemoryClipboard::new();
     let copy = shortcut(Key::Char('c'), Modifiers::CONTROL);
-    let outcome =
-        aqua::ui_app::dispatch_input_with_clipboard_outcome(&mut app, &mut clipboard, &copy)
-            .unwrap();
+    let outcome = dispatch_input_with_clipboard_outcome(&mut app, &mut clipboard, &copy).unwrap();
     assert!(outcome.consumed);
-    assert!(outcome.output.redraw.is_empty());
+    assert!(outcome.redraw.is_empty());
 }

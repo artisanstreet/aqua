@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 
 use aqua::config::{Config, Material, Theme, Titlebar, Window};
 use aqua::{App, Application, Context, IntoView};
-use aqua_platform::prefs::{OsPreferences, PrefState};
+use aqua_protocol::prefs::{PrefState, SystemPrefs as OsPreferences};
 
 fn window() -> Window {
     Window::new()
@@ -143,7 +143,7 @@ fn pure_resolution_glass_stands_opaque_prefs_fall_back() {
         "overlay titlebar passes through resolve"
     );
     let capable =
-        aqua_platform::material::material_capability(aqua_platform::WindowMaterial::Acrylic)
+        aqua_shell_win32::capability::material_capability(aqua_protocol::WindowMaterial::Acrylic)
             .supported;
     assert_eq!(
         resolved.material.is_glass(),
@@ -187,20 +187,20 @@ fn app_builder_and_application_trait_coexist() {
         fn on_window_event(
             &mut self,
             _ctx: &mut aqua::AppCtx,
-            _id: aqua_platform::AquaWindowId,
-            _event: &aqua_platform::WindowEvent,
+            _id: aqua_protocol::geometry::AquaWindowId,
+            _event: &aqua_protocol::window::WindowEvent,
         ) {
         }
         fn on_input(
             &mut self,
             _ctx: &mut aqua::AppCtx,
-            _id: aqua_platform::AquaWindowId,
+            _id: aqua_protocol::geometry::AquaWindowId,
             _event: &aqua_core::InputEvent,
         ) {
         }
         fn build_scene(
             &mut self,
-            _window: &aqua_platform::ObservedWindowState,
+            _window: &aqua_protocol::window::ObservedWindowState,
             _now: aqua::Instant,
         ) -> Option<aqua::Instant> {
             None

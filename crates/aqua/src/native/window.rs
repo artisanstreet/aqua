@@ -1,9 +1,10 @@
 use aqua_a11y_uia::{Connection, UiaAdapter};
 use aqua_core::{ClickSettings, CursorIcon, Rect};
-use aqua_platform::chrome::DragRegions;
-use aqua_platform::monitor::DisplayInfo;
+use aqua_protocol::chrome::DragRegions;
+use aqua_protocol::monitor::DisplayInfo;
 use aqua_protocol::{A11yActionRequest, AccessTreeUpdate};
 use aqua_shell_win32::Window;
+use aqua_transport::Inspector;
 
 use crate::native_window::NativeWindow;
 use crate::runtime::AccessSink;
@@ -106,18 +107,28 @@ impl NativeWindow for Win32Window {
     }
 }
 
-pub struct UiaSink(pub UiaAdapter);
+pub struct UiaSink {
+    pub adapter: UiaAdapter,
+    pub inspector: Option<Inspector>,
+}
 
 impl AccessSink for UiaSink {
     fn needs_snapshot(&self) -> bool {
-        self.0.connection() == Connection::Connected
+        self.inspector.is_some() || self.adapter.connection() == Connection::Connected
+    }
+
+    fn connection_epoch(&self) -> u64 {
+        u64::from(self.adapter.connection() == Connection::Connected)
     }
 
     fn apply(&mut self, update: &AccessTreeUpdate) {
-        self.0.apply(update);
+        if let Some(inspector) = &self.inspector {
+            super::inspector::publish_tree(inspector, update);
+        }
+        self.adapter.apply(update);
     }
 
     fn drain_actions(&mut self) -> Vec<A11yActionRequest> {
-        self.0.drain_actions()
+        self.adapter.drain_actions()
     }
 }

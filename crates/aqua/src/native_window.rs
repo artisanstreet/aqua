@@ -1,6 +1,6 @@
 use aqua_core::{ClickSettings, CursorIcon};
-use aqua_platform::chrome::DragRegions;
-use aqua_platform::monitor::DisplayInfo;
+use aqua_protocol::chrome::DragRegions;
+use aqua_protocol::monitor::DisplayInfo;
 
 pub trait NativeWindow {
     fn scale(&self) -> f64;

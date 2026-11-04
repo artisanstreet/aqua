@@ -21,7 +21,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use aqua::{Aqua, Style, UiApp, fr, px};
+use aqua::{fr, px, Aqua, Style, UiApp};
 use aqua_core::{InputEvent, Key, KeyEvent, Modifiers, NamedKey, Oklch, Point, Role, ScrollDelta};
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::tree::NodeKind;
@@ -53,6 +53,8 @@ struct NameValue {
 // ---------------------------------------------------------------------------
 // Harness helpers (real UiApp frame pipeline, headless).
 // ---------------------------------------------------------------------------
+
+mod support;
 
 fn host() -> UiApp {
     UiApp::new(SharedFonts::new(), SharedRuns::new())
@@ -445,10 +447,9 @@ fn scroll_and_resize_move_the_virtual_window() {
 
     // Real scroll_to near the end: the window must follow through the real
     // frame pipeline (no shadow state).
-    assert!(
-        app.tree_mut()
-            .scroll_to(scroll, Point::new(0.0, 10_000_000.0))
-    );
+    assert!(app
+        .tree_mut()
+        .scroll_to(scroll, Point::new(0.0, 10_000_000.0)));
     frame(&mut app, 600.0, 600.0);
     frame(&mut app, 600.0, 600.0);
     let bottom: Vec<usize> = row_texts(&app, "row-")
@@ -1173,36 +1174,20 @@ fn semantics_carry_roles_totals_and_logical_indices() {
 // 13. Strict offscreen GPU pixels for List + Table (only AdapterNotFound skips).
 // ---------------------------------------------------------------------------
 
-fn headless_or_skip(w: u32, h: u32) -> Option<aqua_render::Renderer> {
-    match pollster::block_on(aqua_render::Renderer::headless(w, h)) {
-        Ok(r) => Some(r),
-        Err(e) => {
-            let strict = std::env::var("AQUA_REQUIRE_GPU").is_ok_and(|v| v == "1");
-            if matches!(e, aqua_render::RenderError::AdapterNotFound(_)) && !strict {
-                eprintln!("SKIP-NO-ADAPTER collections artifact (no adapter): {e}");
-                return None;
-            }
-            panic!("collections artifact GPU init failed (must not skip): {e:?}");
-        }
+#[test]
+fn collections_paint_real_pixels_offscreen() {
+    let fonts = SharedFonts::new();
+    let runs = SharedRuns::new();
+    let painters = support::painters(&fonts, &runs);
+    #[cfg(windows)]
+    assert!(painters.len() > 1, "no D3D12 adapter available");
+    for painter in painters {
+        collections_pixels(painter, fonts.clone(), runs.clone());
     }
 }
 
-#[test]
-fn collections_paint_real_pixels_offscreen() {
+fn collections_pixels(mut r: support::Painter, fonts: SharedFonts, runs: SharedRuns) {
     use aqua::ui::Element;
-    let Some(mut r) = headless_or_skip(640, 480) else {
-        return;
-    };
-    let fonts = SharedFonts::new();
-    let runs = SharedRuns::new();
-    let backend = aqua_render::TextBackend::new(fonts.clone(), runs.clone());
-    let fmt = r.format();
-    r.set_text_provider(Box::new(aqua_render::GlyphonProvider::new(
-        r.device(),
-        r.queue(),
-        fmt,
-        backend,
-    )));
 
     let items: Vec<Item> = (0..12u64).map(Item::plain).collect();
     let rows: Vec<NameValue> = (0..8u64)
@@ -1247,15 +1232,15 @@ fn collections_paint_real_pixels_offscreen() {
     assert_eq!(app.build_error(), None);
     assert!(!app.scene().is_empty(), "list + table emit scene ops");
 
-    let plan = r.prepare(app.scene_mut());
-    assert!(!plan.is_clean(), "real collection content produces work");
-    r.draw(&plan).expect("draw");
-    let px = r.readback().expect("readback");
-    assert_eq!(px.len(), 640 * 480 * 4);
-    let glyph_px = px
-        .as_chunks::<4>()
-        .0
-        .iter()
+    let frame = r.paint(app.scene(), aqua_core::Size::new(640.0, 480.0), 1.0);
+    assert_eq!(frame.rgba8.len(), 640 * 480 * 4);
+    assert!(
+        r.report.glyphs > 0,
+        "{}: text lowers to glyph runs",
+        r.label
+    );
+    let glyph_px = frame
+        .pixels()
         .filter(|c| c[3] > 100 && c[0] > 150 && c[1] > 150 && c[2] > 150)
         .count();
     assert!(
@@ -1266,8 +1251,9 @@ fn collections_paint_real_pixels_offscreen() {
         if let Some(parent) = std::path::Path::new(&path).parent() {
             std::fs::create_dir_all(parent).expect("artifact dir");
         }
-        let img = image::RgbaImage::from_raw(640, 480, px).expect("raw buffer");
-        img.save(&path).expect("png save");
+        let img = image::RgbaImage::from_raw(640, 480, frame.rgba8).expect("raw buffer");
+        img.save(format!("{path}.{}.png", r.label.replace(' ', "-")))
+            .expect("png save");
         eprintln!("artifact saved to {path}");
     }
 }
@@ -1367,10 +1353,9 @@ fn live_signal_subscriptions_survive_window_updates_and_dispose_on_eviction() {
     let stats_same = app.runtime().stats();
 
     // Scroll far: first row evicted, its scope/effect disposed.
-    assert!(
-        app.tree_mut()
-            .scroll_to(scroll, Point::new(0.0, 10_000_000.0))
-    );
+    assert!(app
+        .tree_mut()
+        .scroll_to(scroll, Point::new(0.0, 10_000_000.0)));
     frame(&mut app, 600.0, 400.0);
     frame(&mut app, 600.0, 400.0);
     assert!(

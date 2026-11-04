@@ -1,12 +1,14 @@
-use std::{cell::Cell, rc::Rc};
+#![cfg(windows)]
+
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use aqua::{
     ui::{Box as UiBox, Button, Text},
     UiApp,
 };
-use aqua_core::{Role, Size};
-use aqua_platform::a11y::{build_tree_update, translate_action_request};
-use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest, Input};
+use aqua_a11y_uia::{build_tree_update, pack_node_id, A11yBridge};
+use aqua_core::Role;
+use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest, Machine, RuntimeInput};
 use aqua_text::{SharedFonts, SharedRuns};
 
 #[test]
@@ -32,11 +34,7 @@ fn native_value_and_invoke_requests_update_the_real_bound_field_and_button() {
             .build()
     })
     .unwrap();
-    app.step(Input::Viewport {
-        size: Size::new(400.0, 200.0),
-        scale: 1.0,
-    })
-    .unwrap();
+    app.set_viewport(400.0, 200.0, 1.0);
     app.build_frame().unwrap();
     let (root, focus, nodes) = app.a11y_nodes().unwrap();
     let field = nodes
@@ -55,34 +53,37 @@ fn native_value_and_invoke_requests_update_the_real_bound_field_and_button() {
     let native_field = update
         .nodes
         .iter()
-        .find(|(id, _)| *id == aqua_platform::a11y::pack_node_id(field))
+        .find(|(id, _)| *id == pack_node_id(field))
         .unwrap();
     assert!(native_field.1.supports_action(accesskit::Action::SetValue));
-    let request = translate_action_request(&accesskit::ActionRequest {
+    let bridge = A11yBridge::new(Arc::new(|| {}));
+    bridge.native_action(&accesskit::ActionRequest {
         action: accesskit::Action::SetValue,
         target_tree: accesskit::TreeId::ROOT,
         target_node: native_field.0,
         data: Some(accesskit::ActionData::Value("updated\r\nmessage".into())),
     });
-    app.step(Input::Access(request)).unwrap();
+    let requests = bridge.drain_actions();
+    assert_eq!(requests.len(), 1);
+    for request in requests {
+        app.step(RuntimeInput::Access(request));
+    }
     app.sync().unwrap();
     assert_eq!(read.get(), "updated message");
-    app.step(Input::Access(A11yActionRequest {
+    app.step(RuntimeInput::Access(A11yActionRequest {
         node: button,
         action: A11yAction::Press,
         data: A11yActionData::None,
-    }))
-    .unwrap();
+    }));
     assert_eq!(pressed.get(), 1);
     let mut semantics = app.tree().get(button).unwrap().semantics.clone();
     semantics.disabled = true;
     app.tree_mut().set_semantics(button, semantics);
-    app.step(Input::Access(A11yActionRequest {
+    app.step(RuntimeInput::Access(A11yActionRequest {
         node: button,
         action: A11yAction::Press,
         data: A11yActionData::None,
-    }))
-    .unwrap();
+    }));
     assert_eq!(pressed.get(), 1);
 }
 
@@ -111,7 +112,7 @@ fn password_content_is_protected_in_accessibility_and_clipboard() {
         update
             .nodes
             .iter()
-            .find(|(id, _)| *id == aqua_platform::a11y::pack_node_id(field.semantic.node))
+            .find(|(id, _)| *id == pack_node_id(field.semantic.node))
             .unwrap()
             .1
             .role(),

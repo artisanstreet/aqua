@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use aqua_platform::AquaWindowId;
+use aqua_protocol::AquaWindowId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AquaUserEvent {

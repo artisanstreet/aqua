@@ -8,12 +8,11 @@ rust-version.workspace = true
 
 [dependencies]
 aqua-core = { workspace = true }
-aqua-platform = { path = "../aqua-platform" }
 aqua-protocol = { path = "../aqua-protocol" }
 aqua-runtime = { path = "../aqua-runtime" }
 aqua-reactive = { path = "../aqua-reactive" }
-aqua-render = { path = "../aqua-render" }
 aqua-text = { path = "../aqua-text" }
+aqua-fonts-system = { path = "../aqua-fonts-system" }
 aqua-ui = { path = "../aqua-ui" }
 aqua-graph = { path = "../aqua-graph" }
 aqua-media = { path = "../aqua-media" }
@@ -22,19 +21,35 @@ aqua-scene = { path = "../aqua-scene" }
 aqua-transport = { path = "../aqua-transport" }
 aqua-ime-tsf = { path = "../aqua-ime-tsf" }
 aqua-gpu-ref = { path = "../aqua-gpu-ref" }
+aqua-shell-win32 = { path = "../aqua-shell-win32" }
 
 [target.'cfg(windows)'.dependencies]
-aqua-shell-win32 = { path = "../aqua-shell-win32" }
 aqua-gpu-d3d12 = { path = "../aqua-gpu-d3d12" }
 aqua-a11y-uia = { path = "../aqua-a11y-uia" }
 
 [dev-dependencies]
-winit = { workspace = true }
-wgpu = { workspace = true }
-pollster = "0.4"
 accesskit = "0.25"
 taffy = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+serde_json = "1"
+windows = { version = "0.62.2", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_UI_Accessibility",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[[test]]
+name = "host_native"
+harness = false
+
+[[test]]
+name = "host_windows"
+harness = false
 
 [[test]]
 name = "windows_desktop"

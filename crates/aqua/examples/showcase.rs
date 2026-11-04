@@ -1,27 +1,5 @@
-//! Aqua showcase: reactive todo list driving a real window.
-//!
-//! Exercises the full facade path on peer contracts:
-//! - `aqua-reactive`: todo state as explicit signals, derived visible list
-//!   and counts, keyed per-row child scopes (disposed on remove), `batch`
-//!   around multi-write commands; host-driven flush via `bind_reactive`.
-//! - `aqua-text` v1: `TextEditor`-bound input field, retained `TextLayout`s
-//!   minted through the shared `SharedRuns` into real `DisplayItem::Text`
-//!   runs with caret + selection geometry and IME candidate positioning.
-//! - `aqua-ui` overlay service: filter popover with placement, light
-//!   dismissal, and focus save/restore.
-//! - Platform scheduler: input demand, `MotionController` deadlines for the
-//!   toggle pulse, animation deadlines from the 3D viewport, idle sleep.
-//! - GPU extensions: procedural media (PNG codec path → cache → upload →
-//!   `External` every frame) and a depth-tested cube `ViewportPass`
-//!   (`App::externals` + shared device/queue).
-//!
-//! The `UiApp` high-level host (`aqua::UiApp`, `Aqua::run_ui`) covers
-//! tree mounting/binding/layout for component apps; this example drives the
-//! low-level `Application` escape directly to exercise the full runtime surface.
-//!
-//! Run: `cargo run -p aqua --example showcase`
-//! Smoke (WSLg/CI, no user needed):
-//! `AQUA_SMOKE_MS=2000 cargo run -p aqua --example showcase`
+#[path = "showcase/viewport.rs"]
+mod viewport;
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant as WallInstant};
@@ -29,10 +7,6 @@ use std::time::{Duration, Instant as WallInstant};
 use aqua::prelude::*;
 use aqua::Application;
 use aqua_reactive::{Runtime, Scope};
-use aqua_render::{
-    media::{external_item, media_layer, GpuImageCache, GpuMediaBudget, MediaBudget, MediaCache},
-    viewport::{Camera, MeshData, MeshRenderer, ViewportDesc, ViewportPass},
-};
 use aqua_text::{
     LineMode, RunId, SharedFonts, SharedRuns, TextAlign, TextEditor, TextLayout, TextStyle,
     WrapMode,
@@ -75,7 +49,6 @@ enum FocusZone {
     List,
 }
 
-// Layout constants (logical px).
 const HEADER_H: f32 = 56.0;
 const INPUT_Y: f32 = 68.0;
 const INPUT_H: f32 = 36.0;
@@ -103,16 +76,12 @@ struct Showcase {
     filter_r: aqua_reactive::ReadSignal<Filter>,
     visible: aqua_reactive::ReadSignal<Vec<Todo>>,
     counts: aqua_reactive::ReadSignal<(usize, usize, usize)>,
-    /// Keyed row scopes: one child scope per todo id. Removed rows dispose
-    /// their scope (state/editing context freed with the row).
     row_scopes: HashMap<u64, Scope>,
     next_id: u64,
     focus_zone: FocusZone,
     focus: FocusState,
     overlays: OverlayService,
     menu: Option<OverlayId>,
-    /// Canonical motion: toggle pulse lives in the shared `MotionController`
-    /// (no ad-hoc clocks); the row id selects which row renders the sample.
     motion: MotionController,
     pulse_row: Option<u64>,
     pulse_handle: MotionHandle,
@@ -121,7 +90,6 @@ struct Showcase {
     scene: Scene,
     cursor: (f32, f32),
     width: f32,
-    // Text state (aqua-text v1).
     fonts: SharedFonts,
     runs: SharedRuns,
     header_run: Option<(RunId, u64)>,
@@ -132,18 +100,39 @@ struct Showcase {
     row_runs: HashMap<u64, (RunId, u64, String)>,
     menu_runs: Vec<(RunId, u64)>,
     reactive_bound: bool,
-    // GPU extension state (owned here, rendered through the facade's
-    // `externals` hook; device/queue are borrowed per frame).
-    media: Option<MediaState>,
-    viewport: Option<ViewportPass>,
+    media_registered: bool,
     ext_items: Vec<DisplayItem>,
-    ext_errors: u64,
 }
 
-struct MediaState {
-    cache: MediaCache,
-    gpu: GpuImageCache,
-    id: aqua_core::ImageId,
+const MEDIA_LAYER: u64 = 0x5ee0_0001;
+const VIEWPORT_LAYER: u64 = 0x5ee0_0002;
+const MEDIA_SIZE: (u32, u32) = (96, 64);
+
+fn external_item(layer: u64, bounds: Rect, opacity: f32, rounded_clip: f32) -> DisplayItem {
+    DisplayItem::Image {
+        bounds,
+        layer,
+        fit: aqua_core::image::ImageFit::Fill,
+        position: Point::new(0.5, 0.5),
+        source: Rect::from_edges(0.0, 0.0, 1.0, 1.0),
+        opacity,
+        rounded_clip,
+    }
+}
+
+fn gradient_rgba() -> Vec<u8> {
+    let (w, h) = MEDIA_SIZE;
+    (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .flat_map(|(x, y)| {
+            [
+                (x as f32 / w as f32 * 255.0) as u8,
+                (y as f32 / h as f32 * 255.0) as u8,
+                128,
+                255,
+            ]
+        })
+        .collect()
 }
 
 impl Showcase {
@@ -218,10 +207,8 @@ impl Showcase {
             row_runs: HashMap::new(),
             menu_runs: Vec::new(),
             reactive_bound: false,
-            media: None,
-            viewport: None,
+            media_registered: false,
             ext_items: Vec::new(),
-            ext_errors: 0,
         };
         for title in ["Buy milk", "Write report", "Call mom"] {
             app.insert_todo(title.to_string());
@@ -236,7 +223,6 @@ impl Showcase {
         })
     }
 
-    /// Shape `text` and mint-or-update a run; returns the current revision.
     fn ensure_run(
         fonts: &SharedFonts,
         runs: &SharedRuns,
@@ -246,8 +232,6 @@ impl Showcase {
         max_width: Option<f32>,
         scale: f32,
     ) -> (RunId, u64) {
-        // Built twice only on the rare re-mint path (TextLayout is not
-        // Clone); the retained result is reused across frames.
         let build = || {
             let mut layout = TextLayout::new();
             layout.set_text(text, style);
@@ -265,8 +249,6 @@ impl Showcase {
                     (*id, new_rev)
                 }
                 None => {
-                    // Registry lost the run (should not happen while the UI
-                    // owns removals); re-mint so text stays visible.
                     let (new_id, new_rev) = runs.lock().insert(build());
                     *slot = Some((new_id, new_rev));
                     (new_id, new_rev)
@@ -325,9 +307,6 @@ impl Showcase {
                 }
             });
         });
-        // Canonical motion: a fresh 0→1 tween per toggle (old handle
-        // removed first, so a superseded completion can never leak onto a
-        // newer pulse). Reduced motion snaps via the controller policy.
         let now = self.motion_now();
         self.motion.remove(self.pulse_handle);
         self.pulse_handle = self.motion.spawn(
@@ -448,8 +427,6 @@ impl Showcase {
         }
     }
 
-    /// Re-shape retained text runs whose sources changed. Row runs follow
-    /// todo titles by keyed id; unknown registry handles re-mint.
     fn sync_text(&mut self, scale: f32, max_w: f32) {
         let header_style = text_style(22.0);
         let row_style = text_style(15.0);
@@ -466,7 +443,6 @@ impl Showcase {
             scale,
         );
         let _ = (id, rev);
-        // Input field text follows the bound editor.
         if self.editor.revision() != self.input_revision_seen {
             self.input_revision_seen = self.editor.revision();
             let display = self.editor.display_text();
@@ -475,7 +451,6 @@ impl Showcase {
             self.input_layout.set_scale(scale);
             self.input_layout.layout(&mut self.fonts.lock());
             let layout = std::mem::replace(&mut self.input_layout, TextLayout::new());
-            // Restore input layout settings for next edit.
             self.input_layout.set_line_mode(LineMode::Single);
             self.input_layout.set_wrap(WrapMode::WordOrGlyph);
             self.input_layout.set_align(TextAlign::Start);
@@ -490,7 +465,6 @@ impl Showcase {
                 }
             }
         }
-        // Keyed row runs.
         let mut live: Vec<(u64, String)> = self
             .todos_r
             .get()
@@ -534,118 +508,11 @@ impl Showcase {
         }
     }
 
-    /// Example-local semantic ids (stable slots, not tree nodes): 1 root,
-    /// 2 input, 3 filter button, 10+i visible rows.
     fn sem_node(index: u32) -> NodeId {
         NodeId::from_raw(aqua_core::id::RawId {
             index,
             generation: 0,
         })
-    }
-
-    fn ensure_media(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        if self.media.is_some() {
-            return;
-        }
-        let (w, h) = (96u32, 64u32);
-        let mut px = Vec::with_capacity((w * h * 4) as usize);
-        for y in 0..h {
-            for x in 0..w {
-                let fx = x as f32 / w as f32;
-                let fy = y as f32 / h as f32;
-                px.extend_from_slice(&[(fx * 255.0) as u8, (fy * 255.0) as u8, 128, 255]);
-            }
-        }
-        let mut png = Vec::new();
-        {
-            use image::ImageEncoder;
-            let enc = image::codecs::png::PngEncoder::new(&mut png);
-            if enc
-                .write_image(&px, w, h, image::ExtendedColorType::Rgba8)
-                .is_err()
-            {
-                self.note_ext_error("media PNG encode failed");
-                return;
-            }
-        }
-        let mut cache = MediaCache::new(MediaBudget::default());
-        let id = match cache.decode_and_insert(&png) {
-            Ok(id) => id,
-            Err(e) => {
-                self.note_ext_error(&format!("media decode failed: {e:?}"));
-                return;
-            }
-        };
-        let mut gpu = GpuImageCache::new(GpuMediaBudget::default());
-        match cache.get(id) {
-            Some(img) => {
-                if gpu.upload(device, queue, id, img).is_err() {
-                    self.note_ext_error("media GPU upload failed");
-                    return;
-                }
-            }
-            None => {
-                self.note_ext_error("media image vanished after insert");
-                return;
-            }
-        }
-        self.media = Some(MediaState { cache, gpu, id });
-    }
-
-    fn ensure_viewport(&mut self, frame: &ExternalFrame<'_>) {
-        if self.viewport.is_some() {
-            return;
-        }
-        let cam = Camera::perspective(
-            [2.4, 1.5, 2.4],
-            [0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            60f32.to_radians(),
-            480.0 / 300.0,
-            0.1,
-            100.0,
-        );
-        let mr = match MeshRenderer::new(
-            frame.device,
-            frame.color_format,
-            wgpu::TextureFormat::Depth32Float,
-            &MeshData::cube(),
-            cam,
-            [0.04, 0.05, 0.09, 1.0],
-        ) {
-            Ok(mr) => mr,
-            Err(e) => {
-                self.note_ext_error(&format!("viewport renderer failed: {e:?}"));
-                return;
-            }
-        };
-        let desc = ViewportDesc {
-            width: 480,
-            height: 300,
-            scale: frame.scale,
-            color_format: frame.color_format,
-            depth_format: wgpu::TextureFormat::Depth32Float,
-        };
-        match ViewportPass::new(
-            frame.device.clone(),
-            frame.queue.clone(),
-            &desc,
-            Box::new(mr),
-        ) {
-            Ok(mut pass) => {
-                pass.set_layout(Rect::from_edges(16.0, 300.0, 316.0, 500.0), 1.0, 12.0);
-                self.viewport = Some(pass);
-            }
-            Err(e) => self.note_ext_error(&format!("viewport pass failed: {e:?}")),
-        }
-    }
-
-    fn note_ext_error(&mut self, msg: &str) {
-        // Bounded logging: the externals hook runs every frame.
-        if self.ext_errors < 3 {
-            eprintln!("aqua showcase media/viewport: {msg}");
-        }
-        self.ext_errors += 1;
     }
 }
 
@@ -665,9 +532,6 @@ impl FocusControl for FocusState {
 
 impl Application for Showcase {
     fn on_window_event(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &WindowEvent) {
-        // Host-driven reactive boundary: one bind per window. Derives stay
-        // eager; effects (when added) flush at the draw boundary or via the
-        // proxy wake from worker threads.
         if !self.reactive_bound {
             self.reactive_bound = true;
             ctx.bind_reactive(id, &self.rt);
@@ -688,7 +552,6 @@ impl Application for Showcase {
     }
 
     fn on_input(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &InputEvent) {
-        // Overlay policy first: dismissal, modality, capture.
         match self.overlays.handle_input(&mut self.focus, event) {
             InputOutcome::Dismissed { closed } => {
                 if closed.iter().any(|c| Some(c.id) == self.menu) {
@@ -734,7 +597,6 @@ impl Application for Showcase {
                     && (INPUT_Y..=INPUT_Y + INPUT_H).contains(&y)
                 {
                     self.focus_zone = FocusZone::Input;
-                    // Click-to-caret via shaping hit test.
                     if let Some(byte) = self.input_layout.hit(x - 24.0, y - INPUT_Y - 8.0) {
                         self.editor.set_caret(byte);
                     }
@@ -750,17 +612,10 @@ impl Application for Showcase {
                     }
                 }
             }
-            InputEvent::PointerUp(_, _) | InputEvent::PointerCancel { .. } => {
-                // No press-activation on release or cancel: toggles commit
-                // on press; cancel terminates without any state change.
-            }
-            InputEvent::Scroll { .. } => {
-                // No scrollable region in this demo; the overlay router
-                // already had first refusal above.
-            }
+            InputEvent::PointerUp(_, _) | InputEvent::PointerCancel { .. } => {}
+            InputEvent::Scroll { .. } => {}
             InputEvent::KeyDown(k) => {
                 if k.key == Key::Named(NamedKey::Escape) {
-                    // Overlay dismissal ran first; clear the draft here.
                     self.editor.set_text("");
                     self.input_revision_seen = u64::MAX.wrapping_sub(1);
                     return;
@@ -768,8 +623,6 @@ impl Application for Showcase {
                 if self.focus_zone != FocusZone::Input {
                     return;
                 }
-                // Text arrives via TextInput (layout-resolved, multi-scalar
-                // safe, IME-suppressed); KeyDown carries shortcuts only.
                 match &k.key {
                     Key::Named(NamedKey::Enter) => {
                         let draft = self.editor.text().trim().to_string();
@@ -829,8 +682,6 @@ impl Application for Showcase {
         _id: AquaWindowId,
         paths: &[std::path::PathBuf],
     ) {
-        // Demo hook: dropped files are acknowledged, not imported (no media
-        // pipeline yet). The hook itself is real and tested headless.
         eprintln!("aqua showcase: {} file(s) dropped", paths.len());
     }
 
@@ -838,9 +689,9 @@ impl Application for Showcase {
         &mut self,
         ctx: &mut AppCtx,
         id: AquaWindowId,
-        request: &aqua_platform::a11y::A11yActionRequest,
+        request: &aqua_protocol::A11yActionRequest,
     ) {
-        use aqua_platform::a11y::A11yAction as A;
+        use aqua_protocol::A11yAction as A;
         let index = request.node.raw().index;
         match (&request.action, index) {
             (A::Press, 3) => self.open_menu(self.width),
@@ -862,64 +713,40 @@ impl Application for Showcase {
         }
     }
 
-    /// GPU extension hook: offscreen media decode/upload and the 3D
-    /// viewport render each frame; `build_scene` commits the resulting
-    /// `External` items.
     fn externals(&mut self, frame: &mut ExternalFrame<'_>) {
         self.ext_items.clear();
-        self.ensure_media(frame.device, frame.queue);
-        self.ensure_viewport(frame);
-        if let Some(media) = &self.media {
-            // Skip cleanly if the entry was evicted (LRU); the upload path
-            // re-inserts on demand.
-            if media.cache.get(media.id).is_some() {
-                if let Some(up) = media.gpu.view(media.id) {
-                    let layer = media_layer(media.id);
-                    frame.register_external(layer, up.view.clone(), up.width, up.height);
-                    self.ext_items.push(external_item(
-                        layer,
-                        Rect::from_edges(332.0, 300.0, 552.0, 440.0),
-                        1.0,
-                        8.0,
-                    ));
-                }
-            }
+        if !self.media_registered {
+            frame.register_image(
+                MEDIA_LAYER,
+                MEDIA_SIZE.0,
+                MEDIA_SIZE.1,
+                gradient_rgba().into(),
+            );
+            self.media_registered = true;
         }
-        if let Some(vp) = self.viewport.as_mut() {
-            match vp.render_offscreen() {
-                Ok(()) => {
-                    let (layer, view, w, h) = (vp.layer(), vp.color_view(), 480u32, 300u32);
-                    frame.register_external(layer, view, w, h);
-                    self.ext_items.push(vp.item());
-                }
-                Err(e) => self.note_ext_error(&format!("viewport frame failed: {e:?}")),
-            }
-        }
+        self.ext_items.push(external_item(
+            MEDIA_LAYER,
+            Rect::from_edges(332.0, 300.0, 552.0, 440.0),
+            1.0,
+            8.0,
+        ));
+        frame.register_image(
+            VIEWPORT_LAYER,
+            viewport::WIDTH,
+            viewport::HEIGHT,
+            viewport::render(frame.now.as_secs_f64() as f32).into(),
+        );
+        self.ext_items.push(external_item(
+            VIEWPORT_LAYER,
+            Rect::from_edges(16.0, 300.0, 316.0, 500.0),
+            1.0,
+            12.0,
+        ));
     }
 
-    /// IME candidate window follows the shaped input caret; `None` when the
-    /// input is not focused so the OS disables the candidate window.
-    fn ime_cursor_area(&self) -> Option<Rect> {
-        if self.focus_zone != FocusZone::Input {
-            return None;
-        }
-        let byte = self
-            .editor
-            .ime_caret()
-            .min(self.editor.display_text().len());
-        self.input_layout.caret(byte).map(|c| {
-            Rect::from_edges(
-                24.0 + c.x,
-                INPUT_Y + 8.0 + c.y_top,
-                26.0 + c.x,
-                INPUT_Y + 8.0 + c.y_top + c.height,
-            )
-        })
-    }
-
-    fn a11y_nodes(&self) -> Option<(NodeId, NodeId, Vec<aqua_platform::a11y::A11yNode>)> {
+    fn a11y_nodes(&self) -> Option<(NodeId, NodeId, Vec<aqua_protocol::A11yNode>)> {
         use aqua_core::{Role, SemanticNode};
-        use aqua_platform::a11y::A11yNode;
+        use aqua_protocol::A11yNode;
         let mut items: Vec<A11yNode> = Vec::new();
         let mut child_ids = vec![Self::sem_node(2), Self::sem_node(3)];
         let visible = self.visible.get();
@@ -984,9 +811,6 @@ impl Application for Showcase {
         Some((Self::sem_node(1), focus, items))
     }
 
-    /// Procedural gradient through the real codec path: encode PNG
-    /// in-memory (`image`), decode via `decode_bytes`, retain in the CPU
-    /// cache, upload to the GPU cache. No fixture files, no fake pixels.
     fn build_scene(&mut self, window: &ObservedWindowState, now: Instant) -> Option<Instant> {
         let w = window.inner_size.width as f32;
         let h = window.inner_size.height as f32;
@@ -1038,13 +862,11 @@ impl Application for Showcase {
             },
         ];
 
-        // Real shaped text: header, input contents, filter label.
         if let Some(run) = self.header_run {
             items.push(self.text_item([16.0, 16.0], run));
         }
         if let Some(run) = self.input_run {
             items.push(self.text_item([24.0, INPUT_Y + 8.0], run));
-            // Caret + selection from shaping geometry.
             let caret_byte = self
                 .editor
                 .ime_caret()
@@ -1087,7 +909,6 @@ impl Application for Showcase {
             }
         }
 
-        // Rows (keyed order from the derived visible list).
         let motion_now = self.motion_now();
         let pulse_p = match self.motion.sample_duration(self.pulse_handle, motion_now) {
             Some(MotionValue::Scalar(p)) => p.clamp(0.0, 1.0),
@@ -1121,7 +942,6 @@ impl Application for Showcase {
             }
         }
 
-        // Overlay host: draw open overlays above content.
         for entry in self.overlays.render_plan() {
             items.push(DisplayItem::Rect {
                 bounds: entry.bounds,
@@ -1155,7 +975,6 @@ impl Application for Showcase {
                 let _ = oy;
             }
         }
-        // Menu option labels: static runs minted on first open.
         if self.menu.is_some() && self.menu_runs.is_empty() {
             let style = text_style(14.0);
             for label in ["All", "Active", "Done"] {
@@ -1197,7 +1016,7 @@ impl Application for Showcase {
             return Some(now + Duration::from_millis(16));
         }
         self.pulse_row = None;
-        None
+        Some(now + Duration::from_millis(16))
     }
 
     fn scene_mut(&mut self, _id: AquaWindowId) -> Option<&mut Scene> {
@@ -1209,10 +1028,8 @@ fn main() -> Result<(), String> {
     let mut config = AquaConfig::default();
     config.window.title = "Aqua Showcase — Todo".to_string();
     config.set_fps(60).map_err(|e| e.to_string())?;
-    // OS preferences drive honest behavior: reduced motion snaps the motion
-    // controller; high contrast/transparency-off disables materials.
-    let prefs = aqua_platform::prefs::query_preferences();
-    if aqua_platform::prefs::should_reduce_motion(&prefs) {
+    let prefs = aqua_shell_win32::capability::query_preferences();
+    if aqua_protocol::prefs::should_reduce_motion(&prefs) {
         config.reduced_motion = true;
     }
     let fonts = SharedFonts::new();

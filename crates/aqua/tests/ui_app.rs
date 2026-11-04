@@ -1,8 +1,9 @@
 use aqua::ui::{Box as UiBox, Text as UiText};
 use aqua::{UiApp, UiAppError};
 use aqua_core::{InputEvent, NodeId};
-use aqua_render::Renderer;
 use aqua_text::{SharedFonts, SharedRuns};
+
+mod support;
 
 fn fonts_and_runs() -> (SharedFonts, SharedRuns) {
     (SharedFonts::new(), SharedRuns::new())
@@ -133,36 +134,19 @@ fn dispose_runs_cleanups_and_releases_runs() {
 
 // -- strict real-pixels artifact ----------------------------------------------------
 
-fn headless_or_skip(w: u32, h: u32) -> Option<Renderer> {
-    match pollster::block_on(Renderer::headless(w, h)) {
-        Ok(r) => Some(r),
-        Err(e) => {
-            let strict = std::env::var("AQUA_REQUIRE_GPU").is_ok_and(|v| v == "1");
-            if matches!(e, aqua_render::RenderError::AdapterNotFound(_)) && !strict {
-                eprintln!("SKIP-NO-ADAPTER ui-app artifact (no adapter): {e}");
-                return None;
-            }
-            panic!("ui-app artifact GPU init failed (must not skip): {e:?}");
-        }
+#[test]
+fn ui_app_todo_artifact_real_text() {
+    let (fonts, runs) = fonts_and_runs();
+    let painters = support::painters(&fonts, &runs);
+    #[cfg(windows)]
+    assert!(painters.len() > 1, "no D3D12 adapter available");
+    for painter in painters {
+        todo_artifact(painter, fonts.clone(), runs.clone());
     }
 }
 
-#[test]
-fn ui_app_todo_artifact_real_text() {
+fn todo_artifact(mut painter: support::Painter, fonts: SharedFonts, runs: SharedRuns) {
     use aqua::ui::Element;
-    let Some(mut r) = headless_or_skip(480, 320) else {
-        return;
-    };
-    let (fonts, runs) = fonts_and_runs();
-    let backend = aqua_render::TextBackend::new(fonts.clone(), runs.clone());
-    let fmt = r.format();
-    r.set_text_provider(Box::new(aqua_render::GlyphonProvider::new(
-        r.device(),
-        r.queue(),
-        fmt,
-        backend,
-    )));
-
     let mut app = UiApp::new(fonts, runs);
     let (read, write) = app.scope().signal("buy oat milk".to_string());
     let rows: Vec<(u64, String)> =
@@ -192,15 +176,16 @@ fn ui_app_todo_artifact_real_text() {
     build_at(&mut app, 480.0, 320.0, 1.0).unwrap();
     assert_eq!(app.build_error(), None);
     assert!(!app.scene().is_empty());
-    let plan = r.prepare(app.scene_mut());
-    assert!(!plan.is_clean(), "real UI content produces work");
-    r.draw(&plan).expect("draw");
-    let px = r.readback().expect("readback");
-    assert_eq!(px.len(), 480 * 320 * 4);
-    let glyph_px = px
-        .as_chunks::<4>()
-        .0
-        .iter()
+    let frame = painter.paint(app.scene(), aqua_core::Size::new(480.0, 320.0), 1.0);
+    assert_eq!(frame.rgba8.len(), 480 * 320 * 4);
+    assert!(painter.report.glyphs > 0, "text lowers to glyph runs");
+    assert!(
+        painter.report.skipped.is_empty(),
+        "{:?}",
+        painter.report.skipped
+    );
+    let glyph_px = frame
+        .pixels()
         .filter(|c| c[3] > 100 && c[0] > 150 && c[1] > 150 && c[2] > 150)
         .count();
     assert!(
@@ -211,8 +196,9 @@ fn ui_app_todo_artifact_real_text() {
         if let Some(parent) = std::path::Path::new(&path).parent() {
             std::fs::create_dir_all(parent).expect("artifact dir");
         }
-        let img = image::RgbaImage::from_raw(480, 320, px).expect("raw buffer");
-        img.save(&path).expect("png save");
+        let img = image::RgbaImage::from_raw(480, 320, frame.rgba8).expect("raw buffer");
+        img.save(format!("{path}.{}.png", painter.label.replace(' ', "-")))
+            .expect("png save");
         eprintln!("artifact saved to {path}");
     }
 }

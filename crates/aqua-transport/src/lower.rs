@@ -1,6 +1,6 @@
-use aqua_core::{DisplayItem, Oklch, Rect};
+use aqua_core::{DisplayItem, Oklch, Rect, Size};
 use aqua_graph::{PaintCommand, Quad, Shadow};
-use aqua_protocol::UploadBatch;
+use aqua_protocol::{FrameReport, Instant, UploadBatch};
 use aqua_scene::Scene;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -8,18 +8,43 @@ pub struct Lowered {
     pub commands: Vec<PaintCommand>,
     pub uploads: UploadBatch,
     pub unsupported: u32,
+    pub approximated: u32,
+    pub glyphs: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LowerContext {
+    pub size: Size,
+    pub scale: f32,
+    pub now: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrimRequest {
+    IdleFrames(u64),
+    Everything,
 }
 
 pub trait Lowering: 'static {
-    fn lower(&mut self, scene: &Scene, scale: f32) -> Lowered;
+    fn lower(&mut self, scene: &Scene, context: &LowerContext) -> Lowered;
+
+    fn sync(&mut self) {}
+
+    fn device_recovered(&mut self) {}
+
+    fn frame_reported(&mut self, _report: &FrameReport) {}
+
+    fn trim(&mut self, _request: TrimRequest) -> usize {
+        0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GeometryLowering;
 
 impl Lowering for GeometryLowering {
-    fn lower(&mut self, scene: &Scene, scale: f32) -> Lowered {
-        lower_items(scene.ordered().map(|(_, item)| item), scale)
+    fn lower(&mut self, scene: &Scene, context: &LowerContext) -> Lowered {
+        lower_items(scene.ordered().map(|(_, item)| item), context.scale)
     }
 }
 

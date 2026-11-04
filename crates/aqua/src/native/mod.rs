@@ -1,6 +1,10 @@
 #[cfg(windows)]
 mod d3d12;
 #[cfg(windows)]
+mod hook;
+#[cfg(windows)]
+mod inspector;
+#[cfg(windows)]
 mod looping;
 #[cfg(windows)]
 mod window;

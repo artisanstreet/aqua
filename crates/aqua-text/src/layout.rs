@@ -4,23 +4,29 @@ use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::font::FontManager;
+use crate::lines;
+use crate::shape::{ShapeContext, ShapedParagraph, SpanText, scaled_line_height, shape_paragraph};
 use crate::style::{LineMode, StyledSpan, TextAlign, TextStyle, WrapMode};
 
 #[derive(Clone, Debug)]
 pub struct LaidGlyph {
-    pub buffer_line_index: usize,
-    pub buffer_glyph_index: usize,
     pub display_byte_start: usize,
     pub display_byte_end: usize,
     pub src_byte_start: usize,
     pub src_byte_end: usize,
-    pub font_id: fontdb::ID,
+    pub font_id: crate::font::FontId,
+    pub font_weight: u16,
+    pub font_stretch: crate::style::FontStretch,
+    pub synthetic_italic: bool,
     pub glyph_id: u16,
     pub font_size_px: f32,
     pub x: f32,
     pub y: f32,
+    pub x_offset: f32,
+    pub y_offset: f32,
     pub w: f32,
     pub bidi_level: u8,
+    pub color_srgb: Option<[u8; 4]>,
     pub color_hsla: Option<[f32; 4]>,
     pub source_color_hsla: Option<[f32; 4]>,
     pub font_max_width: Option<f32>,
@@ -116,7 +122,8 @@ pub struct TextLayout {
     gpui_line_height: bool,
     gpui_wrap: bool,
     mask: Option<char>,
-    buffer: Option<cosmic_text::Buffer>,
+    shaped: Option<ShapedCache>,
+    reshapes: u64,
     last_key: Option<InputKey>,
     cached: Option<Arc<LaidOut>>,
     fonts_rev_seen: u64,
@@ -143,6 +150,122 @@ struct InputKey {
     fonts_rev: u64,
 }
 
+struct ShapedCache {
+    key: InputKey,
+    paragraphs: Vec<ShapedParagraph>,
+}
+
+struct PendingLine {
+    paragraph: usize,
+    placed: lines::PlacedLine,
+    height: f32,
+    ascent: f32,
+    descent: f32,
+}
+
+impl InputKey {
+    fn same_shaping(&self, other: &InputKey) -> bool {
+        self.fonts_rev == other.fonts_rev
+            && self.scale_bits == other.scale_bits
+            && self.gpui_line_height == other.gpui_line_height
+            && self.mask == other.mask
+            && self.line_mode == other.line_mode
+            && self.style_key == other.style_key
+            && self.display_text == other.display_text
+    }
+}
+
+type GlyphColors = (Option<[u8; 4]>, Option<[f32; 4]>, Option<[f32; 4]>);
+
+struct SpanColors {
+    ends: Vec<usize>,
+    colors: Vec<GlyphColors>,
+}
+
+impl SpanColors {
+    fn at(&self, source_byte: usize) -> GlyphColors {
+        let index = self.ends.partition_point(|end| *end <= source_byte);
+        self.colors
+            .get(index)
+            .copied()
+            .unwrap_or((None, None, None))
+    }
+}
+
+fn span_colors(spans: &[StyledSpan]) -> SpanColors {
+    let mut ends = Vec::with_capacity(spans.len());
+    let mut colors = Vec::with_capacity(spans.len());
+    let mut end = 0;
+    for span in spans {
+        end += span.text.len();
+        ends.push(end);
+        let color = span.color_hsla.or_else(|| {
+            (span.color_srgb.is_none()
+                && span.source_color_hsla.is_none()
+                && span.style.gpui_source_color.is_none())
+            .then_some(span.style.gpui_color)
+            .flatten()
+        });
+        let source = span.source_color_hsla.or_else(|| {
+            (span.color_srgb.is_none() && span.color_hsla.is_none())
+                .then_some(span.style.gpui_source_color)
+                .flatten()
+        });
+        colors.push((span.color_srgb, color, source));
+    }
+    SpanColors { ends, colors }
+}
+
+fn line_metrics(paragraph: &ShapedParagraph, range: &std::ops::Range<usize>) -> (f32, f32, f32) {
+    if range.is_empty() {
+        return (
+            paragraph.empty_line_height,
+            paragraph.empty_ascent,
+            paragraph.empty_descent,
+        );
+    }
+    let mut height = 0.0f32;
+    let mut ascent = 0.0f32;
+    let mut descent = 0.0f32;
+    for cluster in &paragraph.clusters[range.clone()] {
+        let run = &paragraph.runs[cluster.run];
+        height = height.max(run.line_height);
+        if let Some(entry) = &run.entry {
+            ascent = ascent.max(entry.ascent_em() * run.size_px);
+            descent = descent.max(entry.descent_em() * run.size_px);
+        }
+    }
+    (height, ascent, descent)
+}
+
+fn paragraph_ranges(display: &str) -> Vec<std::ops::Range<usize>> {
+    let bytes = display.as_bytes();
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\n' => {
+                ranges.push(start..index);
+                index += 1;
+                start = index;
+            }
+            b'\r' => {
+                ranges.push(start..index);
+                index += if bytes.get(index + 1) == Some(&b'\n') {
+                    2
+                } else {
+                    1
+                };
+                start = index;
+            }
+            _ => index += 1,
+        }
+    }
+    ranges.push(start..bytes.len());
+    ranges
+}
+
 impl Default for TextLayout {
     fn default() -> Self {
         Self::new()
@@ -161,7 +284,8 @@ impl TextLayout {
             gpui_line_height: false,
             gpui_wrap: false,
             mask: None,
-            buffer: None,
+            shaped: None,
+            reshapes: 0,
             last_key: None,
             cached: None,
             fonts_rev_seen: 0,
@@ -254,6 +378,10 @@ impl TextLayout {
         })
     }
 
+    pub fn reshape_count(&self) -> u64 {
+        self.reshapes
+    }
+
     pub fn source_len(&self) -> usize {
         self.source_len
     }
@@ -292,7 +420,7 @@ impl TextLayout {
         mode: crate::overflow::OverflowMode,
     ) -> Arc<LaidOut> {
         use crate::overflow::{
-            single_line_overflow_with_spacing, EllipsisPosition, OverflowCluster,
+            EllipsisPosition, OverflowCluster, single_line_overflow_with_spacing,
         };
         let natural = self.layout(fonts);
         if self.line_mode != LineMode::Single
@@ -489,257 +617,155 @@ impl TextLayout {
         source_len: usize,
         fonts_rev: u64,
     ) -> Arc<LaidOut> {
-        let inline_spacings: Vec<_> = self
-            .spans
-            .iter()
-            .map(|span| {
-                span.inline_cell_width()
-                    .filter(|_| self.mask.is_none())
-                    .map(|width| {
-                        let metrics = cosmic_text::Metrics::new(
-                            (span.style.size_px * self.scale).max(1.0),
-                            scaled_line_height(
-                                span.style.line_height_px,
-                                self.scale,
-                                self.gpui_line_height,
-                            ),
-                        );
-                        let mut probe = cosmic_text::Buffer::new(fonts.font_system_mut(), metrics);
-                        let attrs = span
-                            .style
-                            .to_cosmic_in()
-                            .letter_spacing(0.0)
-                            .metrics(metrics);
-                        probe.set_text(&span.text, &attrs, cosmic_text::Shaping::Advanced, None);
-                        probe.shape_until_scroll(fonts.font_system_mut(), false);
-                        let natural: f32 = probe.layout_runs().map(|line| line.line_w).sum();
-                        let glyphs: usize = probe.layout_runs().map(|line| line.glyphs.len()).sum();
-                        (width * self.scale - natural).max(0.0)
-                            / (metrics.font_size * glyphs.max(1) as f32)
-                    })
-            })
-            .collect();
-        let fallback_spans: Vec<_> = self
-            .spans
-            .iter()
-            .map(|span| {
-                let text = masked_span_text(&span.text, self.mask, self.line_mode);
-                let ranges = fonts.fallback_spans(&text, &span.style);
-                (text, ranges)
-            })
-            .collect();
-        let buffer = self.buffer.get_or_insert_with(|| {
-            let metrics = first_metrics(&self.spans, self.scale, self.gpui_line_height);
-            cosmic_text::Buffer::new(fonts.font_system_mut(), metrics)
-        });
-        if self.line_mode == LineMode::Single || self.gpui_wrap {
-            buffer.set_wrap(cosmic_text::Wrap::None);
-        } else {
-            buffer.set_wrap(self.wrap.to_cosmic());
-        }
-        let width_px = self.max_width.map(|w| (w * self.scale).max(1.0));
-        buffer.set_size(width_px, None);
-        let metrics = first_metrics(&self.spans, self.scale, self.gpui_line_height);
-        buffer.set_metrics(metrics);
-
-        {
-            let default_attrs = self
-                .spans
-                .first()
-                .map(|s| s.style.to_cosmic_in())
-                .unwrap_or_else(cosmic_text::Attrs::new);
-            let mut refs: Vec<(&str, cosmic_text::Attrs<'_>)> = Vec::new();
-            for (index, span) in self.spans.iter().enumerate() {
-                let (text, ranges) = &fallback_spans[index];
-                for (range, family) in ranges {
-                    let mut attrs = span.style.to_cosmic_in();
-                    if let Some(family) = family {
-                        attrs = attrs.family(cosmic_text::Family::Name(family));
-                        if span.style.families.len() <= 1 {
-                            attrs = attrs.font_features(cosmic_text::FontFeatures::new());
-                        }
-                    }
-                    if let Some(spacing) = inline_spacings[index] {
-                        attrs = attrs.letter_spacing(spacing);
-                    }
-                    if let Some([r, g, b, a]) = span.color_srgb {
-                        attrs = attrs.color(cosmic_text::Color::rgba(r, g, b, a));
-                    }
-                    attrs = attrs.metrics(cosmic_text::Metrics::new(
-                        (span.style.size_px * self.scale).max(1.0),
-                        scaled_line_height(
-                            span.style.line_height_px,
-                            self.scale,
-                            self.gpui_line_height,
-                        ),
-                    ));
-                    refs.push((&text[range.clone()], attrs));
-                }
+        let reusable = self
+            .shaped
+            .as_ref()
+            .is_some_and(|cache| cache.key.same_shaping(&key));
+        if !reusable {
+            let mut span_ranges = Vec::with_capacity(self.spans.len());
+            let mut offset = 0;
+            for span in &self.spans {
+                let length = masked_span_text(&span.text, self.mask, self.line_mode).len();
+                span_ranges.push(SpanText {
+                    range: offset..offset + length,
+                });
+                offset += length;
             }
-            buffer.set_rich_text(
-                refs,
-                &default_attrs,
-                cosmic_text::Shaping::Advanced,
-                self.align.to_cosmic(),
-            );
+            let context = ShapeContext {
+                spans: &self.spans,
+                span_ranges: &span_ranges,
+                scale: self.scale,
+                gpui_line_height: self.gpui_line_height,
+                inline_cells: self.mask.is_none(),
+            };
+            let paragraphs = paragraph_ranges(&display)
+                .into_iter()
+                .map(|range| shape_paragraph(fonts, &context, &display, range))
+                .collect();
+            self.reshapes += 1;
+            self.shaped = Some(ShapedCache {
+                key: key.clone(),
+                paragraphs,
+            });
         }
-        buffer.shape_until_scroll(fonts.font_system_mut(), false);
+        let paragraphs = &self
+            .shaped
+            .as_ref()
+            .expect("shaped cache present")
+            .paragraphs;
 
-        let mut para_starts = Vec::with_capacity(buffer.lines.len() + 1);
-        let mut off = 0usize;
-        for line in &buffer.lines {
-            para_starts.push(off);
-            off += line.text().len() + 1;
+        let wrap = if self.line_mode == LineMode::Single || self.gpui_wrap {
+            WrapMode::None
+        } else {
+            self.wrap
+        };
+        let width_px = self.max_width.map(|w| (w * self.scale).max(1.0));
+        let limit = width_px.filter(|_| wrap != WrapMode::None);
+
+        let mut pending: Vec<PendingLine> = Vec::new();
+        for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {
+            let breaks = paragraph.breaks.get_or_init(|| {
+                lines::break_opportunities(
+                    &display[paragraph.start..paragraph.end],
+                    paragraph.start,
+                )
+            });
+            let ranges = lines::break_lines(&paragraph.clusters, breaks, wrap, limit);
+            let last = ranges.len() - 1;
+            for (index, range) in ranges.into_iter().enumerate() {
+                let placed = lines::place_line(paragraph, range, index == last);
+                let (height, ascent, descent) = line_metrics(paragraph, &placed.clusters);
+                pending.push(PendingLine {
+                    paragraph: paragraph_index,
+                    placed,
+                    height,
+                    ascent,
+                    descent,
+                });
+            }
         }
-        off = off.min(display.len());
-        para_starts.push(off);
 
+        let max_content = pending
+            .iter()
+            .map(|line| line.placed.content_width)
+            .fold(0.0f32, f32::max);
+        let container = width_px.unwrap_or(max_content);
+        let colors = span_colors(&self.spans);
         let needs_background_metrics = self.spans.iter().any(|span| span.background_hsla.is_some());
-        let mut font_bounds = HashMap::new();
-        let mut lines = Vec::new();
+
+        let mut lines_out = Vec::with_capacity(pending.len());
         let mut max_w = 0.0f32;
         let mut total_h = 0.0f32;
         let mut first_baseline_y = None;
-        for (buffer_line_index, run) in buffer.layout_runs().enumerate() {
-            let para = run.line_i;
-            let para_start = para_starts.get(para).copied().unwrap_or(0);
-            let mut glyphs = Vec::with_capacity(run.glyphs.len());
-            for (buffer_glyph_index, g) in run.glyphs.iter().enumerate() {
-                let skip_emoji_remnant = g.glyph_id == 3
-                    && fonts
-                        .font_system()
-                        .db()
-                        .face(g.font_id)
-                        .is_some_and(|face| {
-                            matches!(
-                                face.post_script_name.as_str(),
-                                "NotoColorEmoji"
-                                    | "SegoeUIEmoji"
-                                    | "AppleColorEmoji"
-                                    | ".AppleColorEmojiUI"
-                                    | "TwemojiMozilla"
-                            )
-                        });
-                if skip_emoji_remnant {
+        for mut line in pending {
+            let paragraph = &paragraphs[line.paragraph];
+            if self.align == TextAlign::Justify && width_px.is_some() {
+                lines::justify(&mut line.placed, paragraph, container);
+            }
+            let offset = lines::alignment_offset(&line.placed, self.align, container);
+            let y_top = total_h;
+            let baseline_y =
+                y_top + (line.height - (line.ascent + line.descent)) / 2.0 + line.ascent;
+            let mut glyphs = Vec::with_capacity(line.placed.glyphs.len());
+            for placed in &line.placed.glyphs {
+                let cluster = &paragraph.clusters[placed.cluster];
+                let run = &paragraph.runs[cluster.run];
+                let Some(entry) = &run.entry else { continue };
+                let glyph = &run.glyphs[placed.glyph];
+                if glyph.glyph_id == 3 && entry.is_emoji() {
                     continue;
                 }
-                let d_start = para_start + g.start;
-                let d_end = para_start + g.end;
-                let (s_start, s_end) = display_range_to_source(&cluster_map, d_start, d_end);
-                let mut span_start = 0;
-                let color_hsla = self
-                    .spans
-                    .iter()
-                    .find_map(|span| {
-                        let end = span_start + span.text.len();
-                        let found = (s_start >= span_start && s_start < end).then_some(
-                            span.color_hsla.or_else(|| {
-                                if span.color_srgb.is_none()
-                                    && span.source_color_hsla.is_none()
-                                    && span.style.gpui_source_color.is_none()
-                                {
-                                    span.style.gpui_color
-                                } else {
-                                    None
-                                }
-                            }),
-                        );
-                        span_start = end;
-                        found
-                    })
-                    .flatten();
-                let mut span_start = 0;
-                let source_color_hsla = self
-                    .spans
-                    .iter()
-                    .find_map(|span| {
-                        let end = span_start + span.text.len();
-                        let found = (s_start >= span_start && s_start < end).then_some(
-                            span.source_color_hsla.or_else(|| {
-                                if span.color_srgb.is_none() && span.color_hsla.is_none() {
-                                    span.style.gpui_source_color
-                                } else {
-                                    None
-                                }
-                            }),
-                        );
-                        span_start = end;
-                        found
-                    })
-                    .flatten();
-                let font_max_width = if needs_background_metrics {
-                    *font_bounds
-                        .entry((g.font_id, g.font_weight, g.font_size.to_bits()))
-                        .or_insert_with(|| {
-                            fonts
-                                .font_system_mut()
-                                .get_font(g.font_id, g.font_weight)
-                                .and_then(|font| {
-                                    let metrics = font.as_swash().metrics(&[]);
-                                    (metrics.units_per_em != 0).then_some(
-                                        metrics.max_width / f32::from(metrics.units_per_em)
-                                            * g.font_size,
-                                    )
-                                })
-                        })
-                } else {
-                    None
-                };
+                let (src_start, src_end) =
+                    display_range_to_source(&cluster_map, cluster.start, cluster.end);
+                let (color_srgb, color_hsla, source_color_hsla) = colors.at(src_start);
                 glyphs.push(LaidGlyph {
-                    buffer_line_index,
-                    buffer_glyph_index,
-                    display_byte_start: d_start,
-                    display_byte_end: d_end,
-                    src_byte_start: s_start,
-                    src_byte_end: s_end,
-                    font_id: g.font_id,
-                    glyph_id: g.glyph_id,
-                    font_size_px: g.font_size,
-                    x: g.x,
-                    y: g.y,
-                    w: g.w,
-                    bidi_level: g.level.number(),
+                    display_byte_start: cluster.start,
+                    display_byte_end: cluster.end,
+                    src_byte_start: src_start,
+                    src_byte_end: src_end,
+                    font_id: entry.id(),
+                    font_weight: entry.weight(),
+                    font_stretch: entry.stretch(),
+                    synthetic_italic: entry.fake_italic(),
+                    glyph_id: glyph.glyph_id,
+                    font_size_px: run.size_px,
+                    x: offset + placed.x,
+                    y: 0.0,
+                    x_offset: glyph.x_offset,
+                    y_offset: glyph.y_offset,
+                    w: placed.advance,
+                    bidi_level: placed.level,
+                    color_srgb,
                     color_hsla,
                     source_color_hsla,
-                    font_max_width,
+                    font_max_width: needs_background_metrics
+                        .then(|| entry.max_width_em() * run.size_px)
+                        .filter(|width| *width > 0.0),
                 });
             }
-            if first_baseline_y.is_none() {
-                first_baseline_y = Some(run.line_y);
-            }
-            max_w = max_w.max(run.line_w);
-            total_h = run.line_top + run.line_height;
-            let start = run.glyphs.iter().map(|g| g.start).min().unwrap_or(0);
-            let end = run.glyphs.iter().map(|g| g.end).max().unwrap_or(0);
-            let display_range = para_start + start..para_start + end;
-            lines.push(LaidLine {
-                paragraph: para,
+            let display_range = match line.placed.clusters.is_empty() {
+                true => paragraph.start..paragraph.start,
+                false => {
+                    paragraph.clusters[line.placed.clusters.start].start
+                        ..paragraph.clusters[line.placed.clusters.end - 1].end
+                }
+            };
+            first_baseline_y.get_or_insert(baseline_y);
+            max_w = max_w.max(line.placed.content_width);
+            total_h = y_top + line.height;
+            lines_out.push(LaidLine {
+                paragraph: line.paragraph,
                 display_range,
-                y_top: run.line_top,
-                height: run.line_height,
-                baseline_y: run.line_y,
-                width: run.line_w,
-                rtl: run.rtl,
+                y_top,
+                height: line.height,
+                baseline_y,
+                width: line.placed.content_width,
+                rtl: line.placed.rtl,
                 glyphs,
             });
         }
 
-        if lines.is_empty() {
-            let h = metrics.line_height.max(1.0);
-            lines.push(LaidLine {
-                paragraph: 0,
-                display_range: 0..0,
-                y_top: 0.0,
-                height: h,
-                baseline_y: h,
-                width: 0.0,
-                rtl: false,
-                glyphs: Vec::new(),
-            });
-            total_h = h;
-            first_baseline_y = Some(h);
-        }
-
+        let mut lines = lines_out;
         if self.gpui_wrap && self.line_mode == LineMode::Multi && self.wrap != WrapMode::None {
             if let Some(width) = width_px {
                 lines = gpui_wrapped_lines(lines, &display, width);
@@ -747,6 +773,8 @@ impl TextLayout {
                 total_h = lines.last().map_or(0.0, |line| line.y_top + line.height);
             }
         }
+        let mut para_starts: Vec<usize> = paragraphs.iter().map(|p| p.start).collect();
+        para_starts.push(display.len());
         let laid = Arc::new(LaidOut {
             size: (max_w, total_h),
             constrained_width: width_px,
@@ -1388,10 +1416,6 @@ impl TextLayout {
         }
     }
 
-    pub fn buffer(&self) -> Option<&cosmic_text::Buffer> {
-        self.buffer.as_ref()
-    }
-
     pub fn display_text(&self) -> &str {
         &self.display_text
     }
@@ -1597,25 +1621,6 @@ fn gpui_wrapped_lines(lines: Vec<LaidLine>, text: &str, width: f32) -> Vec<LaidL
         }
     }
     result
-}
-
-fn scaled_line_height(height: f32, scale: f32, gpui: bool) -> f32 {
-    let height = height * scale;
-    if gpui {
-        (height.abs() - 0.5).ceil().copysign(height).max(1.0)
-    } else {
-        height.max(1.0)
-    }
-}
-
-fn first_metrics(spans: &[StyledSpan], scale: f32, gpui: bool) -> cosmic_text::Metrics {
-    match spans.first() {
-        Some(s) => cosmic_text::Metrics::new(
-            (s.style.size_px * scale).max(1.0),
-            scaled_line_height(s.style.line_height_px, scale, gpui),
-        ),
-        None => cosmic_text::Metrics::new(16.0 * scale, scaled_line_height(22.0, scale, gpui)),
-    }
 }
 
 fn build_display(

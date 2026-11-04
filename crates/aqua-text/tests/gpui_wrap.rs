@@ -1,7 +1,7 @@
 use aqua_text::{CaretAffinity, CaretPosition, FontManager, TextLayout, TextStyle, WrapMode};
 
 #[test]
-fn wrapped_lines_retain_buffer_glyphs_and_selection_boundaries() {
+fn wrapped_lines_share_one_paragraph_and_keep_selection_boundaries() {
     let mut fonts = FontManager::new();
     let mut layout = TextLayout::new();
     layout.set_text("alpha beta gamma", &TextStyle::default());
@@ -10,15 +10,9 @@ fn wrapped_lines_retain_buffer_glyphs_and_selection_boundaries() {
     layout.set_gpui_wrap(true);
     let wrapped = layout.layout(&mut fonts);
     assert!(wrapped.lines.len() > 1);
-    let buffer = layout.buffer().unwrap();
-    let runs: Vec<_> = buffer.layout_runs().collect();
-    assert_eq!(runs.len(), 1);
-    for glyph in wrapped.lines.iter().flat_map(|line| &line.glyphs) {
-        assert_eq!(
-            runs[glyph.buffer_line_index].glyphs[glyph.buffer_glyph_index].glyph_id,
-            glyph.glyph_id
-        );
-    }
+    assert!(wrapped.lines.iter().all(|line| line.paragraph == 0));
+    let shown: usize = wrapped.lines.iter().map(|line| line.glyphs.len()).sum();
+    assert_eq!(shown, "alpha beta gamma".len());
     let boundary = wrapped.lines[1].display_range.start;
     let up = layout
         .caret_position(CaretPosition {
@@ -38,7 +32,7 @@ fn wrapped_lines_retain_buffer_glyphs_and_selection_boundaries() {
 }
 
 #[test]
-fn unicode_clusters_and_rtl_keep_original_buffer_mapping() {
+fn unicode_clusters_and_rtl_keep_valid_byte_mapping() {
     for text in ["café e\u{301} 你好世界 abc", "אבג דהו זחט abc"] {
         let mut fonts = FontManager::new();
         let mut layout = TextLayout::new();
@@ -47,14 +41,10 @@ fn unicode_clusters_and_rtl_keep_original_buffer_mapping() {
         layout.set_max_width(Some(48.0));
         layout.set_gpui_wrap(true);
         let wrapped = layout.layout(&mut fonts);
-        let runs: Vec<_> = layout.buffer().unwrap().layout_runs().collect();
         for glyph in wrapped.lines.iter().flat_map(|line| &line.glyphs) {
             assert!(text.is_char_boundary(glyph.display_byte_start));
             assert!(text.is_char_boundary(glyph.display_byte_end));
-            assert_eq!(
-                runs[glyph.buffer_line_index].glyphs[glyph.buffer_glyph_index].glyph_id,
-                glyph.glyph_id
-            );
+            assert!(glyph.display_byte_start <= glyph.display_byte_end);
         }
     }
 }

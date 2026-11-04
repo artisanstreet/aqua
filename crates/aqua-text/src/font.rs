@@ -1,317 +1,733 @@
-//! Shared font discovery and fallback, wrapping the shaping engine.
-//!
-//! `FontManager` owns one `cosmic_text::FontSystem`: system fonts are loaded
-//! once, custom fonts can be added from bytes or files, and every layout in
-//! the process reuses it. The shaping engine performs script-aware fallback
-//! (Latin, CJK, Arabic, emoji, …) internally; this module only exposes
-//! discovery queries and explicit font loading on top.
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
-/// Shared font database + shaping-engine state.
-///
-/// One `FontManager` per UI process is the expected shape: every layout in
-/// the process reuses its font database and shaping caches. Ownership is
-/// shared in practice through [`SharedFonts`] (`Arc<Mutex<…>>`), which is
-/// `Send + Sync` (verified by test) so the UI thread and render code hand
-/// the same instance back and forth — never two divergent databases.
-///
-/// IMPORTANT for `aqua-render`: glyphon's `TextRenderer::prepare` takes
-/// `&mut cosmic_text::FontSystem` from the *caller*, so pass
-/// `fonts.lock().font_system_mut()` together with the retained
-/// [`crate::TextLayout::buffer`] and measurement and pixels share one
-/// shaping. Do not create a second `FontSystem` for rendering.
+use aqua_fonts_system::{FaceBytes, Family, FontDatabase, ID, Query, Stretch, Style, Weight};
+use skrifa::MetadataProvider;
+use skrifa::raw::TableProvider;
+use unicode_segmentation::UnicodeSegmentation;
+
+use crate::style::{FontFamily, FontSlant, FontStretch, TextStyle};
+
+pub type FontId = ID;
+
+const COLOR_FONT_POSTSCRIPT: [&str; 5] = [
+    "NotoColorEmoji",
+    "SegoeUIEmoji",
+    "AppleColorEmoji",
+    ".AppleColorEmojiUI",
+    "TwemojiMozilla",
+];
+
+const EMOJI_FAMILIES: [&str; 4] = [
+    "Segoe UI Emoji",
+    "Noto Color Emoji",
+    "Apple Color Emoji",
+    "Twemoji Mozilla",
+];
+
+const PLATFORM_FALLBACK_FAMILIES: [&str; 12] = [
+    "Segoe UI",
+    "Segoe UI Symbol",
+    "Segoe UI Historic",
+    "Microsoft YaHei UI",
+    "Yu Gothic UI",
+    "Malgun Gothic",
+    "Nirmala UI",
+    "Ebrima",
+    "Gadugi",
+    "Noto Sans",
+    "DejaVu Sans",
+    "Arial Unicode MS",
+];
+
+const SANS_FAMILIES: [&str; 9] = [
+    "Segoe UI",
+    "Inter",
+    "Open Sans",
+    "Noto Sans",
+    "DejaVu Sans",
+    "Arial",
+    "Liberation Sans",
+    "Helvetica",
+    "Ubuntu Sans",
+];
+const SERIF_FAMILIES: [&str; 6] = [
+    "Times New Roman",
+    "Georgia",
+    "Noto Serif",
+    "DejaVu Serif",
+    "Liberation Serif",
+    "Cambria",
+];
+const MONOSPACE_FAMILIES: [&str; 8] = [
+    "Cascadia Mono",
+    "Consolas",
+    "Menlo",
+    "Noto Sans Mono",
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+    "Courier New",
+    "Ubuntu Mono",
+];
+const CURSIVE_FAMILIES: [&str; 3] = ["Segoe Script", "Comic Sans MS", "Z003"];
+const FANTASY_FAMILIES: [&str; 2] = ["Impact", "Papyrus"];
+
+fn default_ignorable(character: char) -> bool {
+    matches!(
+        character,
+        '\u{00ad}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{206f}'
+            | '\u{fe00}'..='\u{fe0f}'
+            | '\u{feff}'
+            | '\u{e0100}'..='\u{e01ef}'
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct EntryKey {
+    id: ID,
+    weight: u16,
+    stretch: FontStretch,
+    fake_italic: bool,
+}
+
+pub struct FontEntry {
+    id: ID,
+    weight: u16,
+    stretch: FontStretch,
+    fake_italic: bool,
+    bytes: FaceBytes,
+    shaper_data: harfrust::ShaperData,
+    shaper_instance: Option<harfrust::ShaperInstance>,
+    location: skrifa::instance::Location,
+    units_per_em: f32,
+    ascent: f32,
+    descent: f32,
+    max_width: f32,
+    space: f32,
+    color: bool,
+    postscript_name: String,
+    glyphs: Mutex<HashMap<char, u16>>,
+}
+
+impl FontEntry {
+    fn build(
+        id: ID,
+        bytes: FaceBytes,
+        weight: u16,
+        stretch: FontStretch,
+        fake_italic: bool,
+        postscript_name: String,
+    ) -> Option<Self> {
+        let font = skrifa::FontRef::from_index(bytes.bytes(), bytes.index()).ok()?;
+        let axes = font.axes();
+        let mut settings: Vec<(skrifa::Tag, f32)> = Vec::new();
+        if axes.get_by_tag(skrifa::Tag::new(b"wght")).is_some() {
+            settings.push((skrifa::Tag::new(b"wght"), f32::from(weight)));
+        }
+        if axes.get_by_tag(skrifa::Tag::new(b"wdth")).is_some() {
+            let width = match stretch {
+                FontStretch::Condensed => 75.0,
+                FontStretch::Normal => 100.0,
+                FontStretch::Expanded => 125.0,
+            };
+            settings.push((skrifa::Tag::new(b"wdth"), width));
+        }
+        let location = axes.location(settings.iter().copied());
+        let metrics = font.metrics(skrifa::instance::Size::unscaled(), &location);
+        let units_per_em = f32::from(metrics.units_per_em.max(1));
+        let harf_font = harfrust::FontRef::from_index(bytes.bytes(), bytes.index()).ok()?;
+        let shaper_data = harfrust::ShaperData::new(&harf_font);
+        let shaper_instance = (!settings.is_empty()).then(|| {
+            harfrust::ShaperInstance::from_variations(
+                &harf_font,
+                settings.iter().map(|(tag, value)| harfrust::Variation {
+                    tag: harfrust::Tag::new(&tag.to_be_bytes()),
+                    value: *value,
+                }),
+            )
+        });
+        let space = font
+            .charmap()
+            .map(' ')
+            .and_then(|glyph| {
+                font.glyph_metrics(skrifa::instance::Size::unscaled(), &location)
+                    .advance_width(glyph)
+            })
+            .map_or(0.25, |advance| advance / units_per_em);
+        let color = [b"COLR", b"CBDT", b"sbix"]
+            .iter()
+            .any(|tag| font.data_for_tag(skrifa::Tag::new(tag)).is_some());
+        Some(Self {
+            id,
+            weight,
+            stretch,
+            fake_italic,
+            shaper_data,
+            shaper_instance,
+            location,
+            units_per_em,
+            ascent: metrics.ascent / units_per_em,
+            descent: -metrics.descent / units_per_em,
+            max_width: metrics.max_width.unwrap_or(0.0) / units_per_em,
+            space,
+            color,
+            postscript_name,
+            glyphs: Mutex::new(HashMap::new()),
+            bytes,
+        })
+    }
+
+    pub fn id(&self) -> ID {
+        self.id
+    }
+
+    pub fn weight(&self) -> u16 {
+        self.weight
+    }
+
+    pub fn stretch(&self) -> FontStretch {
+        self.stretch
+    }
+
+    pub fn fake_italic(&self) -> bool {
+        self.fake_italic
+    }
+
+    pub fn units_per_em(&self) -> f32 {
+        self.units_per_em
+    }
+
+    pub fn ascent_em(&self) -> f32 {
+        self.ascent
+    }
+
+    pub fn descent_em(&self) -> f32 {
+        self.descent
+    }
+
+    pub fn max_width_em(&self) -> f32 {
+        self.max_width
+    }
+
+    pub fn space_em(&self) -> f32 {
+        self.space
+    }
+
+    pub fn has_color(&self) -> bool {
+        self.color
+    }
+
+    pub fn postscript_name(&self) -> &str {
+        &self.postscript_name
+    }
+
+    pub fn is_emoji(&self) -> bool {
+        COLOR_FONT_POSTSCRIPT.contains(&self.postscript_name.as_str())
+    }
+
+    pub fn data(&self) -> &[u8] {
+        self.bytes.bytes()
+    }
+
+    pub fn face_index(&self) -> u32 {
+        self.bytes.index()
+    }
+
+    pub fn location(&self) -> &skrifa::instance::Location {
+        &self.location
+    }
+
+    pub fn glyph_for(&self, character: char) -> u16 {
+        let mut cache = self.glyphs.lock().expect("glyph cache lock poisoned");
+        if let Some(found) = cache.get(&character) {
+            return *found;
+        }
+        let glyph = skrifa::FontRef::from_index(self.bytes.bytes(), self.bytes.index())
+            .ok()
+            .and_then(|font| font.charmap().map(character))
+            .map_or(0, |glyph| glyph.to_u32() as u16);
+        if cache.len() > 8192 {
+            cache.clear();
+        }
+        cache.insert(character, glyph);
+        glyph
+    }
+
+    pub fn covers(&self, character: char) -> bool {
+        default_ignorable(character) || self.glyph_for(character) != 0
+    }
+
+    pub(crate) fn with_shaper<R>(&self, run: impl FnOnce(&harfrust::Shaper<'_>) -> R) -> Option<R> {
+        let font = harfrust::FontRef::from_index(self.bytes.bytes(), self.bytes.index()).ok()?;
+        let shaper = self
+            .shaper_data
+            .shaper(&font)
+            .instance(self.shaper_instance.as_ref())
+            .build();
+        Some(run(&shaper))
+    }
+
+    pub fn with_font<R>(&self, run: impl FnOnce(&skrifa::FontRef<'_>) -> R) -> Option<R> {
+        let font = skrifa::FontRef::from_index(self.bytes.bytes(), self.bytes.index()).ok()?;
+        Some(run(&font))
+    }
+}
+
+type CandidateKey = (Vec<FontFamily>, u16, FontStretch, FontSlant);
+
 pub struct FontManager {
-    system: cosmic_text::FontSystem,
-    /// Monotonic counter bumped by every [`FontManager::load_font_bytes`] /
-    /// [`FontManager::load_font_file`]. Shaping caches key on this instead
-    /// of face count: replacing a font with another of the same face count
-    /// still invalidates (face-count proxy would miss it).
+    database: FontDatabase,
     revision: u64,
-    formation_cache: std::collections::HashMap<(String, String), bool>,
+    entries: HashMap<EntryKey, Option<Arc<FontEntry>>>,
+    family_cache: HashMap<(FontFamily, u16, FontStretch, FontSlant), Option<ID>>,
+    formation_cache: HashMap<(ID, String), bool>,
+    scan_cache: HashMap<char, Option<ID>>,
+    face_coverage: HashMap<(ID, char), bool>,
+    candidate_cache: HashMap<CandidateKey, Vec<Arc<FontEntry>>>,
+    shape_buffer: Option<harfrust::UnicodeBuffer>,
 }
 
 impl FontManager {
-    /// Create a manager with all system fonts loaded (fontconfig on Linux,
-    /// CoreText/DirectWrite backed equivalents elsewhere via fontdb).
     pub fn new() -> Self {
-        Self {
-            system: cosmic_text::FontSystem::new(),
-            revision: 0,
-            formation_cache: std::collections::HashMap::new(),
-        }
+        Self::with_database(FontDatabase::system())
     }
 
-    /// Create a manager with no system fonts. Useful for hermetic tests and
-    /// for hosts that supply their own font set via [`FontManager::load_font_bytes`].
-    ///
-    /// Note: the shaping engine loads system fonts inside `new_with_fonts`
-    /// even for an empty iterator, so this builds from an empty database
-    /// with a fixed `"und"` (undetermined) locale instead.
     pub fn new_without_system_fonts() -> Self {
+        Self::with_database(FontDatabase::empty())
+    }
+
+    fn with_database(database: FontDatabase) -> Self {
         Self {
-            system: cosmic_text::FontSystem::new_with_locale_and_db(
-                "und".to_string(),
-                fontdb::Database::new(),
-            ),
+            database,
             revision: 0,
-            formation_cache: std::collections::HashMap::new(),
+            entries: HashMap::new(),
+            family_cache: HashMap::new(),
+            formation_cache: HashMap::new(),
+            scan_cache: HashMap::new(),
+            face_coverage: HashMap::new(),
+            candidate_cache: HashMap::new(),
+            shape_buffer: None,
         }
     }
 
-    /// Monotonic font-generation counter. Layout caches key on this; any
-    /// font load invalidates shaping. (Face count alone would miss a
-    /// same-count font replacement.)
+    fn invalidate(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+        self.entries.clear();
+        self.family_cache.clear();
+        self.formation_cache.clear();
+        self.scan_cache.clear();
+        self.face_coverage.clear();
+        self.candidate_cache.clear();
+    }
+
     pub fn font_revision(&self) -> u64 {
         self.revision
     }
 
-    /// Load a font from in-memory data (TTF/OTF/WOFF… whatever fontdb parses).
-    /// The data is reference-counted internally; the caller need not retain it.
-    /// Bumps [`FontManager::font_revision`].
     pub fn load_font_bytes(&mut self, data: Vec<u8>) {
-        self.system.db_mut().load_font_data(data);
-        self.revision = self.revision.wrapping_add(1);
-        self.formation_cache.clear();
+        self.database.load_bytes(data);
+        self.invalidate();
     }
 
-    /// Load a font from a file path. Bumps [`FontManager::font_revision`]
-    /// on success.
     pub fn load_font_file(
         &mut self,
         path: impl AsRef<std::path::Path>,
     ) -> Result<(), std::io::Error> {
-        let r = self.system.db_mut().load_font_file(path);
-        if r.is_ok() {
-            self.revision = self.revision.wrapping_add(1);
-            self.formation_cache.clear();
+        let loaded = self.database.load_file(path);
+        if loaded.is_ok() {
+            self.invalidate();
         }
-        r
+        loaded
     }
 
-    /// Number of font faces currently in the database.
     pub fn face_count(&self) -> usize {
-        self.system.db().faces().count()
+        self.database.face_count()
     }
 
-    /// True if at least one face matches the given family name.
     pub fn has_family(&self, family: &str) -> bool {
-        self.system.db().faces().any(|f| {
-            f.families
+        self.database.faces().any(|face| {
+            face.families
                 .iter()
                 .any(|(name, _)| name.eq_ignore_ascii_case(family))
         })
     }
 
-    /// Names of all families in the database, sorted and deduplicated.
     pub fn family_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self
-            .system
-            .db()
+            .database
             .faces()
-            .flat_map(|f| f.families.iter().map(|(name, _)| name.clone()))
+            .flat_map(|face| face.families.iter().map(|(name, _)| name.clone()))
             .collect();
         names.sort();
         names.dedup();
         names
     }
 
-    /// Copy out the raw font data backing `face`, e.g. to load an
-    /// identical copy into another font system. Prefer sharing one
-    /// `FontManager` (see [`SharedFonts`]) over duplicating databases;
-    /// this exists for hosts that must feed a foreign font API.
-    pub fn export_face_data(&self, face: fontdb::ID) -> Option<Vec<u8>> {
-        self.system
-            .db()
-            .with_face_data(face, |data, _| data.to_vec())
+    pub fn export_face_data(&mut self, face: ID) -> Option<Vec<u8>> {
+        self.database
+            .face_bytes(face)
+            .map(|bytes| bytes.bytes().to_vec())
     }
 
-    pub(crate) fn fallback_spans(
-        &mut self,
-        text: &str,
-        style: &crate::style::TextStyle,
-    ) -> Vec<(std::ops::Range<usize>, Option<String>)> {
-        use unicode_segmentation::UnicodeSegmentation;
-        if text.is_empty() {
-            return vec![(0..0, None)];
-        }
-        if text.is_ascii() {
-            return vec![(0..text.len(), None)];
-        }
-        let family = style
-            .families
-            .first()
-            .map(crate::style::FontFamily::to_cosmic)
-            .unwrap_or(cosmic_text::Family::SansSerif);
-        let query = fontdb::Query {
-            families: &[family],
-            weight: style.weight.to_cosmic(),
-            stretch: style.stretch.to_cosmic(),
-            style: style.slant.to_cosmic(),
+    pub fn first_face(&self) -> Option<ID> {
+        self.database.faces().next().map(|face| face.id)
+    }
+
+    pub fn postscript_name(&self, id: ID) -> Option<&str> {
+        self.database
+            .face(id)
+            .map(|face| face.post_script_name.as_str())
+    }
+
+    pub(crate) fn take_buffer(&mut self) -> harfrust::UnicodeBuffer {
+        self.shape_buffer.take().unwrap_or_default()
+    }
+
+    pub(crate) fn return_buffer(&mut self, buffer: harfrust::UnicodeBuffer) {
+        self.shape_buffer = Some(buffer);
+    }
+
+    fn query_name(
+        &self,
+        name: &str,
+        weight: u16,
+        stretch: FontStretch,
+        slant: FontSlant,
+    ) -> Option<ID> {
+        let query = Query {
+            families: &[Family::Name(name)],
+            weight: Weight(weight),
+            stretch: fontdb_stretch(stretch),
+            style: fontdb_style(slant),
         };
-        let Some(primary_id) = self.system.db().query(&query) else {
-            return vec![(0..text.len(), None)];
-        };
-        let Some(primary) = self.system.get_font(primary_id, style.weight.to_cosmic()) else {
-            return vec![(0..text.len(), None)];
-        };
-        let names: Vec<String> = if style.families.len() > 1 {
-            style
-                .families
+        let found = self.database.query(&query)?;
+        let matches = self.database.face(found).is_some_and(|face| {
+            face.families
                 .iter()
-                .skip(1)
-                .filter_map(|family| match family {
-                    crate::style::FontFamily::Named(name) => Some(name.clone()),
-                    _ => None,
-                })
-                .collect()
-        } else {
-            [
-                "Segoe UI Emoji",
-                "Noto Color Emoji",
-                "Apple Color Emoji",
-                "Twemoji Mozilla",
-            ]
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect()
+                .any(|(family, _)| family.eq_ignore_ascii_case(name))
+        });
+        matches.then_some(found)
+    }
+
+    fn resolve_family(
+        &mut self,
+        family: &FontFamily,
+        weight: u16,
+        stretch: FontStretch,
+        slant: FontSlant,
+    ) -> Option<ID> {
+        let key = (family.clone(), weight, stretch, slant);
+        if let Some(found) = self.family_cache.get(&key) {
+            return *found;
+        }
+        let names: Vec<&str> = match family {
+            FontFamily::Named(name) => vec![name.as_str()],
+            FontFamily::SansSerif => SANS_FAMILIES.to_vec(),
+            FontFamily::Serif => SERIF_FAMILIES.to_vec(),
+            FontFamily::Monospace => MONOSPACE_FAMILIES.to_vec(),
+            FontFamily::Cursive => CURSIVE_FAMILIES.to_vec(),
+            FontFamily::Fantasy => FANTASY_FAMILIES.to_vec(),
         };
-        let mut candidates = Vec::new();
-        for name in names {
-            let query = fontdb::Query {
-                families: &[fontdb::Family::Name(&name)],
-                weight: style.weight.to_cosmic(),
-                stretch: style.stretch.to_cosmic(),
-                style: style.slant.to_cosmic(),
-            };
-            let Some(id) = self.system.db().query(&query) else {
-                continue;
-            };
-            let Some(face) = self.system.get_font(id, style.weight.to_cosmic()) else {
-                continue;
-            };
-            let known_emoji = self.system.db().face(id).is_some_and(|face| {
-                matches!(
-                    face.post_script_name.as_str(),
-                    "SegoeUIEmoji"
-                        | "NotoColorEmoji"
-                        | "AppleColorEmoji"
-                        | ".AppleColorEmojiUI"
-                        | "TwemojiMozilla"
+        let found = names
+            .into_iter()
+            .find_map(|name| self.query_name(name, weight, stretch, slant));
+        self.family_cache.insert(key, found);
+        found
+    }
+
+    fn entry_for(
+        &mut self,
+        id: ID,
+        weight: u16,
+        stretch: FontStretch,
+        slant: FontSlant,
+    ) -> Option<Arc<FontEntry>> {
+        let face_style = self.database.face(id)?.style;
+        let fake_italic = slant != FontSlant::Normal && face_style == Style::Normal;
+        let key = EntryKey {
+            id,
+            weight,
+            stretch,
+            fake_italic,
+        };
+        if let Some(found) = self.entries.get(&key) {
+            return found.clone();
+        }
+        let postscript_name = self.database.face(id)?.post_script_name.clone();
+        let built = self.database.face_bytes(id).and_then(|bytes| {
+            FontEntry::build(id, bytes, weight, stretch, fake_italic, postscript_name)
+        });
+        let built = built.map(Arc::new);
+        self.entries.insert(key, built.clone());
+        built
+    }
+
+    pub fn entry_with(
+        &mut self,
+        id: ID,
+        weight: u16,
+        stretch: FontStretch,
+        synthetic_italic: bool,
+    ) -> Option<Arc<FontEntry>> {
+        let slant = if synthetic_italic {
+            FontSlant::Italic
+        } else {
+            FontSlant::Normal
+        };
+        self.entry_for(id, weight, stretch, slant)
+    }
+
+    pub fn entry(&mut self, id: ID, style: &TextStyle) -> Option<Arc<FontEntry>> {
+        self.entry_for(id, style.weight.0, style.stretch, style.slant)
+    }
+
+    pub fn primary(&mut self, style: &TextStyle) -> Option<Arc<FontEntry>> {
+        let default = [FontFamily::SansSerif];
+        let families = if style.families.is_empty() {
+            &default[..]
+        } else {
+            &style.families[..]
+        };
+        let id = families
+            .iter()
+            .find_map(|family| {
+                self.resolve_family(family, style.weight.0, style.stretch, style.slant)
+            })
+            .or_else(|| {
+                self.resolve_family(
+                    &FontFamily::SansSerif,
+                    style.weight.0,
+                    style.stretch,
+                    style.slant,
                 )
-            });
-            candidates.push((name, id, face, known_emoji));
+            })
+            .or_else(|| self.first_face())?;
+        self.entry(id, style)
+    }
+
+    fn fallback_candidates(&mut self, style: &TextStyle) -> Vec<Arc<FontEntry>> {
+        let key = (
+            style.families.clone(),
+            style.weight.0,
+            style.stretch,
+            style.slant,
+        );
+        if let Some(found) = self.candidate_cache.get(&key) {
+            return found.clone();
         }
-        if candidates.is_empty() {
-            return vec![(0..text.len(), None)];
-        }
-        let mut spans = Vec::new();
-        let mut start = 0;
-        let mut slot: Option<usize> = None;
-        for (index, grapheme) in text.grapheme_indices(true) {
-            let next = select_cluster(
-                grapheme,
-                candidates.len(),
-                |ch| primary.as_swash().charmap().map(ch) != 0,
-                |slot, ch| candidates[slot].2.as_swash().charmap().map(ch) != 0,
-                |slot| {
-                    let (name, id, _, emoji) = &candidates[slot];
-                    let key = (name.clone(), grapheme.to_owned());
-                    if let Some(value) = self.formation_cache.get(&key) {
-                        return *value;
-                    }
-                    let metrics = cosmic_text::Metrics::new(
-                        style.size_px.max(1.0),
-                        style.line_height_px.max(1.0),
-                    );
-                    let mut probe = cosmic_text::Buffer::new(&mut self.system, metrics);
-                    let attrs = cosmic_text::Attrs::new().family(cosmic_text::Family::Name(name));
-                    probe.set_text(grapheme, &attrs, cosmic_text::Shaping::Advanced, None);
-                    probe.shape_until_scroll(&mut self.system, false);
-                    let mut count = 0usize;
-                    let mut valid = true;
-                    for glyph in probe.layout_runs().flat_map(|line| line.glyphs) {
-                        if glyph.glyph_id == 0 || glyph.font_id != *id {
-                            valid = false;
-                            break;
-                        }
-                        if *emoji && glyph.glyph_id == 3 {
-                            continue;
-                        }
-                        count += 1;
-                    }
-                    let result = valid && count == 1;
-                    if self.formation_cache.len() < 512 {
-                        self.formation_cache.insert(key, result);
-                    }
-                    result
-                },
+        let candidates = self.build_fallback_candidates(style);
+        self.candidate_cache.insert(key, candidates.clone());
+        candidates
+    }
+
+    fn build_fallback_candidates(&mut self, style: &TextStyle) -> Vec<Arc<FontEntry>> {
+        let mut names: Vec<String> = style
+            .families
+            .iter()
+            .skip(1)
+            .filter_map(|family| match family {
+                FontFamily::Named(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        if style.families.len() <= 1 {
+            names.extend(EMOJI_FAMILIES.iter().map(|name| (*name).to_owned()));
+            names.extend(
+                PLATFORM_FALLBACK_FAMILIES
+                    .iter()
+                    .map(|name| (*name).to_owned()),
             );
-            if next != slot {
-                if index > start {
-                    spans.push((start..index, slot.map(|slot| candidates[slot].0.clone())));
-                }
-                start = index;
-                slot = next;
+        }
+        let mut candidates: Vec<Arc<FontEntry>> = Vec::new();
+        for name in names {
+            let Some(id) = self.query_name(&name, style.weight.0, style.stretch, style.slant)
+            else {
+                continue;
+            };
+            if candidates.iter().any(|entry| entry.id == id) {
+                continue;
+            }
+            if let Some(entry) = self.entry(id, style) {
+                candidates.push(entry);
             }
         }
-        spans.push((
-            start..text.len(),
-            slot.map(|slot| candidates[slot].0.clone()),
-        ));
-        spans
+        candidates
     }
 
-    /// Access the shaping engine's font system for layout calls.
-    pub fn font_system(&self) -> &cosmic_text::FontSystem {
-        &self.system
+    fn face_covers(&mut self, id: ID, character: char) -> bool {
+        if let Some(found) = self.face_coverage.get(&(id, character)) {
+            return *found;
+        }
+        let covered = self.database.face_bytes(id).is_some_and(|bytes| {
+            skrifa::FontRef::from_index(bytes.bytes(), bytes.index())
+                .ok()
+                .and_then(|font| font.charmap().map(character))
+                .is_some()
+        });
+        self.face_coverage.insert((id, character), covered);
+        covered
     }
 
-    /// Mutable access for layout calls (shaping requires `&mut`).
-    ///
-    /// Do NOT load fonts through the returned handle (`db_mut()` etc.):
-    /// that bypasses [`FontManager::font_revision`] and shaping caches
-    /// would keep stale glyphs. Use [`FontManager::load_font_bytes`] /
-    /// [`FontManager::load_font_file`] instead.
-    pub fn font_system_mut(&mut self) -> &mut cosmic_text::FontSystem {
-        &mut self.system
+    fn scan_for(&mut self, character: char, style: &TextStyle) -> Option<Arc<FontEntry>> {
+        if let Some(found) = self.scan_cache.get(&character).copied() {
+            return found.and_then(|id| self.entry(id, style));
+        }
+        let mut ranked: Vec<(ID, u16, bool, String)> = self
+            .database
+            .faces()
+            .map(|face| {
+                (
+                    face.id,
+                    face.weight.0.abs_diff(style.weight.0),
+                    face.style == Style::Normal,
+                    face.post_script_name.clone(),
+                )
+            })
+            .collect();
+        ranked.sort_by(|a, b| (!a.2, a.1, &a.3).cmp(&(!b.2, b.1, &b.3)));
+        let found = ranked
+            .into_iter()
+            .map(|(id, ..)| id)
+            .find(|id| self.face_covers(*id, character));
+        self.scan_cache.insert(character, found);
+        found.and_then(|id| self.entry(id, style))
+    }
+
+    pub(crate) fn font_runs(
+        &mut self,
+        text: &str,
+        style: &TextStyle,
+    ) -> Vec<(std::ops::Range<usize>, Option<Arc<FontEntry>>, bool)> {
+        let Some(primary) = self.primary(style) else {
+            return vec![(0..text.len(), None, false)];
+        };
+        if text.is_ascii() {
+            return vec![(0..text.len(), Some(primary), false)];
+        }
+        let candidates = self.fallback_candidates(style);
+        let mut runs: Vec<(std::ops::Range<usize>, Option<Arc<FontEntry>>, bool)> = Vec::new();
+        for (index, grapheme) in text.grapheme_indices(true) {
+            let slot = if grapheme.is_ascii() || grapheme.chars().all(|ch| primary.covers(ch)) {
+                None
+            } else {
+                select_cluster(
+                    grapheme,
+                    candidates.len(),
+                    |ch| primary.covers(ch),
+                    |slot, ch| candidates[slot].covers(ch),
+                    |slot| self.forms_single(&candidates[slot], grapheme, style),
+                )
+            };
+            let (entry, fallback) = match slot {
+                Some(slot) => (candidates[slot].clone(), true),
+                None => {
+                    let first = grapheme.chars().find(|ch| !default_ignorable(*ch));
+                    let scanned = first
+                        .filter(|ch| !primary.covers(*ch))
+                        .and_then(|ch| self.scan_for(ch, style))
+                        .filter(|entry| grapheme.chars().all(|ch| entry.covers(ch)));
+                    match scanned {
+                        Some(entry) => (entry, true),
+                        None => (primary.clone(), false),
+                    }
+                }
+            };
+            let end = index + grapheme.len();
+            match runs.last_mut() {
+                Some((range, existing, flag))
+                    if existing.as_ref().is_some_and(|e| Arc::ptr_eq(e, &entry))
+                        && *flag == fallback =>
+                {
+                    range.end = end;
+                }
+                _ => runs.push((index..end, Some(entry), fallback)),
+            }
+        }
+        runs
+    }
+
+    fn forms_single(&mut self, entry: &Arc<FontEntry>, grapheme: &str, style: &TextStyle) -> bool {
+        let key = (entry.id, grapheme.to_owned());
+        if let Some(value) = self.formation_cache.get(&key) {
+            return *value;
+        }
+        let glyphs = crate::shape::shape_run(
+            self,
+            entry,
+            grapheme,
+            &crate::shape::ShapeParams {
+                size_px: style.size_px.max(1.0),
+                rtl: false,
+                features: &[],
+                letter_spacing_px: 0.0,
+            },
+        );
+        let emoji = entry.is_emoji();
+        let mut count = 0usize;
+        let mut valid = true;
+        for glyph in &glyphs {
+            if glyph.glyph_id == 0 {
+                valid = false;
+                break;
+            }
+            if emoji && glyph.glyph_id == 3 {
+                continue;
+            }
+            count += 1;
+        }
+        let result = valid && count == 1;
+        if self.formation_cache.len() < 512 {
+            self.formation_cache.insert(key, result);
+        }
+        result
     }
 }
 
-/// Reference-counted shared ownership of one [`FontManager`].
-///
-/// Clone the handle (cheap) wherever text is measured, edited or rendered;
-/// lock it for the duration of each operation. Hold the guard across a
-/// whole layout-or-render call but never across frames.
-#[derive(Clone, Default)]
-pub struct SharedFonts {
-    inner: std::sync::Arc<std::sync::Mutex<FontManager>>,
+fn fontdb_stretch(stretch: FontStretch) -> Stretch {
+    match stretch {
+        FontStretch::Condensed => Stretch::Condensed,
+        FontStretch::Normal => Stretch::Normal,
+        FontStretch::Expanded => Stretch::Expanded,
+    }
 }
 
-impl SharedFonts {
-    /// System fonts loaded.
-    pub fn new() -> Self {
-        Self {
-            inner: std::sync::Arc::new(std::sync::Mutex::new(FontManager::new())),
-        }
-    }
-
-    /// No system fonts; the host adds its own via [`FontManager`].
-    pub fn without_system_fonts() -> Self {
-        Self {
-            inner: std::sync::Arc::new(std::sync::Mutex::new(
-                FontManager::new_without_system_fonts(),
-            )),
-        }
-    }
-
-    /// Lock the shared manager. Guard holds `&mut FontManager`.
-    pub fn lock(&self) -> std::sync::MutexGuard<'_, FontManager> {
-        self.inner.lock().expect("font manager lock poisoned")
+fn fontdb_style(slant: FontSlant) -> Style {
+    match slant {
+        FontSlant::Normal => Style::Normal,
+        FontSlant::Italic => Style::Italic,
+        FontSlant::Oblique => Style::Oblique,
     }
 }
 
 impl Default for FontManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct SharedFonts {
+    inner: Arc<Mutex<FontManager>>,
+}
+
+impl SharedFonts {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(FontManager::new())),
+        }
+    }
+
+    pub fn without_system_fonts() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(FontManager::new_without_system_fonts())),
+        }
+    }
+
+    pub fn lock(&self) -> std::sync::MutexGuard<'_, FontManager> {
+        self.inner.lock().expect("font manager lock poisoned")
     }
 }
 
@@ -350,12 +766,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn system_fonts_load() {
-        let mgr = FontManager::new();
-        assert!(mgr.face_count() > 0, "expected system fonts to load");
-    }
-
-    #[test]
     fn empty_manager_has_no_faces() {
         let mgr = FontManager::new_without_system_fonts();
         assert_eq!(mgr.face_count(), 0);
@@ -366,32 +776,18 @@ mod tests {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<SharedFonts>();
         assert_send_sync::<FontManager>();
-    }
-
-    #[test]
-    fn default_path_matches_new() {
-        let via_new = FontManager::new();
-        let via_default = FontManager::default();
-        assert_eq!(via_new.face_count(), via_default.face_count());
-        assert_eq!(via_new.font_revision(), via_default.font_revision());
-        let shared_new = SharedFonts::new();
-        let shared_default = SharedFonts::default();
-        assert_eq!(
-            shared_new.lock().face_count(),
-            shared_default.lock().face_count()
-        );
+        assert_send_sync::<FontEntry>();
     }
 
     #[test]
     fn font_loads_bump_revision() {
         let mut mgr = FontManager::new_without_system_fonts();
         assert_eq!(mgr.font_revision(), 0);
-        let before = mgr.face_count();
         let r0 = mgr.font_revision();
         mgr.load_font_file("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
             .expect("test host needs DejaVuSans");
         assert_eq!(mgr.font_revision(), r0.wrapping_add(1));
-        assert!(mgr.face_count() >= before);
+        assert_eq!(mgr.face_count(), 1);
         let data = std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
             .expect("test host needs DejaVuSans");
         mgr.load_font_bytes(data);

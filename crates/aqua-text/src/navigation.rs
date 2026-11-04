@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use icu_segmenter::{options::WordBreakInvariantOptions, WordSegmenter};
+use icu_segmenter::{WordSegmenter, options::WordBreakInvariantOptions};
 use unicode_segmentation::UnicodeSegmentation as _;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

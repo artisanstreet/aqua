@@ -9,19 +9,6 @@ pub enum FontFamily {
     Named(String),
 }
 
-impl FontFamily {
-    pub fn to_cosmic(&self) -> cosmic_text::Family<'_> {
-        match self {
-            FontFamily::SansSerif => cosmic_text::Family::SansSerif,
-            FontFamily::Serif => cosmic_text::Family::Serif,
-            FontFamily::Monospace => cosmic_text::Family::Monospace,
-            FontFamily::Cursive => cosmic_text::Family::Cursive,
-            FontFamily::Fantasy => cosmic_text::Family::Fantasy,
-            FontFamily::Named(name) => cosmic_text::Family::Name(name.as_str()),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FontWeight(pub u16);
 
@@ -32,10 +19,6 @@ impl FontWeight {
     pub const MEDIUM: FontWeight = FontWeight(500);
     pub const BOLD: FontWeight = FontWeight(700);
     pub const BLACK: FontWeight = FontWeight(900);
-
-    pub fn to_cosmic(self) -> cosmic_text::Weight {
-        cosmic_text::Weight(self.0)
-    }
 }
 
 impl Default for FontWeight {
@@ -52,32 +35,12 @@ pub enum FontSlant {
     Oblique,
 }
 
-impl FontSlant {
-    pub fn to_cosmic(self) -> cosmic_text::Style {
-        match self {
-            FontSlant::Normal => cosmic_text::Style::Normal,
-            FontSlant::Italic => cosmic_text::Style::Italic,
-            FontSlant::Oblique => cosmic_text::Style::Oblique,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FontStretch {
     Condensed,
     #[default]
     Normal,
     Expanded,
-}
-
-impl FontStretch {
-    pub fn to_cosmic(self) -> cosmic_text::Stretch {
-        match self {
-            FontStretch::Condensed => cosmic_text::Stretch::Condensed,
-            FontStretch::Normal => cosmic_text::Stretch::Normal,
-            FontStretch::Expanded => cosmic_text::Stretch::Expanded,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -150,51 +113,6 @@ impl TextStyle {
             self.underline,
             self.strikethrough,
         )
-    }
-
-    pub fn to_cosmic_in(&self) -> cosmic_text::Attrs<'_> {
-        let family = match self.families.first() {
-            Some(f) => f.to_cosmic(),
-            None => cosmic_text::Family::SansSerif,
-        };
-        let mut attrs = cosmic_text::Attrs::new()
-            .family(family)
-            .weight(self.weight.to_cosmic())
-            .style(self.slant.to_cosmic())
-            .stretch(self.stretch.to_cosmic());
-        if let Some(ls) = self.letter_spacing_em {
-            attrs = attrs.letter_spacing(ls);
-        }
-        let mut features = cosmic_text::FontFeatures::new();
-        for feature in &self.font_features {
-            features.set(cosmic_text::FeatureTag::new(&feature.tag), feature.value);
-        }
-        attrs.font_features(features)
-    }
-
-    pub fn to_cosmic(&self) -> cosmic_text::Attrs<'static> {
-        let family = match self.families.first() {
-            Some(FontFamily::SansSerif) => cosmic_text::Family::SansSerif,
-            Some(FontFamily::Serif) => cosmic_text::Family::Serif,
-            Some(FontFamily::Monospace) => cosmic_text::Family::Monospace,
-            Some(FontFamily::Cursive) => cosmic_text::Family::Cursive,
-            Some(FontFamily::Fantasy) => cosmic_text::Family::Fantasy,
-            Some(FontFamily::Named(_)) => cosmic_text::Family::SansSerif,
-            None => cosmic_text::Family::SansSerif,
-        };
-        let mut attrs = cosmic_text::Attrs::new()
-            .family(family)
-            .weight(self.weight.to_cosmic())
-            .style(self.slant.to_cosmic())
-            .stretch(self.stretch.to_cosmic());
-        if let Some(ls) = self.letter_spacing_em {
-            attrs = attrs.letter_spacing(ls);
-        }
-        let mut features = cosmic_text::FontFeatures::new();
-        for feature in &self.font_features {
-            features.set(cosmic_text::FeatureTag::new(&feature.tag), feature.value);
-        }
-        attrs.font_features(features)
     }
 }
 
@@ -294,17 +212,6 @@ pub enum WrapMode {
     WordOrGlyph,
 }
 
-impl WrapMode {
-    pub fn to_cosmic(self) -> cosmic_text::Wrap {
-        match self {
-            WrapMode::None => cosmic_text::Wrap::None,
-            WrapMode::Glyph => cosmic_text::Wrap::Glyph,
-            WrapMode::Word => cosmic_text::Wrap::Word,
-            WrapMode::WordOrGlyph => cosmic_text::Wrap::WordOrGlyph,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TextAlign {
     #[default]
@@ -314,19 +221,6 @@ pub enum TextAlign {
     Right,
     Center,
     Justify,
-}
-
-impl TextAlign {
-    pub fn to_cosmic(self) -> Option<cosmic_text::Align> {
-        match self {
-            TextAlign::Start => None,
-            TextAlign::End => Some(cosmic_text::Align::End),
-            TextAlign::Left => Some(cosmic_text::Align::Left),
-            TextAlign::Right => Some(cosmic_text::Align::Right),
-            TextAlign::Center => Some(cosmic_text::Align::Center),
-            TextAlign::Justify => Some(cosmic_text::Align::Justified),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

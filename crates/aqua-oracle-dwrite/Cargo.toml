@@ -1,0 +1,19 @@
+[package]
+name = "aqua-oracle-dwrite"
+version = "0.1.0"
+edition = "2021"
+description = "Test-only DirectWrite oracle: shaping and pixel references for aqua-text"
+license = "BSD-3-Clause"
+publish = false
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_DirectWrite",
+  "Win32_Graphics_Gdi",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Threading",
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+aqua-text = { path = "../aqua-text" }

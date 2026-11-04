@@ -2,13 +2,19 @@
 name = "aqua-text"
 version = "0.1.0"
 edition = "2021"
-description = "Aqua shared text infrastructure: font discovery, shaping/measurement, editing model, IME"
+description = "Aqua shared text infrastructure: font discovery, shaping, layout, rasterization, editing model"
 license = "BSD-3-Clause"
 
 [dependencies]
-cosmic-text = "0.19"
-fontdb = "0.23"
+aqua-fonts-system = { path = "../aqua-fonts-system" }
+harfrust = "0.12"
+skrifa = "0.46.2"
+zeno = "0.3"
+etagere = "0.3.0"
+unicode-bidi = "0.3"
+unicode-script = "0.5"
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
 unicode-segmentation = "1.12"
 
 [dev-dependencies]
+harfrust = "0.12"

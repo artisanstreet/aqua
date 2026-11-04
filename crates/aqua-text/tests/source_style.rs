@@ -2,7 +2,7 @@ use aqua_text::style::FontFeature;
 use aqua_text::{FontManager, StyledSpan, TextLayout, TextStyle};
 
 #[test]
-fn font_features_reach_cosmic_and_change_cache_identity() {
+fn font_features_change_cache_identity() {
     let style = TextStyle {
         font_features: vec![FontFeature {
             tag: *b"tnum",
@@ -10,10 +10,6 @@ fn font_features_reach_cosmic_and_change_cache_identity() {
         }],
         ..TextStyle::default()
     };
-    let attrs = style.to_cosmic_in();
-    assert_eq!(attrs.font_features.features.len(), 1);
-    assert_eq!(attrs.font_features.features[0].tag.as_bytes(), b"tnum");
-    assert_eq!(attrs.font_features.features[0].value, 1);
     assert_ne!(style.cache_key(), TextStyle::default().cache_key());
 }
 
@@ -33,15 +29,21 @@ fn raw_base_color_yields_to_explicit_span_colors() {
     ]);
     let shaped = layout.layout(&mut FontManager::new());
     let glyphs = &shaped.lines[0].glyphs;
-    assert!(glyphs
-        .iter()
-        .any(|glyph| glyph.src_byte_start == 0 && glyph.color_hsla == Some(base)));
-    assert!(glyphs
-        .iter()
-        .any(|glyph| glyph.src_byte_start == 1 && glyph.color_hsla == Some(override_color)));
-    assert!(glyphs
-        .iter()
-        .any(|glyph| glyph.src_byte_start == 2 && glyph.color_hsla.is_none()));
+    assert!(
+        glyphs
+            .iter()
+            .any(|glyph| glyph.src_byte_start == 0 && glyph.color_hsla == Some(base))
+    );
+    assert!(
+        glyphs
+            .iter()
+            .any(|glyph| glyph.src_byte_start == 1 && glyph.color_hsla == Some(override_color))
+    );
+    assert!(
+        glyphs
+            .iter()
+            .any(|glyph| glyph.src_byte_start == 2 && glyph.color_hsla.is_none())
+    );
 }
 
 #[test]

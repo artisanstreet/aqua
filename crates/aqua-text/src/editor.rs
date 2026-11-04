@@ -760,11 +760,7 @@ fn snap_nearest(model: &TextModel, at: usize) -> usize {
     }
     let prev = model.prev_grapheme(at);
     let next = model.next_grapheme(at);
-    if at - prev <= next - at {
-        prev
-    } else {
-        next
-    }
+    if at - prev <= next - at { prev } else { next }
 }
 
 #[cfg(test)]

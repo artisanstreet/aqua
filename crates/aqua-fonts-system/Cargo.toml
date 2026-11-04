@@ -1,0 +1,9 @@
+[package]
+name = "aqua-fonts-system"
+version = "0.1.0"
+edition = "2021"
+description = "Aqua system font discovery: memory-mapped faces shared between shaping and rasterization"
+license = "BSD-3-Clause"
+
+[dependencies]
+fontdb = "0.23"

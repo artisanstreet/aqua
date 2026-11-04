@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::mem::transmute_copy;
 
+use windows::core::{s, Interface, PCSTR, PCWSTR};
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::core::{Interface, PCSTR, PCWSTR, s};
 
+use super::bindless::{self, Binding};
 use super::Error;
 
 pub const CONSTANT_DWORDS: u32 = 16;
@@ -105,14 +106,15 @@ pub struct Pipelines {
     device: ID3D12Device,
     library: Option<ID3D12PipelineLibrary>,
     stats: PipelineStats,
+    binding: Binding,
     pub root_signature: ID3D12RootSignature,
     instance_layout: Vec<D3D12_INPUT_ELEMENT_DESC>,
     shadow_layout: Vec<D3D12_INPUT_ELEMENT_DESC>,
     built: HashMap<(Kind, i32), ID3D12PipelineState>,
 }
 
-fn bytecode(name: &'static str) -> Result<D3D12_SHADER_BYTECODE, Error> {
-    let blob = aqua_shaders::find(name).ok_or(Error::MissingShader(name))?;
+fn bytecode(binding: Binding, name: &'static str) -> Result<D3D12_SHADER_BYTECODE, Error> {
+    let blob = aqua_shaders::find(&binding.shader(name)).ok_or(Error::MissingShader(name))?;
     Ok(D3D12_SHADER_BYTECODE {
         pShaderBytecode: blob.bytes.as_ptr() as *const _,
         BytecodeLength: blob.bytes.len(),
@@ -231,12 +233,20 @@ fn blend_state(enabled: bool) -> D3D12_BLEND_DESC {
 }
 
 impl Pipelines {
-    pub fn create(device: &ID3D12Device, cache: Option<&[u8]>) -> Result<Self, Error> {
+    pub fn create(
+        device: &ID3D12Device,
+        cache: Option<&[u8]>,
+        binding: Binding,
+    ) -> Result<Self, Error> {
         Ok(Self {
             device: device.clone(),
             library: open_library(device, cache),
             stats: PipelineStats::default(),
-            root_signature: root_signature(device)?,
+            binding,
+            root_signature: match binding {
+                Binding::Table => root_signature(device)?,
+                Binding::Heap => bindless::root_signature(device)?,
+            },
             instance_layout: vec![
                 instance_element(s!("BOUNDS"), 0),
                 instance_element(s!("CLIP"), 1),
@@ -277,8 +287,8 @@ impl Pipelines {
         formats[0] = format;
         let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
             pRootSignature: unsafe { transmute_copy(&self.root_signature) },
-            VS: bytecode(shaders.vertex)?,
-            PS: bytecode(shaders.pixel)?,
+            VS: bytecode(self.binding, shaders.vertex)?,
+            PS: bytecode(self.binding, shaders.pixel)?,
             BlendState: blend_state(shaders.blend),
             SampleMask: u32::MAX,
             RasterizerState: D3D12_RASTERIZER_DESC {
@@ -301,7 +311,13 @@ impl Pipelines {
             },
             ..Default::default()
         };
-        let name: Vec<u16> = format!("{kind:?}-{}\0", format.0).encode_utf16().collect();
+        let name: Vec<u16> = format!(
+            "{}\0",
+            self.binding
+                .pipeline_name(&format!("{kind:?}-{}", format.0))
+        )
+        .encode_utf16()
+        .collect();
         let loaded: Option<ID3D12PipelineState> = self.library.as_ref().and_then(|library| {
             unsafe { library.LoadGraphicsPipeline(PCWSTR(name.as_ptr()), &desc) }.ok()
         });

@@ -3,7 +3,7 @@ use aqua_graph::ShadowInstance;
 
 use crate::erf::{erf, normal_cdf};
 use crate::raster::{
-    Layer, QuadShape, clip_coverage, expand, over, pixel_window, premultiplied, scaled,
+    clip_coverage, expand, over, pixel_window, premultiplied, scaled, Layer, QuadShape,
 };
 
 pub const HARD_EDGE_SIGMA: f32 = 0.05;

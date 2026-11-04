@@ -1,8 +1,9 @@
 use aqua_protocol::{FeatureTier, GpuBackend, GpuReadback};
 
-use super::cases::{Case, cases};
-use super::compare::{Comparison, Tolerance, compare};
-use super::contract::{ContractReport, run_contract};
+use super::cases::{cases, Case};
+use super::compare::{compare, Comparison, Tolerance};
+use super::contract::{run_contract, ContractReport};
+use super::effects::requirements;
 use super::fuzz::fuzz_cases;
 use super::session::Session;
 
@@ -202,9 +203,22 @@ where
 {
     let mut reference_session = Session::new(reference);
     let mut backend_session = Session::new(backend);
+    let offered = backend_session.backend().capabilities().features;
     let reports = all_cases(config)
         .into_iter()
         .map(|case| {
+            if let Some(missing) = requirements(&case.plan)
+                .into_iter()
+                .find(|requirement| !requirement.offered_by(&offered))
+            {
+                return CaseReport {
+                    name: case.name,
+                    outcome: Outcome::Unsupported(format!(
+                        "not offered by the backend: {}",
+                        missing.name()
+                    )),
+                };
+            }
             let expected = reference_session
                 .render_case(&case)
                 .map_err(|e| format!("reference: {e}"));

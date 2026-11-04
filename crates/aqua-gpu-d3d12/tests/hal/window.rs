@@ -1,6 +1,6 @@
+use windows::core::w;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::w;
 
 pub struct TestWindow {
     pub hwnd: HWND,

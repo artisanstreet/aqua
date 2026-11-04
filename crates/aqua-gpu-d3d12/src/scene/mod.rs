@@ -1,3 +1,5 @@
+mod barriers;
+mod bindless;
 mod device;
 mod formats;
 mod offscreen;
@@ -5,14 +7,17 @@ mod persistent;
 mod pipeline;
 mod renderer;
 mod sprites;
+mod tiers;
+mod timestamps;
 mod transients;
-mod util;
+pub(crate) mod util;
 
 pub use device::AdapterPreference;
 pub use offscreen::{OffscreenBackend, SurfaceFormat};
 pub use persistent::{PersistentStats, PersistentTextures};
 pub use pipeline::PipelineStats;
 pub use renderer::{PersistentView, SceneRenderer, SceneStats, SceneTarget};
+pub use tiers::{SceneOptions, TierLimit};
 
 #[derive(Debug)]
 pub enum Error {
@@ -23,6 +28,7 @@ pub enum Error {
     RootSignature(String),
     DeviceRemoved(String),
     Texture(&'static str),
+    Budget { needed: u64, ceiling: u64 },
 }
 
 impl std::fmt::Display for Error {
@@ -35,6 +41,10 @@ impl std::fmt::Display for Error {
             Error::RootSignature(message) => write!(f, "root signature: {message}"),
             Error::DeviceRemoved(reason) => write!(f, "device removed: {reason}"),
             Error::Texture(message) => write!(f, "persistent texture: {message}"),
+            Error::Budget { needed, ceiling } => write!(
+                f,
+                "transient heap needs {needed} bytes, above the {ceiling} byte ceiling"
+            ),
         }
     }
 }

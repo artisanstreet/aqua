@@ -3,10 +3,14 @@ use std::collections::HashMap;
 use aqua_graph::{Extent, FramePlan, TextureFormat, TransientId};
 use windows::Win32::Graphics::Direct3D12::*;
 
-use super::Error;
+use windows::core::Interface;
+
+use super::barriers::{initial_layout, BarrierMode};
 use super::formats::dxgi;
 use super::util::*;
-use crate::placement::{Planned, place};
+use super::Error;
+use crate::placement::{place, Planned};
+use crate::policy::{HeapDecision, HeapGate};
 
 const HEAP_ALIGNMENT: u64 = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT as u64;
 
@@ -28,16 +32,37 @@ pub struct Entry {
 
 struct Retired {
     fence: u64,
+    bytes: u64,
     _resources: Vec<Entry>,
     _heap: Option<ID3D12Heap>,
 }
 
 pub struct Transients {
+    device10: Option<ID3D12Device10>,
+    gate: HeapGate,
     heap: Option<(ID3D12Heap, u64)>,
+    needed: u64,
     keys: Vec<Key>,
     entries: Vec<Entry>,
     index: HashMap<TransientId, usize>,
     retired: Vec<Retired>,
+}
+
+fn desc1_of(extent: Extent, format: TextureFormat) -> D3D12_RESOURCE_DESC1 {
+    let desc = desc_of(extent, format);
+    D3D12_RESOURCE_DESC1 {
+        Dimension: desc.Dimension,
+        Alignment: desc.Alignment,
+        Width: desc.Width,
+        Height: desc.Height,
+        DepthOrArraySize: desc.DepthOrArraySize,
+        MipLevels: desc.MipLevels,
+        Format: desc.Format,
+        SampleDesc: desc.SampleDesc,
+        Layout: desc.Layout,
+        Flags: desc.Flags,
+        SamplerFeedbackMipRegion: D3D12_MIP_REGION::default(),
+    }
 }
 
 fn desc_of(extent: Extent, format: TextureFormat) -> D3D12_RESOURCE_DESC {
@@ -47,6 +72,24 @@ fn desc_of(extent: Extent, format: TextureFormat) -> D3D12_RESOURCE_DESC {
         dxgi(format),
         D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
     )
+}
+
+fn place_keys(device: &ID3D12Device, keys: &[Key]) -> crate::placement::Placement {
+    let real: Vec<u64> = keys
+        .iter()
+        .map(|key| unsafe {
+            device.GetResourceAllocationInfo(0, &[desc_of(key.extent, key.format)])
+        }
+        .SizeInBytes)
+        .collect();
+    let planned: Vec<Planned> = keys
+        .iter()
+        .map(|key| Planned {
+            offset: key.offset,
+            bytes: key.bytes,
+        })
+        .collect();
+    place(&planned, &real, HEAP_ALIGNMENT)
 }
 
 fn keys_of(plan: &FramePlan) -> Vec<Key> {
@@ -63,14 +106,52 @@ fn keys_of(plan: &FramePlan) -> Vec<Key> {
 }
 
 impl Transients {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(
+        device: &ID3D12Device,
+        sync: BarrierMode,
+        ceiling: Option<u64>,
+    ) -> Result<Self, Error> {
+        let device10 = match sync {
+            BarrierMode::Queue => None,
+            BarrierMode::Enhanced => Some(
+                device
+                    .cast::<ID3D12Device10>()
+                    .map_err(|_| Error::Unsupported("enhanced barriers need device 10"))?,
+            ),
+        };
+        Ok(Self {
+            device10,
+            gate: HeapGate::new(ceiling, HEAP_ALIGNMENT),
             heap: None,
+            needed: 0,
             keys: Vec::new(),
             entries: Vec::new(),
             index: HashMap::new(),
             retired: Vec::new(),
+        })
+    }
+
+    pub fn trim(&mut self, frame_fence: u64) -> u64 {
+        let freed = self.heap_bytes();
+        let entries = std::mem::take(&mut self.entries);
+        let heap = self.heap.take().map(|(heap, _)| heap);
+        if !entries.is_empty() || heap.is_some() {
+            self.retired.push(Retired {
+                fence: frame_fence,
+                bytes: freed,
+                _resources: entries,
+                _heap: heap,
+            });
         }
+        self.keys.clear();
+        self.index.clear();
+        self.needed = 0;
+        self.gate.reset();
+        freed
+    }
+
+    pub fn retired_bytes(&self) -> u64 {
+        self.retired.iter().map(|entry| entry.bytes).sum()
     }
 
     pub fn entries(&self) -> &[Entry] {
@@ -93,68 +174,112 @@ impl Transients {
         self.heap.as_ref().map(|(_, size)| *size).unwrap_or(0)
     }
 
+    fn matches(&self, plan: &FramePlan) -> bool {
+        self.keys.len() == plan.textures.len()
+            && self.keys.iter().zip(&plan.textures).all(|(key, texture)| {
+                key.id == texture.id
+                    && key.extent == texture.extent
+                    && key.format == texture.format
+                    && key.offset == texture.heap_offset
+                    && key.bytes == texture.bytes()
+            })
+    }
+
+    fn create(
+        &self,
+        device: &ID3D12Device,
+        heap: &ID3D12Heap,
+        key: &Key,
+        offset: u64,
+    ) -> Result<ID3D12Resource, Error> {
+        let clear = D3D12_CLEAR_VALUE {
+            Format: dxgi(key.format),
+            Anonymous: D3D12_CLEAR_VALUE_0 { Color: [0.0; 4] },
+        };
+        let mut resource: Option<ID3D12Resource> = None;
+        match &self.device10 {
+            Some(device10) => unsafe {
+                device10.CreatePlacedResource2(
+                    heap,
+                    offset,
+                    &desc1_of(key.extent, key.format),
+                    initial_layout(D3D12_RESOURCE_STATE_RENDER_TARGET),
+                    Some(&clear),
+                    None,
+                    &mut resource,
+                )?
+            },
+            None => unsafe {
+                device.CreatePlacedResource(
+                    heap,
+                    offset,
+                    &desc_of(key.extent, key.format),
+                    D3D12_RESOURCE_STATE_RENDER_TARGET,
+                    Some(&clear),
+                    &mut resource,
+                )?
+            },
+        }
+        resource.ok_or(Error::NoAdapter)
+    }
+
     pub fn ensure(
         &mut self,
         device: &ID3D12Device,
         plan: &FramePlan,
         frame_fence: u64,
     ) -> Result<(), Error> {
-        let keys = keys_of(plan);
-        if keys == self.keys {
+        let same = self.matches(plan);
+        let fresh = match same {
+            true => None,
+            false => Some(keys_of(plan)),
+        };
+        let placement = fresh.as_ref().map(|keys| place_keys(device, keys));
+        let needed = placement
+            .as_ref()
+            .map(|placement| placement.total)
+            .unwrap_or(self.needed);
+        let current = self.heap_bytes();
+        let resize = match self.gate.decide(current, needed) {
+            HeapDecision::Keep => None,
+            HeapDecision::Resize { bytes } => Some(bytes),
+            HeapDecision::Reject { needed, ceiling } => {
+                return Err(Error::Budget { needed, ceiling });
+            }
+        };
+        if same && resize.is_none() {
             return Ok(());
         }
+        let keys = fresh.unwrap_or_else(|| self.keys.clone());
+        let placement = placement.unwrap_or_else(|| place_keys(device, &keys));
         let old_entries = std::mem::take(&mut self.entries);
-        let real: Vec<u64> = keys
-            .iter()
-            .map(|key| unsafe { device.GetResourceAllocationInfo(0, &[desc_of(key.extent, key.format)]) }.SizeInBytes)
-            .collect();
-        let planned: Vec<Planned> = keys
-            .iter()
-            .map(|key| Planned {
-                offset: key.offset,
-                bytes: key.bytes,
-            })
-            .collect();
-        let placement = place(&planned, &real, HEAP_ALIGNMENT);
         let mut old_heap = None;
-        let grow = self
-            .heap
-            .as_ref()
-            .map(|(_, size)| *size < placement.total)
-            .unwrap_or(placement.total > 0);
-        if grow {
-            let size = placement.total.next_multiple_of(HEAP_ALIGNMENT);
-            let desc = D3D12_HEAP_DESC {
-                SizeInBytes: size,
-                Properties: heap_properties(D3D12_HEAP_TYPE_DEFAULT),
-                Alignment: HEAP_ALIGNMENT,
-                Flags: D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES,
+        let mut old_bytes = 0;
+        if let Some(bytes) = resize {
+            let size = bytes.max(placement.total).next_multiple_of(HEAP_ALIGNMENT);
+            let new_heap = match size {
+                0 => None,
+                size => {
+                    let desc = D3D12_HEAP_DESC {
+                        SizeInBytes: size,
+                        Properties: heap_properties(D3D12_HEAP_TYPE_DEFAULT),
+                        Alignment: HEAP_ALIGNMENT,
+                        Flags: D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES,
+                    };
+                    let mut heap: Option<ID3D12Heap> = None;
+                    unsafe { device.CreateHeap(&desc, &mut heap)? };
+                    heap.map(|heap| (heap, size))
+                }
             };
-            let mut heap: Option<ID3D12Heap> = None;
-            unsafe { device.CreateHeap(&desc, &mut heap)? };
-            old_heap = self.heap.take().map(|(heap, _)| heap);
-            self.heap = heap.map(|heap| (heap, size));
+            let previous = std::mem::replace(&mut self.heap, new_heap);
+            old_bytes = previous.as_ref().map(|(_, size)| *size).unwrap_or(0);
+            old_heap = previous.map(|(heap, _)| heap);
         }
         let mut created = Vec::with_capacity(keys.len());
         for (key, offset) in keys.iter().zip(&placement.offsets) {
-            let clear = D3D12_CLEAR_VALUE {
-                Format: dxgi(key.format),
-                Anonymous: D3D12_CLEAR_VALUE_0 { Color: [0.0; 4] },
-            };
-            let mut resource: Option<ID3D12Resource> = None;
             let (heap, _) = self.heap.as_ref().ok_or(Error::NoAdapter)?;
-            unsafe {
-                device.CreatePlacedResource(
-                    heap,
-                    *offset,
-                    &desc_of(key.extent, key.format),
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    Some(&clear),
-                    &mut resource,
-                )?
-            };
             created.push(Entry {
-                resource: resource.ok_or(Error::NoAdapter)?,
+                resource: self.create(device, heap, key, *offset)?,
                 extent: key.extent,
                 format: key.format,
                 state: D3D12_RESOURCE_STATE_RENDER_TARGET,
@@ -163,6 +288,7 @@ impl Transients {
         if !old_entries.is_empty() || old_heap.is_some() {
             self.retired.push(Retired {
                 fence: frame_fence,
+                bytes: old_bytes,
                 _resources: old_entries,
                 _heap: old_heap,
             });
@@ -174,6 +300,7 @@ impl Transients {
             .collect();
         self.entries = created;
         self.keys = keys;
+        self.needed = placement.total;
         Ok(())
     }
 }

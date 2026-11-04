@@ -1,7 +1,7 @@
 use aqua_core::geometry::Rect;
-use aqua_graph::ImageInstance;
+use aqua_graph::{Blend, ImageInstance};
 
-use crate::raster::{Layer, Pixel, QuadShape, clip_coverage, over, pixel_window, scaled};
+use crate::raster::{over, pixel_window, scaled, Layer, Pixel, QuadShape};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Window {
@@ -86,11 +86,15 @@ pub fn draw_image(layer: &mut Layer, source: &Layer, image: &ImageInstance) {
     );
     let (x0, y0, x1, y1) = pixel_window(expanded, image.clip, layer.width, layer.height);
     let shape = QuadShape::new(image.bounds, image.radius, 0.0);
+    let clip_shape = image
+        .clip
+        .map(|clip| QuadShape::new(clip, image.clip_radius, 0.0));
     let window = Window::of_rect(image.texels, source);
     (y0..y1).for_each(|y| {
         (x0..x1).for_each(|x| {
             let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-            let cover = shape.coverage(px, py) * clip_coverage(image.clip, px, py);
+            let cover =
+                shape.coverage(px, py) * clip_shape.map_or(1.0, |clip| clip.coverage(px, py));
             if cover <= 0.0 {
                 return;
             }
@@ -99,8 +103,17 @@ pub fn draw_image(layer: &mut Layer, source: &Layer, image: &ImageInstance) {
             layer.put(
                 x,
                 y,
-                over(scaled(sample, cover * image.opacity), layer.at(x, y)),
+                blend(image.blend, sample, cover * image.opacity, layer.at(x, y)),
             );
         });
     });
+}
+
+pub fn blend(mode: Blend, source: Pixel, weight: f32, destination: Pixel) -> Pixel {
+    match mode {
+        Blend::Over => over(scaled(source, weight), destination),
+        Blend::Replace => std::array::from_fn(|channel| {
+            source[channel] * weight + destination[channel] * (1.0 - weight)
+        }),
+    }
 }

@@ -65,6 +65,21 @@ impl ToneCurve {
         alpha + alpha * (1.0 - alpha) * (level * alpha + offset)
     }
 
+    pub fn linear_blend_alpha(&self, coverage: f32, luminance: f32) -> f32 {
+        let toned = self.adjust(coverage, luminance).clamp(0.0, 1.0);
+        let backdrop = if luminance > 0.5 { 0.0 } else { 1.0 };
+        let encoded = backdrop + (luminance - backdrop) * toned;
+        let (text, behind, blended) = (
+            srgb_to_linear(luminance),
+            srgb_to_linear(backdrop),
+            srgb_to_linear(encoded),
+        );
+        match (text - behind).abs() > 1.0e-4 {
+            true => ((blended - behind) / (text - behind)).clamp(0.0, 1.0),
+            false => toned,
+        }
+    }
+
     pub fn table(&self, luminance: f32) -> [u8; 256] {
         std::array::from_fn(|index| {
             let adjusted = self.adjust(index as f32 / 255.0, luminance);
@@ -75,6 +90,34 @@ impl ToneCurve {
 
 pub fn luminance(srgb: [f32; 3]) -> f32 {
     srgb[0] * 0.30 + srgb[1] * 0.59 + srgb[2] * 0.11
+}
+
+pub fn srgb_to_linear(encoded: f32) -> f32 {
+    let value = encoded.clamp(0.0, 1.0);
+    match value <= 0.040_45 {
+        true => value / 12.92,
+        false => ((value + 0.055) / 1.055).powf(2.4),
+    }
+}
+
+pub fn linear_to_srgb(linear: f32) -> f32 {
+    let value = linear.clamp(0.0, 1.0);
+    match value <= 0.003_130_8 {
+        true => value * 12.92,
+        false => 1.055 * value.powf(1.0 / 2.4) - 0.055,
+    }
+}
+
+pub fn premultiplied_linear_luminance(color: [f32; 4]) -> f32 {
+    let alpha = color[3];
+    match alpha > 0.0 {
+        true => luminance([
+            linear_to_srgb(color[0] / alpha),
+            linear_to_srgb(color[1] / alpha),
+            linear_to_srgb(color[2] / alpha),
+        ]),
+        false => 0.0,
+    }
 }
 
 #[cfg(test)]
@@ -103,6 +146,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn linear_blend_alpha_keeps_endpoints_and_lifts_dark_text() {
+        let curve = ToneCurve::native();
+        for luminance in [0.0, 0.3, 0.7, 1.0] {
+            assert!(curve.linear_blend_alpha(0.0, luminance).abs() < 1e-5);
+            assert!((curve.linear_blend_alpha(1.0, luminance) - 1.0).abs() < 1e-4);
+        }
+        assert!(curve.linear_blend_alpha(0.5, 0.0) > curve.adjust(0.5, 0.0));
+        assert!(curve.linear_blend_alpha(0.5, 1.0) < curve.adjust(0.5, 1.0));
     }
 
     #[test]

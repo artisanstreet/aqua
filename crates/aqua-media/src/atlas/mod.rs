@@ -6,7 +6,10 @@ mod stream;
 mod types;
 
 pub use cache::{Atlas, AtlasConfig, AtlasStats};
-pub use glyph::{GlyphBitmap, GlyphKey, GlyphRasterizer, SUBPIXEL_BINS, subpixel_bin};
+pub use glyph::{
+    subpixel_bin, ColorGlyphBitmap, GlyphBitmap, GlyphKey, GlyphRaster, GlyphRasterizer,
+    GlyphSource, SUBPIXEL_BINS,
+};
 pub use image::ImageKey;
 pub use shelf::ShelfPacker;
 pub use stream::{StreamBudget, Streamer};

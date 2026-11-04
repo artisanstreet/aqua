@@ -1,8 +1,8 @@
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
+use aqua_core::Oklch;
 use aqua_gpu_ref::raster::Layer;
 use aqua_gpu_ref::sprites::{
-    RefTexture, TextureError, Textures, draw_glyphs, draw_images, sample_image,
+    draw_glyphs, draw_images, sample_image, RefTexture, TextureError, Textures,
 };
 use aqua_graph::{Extent, GlyphInstance, ImageInstance, TextureFormat, TextureHandle, TextureRef};
 
@@ -55,7 +55,9 @@ fn glyph_pixels_take_their_coverage_from_the_matching_atlas_texel() {
             let alpha = layer.pixels[y * 16 + x][3];
             match (4..7).contains(&x) && (5..7).contains(&y) {
                 true => {
-                    let expected = ((x - 4 + 2) * 16 + (y - 5 + 1)) as f32 / 255.0;
+                    let coverage = ((x - 4 + 2) * 16 + (y - 5 + 1)) as f32 / 255.0;
+                    let expected =
+                        aqua_graph::tone::ToneCurve::native().linear_blend_alpha(coverage, 1.0);
                     assert!(
                         (alpha - expected).abs() < 1e-6,
                         "({x},{y}) {alpha} vs {expected}"
@@ -95,12 +97,10 @@ fn glyph_sampling_clamps_inside_its_atlas_rectangle() {
         opacity: 1.0,
     };
     draw_glyphs(&mut layer, &atlas, &[glyph]);
-    assert!(
-        layer
-            .pixels
-            .iter()
-            .all(|pixel| (pixel[3] - 1.0).abs() < 1e-6)
-    );
+    assert!(layer
+        .pixels
+        .iter()
+        .all(|pixel| (pixel[3] - 1.0).abs() < 1e-6));
 }
 
 #[test]
@@ -172,6 +172,8 @@ fn image_corners_are_rounded_and_opacity_applies() {
         radius: 6.0,
         opacity: 0.5,
         clip: None,
+        clip_radius: 0.0,
+        blend: aqua_graph::Blend::Over,
     };
     draw_images(&mut layer, &textures, &[image]);
     assert!((layer.pixels[12 * 24 + 12][3] - 0.5).abs() < 1e-6);

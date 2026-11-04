@@ -2,9 +2,11 @@ use std::sync::Arc;
 
 use aqua_core::vector::{Brush, Drawing, PaintedPath, PathCommand, VectorSource};
 use aqua_core::{Oklch, Point, Rect};
-use aqua_media::atlas::{AtlasConfig, GlyphBitmap, GlyphKey, ImageKey, PageFormat, Slot};
-use aqua_media::residency::{Residency, ResidencyConfig, VectorMode};
-use aqua_media::vector::{VectorBudget, VectorError, rasterize};
+use aqua_media::atlas::{
+    AtlasConfig, ColorGlyphBitmap, GlyphBitmap, GlyphKey, GlyphRaster, ImageKey, PageFormat, Slot,
+};
+use aqua_media::residency::{GlyphSlot, Residency, ResidencyConfig, VectorMode};
+use aqua_media::vector::{rasterize, VectorBudget, VectorError};
 
 fn square(side: f32, offset: f32) -> VectorSource {
     let corner = |x: f32, y: f32| Point::new(offset + x, offset + y);
@@ -190,4 +192,92 @@ fn clearing_after_device_loss_makes_every_resident_entry_upload_again() {
     let updates = residency.finish_frame();
     assert_eq!(updates.created.len(), 1);
     assert_eq!(updates.uploads.len(), 1);
+}
+
+fn any_source(key: &GlyphKey) -> Option<GlyphRaster> {
+    match key.variant {
+        1 => Some(GlyphRaster::Color(ColorGlyphBitmap {
+            width: 3,
+            height: 2,
+            left: 1,
+            top: 2,
+            premultiplied_rgba: vec![9u8; 24],
+        })),
+        2 => None,
+        _ => Some(GlyphRaster::Mask(GlyphBitmap {
+            width: 2,
+            height: 2,
+            left: 0,
+            top: 2,
+            coverage: vec![200u8; 4],
+        })),
+    }
+}
+
+fn variant_key(glyph: u32, variant: u8) -> GlyphKey {
+    GlyphKey {
+        variant,
+        ..glyph_key(glyph)
+    }
+}
+
+#[test]
+fn glyph_any_routes_mask_color_and_blank_glyphs_to_their_atlases() {
+    let mut residency = Residency::new(ResidencyConfig::default());
+    residency.begin_frame();
+    let mut source = any_source;
+    let mask = residency.glyph_any(variant_key(1, 0), &mut source).unwrap();
+    let color = residency.glyph_any(variant_key(1, 1), &mut source).unwrap();
+    let blank = residency.glyph_any(variant_key(1, 2), &mut source).unwrap();
+    assert!(
+        matches!(mask, GlyphSlot::Mask(Slot::Resident(p)) if p.page.format == PageFormat::Mask8)
+    );
+    assert!(
+        matches!(color, GlyphSlot::Color(Slot::Resident(p)) if p.page.format == PageFormat::Color8)
+    );
+    assert!(matches!(blank, GlyphSlot::Mask(Slot::Blank { .. })));
+    let updates = residency.finish_frame();
+    assert_eq!(updates.uploads.len(), 2);
+    residency.begin_frame();
+    let mut unreachable = |_: &GlyphKey| -> Option<GlyphRaster> { panic!("must be resident") };
+    assert_eq!(
+        residency
+            .glyph_any(variant_key(1, 1), &mut unreachable)
+            .unwrap(),
+        color
+    );
+    assert_eq!(
+        residency
+            .glyph_any(variant_key(1, 0), &mut unreachable)
+            .unwrap(),
+        mask
+    );
+    assert_eq!(
+        residency
+            .glyph_any(variant_key(1, 2), &mut unreachable)
+            .unwrap(),
+        blank
+    );
+}
+
+#[test]
+fn clearing_forgets_color_glyphs_and_drops_everything_still_streaming() {
+    let mut residency = Residency::new(ResidencyConfig::default());
+    let mut source = any_source;
+    residency.begin_frame();
+    residency.glyph_any(variant_key(4, 1), &mut source).unwrap();
+    residency.finish_frame();
+    assert_eq!(residency.generation(), 0);
+    residency.clear();
+    assert_eq!(residency.generation(), 1);
+    let stats = residency.stats();
+    assert_eq!(stats.colors.entries, 0);
+    assert_eq!(stats.colors.pages, 0);
+    assert_eq!(stats.streaming_bytes, 0);
+    residency.begin_frame();
+    residency.glyph_any(variant_key(4, 1), &mut source).unwrap();
+    let updates = residency.finish_frame();
+    assert_eq!(updates.created.len(), 1);
+    assert_eq!(updates.uploads.len(), 1);
+    assert!(updates.released.is_empty());
 }

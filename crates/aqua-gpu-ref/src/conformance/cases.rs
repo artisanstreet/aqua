@@ -1,11 +1,11 @@
-use aqua_core::{Oklch, geometry::Rect};
+use aqua_core::{geometry::Rect, Oklch};
 use aqua_graph::{
-    BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientQuad, GradientStop, Image,
-    PaintCommand, Quad, Shadow, plan_paint,
+    plan_paint, BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientQuad,
+    GradientStop, Image, PaintCommand, Quad, Shadow,
 };
 use aqua_protocol::UploadBatch;
 
-use super::assets::{ATLAS, PHOTO, standard_uploads};
+use super::assets::{standard_uploads, ATLAS, PHOTO};
 
 #[derive(Clone, Debug)]
 pub struct Case {
@@ -420,6 +420,7 @@ pub fn cases() -> Vec<Case> {
     );
     cases.push(standard("sibling_groups_alias", Oklch::TRANSPARENT, nested));
     cases.extend(effect_cases());
+    cases.extend(super::effects::cases());
     cases.push(build(
         "extent_one_by_one",
         Extent {

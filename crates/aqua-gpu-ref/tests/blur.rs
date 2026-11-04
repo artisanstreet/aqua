@@ -1,6 +1,6 @@
-use aqua_gpu_ref::RefBackend;
-use aqua_gpu_ref::conformance::Session;
 use aqua_gpu_ref::conformance::cases::{backdrop_blur, build, hex, quad, rect};
+use aqua_gpu_ref::conformance::Session;
+use aqua_gpu_ref::RefBackend;
 use aqua_graph::{Extent, PaintCommand};
 
 fn blurred_row(radius: f32, scene: &[PaintCommand], extent: Extent) -> Vec<f32> {
@@ -85,7 +85,6 @@ fn blurred_impulse_is_symmetric_and_conserves_most_of_its_mass() {
 }
 
 #[test]
-#[ignore = "dual Kawase level changes step the width at every power-of-two radius; planner must keep the blur continuous (ARCHITECTURE section 6.2)"]
 fn blur_width_grows_smoothly_and_monotonically_with_the_radius() {
     let extent = Extent::new(160, 16);
     let widths: Vec<f32> = (1..=40)
@@ -109,7 +108,6 @@ fn blur_width_grows_smoothly_and_monotonically_with_the_radius() {
 }
 
 #[test]
-#[ignore = "dual Kawase level changes step the output at radius 2, 4, 8 and 16 (ARCHITECTURE section 6.2)"]
 fn level_count_changes_do_not_step_the_output() {
     let extent = Extent::new(128, 16);
     for boundary in [2.0f32, 4.0, 8.0, 16.0] {

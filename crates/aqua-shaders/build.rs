@@ -140,11 +140,13 @@ fn windows_path(dxc: &Dxc, path: &Path) -> String {
     }
 }
 
-fn profile(entry: &str) -> &'static str {
-    match entry.split('_').next() {
-        Some("vs") => "vs_6_0",
-        Some("ps") => "ps_6_0",
-        Some("cs") => "cs_6_0",
+fn profile(entry: &str, bindless: bool) -> &'static str {
+    match (entry.split('_').next(), bindless) {
+        (Some("ps"), true) => "ps_6_6",
+        (Some("cs"), true) => "cs_6_6",
+        (Some("vs"), _) => "vs_6_0",
+        (Some("ps"), false) => "ps_6_0",
+        (Some("cs"), false) => "cs_6_0",
         _ => panic!("entry {entry} must start with vs_, ps_ or cs_"),
     }
 }
@@ -157,9 +159,21 @@ fn stage(entry: &str) -> &'static str {
     }
 }
 
-fn compile(dxc: &Dxc, source: &Path, include: &Path, entry: &str, output: &Path) {
-    let result = Command::new(&dxc.path)
-        .args(["-nologo", "-Zpr", "-O3", "-T", profile(entry), "-E", entry])
+fn compile(dxc: &Dxc, source: &Path, include: &Path, entry: &str, bindless: bool, output: &Path) {
+    let mut command = Command::new(&dxc.path);
+    command.args([
+        "-nologo",
+        "-Zpr",
+        "-O3",
+        "-T",
+        profile(entry, bindless),
+        "-E",
+        entry,
+    ]);
+    if bindless {
+        command.args(["-D", "BINDLESS=1"]);
+    }
+    let result = command
         .arg("-I")
         .arg(windows_path(dxc, include))
         .arg("-Fo")
@@ -186,13 +200,30 @@ fn main() {
     println!("cargo:rerun-if-env-changed=AQUA_DXC");
     let dxc = locate().expect("dxc not found: set AQUA_DXC to dxc or dxc.exe from the Windows SDK");
     let mut generated = String::from("pub static BLOBS: &[Blob] = &[\n");
-    for entry in ENTRIES {
-        let output = out.join(format!("{}.dxil", entry.entry));
-        compile(&dxc, &hlsl.join(entry.file), &hlsl, entry.entry, &output);
+    let variants = ENTRIES.iter().map(|entry| (entry, false)).chain(
+        ENTRIES
+            .iter()
+            .filter(|entry| entry.entry.starts_with("ps_"))
+            .map(|entry| (entry, true)),
+    );
+    for (entry, bindless) in variants {
+        let name = match bindless {
+            true => format!("{}_bl", entry.entry),
+            false => entry.entry.to_string(),
+        };
+        let output = out.join(format!("{name}.dxil"));
+        compile(
+            &dxc,
+            &hlsl.join(entry.file),
+            &hlsl,
+            entry.entry,
+            bindless,
+            &output,
+        );
         writeln!(
             generated,
             "    Blob {{ name: \"{}\", stage: Stage::{}, bytes: include_bytes!(\"{}\") }},",
-            entry.entry,
+            name,
             stage(entry.entry),
             output.display().to_string().replace('\\', "/")
         )

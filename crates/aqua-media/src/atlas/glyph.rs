@@ -18,6 +18,34 @@ pub struct GlyphBitmap {
     pub coverage: Vec<u8>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColorGlyphBitmap {
+    pub width: u32,
+    pub height: u32,
+    pub left: i32,
+    pub top: i32,
+    pub premultiplied_rgba: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GlyphRaster {
+    Mask(GlyphBitmap),
+    Color(ColorGlyphBitmap),
+}
+
+pub trait GlyphSource {
+    fn rasterize(&mut self, key: &GlyphKey) -> Option<GlyphRaster>;
+}
+
+impl<F> GlyphSource for F
+where
+    F: FnMut(&GlyphKey) -> Option<GlyphRaster>,
+{
+    fn rasterize(&mut self, key: &GlyphKey) -> Option<GlyphRaster> {
+        self(key)
+    }
+}
+
 pub trait GlyphRasterizer {
     fn rasterize(&mut self, key: &GlyphKey) -> Option<GlyphBitmap>;
 }

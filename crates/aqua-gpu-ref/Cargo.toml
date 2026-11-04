@@ -9,3 +9,4 @@ description = "Aqua GpuBackend on the CPU: the oracle for conformance, headless 
 aqua-core = { path = "../aqua-core" }
 aqua-graph = { path = "../aqua-graph" }
 aqua-protocol = { path = "../aqua-protocol" }
+aqua-kernels = { path = "../aqua-kernels" }

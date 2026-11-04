@@ -3,15 +3,17 @@ use std::collections::HashMap;
 use aqua_graph::{Extent, FramePlan, LoadOp, Pass, PassKind, ShaderId, TextureRef, TransientId};
 use aqua_protocol::GpuError;
 
-use crate::filter::{blur_down, blur_up};
-use crate::raster::{Layer, composite_layer, draw_quad, premultiplied};
+use crate::filter::{blur_down, blur_up, color_matrix};
+use crate::kernels::{ComputeCall, Kernels};
+use crate::raster::{composite_layer, draw_quad, premultiplied, Layer};
 use crate::sample::draw_image;
 use crate::shadow::draw_shadow;
-use crate::sprites::{Textures, draw_glyphs, draw_images};
+use crate::sprites::{draw_glyphs, draw_images, Textures};
 
 pub struct Frame<'a> {
     plan: &'a FramePlan,
     persistent: &'a Textures,
+    kernels: &'a Kernels,
     surface: Option<Layer>,
     transients: HashMap<TransientId, Layer>,
 }
@@ -25,11 +27,12 @@ fn layer_of(extent: Extent) -> Layer {
 }
 
 impl<'a> Frame<'a> {
-    pub fn new(plan: &'a FramePlan, persistent: &'a Textures) -> Self {
+    pub fn new(plan: &'a FramePlan, persistent: &'a Textures, kernels: &'a Kernels) -> Self {
         let clear = premultiplied(plan.clear);
         Self {
             plan,
             persistent,
+            kernels,
             surface: Some(Layer::filled(
                 plan.extent.width as usize,
                 plan.extent.height as usize,
@@ -95,6 +98,10 @@ impl<'a> Frame<'a> {
             }
             TextureRef::Persistent(_) => {}
         }
+    }
+
+    fn inputs(&self, pass: &Pass) -> Result<Vec<&Layer>, GpuError> {
+        pass.reads.iter().map(|read| self.read(*read)).collect()
     }
 
     pub fn run(mut self) -> Result<Layer, GpuError> {
@@ -198,8 +205,11 @@ impl<'a> Frame<'a> {
                         blur_up(source, target, params);
                         Ok(())
                     }
+                    ShaderId::ColorMatrix => color_matrix(source, target, params)
+                        .then_some(())
+                        .ok_or_else(|| failure("color matrix source and target extents differ")),
                     _ => Err(GpuError::Unsupported(
-                        "filter shaders other than the blur pyramid",
+                        "filter shaders other than the blur pyramid and the color matrix",
                     )),
                 }
             }
@@ -240,8 +250,38 @@ impl<'a> Frame<'a> {
                     false => Err(failure("copy region exceeds a texture")),
                 }
             }
-            PassKind::Compute { .. } => Err(GpuError::Unsupported("compute passes")),
-            PassKind::Custom(_) => Err(GpuError::Unsupported("custom passes")),
+            PassKind::Compute {
+                shader: ShaderId::Custom(id),
+                groups,
+                params,
+            } => {
+                let kernel = self
+                    .kernels
+                    .compute(*id)
+                    .ok_or(GpuError::Unsupported("unregistered compute kernel"))?;
+                let inputs = self.inputs(pass)?;
+                kernel(
+                    &ComputeCall {
+                        groups: *groups,
+                        params: *params,
+                    },
+                    &inputs,
+                    target,
+                );
+                Ok(())
+            }
+            PassKind::Compute { .. } => {
+                Err(GpuError::Unsupported("compute shaders other than custom"))
+            }
+            PassKind::Custom(spec) => {
+                let kernel = self
+                    .kernels
+                    .custom(&spec.name)
+                    .ok_or(GpuError::Unsupported("unregistered custom pass"))?;
+                let inputs = self.inputs(pass)?;
+                kernel(spec, &inputs, target);
+                Ok(())
+            }
         }
     }
 }

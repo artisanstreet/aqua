@@ -1,23 +1,25 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use aqua_graph::{Extent, FramePlan, validate};
+use aqua_graph::{validate, Extent, FramePlan};
 use aqua_protocol::{
     DeviceStatus, FeatureTier, Features, FrameInputs, FrameReport, GpuBackend, GpuCapabilities,
     GpuError, GpuReadback, PresentHint, PresentTimes, RecoveryReport, SurfaceId, SurfacePixels,
     SurfaceTarget, UploadBatch,
 };
+use windows::core::Interface;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
-use windows::core::Interface;
+use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
 
-use super::Error;
-use super::device::{AdapterPreference, Selected, select};
+use super::device::{select, AdapterPreference, Selected};
 use super::persistent::PersistentTextures;
 use super::renderer::{SceneRenderer, SceneTarget};
+use super::tiers::{SceneOptions, TierLimit};
 use super::util::*;
+use super::Error;
+use crate::hal::tier::Tier;
 use crate::half::{bgra8_rows_to_rgba8, bgra8_srgb_rows_to_linear_rgba8, rgba16f_rows_to_rgba8};
 
 const SLOTS: usize = 3;
@@ -85,6 +87,7 @@ pub struct OffscreenBackend {
     capabilities: GpuCapabilities,
     software: bool,
     unified_memory: bool,
+    options: SceneOptions,
     gpu: Gpu,
     surfaces: HashMap<SurfaceId, SurfaceResources>,
     next_surface: u32,
@@ -155,6 +158,7 @@ impl Gpu {
         selected: &Selected,
         format: SurfaceFormat,
         cache: Option<&[u8]>,
+        options: SceneOptions,
     ) -> Result<Self, Error> {
         let device = selected.device.clone();
         let queue: ID3D12CommandQueue = unsafe {
@@ -178,7 +182,7 @@ impl Gpu {
         unsafe { list.Close()? };
         let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE)? };
         let event = unsafe { CreateEventW(None, false, false, None)? };
-        let mut renderer = SceneRenderer::with_pipeline_cache(&device, SLOTS, cache)?;
+        let mut renderer = SceneRenderer::with_options(&device, SLOTS, cache, options)?;
         renderer.warm(&[DXGI_FORMAT_R16G16B16A16_FLOAT, format.view()])?;
         let textures = PersistentTextures::new(&device);
         Ok(Self {
@@ -250,18 +254,48 @@ impl OffscreenBackend {
         format: SurfaceFormat,
         cache: Option<&[u8]>,
     ) -> Result<Self, Error> {
+        Self::with_options(preference, format, cache, SceneOptions::default())
+    }
+
+    pub fn with_tiers(
+        preference: AdapterPreference,
+        format: SurfaceFormat,
+        limit: TierLimit,
+    ) -> Result<Self, Error> {
+        Self::with_options(
+            preference,
+            format,
+            None,
+            SceneOptions {
+                limit,
+                ..SceneOptions::default()
+            },
+        )
+    }
+
+    pub fn with_options(
+        preference: AdapterPreference,
+        format: SurfaceFormat,
+        cache: Option<&[u8]>,
+        options: SceneOptions,
+    ) -> Result<Self, Error> {
         let selected = select(preference)?;
-        let gpu = Gpu::new(&selected, format, cache)?;
+        let gpu = Gpu::new(&selected, format, cache, options)?;
+        let tiers = gpu.renderer.tiers();
         let capabilities = GpuCapabilities {
             backend: "d3d12".into(),
             adapter: selected.name.clone(),
-            tier: FeatureTier::Baseline,
+            tier: match tiers.binding {
+                Tier::Baseline => FeatureTier::Baseline,
+                Tier::Bindless => FeatureTier::Bindless,
+            },
             max_texture_extent: D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION,
             heap_alignment: D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT as u64,
             features: Features {
                 compute: false,
                 custom_passes: false,
-                enhanced_barriers: false,
+                color_matrix: false,
+                enhanced_barriers: tiers.enhanced_barriers,
                 tearing: false,
                 software: selected.software,
                 window_surfaces: false,
@@ -273,11 +307,38 @@ impl OffscreenBackend {
             capabilities,
             software: selected.software,
             unified_memory: selected.unified_memory,
+            options,
             gpu,
             surfaces: HashMap::new(),
             next_surface: 0,
             next_slot: 0,
         })
+    }
+
+    pub fn tiers(&self) -> crate::hal::tier::Tiers {
+        self.gpu.renderer.tiers()
+    }
+
+    pub fn gpu_time(&self) -> Option<std::time::Duration> {
+        self.gpu.renderer.gpu_time()
+    }
+
+    pub fn transient_bytes(&self) -> u64 {
+        self.gpu.renderer.transient_heap_bytes()
+    }
+
+    pub fn retired_transient_bytes(&self) -> u64 {
+        self.gpu.renderer.retired_transient_bytes()
+    }
+
+    pub fn trim(&mut self, trim: &crate::hal::budget::Trim) -> Result<u64, GpuError> {
+        self.gpu.wait_idle()?;
+        let completed = self.gpu.completed();
+        self.gpu.renderer.retire(completed);
+        let freed = self.gpu.renderer.trim(trim, self.gpu.fence_value);
+        let completed = self.gpu.completed();
+        self.gpu.renderer.retire(completed);
+        Ok(freed)
     }
 
     pub fn is_software(&self) -> bool {
@@ -363,7 +424,7 @@ impl OffscreenBackend {
             device: DeviceStatus::Healthy,
             barriers: stats.barriers,
             transient_bytes: gpu.renderer.transient_heap_bytes(),
-            gpu_time: None,
+            gpu_time: gpu.renderer.gpu_time(),
         })
     }
 }
@@ -420,7 +481,7 @@ impl GpuBackend for OffscreenBackend {
             .collect();
         let selected = select(self.preference)?;
         self.surfaces.clear();
-        self.gpu = Gpu::new(&selected, self.format, None)?;
+        self.gpu = Gpu::new(&selected, self.format, None, self.options)?;
         self.software = selected.software;
         for (id, extent) in &extents {
             self.surfaces.insert(

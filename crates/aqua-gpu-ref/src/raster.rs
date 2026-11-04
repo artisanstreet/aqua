@@ -1,4 +1,4 @@
-use aqua_core::{Oklch, geometry::Rect};
+use aqua_core::{geometry::Rect, Oklch};
 use aqua_graph::{Gradient, QuadInstance};
 
 pub type Pixel = [f32; 4];

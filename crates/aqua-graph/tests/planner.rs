@@ -1,7 +1,7 @@
-use aqua_core::{Oklch, geometry::Rect};
+use aqua_core::{geometry::Rect, Oklch};
 use aqua_graph::{
-    BackdropBlur, Barrier, Extent, PaintCommand, PassKind, PlanError, Quad, ResourceState,
-    ShaderId, TextureRef, plan_paint, validate,
+    depth_for, plan_paint, validate, BackdropBlur, Barrier, Blend, BlurDepth, ColorMatrix, Extent,
+    LoadOp, PaintCommand, PassKind, PlanError, Quad, ResourceState, ShaderId, TextureRef,
 };
 
 const EXTENT: Extent = Extent {
@@ -76,6 +76,49 @@ fn groups_of_overlapping_children_get_a_layer() {
     let plan = plan(&layered());
     assert_eq!(plan.textures.len(), 1);
     assert_eq!(plan.passes.len(), 2);
+    assert_eq!(plan.textures[0].extent, Extent::new(10, 10));
+    let PassKind::Images { instances } = &plan.passes[1].kind else {
+        panic!("bounded layer composite expected");
+    };
+    assert_eq!(instances[0].opacity, 0.5);
+    assert_eq!(instances[0].blend, Blend::Over);
+    assert_eq!(instances[0].bounds, rect(0.0, 0.0, 10.0, 10.0));
+}
+
+#[test]
+fn layer_content_is_drawn_in_layer_local_coordinates() {
+    let plan = plan(&[
+        PaintCommand::PushOpacity(0.5),
+        quad_at(20.0, 30.0),
+        quad_at(25.0, 33.0),
+        PaintCommand::PopOpacity,
+    ]);
+    assert_eq!(plan.textures[0].extent, Extent::new(15, 13));
+    let PassKind::Instanced { instances, .. } = &plan.passes[0].kind else {
+        panic!("layer content expected first");
+    };
+    assert_eq!(instances[0].bounds, rect(0.0, 0.0, 10.0, 10.0));
+    assert_eq!(instances[1].bounds, rect(5.0, 3.0, 10.0, 10.0));
+    let PassKind::Images { instances } = &plan.passes[1].kind else {
+        panic!("composite expected");
+    };
+    assert_eq!(instances[0].bounds, rect(20.0, 30.0, 15.0, 13.0));
+}
+
+#[test]
+fn layers_covering_the_target_keep_the_fullscreen_composite() {
+    let plan = plan(&[
+        PaintCommand::PushOpacity(0.5),
+        PaintCommand::Quad(Quad {
+            bounds: rect(0.0, 0.0, 64.0, 64.0),
+            radius: 0.0,
+            border_width: 0.0,
+            fill: Oklch::WHITE,
+            border_color: Oklch::WHITE,
+        }),
+        quad(),
+        PaintCommand::PopOpacity,
+    ]);
     assert!(matches!(
         plan.passes[1].kind,
         PassKind::Fullscreen {
@@ -83,6 +126,116 @@ fn groups_of_overlapping_children_get_a_layer() {
             opacity
         } if opacity == 0.5
     ));
+}
+
+#[test]
+fn rounded_clips_isolate_their_children_and_clip_the_composite() {
+    let plan = plan(&[
+        PaintCommand::PushRoundedClip {
+            rect: rect(4.5, 6.0, 30.0, 20.0),
+            radius: 8.0,
+        },
+        quad_at(0.0, 0.0),
+        quad_at(20.0, 10.0),
+        PaintCommand::PopClip,
+    ]);
+    assert_eq!(validate(&plan), Ok(()));
+    assert_eq!(plan.textures.len(), 1);
+    let layer = plan.textures[0].extent;
+    assert!(layer.width < EXTENT.width && layer.height < EXTENT.height);
+    let PassKind::Images { instances } = &plan.passes.last().unwrap().kind else {
+        panic!("rounded composite expected");
+    };
+    assert_eq!(instances[0].clip, Some(rect(4.5, 6.0, 30.0, 20.0)));
+    assert_eq!(instances[0].clip_radius, 8.0);
+    assert_eq!(instances[0].blend, Blend::Over);
+}
+
+#[test]
+fn rounded_clip_with_no_radius_is_a_plain_clip() {
+    let plan = plan(&[
+        PaintCommand::PushRoundedClip {
+            rect: rect(0.0, 0.0, 30.0, 20.0),
+            radius: 0.0,
+        },
+        quad(),
+        PaintCommand::PopClip,
+    ]);
+    assert!(plan.textures.is_empty());
+    let PassKind::Instanced { instances, .. } = &plan.passes[0].kind else {
+        panic!("direct draw expected");
+    };
+    assert_eq!(instances[0].clip, Some(rect(0.0, 0.0, 30.0, 20.0)));
+}
+
+#[test]
+fn color_matrix_effect_filters_a_bounded_layer() {
+    let plan = plan(&[
+        PaintCommand::PushColorMatrix {
+            bounds: rect(8.0, 8.0, 20.0, 12.0),
+            matrix: ColorMatrix::saturation(0.0),
+        },
+        quad_at(8.0, 8.0),
+        PaintCommand::PopColorMatrix,
+    ]);
+    assert_eq!(validate(&plan), Ok(()));
+    let filter = plan
+        .passes
+        .iter()
+        .find_map(|pass| match &pass.kind {
+            PassKind::Filter {
+                shader: ShaderId::ColorMatrix,
+                params,
+            } => Some(*params),
+            _ => None,
+        })
+        .expect("color matrix pass");
+    assert_eq!(filter.region, rect(0.0, 0.0, 20.0, 12.0));
+    assert_eq!(filter.matrix, ColorMatrix::saturation(0.0));
+    assert_eq!(plan.textures[0].extent, Extent::new(20, 12));
+}
+
+#[test]
+fn mismatched_effect_pops_are_rejected() {
+    let result = plan_paint(
+        EXTENT,
+        Oklch::TRANSPARENT,
+        &[
+            PaintCommand::PushColorMatrix {
+                bounds: rect(0.0, 0.0, 8.0, 8.0),
+                matrix: ColorMatrix::IDENTITY,
+            },
+            PaintCommand::PopContentBlur,
+        ],
+    );
+    assert_eq!(result.unwrap_err(), PlanError::UnbalancedPop);
+}
+
+#[test]
+fn backdrop_blur_replaces_instead_of_blending() {
+    let plan = plan(&[quad(), backdrop(10.0)]);
+    let PassKind::Images { instances } = &plan.passes.last().unwrap().kind else {
+        panic!("backdrop composite expected");
+    };
+    assert_eq!(instances[0].blend, Blend::Replace);
+    assert_eq!(instances[0].radius, 6.0);
+}
+
+#[test]
+fn plans_that_never_touch_the_surface_still_clear_it() {
+    let plan = plan_paint(EXTENT, Oklch::WHITE, &[]).unwrap();
+    assert_eq!(plan.passes.len(), 1);
+    assert!(plan.passes[0].is_clear());
+    assert_eq!(plan.passes[0].load, LoadOp::Clear(Oklch::WHITE));
+    assert_eq!(validate(&plan), Ok(()));
+}
+
+#[test]
+fn drawing_plans_clear_through_the_first_draw_instead_of_an_extra_pass() {
+    let plan = plan(&[quad()]);
+    assert_eq!(plan.passes.len(), 1);
+    assert!(!plan.passes[0].is_clear());
+    assert!(matches!(plan.passes[0].load, LoadOp::Clear(_)));
 }
 
 #[test]
@@ -169,9 +322,9 @@ fn invisible_work_is_culled() {
         quad(),
         PaintCommand::PopOpacity,
     ]);
-    assert!(plan.passes.is_empty());
+    assert_eq!(plan.passes.len(), 1);
+    assert!(plan.passes[0].is_clear());
     assert!(plan.textures.is_empty());
-    assert!(plan.final_barriers.is_empty());
 }
 
 #[test]
@@ -302,7 +455,7 @@ fn shaders(plan: &aqua_graph::FramePlan, wanted: ShaderId) -> usize {
 
 #[test]
 fn backdrop_blur_snapshots_the_parent_then_runs_a_pyramid() {
-    let plan = plan(&[quad(), backdrop(6.0), quad_at(50.0, 50.0)]);
+    let plan = plan(&[quad(), backdrop(10.0), quad_at(50.0, 50.0)]);
     assert_eq!(validate(&plan), Ok(()));
     let copy = plan
         .passes
@@ -329,40 +482,103 @@ fn backdrop_blur_snapshots_the_parent_then_runs_a_pyramid() {
         .map(|texture| texture.extent.width)
         .collect();
     assert_eq!(sizes[0], 40);
-    assert!(
-        sizes[1..levels + 1]
-            .windows(2)
-            .all(|pair| pair[1] < pair[0])
-    );
+    assert!(sizes[1..levels + 1]
+        .windows(2)
+        .all(|pair| pair[1] < pair[0]));
+}
+
+fn offset_of(depth: BlurDepth, radius: f32) -> (u32, f32) {
+    match depth {
+        BlurDepth::Single { levels } => (levels, radius / (1u32 << levels) as f32),
+        BlurDepth::Mixed { lower, .. } => (lower + 1, radius / (1u32 << (lower + 1)) as f32),
+    }
 }
 
 #[test]
-fn blur_strength_is_continuous_across_level_changes() {
-    let strength = |radius: f32| {
-        let plan = plan(&[backdrop(radius)]);
-        let down = plan
-            .passes
-            .iter()
-            .find_map(|pass| match &pass.kind {
-                PassKind::Filter {
-                    shader: ShaderId::BlurDown,
-                    params,
-                } => Some(params.values),
-                _ => None,
-            })
-            .unwrap();
-        let levels = shaders(&plan, ShaderId::BlurDown);
-        down[0] * (1u32 << levels) as f32
-    };
-    for radius in [1.5_f32, 3.0, 7.99, 8.01, 20.0, 33.3] {
-        assert!((strength(radius) - radius).abs() < 1e-3, "{radius}");
+fn single_depths_keep_the_effective_strength_equal_to_the_radius() {
+    let size = Extent::new(512, 512);
+    for radius in [0.5_f32, 1.5, 3.0, 5.0, 11.0, 20.0, 45.0] {
+        let depth = depth_for(radius, size);
+        let BlurDepth::Single { levels } = depth else {
+            panic!("{radius} should be single depth");
+        };
+        let (_, offset) = offset_of(depth, radius);
+        assert!(
+            (offset * (1u32 << levels) as f32 - radius).abs() < 1e-3,
+            "{radius}"
+        );
     }
+}
+
+#[test]
+fn blur_depth_crossfades_into_the_next_level_before_each_octave_boundary() {
+    let size = Extent::new(512, 512);
+    for octave in 1..5 {
+        let boundary = (1u32 << (octave + 1)) as f32;
+        let below = depth_for(boundary * 0.999, size);
+        let above = depth_for(boundary * 1.001, size);
+        let BlurDepth::Mixed { lower, weight } = below else {
+            panic!("expected a crossfade below {boundary}");
+        };
+        assert_eq!(lower, octave);
+        assert!(weight > 0.99, "{weight}");
+        let BlurDepth::Single { levels } = above else {
+            panic!("expected a single depth above {boundary}");
+        };
+        assert_eq!(levels, octave + 1);
+        let (_, upper_offset) = offset_of(below, boundary * 0.999);
+        let (_, next_offset) = offset_of(above, boundary * 1.001);
+        assert!((upper_offset - next_offset).abs() < 0.01);
+    }
+}
+
+#[test]
+fn blur_depth_weight_never_decreases_inside_an_octave() {
+    let size = Extent::new(512, 512);
+    let mut last = 0.0f32;
+    let mut radius = 4.0f32;
+    while radius < 7.999 {
+        let weight = match depth_for(radius, size) {
+            BlurDepth::Single { .. } => 0.0,
+            BlurDepth::Mixed { weight, .. } => weight,
+        };
+        assert!(weight >= last);
+        last = weight;
+        radius += 0.01;
+    }
+    assert!(last > 0.9);
+}
+
+#[test]
+fn mixed_depth_blends_two_pyramids_with_replace_instances() {
+    let plan = plan(&[
+        quad(),
+        PaintCommand::BackdropBlur(BackdropBlur {
+            bounds: rect(8.0, 8.0, 40.0, 40.0),
+            radius: 7.5,
+            corner_radius: 0.0,
+        }),
+    ]);
+    assert_eq!(validate(&plan), Ok(()));
+    assert_eq!(shaders(&plan, ShaderId::BlurDown), 5);
+    let mix = plan
+        .passes
+        .iter()
+        .find_map(|pass| match &pass.kind {
+            PassKind::Images { instances } if instances.len() == 2 => Some(instances.clone()),
+            _ => None,
+        })
+        .expect("mix pass");
+    assert!(mix.iter().all(|image| image.blend == Blend::Replace));
+    assert_eq!(mix[0].opacity, 1.0);
+    assert!(mix[1].opacity > 0.0 && mix[1].opacity < 1.0);
 }
 
 #[test]
 fn zero_radius_blur_draws_nothing_and_content_blur_passes_through() {
     let plan = plan(&[backdrop(0.0)]);
-    assert!(plan.passes.is_empty());
+    assert_eq!(plan.passes.len(), 1);
+    assert!(plan.passes[0].is_clear());
     let plan = plan_through();
     assert_eq!(plan.instance_count(), 1);
     assert!(plan.textures.is_empty());
@@ -390,11 +606,10 @@ fn content_blur_renders_children_to_a_layer_and_blurs_only_the_region() {
         PaintCommand::PopContentBlur,
     ]);
     assert_eq!(validate(&plan), Ok(()));
-    assert!(
-        plan.passes
-            .iter()
-            .all(|pass| !matches!(pass.kind, PassKind::Copy { .. }))
-    );
+    assert!(plan
+        .passes
+        .iter()
+        .all(|pass| !matches!(pass.kind, PassKind::Copy { .. })));
     let first_filter = plan
         .passes
         .iter()
@@ -403,5 +618,6 @@ fn content_blur_renders_children_to_a_layer_and_blurs_only_the_region() {
             _ => None,
         })
         .unwrap();
-    assert_eq!((first_filter.x, first_filter.w), (4.0, 30.0));
+    assert_eq!((first_filter.x, first_filter.w), (0.0, 30.0));
+    assert_eq!(plan.textures[0].extent, Extent::new(30, 30));
 }

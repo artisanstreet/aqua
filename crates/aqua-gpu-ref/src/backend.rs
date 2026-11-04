@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use aqua_graph::{Extent, FramePlan, validate};
+use aqua_graph::{validate, Extent, FramePlan};
 use aqua_protocol::{
     FeatureTier, Features, FrameInputs, FrameReport, GpuBackend, GpuCapabilities, GpuError,
     GpuReadback, PresentHint, PresentTimes, RecoveryReport, SurfaceId, SurfacePixels,
@@ -9,7 +9,8 @@ use aqua_protocol::{
 };
 
 use crate::frame::Frame;
-use crate::raster::{Layer, to_rgba8};
+use crate::kernels::Kernels;
+use crate::raster::{to_rgba8, Layer};
 use crate::sprites::{TextureError, Textures};
 
 struct Surface {
@@ -21,6 +22,7 @@ pub struct RefBackend {
     capabilities: GpuCapabilities,
     surfaces: HashMap<SurfaceId, Surface>,
     textures: Textures,
+    kernels: Kernels,
     next_surface: u32,
 }
 
@@ -40,8 +42,9 @@ impl RefBackend {
                 max_texture_extent: 16384,
                 heap_alignment: 64 * 1024,
                 features: Features {
-                    compute: false,
-                    custom_passes: false,
+                    compute: true,
+                    custom_passes: true,
+                    color_matrix: true,
                     enhanced_barriers: false,
                     tearing: false,
                     software: true,
@@ -50,8 +53,13 @@ impl RefBackend {
             },
             surfaces: HashMap::new(),
             textures: Textures::default(),
+            kernels: Kernels::standard(),
             next_surface: 0,
         }
+    }
+
+    pub fn kernels_mut(&mut self) -> &mut Kernels {
+        &mut self.kernels
     }
 
     pub fn textures(&self) -> &Textures {
@@ -126,7 +134,7 @@ impl GpuBackend for RefBackend {
                 surface: surface.extent,
             });
         }
-        surface.pixels = Some(Frame::new(plan, &self.textures).run()?);
+        surface.pixels = Some(Frame::new(plan, &self.textures, &self.kernels).run()?);
         Ok(FrameReport::from_plan(plan, started.elapsed()))
     }
 

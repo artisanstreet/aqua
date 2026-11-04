@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
 use aqua_core::geometry::Rect;
+use aqua_graph::tone::{premultiplied_linear_luminance, ToneCurve};
 use aqua_graph::{Extent, GlyphInstance, ImageInstance, TextureFormat, TextureHandle, TextureRef};
 
-use crate::raster::{Layer, Pixel, over};
+use crate::raster::{over, Layer, Pixel};
+use crate::sample::blend;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefTexture {
@@ -159,10 +161,12 @@ fn pixel_span(low: f32, high: f32, limit: usize) -> std::ops::Range<usize> {
 }
 
 pub fn draw_glyphs(layer: &mut Layer, atlas: &RefTexture, instances: &[GlyphInstance]) {
+    let tone = ToneCurve::native();
     for glyph in instances {
         let clip = glyph.clip.unwrap_or(NO_CLIP);
         let [r, g, b, a] = glyph.color.to_gpu();
         let color = [r, g, b, a].map(|channel| channel * glyph.opacity);
+        let luminance = premultiplied_linear_luminance(color);
         let scale = (
             glyph.texels.w / glyph.bounds.w.max(1.0e-4),
             glyph.texels.h / glyph.bounds.h.max(1.0e-4),
@@ -180,7 +184,8 @@ pub fn draw_glyphs(layer: &mut Layer, atlas: &RefTexture, instances: &[GlyphInst
                     (glyph.texels.x + local_x) as i64,
                     (glyph.texels.y + local_y) as i64,
                 )[0];
-                let weight = coverage * clip_cover(clip, px, py);
+                let toned = tone.linear_blend_alpha(coverage, luminance);
+                let weight = toned * clip_cover(clip, px, py);
                 let source = color.map(|channel| channel * weight);
                 let index = y * layer.width + x;
                 layer.pixels[index] = over(source, layer.pixels[index]);
@@ -219,6 +224,7 @@ pub fn draw_images(layer: &mut Layer, textures: &Textures, instances: &[ImageIns
             continue;
         };
         let clip = image.clip.unwrap_or(NO_CLIP);
+        let clip_radius = image.clip.map_or(0.0, |_| image.clip_radius);
         let low = (
             (image.bounds.x - 1.0).max(clip.x - 1.0),
             (image.bounds.y - 1.0).max(clip.y - 1.0),
@@ -236,13 +242,17 @@ pub fn draw_images(layer: &mut Layer, textures: &Textures, instances: &[ImageIns
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
                 let cover = (0.5 - rect_distance(px, py, image.bounds, image.radius))
                     .clamp(0.0, 1.0)
-                    * clip_cover(clip, px, py);
+                    * (0.5 - rect_distance(px, py, clip, clip_radius)).clamp(0.0, 1.0);
                 let u = (px - image.bounds.x) / image.bounds.w.max(1.0e-4);
                 let v = (py - image.bounds.y) / image.bounds.h.max(1.0e-4);
                 let color = sample_image(texture, image.texels, u, v);
-                let source = color.map(|channel| channel * cover * image.opacity);
                 let index = y * layer.width + x;
-                layer.pixels[index] = over(source, layer.pixels[index]);
+                layer.pixels[index] = blend(
+                    image.blend,
+                    color,
+                    cover * image.opacity,
+                    layer.pixels[index],
+                );
             }
         }
     }

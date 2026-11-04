@@ -1,7 +1,7 @@
-use aqua_core::{Oklch, geometry::Rect};
+use aqua_core::{geometry::Rect, Oklch};
 use aqua_graph::{
-    Extent, FilterParams, GlyphInstance, Pass, PassKind, PlanError, PlanLimits, QuadInstance,
-    RenderGraph, ShaderId, TextureFormat, TextureHandle, TextureRef, validate,
+    validate, Extent, FilterParams, GlyphInstance, Pass, PassKind, PlanError, PlanLimits,
+    QuadInstance, RenderGraph, ShaderId, TextureFormat, TextureHandle, TextureRef,
 };
 
 const EXTENT: Extent = Extent {
@@ -185,10 +185,7 @@ fn filters_reading_and_writing_the_same_texture_are_rejected() {
     graph.push(Pass::new(
         PassKind::Filter {
             shader: ShaderId::ColorMatrix,
-            params: FilterParams {
-                region: EXTENT.bounds(),
-                values: [0.0; 4],
-            },
+            params: FilterParams::color_matrix(EXTENT.bounds(), aqua_graph::ColorMatrix::IDENTITY),
         },
         vec![a],
         vec![a],
@@ -197,5 +194,95 @@ fn filters_reading_and_writing_the_same_texture_are_rejected() {
     assert!(matches!(
         graph.plan(PlanLimits::default()),
         Err(PlanError::ReadWriteHazard { .. })
+    ));
+}
+
+fn custom_spec(name: &str, param: f32) -> aqua_graph::CustomPassSpec {
+    aqua_graph::CustomPassSpec {
+        name: name.into(),
+        hlsl: String::new(),
+        entry: "main".into(),
+        bounds: EXTENT.bounds(),
+        params: vec![param],
+    }
+}
+
+fn effect_graph(kind: PassKind) -> RenderGraph {
+    let mut graph = graph();
+    let a = graph.create(EXTENT, TextureFormat::Rgba16Float);
+    let b = graph.create(EXTENT, TextureFormat::Rgba16Float);
+    graph.push(draw(0.0, a));
+    graph.push(Pass::new(kind, vec![a], vec![b]));
+    graph.push(composite(b));
+    graph
+}
+
+#[test]
+fn compute_and_custom_passes_plan_with_unordered_access_and_declared_inputs() {
+    let compute = PassKind::Compute {
+        shader: ShaderId::Custom(aqua_graph::CustomShaderId(1)),
+        groups: [2, 128, 1],
+        params: [3.0, 0.0, 0.0, 0.0],
+    };
+    let plan = effect_graph(compute).plan(PlanLimits::default()).unwrap();
+    assert_eq!(validate(&plan), Ok(()));
+    assert!(plan
+        .passes
+        .iter()
+        .flat_map(|pass| pass.barriers.iter())
+        .any(|barrier| matches!(
+            barrier,
+            aqua_graph::Barrier::Transition {
+                to: aqua_graph::ResourceState::UnorderedAccess,
+                ..
+            }
+        )));
+    let plan = effect_graph(PassKind::Custom(custom_spec("effect", 1.0)))
+        .plan(PlanLimits::default())
+        .unwrap();
+    assert_eq!(validate(&plan), Ok(()));
+}
+
+#[test]
+fn malformed_compute_and_custom_passes_are_rejected() {
+    let empty_groups = PassKind::Compute {
+        shader: ShaderId::Custom(aqua_graph::CustomShaderId(1)),
+        groups: [0, 1, 1],
+        params: [0.0; 4],
+    };
+    assert!(matches!(
+        effect_graph(empty_groups).plan(PlanLimits::default()),
+        Err(PlanError::NonFiniteValue { .. })
+    ));
+    let builtin_shader = PassKind::Compute {
+        shader: ShaderId::Quad,
+        groups: [1, 1, 1],
+        params: [0.0; 4],
+    };
+    assert!(matches!(
+        effect_graph(builtin_shader).plan(PlanLimits::default()),
+        Err(PlanError::ShaderMismatch { .. })
+    ));
+    assert!(matches!(
+        effect_graph(PassKind::Custom(custom_spec("", 1.0))).plan(PlanLimits::default()),
+        Err(PlanError::BadBindings { .. })
+    ));
+    assert!(matches!(
+        effect_graph(PassKind::Custom(custom_spec("effect", f32::NAN))).plan(PlanLimits::default()),
+        Err(PlanError::NonFiniteValue { .. })
+    ));
+}
+
+#[test]
+fn color_matrix_filters_reject_non_finite_matrices() {
+    let mut matrix = aqua_graph::ColorMatrix::IDENTITY;
+    matrix.0[7] = f32::INFINITY;
+    let kind = PassKind::Filter {
+        shader: ShaderId::ColorMatrix,
+        params: FilterParams::color_matrix(EXTENT.bounds(), matrix),
+    };
+    assert!(matches!(
+        effect_graph(kind).plan(PlanLimits::default()),
+        Err(PlanError::NonFiniteValue { .. })
     ));
 }

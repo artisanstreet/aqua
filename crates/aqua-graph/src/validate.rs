@@ -147,6 +147,9 @@ fn finite_rect(rect: aqua_core::geometry::Rect) -> bool {
         && rect.h >= 0.0
 }
 
+const MAX_PASS_INPUTS: usize = 8;
+const MAX_GROUPS: u32 = 65535;
+
 fn finite_quad(instance: &QuadInstance) -> bool {
     finite_rect(instance.bounds)
         && instance.radius.is_finite()
@@ -246,6 +249,8 @@ fn check_kind(plan: &FramePlan, index: usize) -> Result<(), PlanError> {
                         && finite_rect(image.texels)
                         && image.radius.is_finite()
                         && image.radius >= 0.0
+                        && image.clip_radius.is_finite()
+                        && image.clip_radius >= 0.0
                         && (0.0..=1.0).contains(&image.opacity)
                         && image.clip.is_none_or(finite_rect)
                 })
@@ -273,12 +278,38 @@ fn check_kind(plan: &FramePlan, index: usize) -> Result<(), PlanError> {
             if pass.reads.len() != 1 || !single_target {
                 return Err(bad_bindings);
             }
-            (finite_rect(params.region) && params.values.iter().all(|v| v.is_finite()))
+            (finite_rect(params.region)
+                && params.values.iter().all(|v| v.is_finite())
+                && params.matrix.is_finite())
+            .then_some(())
+            .ok_or(non_finite)
+        }
+        PassKind::Compute {
+            shader,
+            groups,
+            params,
+        } => {
+            if !matches!(shader, ShaderId::Custom(_)) {
+                return Err(PlanError::ShaderMismatch { pass: index });
+            }
+            if !single_target || pass.reads.len() > MAX_PASS_INPUTS {
+                return Err(bad_bindings);
+            }
+            (groups.iter().all(|group| (1..=MAX_GROUPS).contains(group))
+                && params.iter().all(|value| value.is_finite()))
+            .then_some(())
+            .ok_or(non_finite)
+        }
+        PassKind::Custom(spec) => {
+            if !single_target || pass.reads.len() > MAX_PASS_INPUTS {
+                return Err(bad_bindings);
+            }
+            if spec.name.is_empty() || spec.entry.is_empty() {
+                return Err(bad_bindings);
+            }
+            (finite_rect(spec.bounds) && spec.params.iter().all(|value| value.is_finite()))
                 .then_some(())
                 .ok_or(non_finite)
-        }
-        PassKind::Compute { .. } | PassKind::Custom(_) => {
-            (!pass.writes.is_empty()).then_some(()).ok_or(bad_bindings)
         }
         PassKind::Copy { size, .. } => {
             let source_ok = matches!(

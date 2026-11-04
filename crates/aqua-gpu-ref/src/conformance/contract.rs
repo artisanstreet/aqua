@@ -1,7 +1,10 @@
 use aqua_graph::{FramePlan, PassKind};
-use aqua_protocol::{FrameInputs, GpuBackend, GpuReadback, SurfaceId, SurfaceTarget, UploadBatch};
+use aqua_protocol::{
+    Features, FrameInputs, GpuBackend, GpuReadback, SurfaceId, SurfaceTarget, UploadBatch,
+};
 
-use super::cases::{Case, STANDARD, cases};
+use super::cases::{cases, Case, STANDARD};
+use super::effects::requirements;
 use super::session::Session;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,10 +37,15 @@ fn describe<E: std::fmt::Display>(error: E) -> String {
     error.to_string()
 }
 
-fn standard_cases() -> Vec<Case> {
+fn standard_cases(features: &Features) -> Vec<Case> {
     cases()
         .into_iter()
         .filter(|case| case.plan.extent == STANDARD)
+        .filter(|case| {
+            requirements(&case.plan)
+                .iter()
+                .all(|requirement| requirement.offered_by(features))
+        })
         .collect()
 }
 
@@ -70,7 +78,7 @@ fn capabilities_are_reported<B: GpuBackend + GpuReadback>(backend: &mut B) -> Re
 }
 
 fn unknown_surface_is_rejected<B: GpuBackend + GpuReadback>(backend: &mut B) -> Result<(), String> {
-    let plan = &standard_cases()[0].plan;
+    let plan = &standard_cases(&backend.capabilities().features)[0].plan;
     let result = backend.execute(
         plan,
         &FrameInputs {
@@ -86,7 +94,7 @@ fn unknown_surface_is_rejected<B: GpuBackend + GpuReadback>(backend: &mut B) -> 
 }
 
 fn extent_mismatch_is_rejected<B: GpuBackend + GpuReadback>(backend: &mut B) -> Result<(), String> {
-    let plan = &standard_cases()[0].plan;
+    let plan = &standard_cases(&backend.capabilities().features)[0].plan;
     let small = aqua_graph::Extent {
         width: 16,
         height: 16,
@@ -101,7 +109,7 @@ fn extent_mismatch_is_rejected<B: GpuBackend + GpuReadback>(backend: &mut B) -> 
 }
 
 fn invalid_plan_is_rejected<B: GpuBackend + GpuReadback>(backend: &mut B) -> Result<(), String> {
-    let plan = poisoned(&standard_cases()[0].plan);
+    let plan = poisoned(&standard_cases(&backend.capabilities().features)[0].plan);
     let surface = backend
         .create_surface(SurfaceTarget::Offscreen(plan.extent))
         .map_err(describe)?;
@@ -117,7 +125,8 @@ fn empty_upload_is_accepted<B: GpuBackend + GpuReadback>(backend: &mut B) -> Res
 
 fn rendering_is_deterministic<B: GpuBackend + GpuReadback>(backend: &mut B) -> Result<(), String> {
     let mut session = Session::new(backend);
-    for case in standard_cases() {
+    let features = session.backend().capabilities().features;
+    for case in standard_cases(&features) {
         let first = session.render_case(&case).map_err(describe)?;
         let second = session.render_case(&case).map_err(describe)?;
         expect(first == second, || {
@@ -130,7 +139,7 @@ fn rendering_is_deterministic<B: GpuBackend + GpuReadback>(backend: &mut B) -> R
 fn surface_reuse_leaves_no_residue<B: GpuBackend + GpuReadback>(
     backend: &mut B,
 ) -> Result<(), String> {
-    let all = standard_cases();
+    let all = standard_cases(&backend.capabilities().features);
     let mut session = Session::new(backend);
     let baseline: Vec<_> = all
         .iter()
@@ -149,7 +158,7 @@ fn surface_reuse_leaves_no_residue<B: GpuBackend + GpuReadback>(
 }
 
 fn recovery_preserves_output<B: GpuBackend + GpuReadback>(backend: &mut B) -> Result<(), String> {
-    let all = standard_cases();
+    let all = standard_cases(&backend.capabilities().features);
     let before = {
         let mut session = Session::new(backend);
         all.iter()

@@ -1,7 +1,7 @@
 use aqua_graph::FilterParams;
 
 use crate::raster::{Layer, Pixel};
-use crate::sample::{Window, bilinear};
+use crate::sample::{bilinear, Window};
 
 fn weighted(taps: &[((f32, f32), f32)], sample: impl Fn(f32, f32) -> Pixel) -> Pixel {
     let total: f32 = taps.iter().map(|(_, weight)| weight).sum();
@@ -67,5 +67,16 @@ pub fn blur_up(source: &Layer, target: &mut Layer, params: &FilterParams) {
             let value = weighted(&taps, |dx, dy| bilinear(source, cx + dx, cy + dy, window));
             target.put(x, y, value);
         }
+    }
+}
+
+pub fn color_matrix(source: &Layer, target: &mut Layer, params: &FilterParams) -> bool {
+    match (source.width == target.width, source.height == target.height) {
+        (true, true) => {
+            target.pixels.clone_from(&source.pixels);
+            aqua_kernels::color_matrix::reference(&params.matrix.0, &mut target.pixels);
+            true
+        }
+        _ => false,
     }
 }

@@ -2,12 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use aqua_core::Oklch;
 
-use crate::analysis::{Lifetime, align_up, first_writers, independent, intersect, lifetimes};
+use crate::analysis::{align_up, first_writers, independent, intersect, lifetimes, Lifetime};
 use crate::plan::{
     Barrier, Extent, FramePlan, LoadOp, Pass, PassKind, ResourceState, TextureFormat, TextureRef,
     TransientId, TransientTexture,
 };
-use crate::validate::{PlanError, validate};
+use crate::validate::{validate, PlanError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlanLimits {
@@ -96,6 +96,7 @@ impl RenderGraph {
         let before = passes.len();
         passes = merge_passes(passes);
         stats.merged_passes = before - passes.len();
+        ensure_surface_clear(&mut passes, self.clear);
         let lives = lifetimes(&passes);
         let (textures, heap_bytes, naive) = allocate(&self, &lives, limits.heap_alignment);
         stats.aliased_bytes_saved = naive.saturating_sub(heap_bytes);
@@ -338,6 +339,23 @@ fn allocate(
         .max()
         .unwrap_or(0);
     (textures, heap, naive)
+}
+
+fn ensure_surface_clear(passes: &mut Vec<Pass>, clear: Oklch) {
+    let first_write = passes
+        .iter()
+        .position(|pass| pass.writes.contains(&TextureRef::Surface));
+    let first_read = passes
+        .iter()
+        .position(|pass| pass.reads.contains(&TextureRef::Surface));
+    let uncleared = match (first_write, first_read) {
+        (None, _) => true,
+        (Some(write), Some(read)) => read < write,
+        (Some(_), None) => false,
+    };
+    if uncleared {
+        passes.insert(0, Pass::clear(TextureRef::Surface, clear));
+    }
 }
 
 fn assign_loads(passes: &mut [Pass], clear: Oklch) {

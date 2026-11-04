@@ -1,4 +1,4 @@
-use aqua_core::{Oklch, geometry::Rect};
+use aqua_core::{geometry::Rect, Oklch};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Extent {
@@ -151,6 +151,13 @@ pub struct GlyphInstance {
     pub opacity: f32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Blend {
+    #[default]
+    Over,
+    Replace,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImageInstance {
     pub source: TextureRef,
@@ -159,6 +166,8 @@ pub struct ImageInstance {
     pub radius: f32,
     pub opacity: f32,
     pub clip: Option<Rect>,
+    pub clip_radius: f32,
+    pub blend: Blend,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -202,9 +211,69 @@ pub struct CustomPassSpec {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColorMatrix(pub [f32; 20]);
+
+impl ColorMatrix {
+    pub const IDENTITY: ColorMatrix = ColorMatrix([
+        1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        1.0, 0.0,
+    ]);
+
+    pub fn saturation(amount: f32) -> Self {
+        let (r, g, b) = (0.2126, 0.7152, 0.0722);
+        let inverse = 1.0 - amount;
+        ColorMatrix([
+            r * inverse + amount,
+            g * inverse,
+            b * inverse,
+            0.0,
+            0.0,
+            r * inverse,
+            g * inverse + amount,
+            b * inverse,
+            0.0,
+            0.0,
+            r * inverse,
+            g * inverse,
+            b * inverse + amount,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+        ])
+    }
+
+    pub fn is_finite(&self) -> bool {
+        self.0.iter().all(|value| value.is_finite())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FilterParams {
     pub region: Rect,
     pub values: [f32; 4],
+    pub matrix: ColorMatrix,
+}
+
+impl FilterParams {
+    pub fn blur(region: Rect, values: [f32; 4]) -> Self {
+        Self {
+            region,
+            values,
+            matrix: ColorMatrix::IDENTITY,
+        }
+    }
+
+    pub fn color_matrix(region: Rect, matrix: ColorMatrix) -> Self {
+        Self {
+            region,
+            values: [0.0; 4],
+            matrix,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -234,6 +303,7 @@ pub enum PassKind {
     Compute {
         shader: ShaderId,
         groups: [u32; 3],
+        params: [f32; 4],
     },
     Copy {
         source_origin: [u32; 2],
@@ -285,6 +355,27 @@ pub struct Pass {
 }
 
 impl Pass {
+    pub fn clear(target: TextureRef, color: Oklch) -> Self {
+        Self {
+            kind: PassKind::Instanced {
+                shader: ShaderId::Quad,
+                instances: Vec::new(),
+            },
+            reads: Vec::new(),
+            writes: vec![target],
+            load: LoadOp::Clear(color),
+            constants: Vec::new(),
+            barriers: Vec::new(),
+        }
+    }
+
+    pub fn is_clear(&self) -> bool {
+        matches!(
+            &self.kind,
+            PassKind::Instanced { instances, .. } if instances.is_empty()
+        ) && matches!(self.load, LoadOp::Clear(_))
+    }
+
     pub fn new(kind: PassKind, reads: Vec<TextureRef>, writes: Vec<TextureRef>) -> Self {
         Self {
             kind,

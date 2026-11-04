@@ -1,5 +1,5 @@
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
+use aqua_core::Oklch;
 use aqua_gpu_d3d12::sprite::{pack_glyph, pack_glyphs, pack_image};
 use aqua_graph::{GlyphInstance, ImageInstance, TextureHandle, TextureRef};
 
@@ -53,6 +53,8 @@ fn image_parameters_carry_radius_and_opacity() {
         radius: 4.0,
         opacity: 0.25,
         clip: Some(rect(0.0)),
+        clip_radius: 0.0,
+        blend: aqua_graph::Blend::Over,
     };
     let packed = pack_image(&image);
     assert_eq!(&packed.tail[..2], &[4.0, 0.25]);

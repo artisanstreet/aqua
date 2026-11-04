@@ -1,6 +1,19 @@
 #include "sprite.hlsli"
 
+#ifdef BINDLESS
+struct BoundPage
+{
+    float4 Load(int3 location)
+    {
+        Texture2D<float4> bound = ResourceDescriptorHeap[texture_index];
+        return bound.Load(location);
+    }
+};
+
+static BoundPage page;
+#else
 Texture2D<float4> page : register(t0);
+#endif
 
 struct ImageIn
 {

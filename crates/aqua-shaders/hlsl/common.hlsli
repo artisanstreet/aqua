@@ -6,10 +6,30 @@ cbuffer Frame : register(b0)
     float4 region;
     float4 values;
     float2 source_size;
-    float2 frame_pad2;
+    uint texture_index;
+    uint frame_pad2;
 };
 
+#ifdef BINDLESS
+struct BoundSource
+{
+    float4 Load(int3 location)
+    {
+        Texture2D<float4> bound = ResourceDescriptorHeap[texture_index];
+        return bound.Load(location);
+    }
+
+    float4 SampleLevel(SamplerState state, float2 uv, float level)
+    {
+        Texture2D<float4> bound = ResourceDescriptorHeap[texture_index];
+        return bound.SampleLevel(state, uv, level);
+    }
+};
+
+static BoundSource source;
+#else
 Texture2D<float4> source : register(t0);
+#endif
 SamplerState linear_clamp : register(s0);
 
 float4 to_clip(float2 pixel)

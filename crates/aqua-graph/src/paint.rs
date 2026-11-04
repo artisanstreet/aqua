@@ -1,11 +1,12 @@
-use aqua_core::{Oklch, geometry::Rect};
+use aqua_core::{geometry::Rect, Oklch};
 
 use crate::analysis::{intersect, union};
-use crate::blur::{BlurRequest, blur_chain};
+use crate::blur::{blur_chain, BlurRequest};
 use crate::graph::{PlanLimits, RenderGraph};
 use crate::plan::{
-    Extent, FramePlan, GlyphInstance, Gradient, ImageInstance, Pass, PassKind, QuadInstance,
-    ShaderId, ShadowInstance, TextureFormat, TextureHandle, TextureRef,
+    Blend, ColorMatrix, CustomPassSpec, Extent, FilterParams, FramePlan, GlyphInstance, Gradient,
+    ImageInstance, Pass, PassKind, QuadInstance, ShaderId, ShadowInstance, TextureFormat,
+    TextureHandle, TextureRef,
 };
 use crate::validate::PlanError;
 
@@ -71,11 +72,40 @@ pub enum PaintCommand {
     Image(Image),
     BackdropBlur(BackdropBlur),
     PushClip(Rect),
+    PushRoundedClip { rect: Rect, radius: f32 },
     PopClip,
     PushOpacity(f32),
     PopOpacity,
     PushContentBlur { bounds: Rect, radius: f32 },
     PopContentBlur,
+    PushColorMatrix { bounds: Rect, matrix: ColorMatrix },
+    PopColorMatrix,
+    PushCustomEffect { bounds: Rect, spec: CustomPassSpec },
+    PopCustomEffect,
+}
+
+#[derive(Clone, Debug)]
+enum Effect {
+    Blur(f32),
+    ColorMatrix(ColorMatrix),
+    Custom(CustomPassSpec),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EffectKind {
+    Blur,
+    ColorMatrix,
+    Custom,
+}
+
+impl Effect {
+    fn kind(&self) -> EffectKind {
+        match self {
+            Effect::Blur(_) => EffectKind::Blur,
+            Effect::ColorMatrix(_) => EffectKind::ColorMatrix,
+            Effect::Custom(_) => EffectKind::Custom,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -91,18 +121,45 @@ enum Leaf {
 enum Node {
     Leaf(Leaf),
     Clip(Rect, Vec<Node>),
-    Group(f32, Vec<Node>),
-    ContentBlur {
-        bounds: Rect,
+    RoundedClip {
+        rect: Rect,
         radius: f32,
+        children: Vec<Node>,
+    },
+    Group(f32, Vec<Node>),
+    Effect {
+        bounds: Rect,
+        effect: Effect,
         children: Vec<Node>,
     },
 }
 
 enum Frame {
     Clip(Rect),
+    RoundedClip { rect: Rect, radius: f32 },
     Group(f32),
-    ContentBlur { bounds: Rect, radius: f32 },
+    Effect { bounds: Rect, effect: Effect },
+}
+
+type Stack = Vec<(Option<Frame>, Vec<Node>)>;
+
+fn pop_effect(stack: &mut Stack, expected: EffectKind) -> Result<(), PlanError> {
+    let (frame, children) = stack.pop().ok_or(PlanError::UnbalancedPop)?;
+    match frame {
+        Some(Frame::Effect { bounds, effect }) if effect.kind() == expected => {
+            stack
+                .last_mut()
+                .ok_or(PlanError::UnbalancedPop)?
+                .1
+                .push(Node::Effect {
+                    bounds,
+                    effect,
+                    children,
+                });
+            Ok(())
+        }
+        _ => Err(PlanError::UnbalancedPop),
+    }
 }
 
 fn parse(commands: &[PaintCommand]) -> Result<Vec<Node>, PlanError> {
@@ -122,13 +179,34 @@ fn parse(commands: &[PaintCommand]) -> Result<Vec<Node>, PlanError> {
             PaintCommand::Image(image) => push(&mut stack, Node::Leaf(Leaf::Image(*image))),
             PaintCommand::BackdropBlur(blur) => push(&mut stack, Node::Leaf(Leaf::Backdrop(*blur))),
             PaintCommand::PushClip(rect) => stack.push((Some(Frame::Clip(*rect)), Vec::new())),
+            PaintCommand::PushRoundedClip { rect, radius } => stack.push((
+                Some(Frame::RoundedClip {
+                    rect: *rect,
+                    radius: *radius,
+                }),
+                Vec::new(),
+            )),
             PaintCommand::PushOpacity(opacity) => {
                 stack.push((Some(Frame::Group(*opacity)), Vec::new()))
             }
             PaintCommand::PushContentBlur { bounds, radius } => stack.push((
-                Some(Frame::ContentBlur {
+                Some(Frame::Effect {
                     bounds: *bounds,
-                    radius: *radius,
+                    effect: Effect::Blur(*radius),
+                }),
+                Vec::new(),
+            )),
+            PaintCommand::PushColorMatrix { bounds, matrix } => stack.push((
+                Some(Frame::Effect {
+                    bounds: *bounds,
+                    effect: Effect::ColorMatrix(*matrix),
+                }),
+                Vec::new(),
+            )),
+            PaintCommand::PushCustomEffect { bounds, spec } => stack.push((
+                Some(Frame::Effect {
+                    bounds: *bounds,
+                    effect: Effect::Custom(spec.clone()),
                 }),
                 Vec::new(),
             )),
@@ -136,6 +214,14 @@ fn parse(commands: &[PaintCommand]) -> Result<Vec<Node>, PlanError> {
                 let (frame, children) = stack.pop().ok_or(PlanError::UnbalancedPop)?;
                 match frame {
                     Some(Frame::Clip(rect)) => push(&mut stack, Node::Clip(rect, children)),
+                    Some(Frame::RoundedClip { rect, radius }) => push(
+                        &mut stack,
+                        Node::RoundedClip {
+                            rect,
+                            radius,
+                            children,
+                        },
+                    ),
                     _ => return Err(PlanError::UnbalancedPop),
                 }
             }
@@ -146,20 +232,9 @@ fn parse(commands: &[PaintCommand]) -> Result<Vec<Node>, PlanError> {
                     _ => return Err(PlanError::UnbalancedPop),
                 }
             }
-            PaintCommand::PopContentBlur => {
-                let (frame, children) = stack.pop().ok_or(PlanError::UnbalancedPop)?;
-                match frame {
-                    Some(Frame::ContentBlur { bounds, radius }) => push(
-                        &mut stack,
-                        Node::ContentBlur {
-                            bounds,
-                            radius,
-                            children,
-                        },
-                    ),
-                    _ => return Err(PlanError::UnbalancedPop),
-                }
-            }
+            PaintCommand::PopContentBlur => pop_effect(&mut stack, EffectKind::Blur)?,
+            PaintCommand::PopColorMatrix => pop_effect(&mut stack, EffectKind::ColorMatrix)?,
+            PaintCommand::PopCustomEffect => pop_effect(&mut stack, EffectKind::Custom)?,
         }
         if stack.is_empty() {
             return Err(PlanError::UnbalancedPop);
@@ -214,6 +289,15 @@ fn units(nodes: &[Node], clip: Option<Rect>, out: &mut Vec<Rect>) {
                     units(children, Some(next), out);
                 }
             }
+            Node::RoundedClip { rect, children, .. } => {
+                if let Some(next) = clipped(*rect, clip) {
+                    let mut inner = Vec::new();
+                    units(children, Some(next), &mut inner);
+                    if let Some(total) = inner.into_iter().reduce(union) {
+                        out.push(total);
+                    }
+                }
+            }
             Node::Group(_, children) => {
                 let mut inner = Vec::new();
                 units(children, clip, &mut inner);
@@ -221,7 +305,7 @@ fn units(nodes: &[Node], clip: Option<Rect>, out: &mut Vec<Rect>) {
                     out.push(total);
                 }
             }
-            Node::ContentBlur {
+            Node::Effect {
                 bounds, children, ..
             } => {
                 let mut inner = Vec::new();
@@ -258,11 +342,88 @@ struct Context {
     clip: Option<Rect>,
     opacity: f32,
     target: TextureRef,
+    origin: [f32; 2],
+    extent: Extent,
+}
+
+impl Context {
+    fn area(&self) -> Rect {
+        Rect {
+            x: self.origin[0],
+            y: self.origin[1],
+            w: self.extent.width as f32,
+            h: self.extent.height as f32,
+        }
+    }
+
+    fn local(&self, rect: Rect) -> Rect {
+        Rect {
+            x: rect.x - self.origin[0],
+            y: rect.y - self.origin[1],
+            ..rect
+        }
+    }
+
+    fn local_clip(&self) -> Option<Rect> {
+        self.clip.map(|clip| self.local(clip))
+    }
+
+    fn local_gradient(&self, gradient: Gradient) -> Gradient {
+        Gradient {
+            start: [
+                gradient.start[0] - self.origin[0],
+                gradient.start[1] - self.origin[1],
+            ],
+            end: [
+                gradient.end[0] - self.origin[0],
+                gradient.end[1] - self.origin[1],
+            ],
+            stops: gradient.stops,
+        }
+    }
+
+    fn layer(&self, target: TextureRef, region: PixelRegion) -> Context {
+        Context {
+            clip: self.clip,
+            opacity: 1.0,
+            target,
+            origin: [region.rect.x, region.rect.y],
+            extent: region.extent,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PixelRegion {
+    rect: Rect,
+    extent: Extent,
+}
+
+fn pixel_region(rect: Rect) -> Option<PixelRegion> {
+    let (left, top) = (rect.x.floor(), rect.y.floor());
+    let (right, bottom) = (rect.right().ceil(), rect.bottom().ceil());
+    (right > left && bottom > top).then(|| PixelRegion {
+        rect: Rect::from_edges(left, top, right, bottom),
+        extent: Extent::new((right - left) as u32, (bottom - top) as u32),
+    })
+}
+
+fn children_region(
+    children: &[Node],
+    clip: Option<Rect>,
+    context: &Context,
+) -> Option<PixelRegion> {
+    let mut inner = Vec::new();
+    units(children, clip, &mut inner);
+    inner
+        .into_iter()
+        .reduce(union)
+        .and_then(|total| intersect(total, context.area()))
+        .and_then(pixel_region)
 }
 
 struct Emitter {
     graph: RenderGraph,
-    extent: Extent,
 }
 
 impl Emitter {
@@ -297,6 +458,11 @@ impl Emitter {
                     );
                 }
             }
+            Node::RoundedClip {
+                rect,
+                radius,
+                children,
+            } => self.rounded_clip(*rect, *radius, children, context),
             Node::Group(opacity, children) => {
                 let combined = context.opacity * opacity.clamp(0.0, 1.0);
                 if combined <= 0.0 || children.is_empty() {
@@ -312,58 +478,156 @@ impl Emitter {
                     );
                     return;
                 }
-                let layer = self.graph.create(self.extent, TextureFormat::Rgba16Float);
-                self.emit(
-                    children,
-                    Context {
-                        opacity: 1.0,
-                        target: layer,
-                        ..context
-                    },
-                );
+                let Some(region) = children_region(children, context.clip, &context) else {
+                    return;
+                };
+                let layer = self.graph.create(region.extent, TextureFormat::Rgba16Float);
+                self.emit(children, context.layer(layer, region));
                 if !self.written(layer) {
                     return;
                 }
-                self.draw(
-                    PassKind::Fullscreen {
-                        shader: ShaderId::LayerOver,
-                        opacity: combined,
-                    },
-                    vec![layer],
-                    context.target,
-                );
+                let covers_target = region.extent == context.extent
+                    && region.rect.x == context.origin[0]
+                    && region.rect.y == context.origin[1];
+                match covers_target {
+                    true => self.draw(
+                        PassKind::Fullscreen {
+                            shader: ShaderId::LayerOver,
+                            opacity: combined,
+                        },
+                        vec![layer],
+                        context.target,
+                    ),
+                    false => self.composite(layer, region, combined, Blend::Over, context),
+                }
             }
-            Node::ContentBlur {
+            Node::Effect {
                 bounds,
-                radius,
+                effect,
                 children,
-            } => self.content_blur(*bounds, *radius, children, context),
+            } => self.effect(*bounds, effect, children, context),
         }
     }
 
-    fn content_blur(&mut self, bounds: Rect, radius: f32, children: &[Node], context: Context) {
+    fn composite(
+        &mut self,
+        layer: TextureRef,
+        region: PixelRegion,
+        opacity: f32,
+        blend: Blend,
+        context: Context,
+    ) {
+        self.draw(
+            PassKind::Images {
+                instances: vec![ImageInstance {
+                    source: layer,
+                    bounds: context.local(region.rect),
+                    texels: region.extent.bounds(),
+                    radius: 0.0,
+                    opacity,
+                    clip: context.local_clip(),
+                    clip_radius: 0.0,
+                    blend,
+                }],
+            },
+            vec![layer],
+            context.target,
+        );
+    }
+
+    fn rounded_clip(&mut self, rect: Rect, radius: f32, children: &[Node], context: Context) {
         if radius <= BLUR_EPSILON {
+            return self.node(&Node::Clip(rect, children.to_vec()), context);
+        }
+        let Some(bounded) = clipped(rect, context.clip) else {
+            return;
+        };
+        let Some(region) = children_region(children, Some(bounded), &context) else {
+            return;
+        };
+        let layer = self.graph.create(region.extent, TextureFormat::Rgba16Float);
+        self.emit(children, context.layer(layer, region));
+        if !self.written(layer) {
+            return;
+        }
+        self.draw(
+            PassKind::Images {
+                instances: vec![ImageInstance {
+                    source: layer,
+                    bounds: context.local(region.rect),
+                    texels: region.extent.bounds(),
+                    radius: 0.0,
+                    opacity: context.opacity,
+                    clip: Some(context.local(rect)),
+                    clip_radius: radius,
+                    blend: Blend::Over,
+                }],
+            },
+            vec![layer],
+            context.target,
+        );
+    }
+
+    fn effect(&mut self, bounds: Rect, effect: &Effect, children: &[Node], context: Context) {
+        if matches!(effect, Effect::Blur(radius) if *radius <= BLUR_EPSILON) {
             return self.emit(children, context);
         }
-        let Some(region) =
-            clipped(bounds, context.clip).and_then(|r| clipped(r, Some(self.extent.bounds())))
+        let Some(exact) = clipped(bounds, context.clip).and_then(|r| intersect(r, context.area()))
         else {
             return;
         };
-        let layer = self.graph.create(self.extent, TextureFormat::Rgba16Float);
+        let Some(region) = pixel_region(exact) else {
+            return;
+        };
+        let layer = self.graph.create(region.extent, TextureFormat::Rgba16Float);
         self.emit(
             children,
             Context {
-                clip: Some(region),
-                opacity: 1.0,
-                target: layer,
+                clip: Some(exact),
+                ..context.layer(layer, region)
             },
         );
-        if self.written(layer) {
-            self.blurred(layer, region, region, radius, 0.0, context);
+        if !self.written(layer) {
+            return;
+        }
+        match effect {
+            Effect::Blur(radius) => {
+                let local = region.extent.bounds();
+                self.blurred(
+                    layer,
+                    local,
+                    context.local(region.rect),
+                    *radius,
+                    0.0,
+                    Blend::Over,
+                    context,
+                );
+            }
+            Effect::ColorMatrix(matrix) => {
+                let output = self.graph.create(region.extent, TextureFormat::Rgba16Float);
+                let mut pass = Pass::new(
+                    PassKind::Filter {
+                        shader: ShaderId::ColorMatrix,
+                        params: FilterParams::color_matrix(region.extent.bounds(), *matrix),
+                    },
+                    vec![layer],
+                    vec![output],
+                );
+                pass.load = crate::plan::LoadOp::DontCare;
+                self.graph.push(pass);
+                self.composite(output, region, context.opacity, Blend::Over, context);
+            }
+            Effect::Custom(spec) => {
+                let output = self.graph.create(region.extent, TextureFormat::Rgba16Float);
+                let mut spec = spec.clone();
+                spec.bounds = region.extent.bounds();
+                self.draw(PassKind::Custom(spec), vec![layer], output);
+                self.composite(output, region, context.opacity, Blend::Over, context);
+            }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn blurred(
         &mut self,
         source: TextureRef,
@@ -371,6 +635,7 @@ impl Emitter {
         placement: Rect,
         radius: f32,
         corner: f32,
+        blend: Blend,
         context: Context,
     ) {
         let output = blur_chain(
@@ -390,7 +655,9 @@ impl Emitter {
                     texels: output.texels,
                     radius: corner,
                     opacity: context.opacity,
-                    clip: context.clip,
+                    clip: context.local_clip(),
+                    clip_radius: 0.0,
+                    blend,
                 }],
             },
             vec![output.texture],
@@ -399,23 +666,21 @@ impl Emitter {
     }
 
     fn leaf(&mut self, leaf: &Leaf, context: Context) {
-        let Context {
-            clip,
-            opacity,
-            target,
-        } = context;
+        let opacity = context.opacity;
+        let target = context.target;
+        let clip = context.local_clip();
         match leaf {
             Leaf::Quad(quad, gradient) => self.draw(
                 PassKind::Instanced {
                     shader: ShaderId::Quad,
                     instances: vec![QuadInstance {
-                        bounds: quad.bounds,
+                        bounds: context.local(quad.bounds),
                         radius: quad.radius,
                         border_width: quad.border_width,
                         fill: quad.fill,
                         border_color: quad.border_color,
                         clip,
-                        gradient: *gradient,
+                        gradient: gradient.map(|g| context.local_gradient(g)),
                         opacity,
                     }],
                 },
@@ -425,7 +690,7 @@ impl Emitter {
             Leaf::Shadow(shadow) => self.draw(
                 PassKind::Shadows {
                     instances: vec![ShadowInstance {
-                        bounds: shadow.bounds,
+                        bounds: context.local(shadow.bounds),
                         radius: shadow.radius,
                         offset: shadow.offset,
                         sigma: shadow.sigma,
@@ -445,7 +710,7 @@ impl Emitter {
                         .glyphs
                         .iter()
                         .map(|glyph| GlyphInstance {
-                            bounds: glyph.bounds,
+                            bounds: context.local(glyph.bounds),
                             texels: glyph.texels,
                             color: glyph.color,
                             clip,
@@ -460,11 +725,13 @@ impl Emitter {
                 PassKind::Images {
                     instances: vec![ImageInstance {
                         source: TextureRef::Persistent(image.source),
-                        bounds: image.bounds,
+                        bounds: context.local(image.bounds),
                         texels: image.texels,
                         radius: image.radius,
                         opacity,
                         clip,
+                        clip_radius: 0.0,
+                        blend: Blend::Over,
                     }],
                 },
                 vec![TextureRef::Persistent(image.source)],
@@ -474,8 +741,9 @@ impl Emitter {
                 if blur.radius <= BLUR_EPSILON {
                     return;
                 }
-                let Some(region) =
-                    clipped(blur.bounds, clip).and_then(|r| clipped(r, Some(self.extent.bounds())))
+                let Some(region) = clipped(blur.bounds, context.clip)
+                    .and_then(|r| intersect(r, context.area()))
+                    .map(|r| context.local(r))
                 else {
                     return;
                 };
@@ -495,6 +763,7 @@ impl Emitter {
                     snapshot.bounds,
                     blur.radius,
                     blur.corner_radius,
+                    Blend::Replace,
                     context,
                 );
             }
@@ -521,7 +790,6 @@ pub fn plan_paint_with(
     let tree = parse(commands)?;
     let mut emitter = Emitter {
         graph: RenderGraph::new(extent, clear),
-        extent,
     };
     emitter.emit(
         &tree,
@@ -529,6 +797,8 @@ pub fn plan_paint_with(
             clip: None,
             opacity: 1.0,
             target: TextureRef::Surface,
+            origin: [0.0, 0.0],
+            extent,
         },
     );
     emitter.graph.plan(limits)

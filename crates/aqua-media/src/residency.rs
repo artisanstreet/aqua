@@ -4,10 +4,10 @@ use std::sync::Arc;
 use aqua_core::vector::VectorSource;
 
 use crate::atlas::{
-    Atlas, AtlasConfig, AtlasError, AtlasStats, AtlasUpdates, GlyphBitmap, GlyphKey,
-    GlyphRasterizer, ImageKey, PageId, Raster, Slot, StreamBudget, Streamer,
+    Atlas, AtlasConfig, AtlasError, AtlasStats, AtlasUpdates, GlyphBitmap, GlyphKey, GlyphRaster,
+    GlyphRasterizer, GlyphSource, ImageKey, PageId, Raster, Slot, StreamBudget, Streamer,
 };
-use crate::vector::{VectorBudget, VectorError, rasterize, retained_source_bytes};
+use crate::vector::{rasterize, retained_source_bytes, VectorBudget, VectorError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum VectorMode {
@@ -32,7 +32,22 @@ pub enum MaskKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ColorKey {
     Image(ImageKey),
+    Glyph(GlyphKey),
     Vector(VectorKey),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlyphSlot {
+    Mask(Slot),
+    Color(Slot),
+}
+
+impl GlyphSlot {
+    pub fn slot(&self) -> &Slot {
+        match self {
+            GlyphSlot::Mask(slot) | GlyphSlot::Color(slot) => slot,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -100,6 +115,7 @@ pub struct Residency {
     vector: VectorBudget,
     retained: HashMap<VectorKey, (VectorSource, u64)>,
     rasterizations: u64,
+    generation: u64,
 }
 
 fn vector_identity(source: &VectorSource) -> (usize, u8) {
@@ -119,7 +135,12 @@ impl Residency {
             vector: config.vector,
             retained: HashMap::new(),
             rasterizations: 0,
+            generation: 0,
         }
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn begin_frame(&mut self) {
@@ -149,6 +170,38 @@ impl Residency {
             )
         };
         Ok(self.masks.resolve(MaskKey::Glyph(key), produce)?)
+    }
+
+    pub fn glyph_any(
+        &mut self,
+        key: GlyphKey,
+        source: &mut impl GlyphSource,
+    ) -> Result<GlyphSlot, ResidencyError> {
+        if let Some(slot) = self.masks.get(&MaskKey::Glyph(key)) {
+            return Ok(GlyphSlot::Mask(slot));
+        }
+        if let Some(slot) = self.colors.get(&ColorKey::Glyph(key)) {
+            return Ok(GlyphSlot::Color(slot));
+        }
+        match source.rasterize(&key) {
+            None => Ok(GlyphSlot::Mask(
+                self.masks.insert_blank(MaskKey::Glyph(key), [0, 0]),
+            )),
+            Some(GlyphRaster::Mask(bitmap)) => Ok(GlyphSlot::Mask(self.masks.insert(
+                MaskKey::Glyph(key),
+                bitmap.width,
+                bitmap.height,
+                [bitmap.left, bitmap.top],
+                bitmap.coverage,
+            )?)),
+            Some(GlyphRaster::Color(bitmap)) => Ok(GlyphSlot::Color(self.colors.insert(
+                ColorKey::Glyph(key),
+                bitmap.width,
+                bitmap.height,
+                [bitmap.left, bitmap.top],
+                bitmap.premultiplied_rgba,
+            )?)),
+        }
     }
 
     pub fn image(
@@ -275,6 +328,7 @@ impl Residency {
         self.colors.clear();
         self.retained.clear();
         self.streamer = Streamer::new();
+        self.generation += 1;
     }
 
     pub fn stats(&self) -> ResidencyStats {

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use aqua_graph::tone::ToneCurve;
 use aqua_graph::{
     Barrier, Extent, FramePlan, LoadOp, PassKind, ResourceState, ShaderId, TextureHandle,
     TextureRef, TransientId,
@@ -9,14 +10,17 @@ use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use super::Error;
+use super::barriers::Emitter;
 use super::formats::{dxgi, state};
-use super::pipeline::{CONSTANT_DWORDS, Kind, PipelineStats, Pipelines};
+use super::pipeline::{Kind, PipelineStats, Pipelines};
 use super::sprites;
+use super::tiers::{resolve, Active, SceneOptions};
+use super::timestamps::Timestamps;
 use super::transients::Transients;
 use super::util::*;
-use crate::pack::{QUAD_STRIDE, QuadGpu, SHADOW_STRIDE, ShadowGpu, pack_quad, pack_shadow};
-use crate::sprite::{SpriteGpu, pack_glyphs, pack_image};
+use super::Error;
+use crate::pack::{pack_quad, pack_shadow, QuadGpu, ShadowGpu, QUAD_STRIDE, SHADOW_STRIDE};
+use crate::sprite::{pack_glyphs, pack_image, SpriteGpu};
 
 const INITIAL_UPLOAD_BYTES: u64 = 1 << 16;
 const INITIAL_DESCRIPTORS: u32 = 8;
@@ -59,6 +63,9 @@ pub struct SceneRenderer {
     rtv_stride: usize,
     srv_stride: usize,
     transients: Transients,
+    active: Active,
+    timestamps: Option<Timestamps>,
+    trim_slots: Vec<bool>,
 }
 
 fn create_srv_heap(device: &ID3D12Device, count: u32) -> Result<ID3D12DescriptorHeap, Error> {
@@ -219,8 +226,23 @@ impl SceneRenderer {
         slots: usize,
         cache: Option<&[u8]>,
     ) -> Result<Self, Error> {
-        let pipelines = Pipelines::create(device, cache)?;
-        let slots = (0..slots.max(1))
+        Self::with_options(device, slots, cache, SceneOptions::default())
+    }
+
+    pub fn with_options(
+        device: &ID3D12Device,
+        slots: usize,
+        cache: Option<&[u8]>,
+        options: SceneOptions,
+    ) -> Result<Self, Error> {
+        let active = resolve(device, options.limit);
+        let pipelines = Pipelines::create(device, cache, active.binding)?;
+        let timestamps = match options.timestamps {
+            true => Timestamps::new(device, slots.max(1))?,
+            false => None,
+        };
+        let slot_count = slots.max(1);
+        let slots = (0..slot_count)
             .map(|_| create_slot(device, INITIAL_UPLOAD_BYTES, INITIAL_DESCRIPTORS))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
@@ -235,12 +257,42 @@ impl SceneRenderer {
             srv_stride: unsafe {
                 device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
             } as usize,
-            transients: Transients::new(),
+            transients: Transients::new(device, active.sync, options.transient_ceiling)?,
+            active,
+            timestamps,
+            trim_slots: vec![false; slot_count],
         })
     }
 
     pub fn retire(&mut self, completed_fence: u64) {
         self.transients.retire(completed_fence);
+        if let Some(timestamps) = &mut self.timestamps {
+            timestamps.poll(completed_fence);
+        }
+    }
+
+    pub fn tiers(&self) -> crate::hal::tier::Tiers {
+        self.active.tiers
+    }
+
+    pub fn gpu_time(&self) -> Option<std::time::Duration> {
+        self.timestamps.as_ref().and_then(Timestamps::latest)
+    }
+
+    pub fn retired_transient_bytes(&self) -> u64 {
+        self.transients.retired_bytes()
+    }
+
+    pub fn trim(&mut self, trim: &crate::hal::budget::Trim, frame_fence: u64) -> u64 {
+        if trim.shrink_upload_ring {
+            self.trim_slots
+                .iter_mut()
+                .for_each(|pending| *pending = true);
+        }
+        match trim.free_transients {
+            true => self.transients.trim(frame_fence),
+            false => 0,
+        }
     }
 
     pub fn warm(&mut self, formats: &[DXGI_FORMAT]) -> Result<(), Error> {
@@ -265,14 +317,19 @@ impl SceneRenderer {
         upload_bytes: u64,
         descriptors: u32,
     ) -> Result<(), Error> {
+        let shrink = std::mem::take(&mut self.trim_slots[slot]);
         let current = &self.slots[slot];
-        let capacity = match current.capacity < upload_bytes {
-            true => upload_bytes.next_power_of_two(),
-            false => current.capacity,
+        let wanted = upload_bytes.next_power_of_two().max(INITIAL_UPLOAD_BYTES);
+        let wanted_descriptors = descriptors.next_power_of_two().max(INITIAL_DESCRIPTORS);
+        let capacity = match (current.capacity < upload_bytes, shrink) {
+            (true, _) => wanted,
+            (false, true) => wanted,
+            (false, false) => current.capacity,
         };
-        let srv_capacity = match current.srv_capacity < descriptors {
-            true => descriptors.next_power_of_two(),
-            false => current.srv_capacity,
+        let srv_capacity = match (current.srv_capacity < descriptors, shrink) {
+            (true, _) => wanted_descriptors,
+            (false, true) => wanted_descriptors,
+            (false, false) => current.srv_capacity,
         };
         if capacity != current.capacity || srv_capacity != current.srv_capacity {
             self.slots[slot] = create_slot(&self.device, capacity, srv_capacity)?;
@@ -392,10 +449,14 @@ impl SceneRenderer {
         };
 
         unsafe {
-            list.SetGraphicsRootSignature(&self.pipelines.root_signature);
             list.SetDescriptorHeaps(&[Some(heap)]);
+            list.SetGraphicsRootSignature(&self.pipelines.root_signature);
             list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         }
+        if let Some(timestamps) = &self.timestamps {
+            timestamps.begin(list, slot);
+        }
+        let emitter = Emitter::new(self.active.sync, list)?;
         let first_surface_use = plan.passes.iter().find(|pass| {
             pass.reads.contains(&TextureRef::Surface) || pass.writes.contains(&TextureRef::Surface)
         });
@@ -404,27 +465,28 @@ impl SceneRenderer {
                 && matches!(pass.load, LoadOp::Clear(_))
         });
         if !clears_surface_first {
-            unsafe {
-                if target.rest_state != D3D12_RESOURCE_STATE_RENDER_TARGET {
-                    list.ResourceBarrier(&[transition(
-                        target.resource,
-                        target.rest_state,
-                        D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    )]);
-                    stats.barriers += 1;
-                }
-                list.ClearRenderTargetView(target.rtv, &plan.clear.to_gpu(), None);
+            if target.rest_state != D3D12_RESOURCE_STATE_RENDER_TARGET {
+                let mut batch = emitter.batch();
+                batch.transition(
+                    target.resource,
+                    target.rest_state,
+                    D3D12_RESOURCE_STATE_RENDER_TARGET,
+                );
+                stats.barriers += emitter.submit(list, batch);
             }
+            unsafe { list.ClearRenderTargetView(target.rtv, &plan.clear.to_gpu(), None) };
             tracked.insert(TextureRef::Surface, D3D12_RESOURCE_STATE_RENDER_TARGET);
         }
         let mut next_descriptor = 0u32;
         for (pass_index, pass) in plan.passes.iter().enumerate() {
-            let mut barriers: Vec<D3D12_RESOURCE_BARRIER> = Vec::new();
+            let mut barriers = emitter.batch();
             for reference in pass.reads.iter().chain(&pass.writes) {
                 if let TextureRef::Transient(id) = reference {
                     if activated.insert(*id) {
                         let bound = bind(*reference, self)?;
-                        barriers.push(aliasing(&bound.resource));
+                        if let Some(after) = barriers.activate(&bound.resource) {
+                            tracked.insert(*reference, after);
+                        }
                     }
                 }
             }
@@ -438,7 +500,9 @@ impl SceneRenderer {
                 match barrier {
                     Barrier::Alias { after, .. } => {
                         let bound = bind(TextureRef::Transient(*after), self)?;
-                        barriers.push(aliasing(&bound.resource));
+                        if let Some(state) = barriers.activate(&bound.resource) {
+                            tracked.insert(TextureRef::Transient(*after), state);
+                        }
                     }
                     Barrier::Transition { resource, to, .. } => {
                         let to = match (copy_via_shader, to) {
@@ -455,16 +519,18 @@ impl SceneRenderer {
                             .copied()
                             .unwrap_or(D3D12_RESOURCE_STATE_COMMON);
                         if before != after {
-                            barriers.push(transition(&bound.resource, before, after));
+                            match resource {
+                                TextureRef::Persistent(_) => {
+                                    barriers.transition_legacy(&bound.resource, before, after)
+                                }
+                                _ => barriers.transition(&bound.resource, before, after),
+                            }
                             tracked.insert(*resource, after);
                         }
                     }
                 }
             }
-            if !barriers.is_empty() {
-                stats.barriers += barriers.len() as u32;
-                unsafe { list.ResourceBarrier(&barriers) };
-            }
+            stats.barriers += emitter.submit(list, barriers);
             let Some(&write) = pass.writes.first() else {
                 continue;
             };
@@ -488,10 +554,11 @@ impl SceneRenderer {
                 };
                 next_descriptor += 1;
             }
-            let bound_table = match read_bounds.is_empty() {
-                true => table(null_index),
-                false => table(first_descriptor),
+            let bound_index = match read_bounds.is_empty() {
+                true => null_index,
+                false => first_descriptor,
             };
+            let bound_table = table(bound_index);
             let extent = write_bound.extent;
             match &pass.kind {
                 PassKind::Copy {
@@ -538,13 +605,10 @@ impl SceneRenderer {
                                 0.0,
                             ];
                             let values = constants(extent, 1.0, offset, [0.0; 4], source.extent);
-                            list.SetGraphicsRoot32BitConstants(
-                                0,
-                                CONSTANT_DWORDS,
-                                values.as_ptr() as *const _,
-                                0,
-                            );
-                            list.SetGraphicsRootDescriptorTable(1, bound_table);
+                            self.active
+                                .binding
+                                .set_constants(list, &values, bound_index);
+                            self.active.binding.bind_table(list, bound_table);
                             list.DrawInstanced(4, 1, 0, 0);
                         }
                         stats.draws += 1;
@@ -617,7 +681,7 @@ impl SceneRenderer {
                 if let LoadOp::Clear(color) = pass.load {
                     list.ClearRenderTargetView(rtv, &color.to_gpu(), None);
                 }
-                list.SetGraphicsRootDescriptorTable(1, bound_table);
+                self.active.binding.bind_table(list, bound_table);
             }
             let source_extent = read_bounds
                 .first()
@@ -633,12 +697,9 @@ impl SceneRenderer {
                 ) => unsafe {
                     list.SetPipelineState(&self.pipelines.get(Kind::Quad, write_bound.format)?);
                     let values = constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent);
-                    list.SetGraphicsRoot32BitConstants(
-                        0,
-                        CONSTANT_DWORDS,
-                        values.as_ptr() as *const _,
-                        0,
-                    );
+                    self.active
+                        .binding
+                        .set_constants(list, &values, bound_index);
                     list.IASetVertexBuffers(
                         0,
                         Some(&[D3D12_VERTEX_BUFFER_VIEW {
@@ -653,12 +714,9 @@ impl SceneRenderer {
                 (PassKind::Shadows { .. }, Upload::Shadows { offset, count }) => unsafe {
                     list.SetPipelineState(&self.pipelines.get(Kind::Shadow, write_bound.format)?);
                     let values = constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent);
-                    list.SetGraphicsRoot32BitConstants(
-                        0,
-                        CONSTANT_DWORDS,
-                        values.as_ptr() as *const _,
-                        0,
-                    );
+                    self.active
+                        .binding
+                        .set_constants(list, &values, bound_index);
                     list.IASetVertexBuffers(
                         0,
                         Some(&[D3D12_VERTEX_BUFFER_VIEW {
@@ -679,12 +737,9 @@ impl SceneRenderer {
                 ) => unsafe {
                     list.SetPipelineState(&self.pipelines.get(Kind::Layer, write_bound.format)?);
                     let values = constants(extent, *opacity, [0.0; 4], [0.0; 4], source_extent);
-                    list.SetGraphicsRoot32BitConstants(
-                        0,
-                        CONSTANT_DWORDS,
-                        values.as_ptr() as *const _,
-                        0,
-                    );
+                    self.active
+                        .binding
+                        .set_constants(list, &values, bound_index);
                     list.DrawInstanced(4, 1, 0, 0);
                     stats.draws += 1;
                 },
@@ -703,43 +758,41 @@ impl SceneRenderer {
                             params.region.h,
                         ];
                         let values = constants(extent, 1.0, region, params.values, source_extent);
-                        list.SetGraphicsRoot32BitConstants(
-                            0,
-                            CONSTANT_DWORDS,
-                            values.as_ptr() as *const _,
-                            0,
-                        );
+                        self.active
+                            .binding
+                            .set_constants(list, &values, bound_index);
                         list.DrawInstanced(4, 1, 0, 0);
                     }
                     stats.draws += 1;
                 }
                 (PassKind::Glyphs { .. }, Upload::Sprites { offset, count }) => unsafe {
                     list.SetPipelineState(&self.pipelines.get(Kind::Glyph, write_bound.format)?);
-                    let values = constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent);
-                    list.SetGraphicsRoot32BitConstants(
-                        0,
-                        CONSTANT_DWORDS,
-                        values.as_ptr() as *const _,
-                        0,
+                    let tone = ToneCurve::native();
+                    let values = constants(
+                        extent,
+                        1.0,
+                        tone.ratios(),
+                        [tone.contrast(), 0.0, 0.0, 0.0],
+                        source_extent,
                     );
+                    self.active
+                        .binding
+                        .set_constants(list, &values, bound_index);
                     sprites::draw(list, upload_address + offset, 0..count);
                     stats.draws += 1;
                 },
                 (PassKind::Images { instances }, Upload::Sprites { offset, .. }) => unsafe {
                     list.SetPipelineState(&self.pipelines.get(Kind::Image, write_bound.format)?);
                     let values = constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent);
-                    list.SetGraphicsRoot32BitConstants(
-                        0,
-                        CONSTANT_DWORDS,
-                        values.as_ptr() as *const _,
-                        0,
-                    );
+                    self.active
+                        .binding
+                        .set_constants(list, &values, bound_index);
                     for (source, range) in sprites::image_runs(instances) {
                         let position = pass.reads.iter().position(|read| *read == source);
-                        list.SetGraphicsRootDescriptorTable(
-                            1,
-                            table(first_descriptor + position.unwrap_or(0) as u32),
-                        );
+                        let descriptor = first_descriptor + position.unwrap_or(0) as u32;
+                        self.active
+                            .binding
+                            .select(list, table(descriptor), descriptor);
                         sprites::draw(list, upload_address + offset, range);
                         stats.draws += 1;
                     }
@@ -754,7 +807,7 @@ impl SceneRenderer {
                 _ => return Err(Error::Unsupported("pass kind")),
             }
         }
-        let mut closing: Vec<D3D12_RESOURCE_BARRIER> = Vec::new();
+        let mut closing = emitter.batch();
         for barrier in &plan.final_barriers {
             if let Barrier::Transition { resource, to, .. } = barrier {
                 if let Some(after) = state(*to) {
@@ -764,7 +817,12 @@ impl SceneRenderer {
                         .copied()
                         .unwrap_or(D3D12_RESOURCE_STATE_COMMON);
                     if before != after {
-                        closing.push(transition(&bound.resource, before, after));
+                        match resource {
+                            TextureRef::Persistent(_) => {
+                                closing.transition_legacy(&bound.resource, before, after)
+                            }
+                            _ => closing.transition(&bound.resource, before, after),
+                        }
                         tracked.insert(*resource, after);
                     }
                 }
@@ -775,19 +833,19 @@ impl SceneRenderer {
             .copied()
             .unwrap_or(target.rest_state);
         if surface_now != target.rest_state {
-            closing.push(transition(target.resource, surface_now, target.rest_state));
+            closing.transition(target.resource, surface_now, target.rest_state);
             tracked.insert(TextureRef::Surface, target.rest_state);
         }
-        if !closing.is_empty() {
-            stats.barriers += closing.len() as u32;
-            unsafe { list.ResourceBarrier(&closing) };
-        }
+        stats.barriers += emitter.submit(list, closing);
         for (reference, final_state) in &tracked {
             if let TextureRef::Transient(id) = reference {
                 if let Some(index) = self.transients.position(*id) {
                     self.transients.entries_mut()[index].state = *final_state;
                 }
             }
+        }
+        if let Some(timestamps) = &mut self.timestamps {
+            timestamps.end(list, slot, frame_fence);
         }
         Ok(stats)
     }

@@ -5,6 +5,7 @@ pub mod conformance;
 pub mod erf;
 pub mod filter;
 pub mod frame;
+pub mod kernels;
 pub mod raster;
 pub mod sample;
 pub mod shadow;

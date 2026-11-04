@@ -1,17 +1,17 @@
 use std::time::{Duration, Instant};
 
+use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
-use windows::core::Interface;
 
-use super::adapter::{DeviceInfo, create_factory, enable_debug_layer, select};
-use super::budget::{Pressure, Trim, Visibility, pressure, trim_for};
+use super::adapter::{create_factory, enable_debug_layer, select, DeviceInfo};
+use super::budget::{pressure, trim_for, Pressure, Trim, Visibility};
 use super::descriptors::{CpuHeap, DynamicRange, ShaderVisibleHeap};
 use super::error::Error;
 use super::frames::{CoreFrame, FrameRing, UploadAlloc};
 use super::monitor::{BudgetMonitor, MemorySnapshot};
-use super::recovery::{LossCause, LossHistory, RecoveryStep, classify};
-use super::selection::{Adapter, AdapterPreference, parse_preference};
+use super::recovery::{classify, LossCause, LossHistory, RecoveryStep};
+use super::selection::{parse_preference, Adapter, AdapterPreference};
 use super::swapchain::Swapchain;
 use super::tier::{Tier, Tiers};
 use super::timeline::Timeline;

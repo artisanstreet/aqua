@@ -100,9 +100,16 @@ fn footprints(plan: &FramePlan) -> Vec<Footprint> {
                 .collect(),
             PassKind::Images { instances } => instances
                 .iter()
-                .map(|i| Footprint {
-                    soft: matches!(i.source, TextureRef::Transient(_)).then_some(i.bounds),
-                    ..hard(i.bounds, i.radius, 0.0, i.clip)
+                .flat_map(|i| {
+                    let image = Footprint {
+                        soft: matches!(i.source, TextureRef::Transient(_)).then_some(i.bounds),
+                        ..hard(i.bounds, i.radius, 0.0, i.clip)
+                    };
+                    let rounded_clip = i
+                        .clip
+                        .filter(|_| i.clip_radius > 0.0)
+                        .map(|clip| hard(clip, i.clip_radius, 0.0, None));
+                    std::iter::once(image).chain(rounded_clip)
                 })
                 .collect(),
             PassKind::Fullscreen { .. }

@@ -1,13 +1,97 @@
-use aqua_platform::prefs::query_preferences;
+use aqua_protocol::prefs::{PrefState, PreferenceSource, SystemPrefs};
+use aqua_protocol::ColorScheme;
+use windows::core::{BOOL, PCWSTR};
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
+    RegGetValueW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
 };
-use windows::core::PCWSTR;
+use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
+use windows::Win32::UI::WindowsAndMessaging::{
+    SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, SPI_GETHIGHCONTRAST,
+    SYSTEM_PARAMETERS_INFO_ACTION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+};
 
-pub use aqua_platform::prefs::{OsPreferences, PrefState, should_reduce_motion};
+pub use aqua_protocol::prefs::{prefers_opaque_frame, should_reduce_motion};
 
-pub fn query() -> OsPreferences {
-    query_preferences()
+const PERSONALIZE: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
+
+fn system_parameter(
+    action: SYSTEM_PARAMETERS_INFO_ACTION,
+    param: u32,
+    data: *mut core::ffi::c_void,
+) -> bool {
+    unsafe {
+        SystemParametersInfoW(
+            action,
+            param,
+            Some(data),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .is_ok()
+}
+
+fn high_contrast() -> PrefState {
+    let mut info = HIGHCONTRASTW {
+        cbSize: std::mem::size_of::<HIGHCONTRASTW>() as u32,
+        ..Default::default()
+    };
+    let read = system_parameter(
+        SPI_GETHIGHCONTRAST,
+        info.cbSize,
+        (&mut info as *mut HIGHCONTRASTW).cast(),
+    );
+    match (read, info.dwFlags.contains(HCF_HIGHCONTRASTON)) {
+        (false, _) => PrefState::Unknown,
+        (true, true) => PrefState::On,
+        (true, false) => PrefState::Off,
+    }
+}
+
+fn reduce_motion() -> PrefState {
+    let mut animated = BOOL::from(false);
+    let read = system_parameter(
+        SPI_GETCLIENTAREAANIMATION,
+        0,
+        (&mut animated as *mut BOOL).cast(),
+    );
+    match (read, animated.as_bool()) {
+        (false, _) => PrefState::Unknown,
+        (true, true) => PrefState::Off,
+        (true, false) => PrefState::On,
+    }
+}
+
+fn reduce_transparency() -> PrefState {
+    match dword(HKEY_CURRENT_USER, PERSONALIZE, "EnableTransparency") {
+        None => PrefState::Unknown,
+        Some(0) => PrefState::On,
+        Some(_) => PrefState::Off,
+    }
+}
+
+fn scheme() -> ColorScheme {
+    match apps_use_dark_theme() {
+        Some(true) => ColorScheme::Dark,
+        Some(false) => ColorScheme::Light,
+        None => ColorScheme::Unknown,
+    }
+}
+
+pub fn query() -> SystemPrefs {
+    let overridden = SystemPrefs::fallback().with_overrides(|name| std::env::var(name).ok());
+    match overridden.source {
+        PreferenceSource::EnvOverride => SystemPrefs {
+            theme: scheme(),
+            ..overridden
+        },
+        _ => SystemPrefs {
+            reduce_motion: reduce_motion(),
+            reduce_transparency: reduce_transparency(),
+            high_contrast: high_contrast(),
+            theme: scheme(),
+            source: PreferenceSource::WindowsSystem,
+        },
+    }
 }
 
 fn wide(text: &str) -> Vec<u16> {
@@ -34,12 +118,7 @@ fn dword(root: HKEY, subkey: &str, value: &str) -> Option<u32> {
 }
 
 pub fn apps_use_dark_theme() -> Option<bool> {
-    dword(
-        HKEY_CURRENT_USER,
-        "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-        "AppsUseLightTheme",
-    )
-    .map(|light| light == 0)
+    dword(HKEY_CURRENT_USER, PERSONALIZE, "AppsUseLightTheme").map(|light| light == 0)
 }
 
 pub fn build_number() -> Option<u32> {

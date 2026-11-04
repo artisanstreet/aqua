@@ -1,12 +1,12 @@
 use crate::event::{Handler, ShellError, ShellEvent};
-use crate::state::{self, HANDLER, IN_HANDLER, ORIGIN, Queued};
+use crate::state::{self, Queued, HANDLER, IN_HANDLER, ORIGIN};
 use crate::timing;
-use crate::wndproc::{WM_WAKE, hwnd_from};
+use crate::wndproc::{hwnd_from, WM_WAKE};
 use aqua_protocol::Instant;
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{
-    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CancelWaitableTimer, CreateWaitableTimerExW,
-    SetWaitableTimer,
+    CancelWaitableTimer, CreateWaitableTimerExW, SetWaitableTimer,
+    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -118,9 +118,17 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
                 quit = true;
                 break;
             }
-            unsafe {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+            let consumed = crate::hooks::pre_translate(&crate::hooks::RawMessage {
+                hwnd: msg.hwnd.0 as isize,
+                message: msg.message,
+                wparam: msg.wParam.0,
+                lparam: msg.lParam.0,
+            });
+            if !consumed {
+                unsafe {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
             }
         }
         if quit {

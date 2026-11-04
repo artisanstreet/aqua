@@ -1,119 +1,27 @@
-//! OS accessibility/display preferences: reduced motion, reduced
-//! transparency, high contrast.
-//!
-//! Sources, in priority order:
-//! 1. `AQUA_PREF_*` env overrides (`1`/`true` = on, `0`/`false` = off) —
-//!    deterministic headless tests and CI.
-//! 2. Windows system state via documented `SystemParametersInfoW` /
-//!    Personalize registry reads (`cfg(windows)` only).
-//! 3. Explicit `Unknown` fallback elsewhere — never guessed.
-//!
-//! These directly drive honest behavior: reduced motion pauses non-essential
-//! animation, high contrast / transparency-off switch native materials to
-//! solid fallbacks (per Mica guidance), and the animation scheduler skips
-//! purely decorative deadlines when motion is reduced.
+pub use aqua_protocol::prefs::{
+    prefers_opaque_frame, should_reduce_motion, PrefState, PreferenceSource,
+};
 
-use crate::window::ThemePreference;
+pub type OsPreferences = aqua_protocol::prefs::SystemPrefs;
 
-/// One preference reading. `Unknown` means "not observable here" and must
-/// be treated as off by behavior code, but REPORTED as unknown.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PrefState {
-    On,
-    Off,
-    #[default]
-    Unknown,
-}
-
-impl PrefState {
-    pub fn is_on(self) -> bool {
-        matches!(self, PrefState::On)
-    }
-}
-
-/// Where the readings came from (diagnostics, not behavior).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PreferenceSource {
-    EnvOverride,
-    WindowsSystem,
-    Fallback,
-}
-
-/// Snapshot of OS preferences + last known OS theme hint.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OsPreferences {
-    pub reduce_motion: PrefState,
-    pub reduce_transparency: PrefState,
-    pub high_contrast: PrefState,
-    /// Last `ThemeChanged` value forwarded by the facade; `Unknown` until
-    /// the OS reports one (winit: Windows/macOS only).
-    pub theme: ThemePreference,
-    pub source: PreferenceSource,
-}
-
-impl OsPreferences {
-    pub fn fallback() -> Self {
-        Self {
-            reduce_motion: PrefState::Unknown,
-            reduce_transparency: PrefState::Unknown,
-            high_contrast: PrefState::Unknown,
-            theme: ThemePreference::Unknown,
-            source: PreferenceSource::Fallback,
-        }
-    }
-}
-
-/// Query the OS now. Pure except for the system calls it documents.
 pub fn query_preferences() -> OsPreferences {
-    let mut prefs = OsPreferences::fallback();
-    let mut overridden = false;
-    for (slot, var) in [
-        (&mut prefs.reduce_motion, "AQUA_PREF_REDUCED_MOTION"),
-        (
-            &mut prefs.reduce_transparency,
-            "AQUA_PREF_REDUCED_TRANSPARENCY",
-        ),
-        (&mut prefs.high_contrast, "AQUA_PREF_HIGH_CONTRAST"),
-    ] {
-        if let Some(v) = read_env_pref(var) {
-            *slot = v;
-            overridden = true;
+    let overridden = OsPreferences::fallback().with_overrides(|name| std::env::var(name).ok());
+    match (overridden.source, cfg!(windows)) {
+        (PreferenceSource::EnvOverride, _) | (_, false) => overridden,
+        #[cfg(windows)]
+        (_, true) => {
+            let (reduce_motion, reduce_transparency, high_contrast) = query_windows();
+            OsPreferences {
+                reduce_motion,
+                reduce_transparency,
+                high_contrast,
+                source: PreferenceSource::WindowsSystem,
+                ..overridden
+            }
         }
+        #[cfg(not(windows))]
+        (_, true) => overridden,
     }
-    if overridden {
-        prefs.source = PreferenceSource::EnvOverride;
-        return prefs;
-    }
-    #[cfg(windows)]
-    {
-        let sys = query_windows();
-        prefs.reduce_motion = sys.0;
-        prefs.reduce_transparency = sys.1;
-        prefs.high_contrast = sys.2;
-        prefs.source = PreferenceSource::WindowsSystem;
-    }
-    prefs
-}
-
-fn read_env_pref(var: &str) -> Option<PrefState> {
-    match std::env::var(var).ok()?.to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" => Some(PrefState::On),
-        "0" | "false" | "no" => Some(PrefState::Off),
-        _ => None,
-    }
-}
-
-/// Whether decorative motion should be suppressed. `Unknown` counts as off
-/// (apps must not freeze repayable motion on a guess).
-pub fn should_reduce_motion(p: &OsPreferences) -> bool {
-    p.reduce_motion.is_on()
-}
-
-/// Whether native materials must use their solid fallback: high contrast
-/// replaces Mica with the user's solid color, and transparency-off does the
-/// same (Mica guidance). Unknown counts as composited.
-pub fn prefers_opaque_frame(p: &OsPreferences) -> bool {
-    p.high_contrast.is_on() || p.reduce_transparency.is_on()
 }
 
 /// Windows system query. Each probe fails independently to `Unknown` —

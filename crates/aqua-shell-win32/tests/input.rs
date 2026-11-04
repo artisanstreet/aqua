@@ -40,10 +40,7 @@ fn modifier_chords_classify_as_shortcuts_except_altgr() {
     assert!(!is_shortcut(modifiers(true, false, false, false)));
     assert!(!is_shortcut(modifiers(false, true, true, false)));
     assert!(is_shortcut(modifiers(false, false, false, true)));
-    assert_eq!(
-        modifiers(true, true, true, true).contains(Modifiers::LOGO),
-        true
-    );
+    assert!(modifiers(true, true, true, true).contains(Modifiers::LOGO));
     assert_eq!(modifiers(false, false, false, false), Modifiers::NONE);
 }
 

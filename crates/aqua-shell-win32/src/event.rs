@@ -1,6 +1,22 @@
-use aqua_core::InputEvent;
-use aqua_platform::material::WindowMaterial;
-use aqua_protocol::{CaptionControl, WindowId};
+use aqua_core::{InputEvent, Point};
+use aqua_protocol::{CaptionControl, WindowId, WindowMaterial};
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileDrag {
+    Enter {
+        paths: Vec<PathBuf>,
+        position: Point,
+    },
+    Over {
+        position: Point,
+    },
+    Leave,
+    Drop {
+        paths: Vec<PathBuf>,
+        position: Point,
+    },
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ShellEvent {
@@ -12,6 +28,7 @@ pub enum ShellEvent {
     Minimized(bool),
     Maximized(bool),
     Input(InputEvent),
+    FileDrag(FileDrag),
     PointerEntered,
     PointerLeft,
     CaptionHover(Option<CaptionControl>),
@@ -56,6 +73,7 @@ pub struct WindowOptions {
     pub minimizable: bool,
     pub maximizable: bool,
     pub visible: bool,
+    pub alpha_surface: bool,
 }
 
 impl Default for WindowOptions {
@@ -67,7 +85,7 @@ impl Default for WindowOptions {
             position: None,
             kind: WindowKind::Normal,
             chrome: Chrome::Native,
-            material: WindowMaterial::None,
+            material: WindowMaterial::Solid,
             dark: false,
             topmost: false,
             owner: None,
@@ -75,6 +93,7 @@ impl Default for WindowOptions {
             minimizable: true,
             maximizable: true,
             visible: true,
+            alpha_surface: false,
         }
     }
 }

@@ -1,28 +1,27 @@
-use crate::event::{Chrome, ShellError, ShellEvent, WindowKind, WindowOptions, win32};
+use crate::event::{win32, Chrome, ShellError, ShellEvent, WindowKind, WindowOptions};
 use crate::handle::NativeHandle;
 use crate::looping::Waker;
 use crate::material::{self, MaterialOutcome};
 use crate::state::{self, WindowState};
-use crate::wndproc::{self, CLASS_NAME, hwnd_from};
+use crate::wndproc::{self, hwnd_from, CLASS_NAME};
 use aqua_core::{CursorIcon, Modifiers};
-use aqua_platform::chrome::DragRects;
-use aqua_platform::material::WindowMaterial;
-use aqua_protocol::{DragRegions, WindowId};
+use aqua_protocol::chrome::DragRects;
+use aqua_protocol::{DragRegions, WindowId, WindowMaterial};
 use std::sync::Once;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HINSTANCE, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, GetDC, GetMonitorInfoW,
-    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, ReleaseDC, SetDIBitsToDevice,
+    GetDC, GetMonitorInfoW, MonitorFromWindow, ReleaseDC, SetDIBitsToDevice, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{
-    AdjustWindowRectExForDpi, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForSystem,
-    GetDpiForWindow, GetSystemMetricsForDpi, SetProcessDpiAwarenessContext,
+    AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi,
+    SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-use windows::Win32::UI::Input::{RAWINPUTDEVICE, RIDEV_REMOVE, RegisterRawInputDevices};
+use windows::Win32::UI::Input::{RegisterRawInputDevices, RAWINPUTDEVICE, RIDEV_REMOVE};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::PCWSTR;
 
 static INIT: Once = Once::new();
 
@@ -88,7 +87,12 @@ fn ex_style_for(options: &WindowOptions) -> WINDOW_EX_STYLE {
     } else {
         WINDOW_EX_STYLE(0)
     };
-    panel | topmost
+    let alpha = if options.alpha_surface {
+        WS_EX_NOREDIRECTIONBITMAP
+    } else {
+        WINDOW_EX_STYLE(0)
+    };
+    panel | topmost | alpha
 }
 
 fn outer_size(
@@ -164,10 +168,13 @@ impl Window {
                         raw_mouse: false,
                         minimized: false,
                         text: Default::default(),
+                        touch_buttons: Default::default(),
+                        composition: None,
                     },
                 )
             });
             let window = Window { hwnd: raw };
+            let _ = crate::drop_target::register(hwnd);
             if dpi != system_dpi {
                 let (width, height) = outer_size(options, style, ex, dpi)?;
                 let _ = SetWindowPos(
@@ -197,7 +204,7 @@ impl Window {
             if options.kind == WindowKind::Panel {
                 material::round_corners(hwnd);
             }
-            if options.material != WindowMaterial::None {
+            if options.material != WindowMaterial::Solid {
                 material::apply(hwnd, options.material, custom);
             }
             let (width, height) = window.inner_size();
@@ -223,6 +230,10 @@ impl Window {
             hwnd: self.hwnd,
             hinstance: module.0 as isize,
         }
+    }
+
+    pub fn raw_hwnd(self) -> isize {
+        self.hwnd
     }
 
     pub fn waker(self) -> Waker {
@@ -309,6 +320,29 @@ impl Window {
         })
         .unwrap_or(false);
         material::apply(self.hwnd(), material, custom)
+    }
+
+    pub fn attach_composition_surface(
+        self,
+        surface: &windows::core::IUnknown,
+    ) -> Result<(), ShellError> {
+        let existing = state::window(self.hwnd, |w| w.composition.is_some()).unwrap_or(false);
+        if !existing {
+            let composition = crate::composition::Composition::create(self.hwnd())?;
+            state::window(self.hwnd, |w| w.composition = Some(composition));
+        }
+        state::window(self.hwnd, |w| {
+            w.composition
+                .as_ref()
+                .map(|composition| composition.set_content(surface))
+        })
+        .flatten()
+        .unwrap_or(Err(ShellError::Win32("attach_composition_surface", 0)))
+    }
+
+    pub fn has_alpha_surface(self) -> bool {
+        let ex = unsafe { GetWindowLongW(self.hwnd(), GWL_EXSTYLE) } as u32;
+        ex & WS_EX_NOREDIRECTIONBITMAP.0 != 0
     }
 
     pub fn backdrop_attribute(self) -> Option<i32> {

@@ -1,13 +1,21 @@
-use aqua_platform::dialogs::{DialogKind, DialogRequest, FileFilter};
+use aqua_protocol::{DialogFilter, DialogKind, DialogSpec};
 use std::path::PathBuf;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelperKind {
+    OpenFile,
+    OpenFiles,
+    SaveFile,
+    PickFolder,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HelperRequest {
-    pub kind: DialogKind,
+    pub kind: HelperKind,
     pub title: Option<String>,
     pub start_dir: Option<PathBuf>,
     pub file_name: Option<String>,
-    pub filters: Vec<FileFilter>,
+    pub filters: Vec<DialogFilter>,
     pub owner: Option<isize>,
 }
 
@@ -27,24 +35,22 @@ pub enum DecodeError {
 }
 
 impl HelperRequest {
-    pub fn new(request: &DialogRequest, owner: Option<isize>) -> Option<Self> {
-        Some(Self {
-            kind: request.kind?,
-            title: request.title.clone(),
-            start_dir: request.start_dir.clone(),
-            file_name: request.file_name.clone(),
-            filters: request.filters.clone(),
+    pub fn from_spec(spec: &DialogSpec, owner: Option<isize>) -> Self {
+        let (kind, file_name) = match &spec.kind {
+            DialogKind::OpenFile { multiple: false } => (HelperKind::OpenFile, None),
+            DialogKind::OpenFile { multiple: true } => (HelperKind::OpenFiles, None),
+            DialogKind::SaveFile { suggested_name } => {
+                (HelperKind::SaveFile, Some(suggested_name.clone()))
+            }
+            DialogKind::PickFolder => (HelperKind::PickFolder, None),
+        };
+        Self {
+            kind,
+            title: Some(spec.title.clone()).filter(|t| !t.is_empty()),
+            start_dir: None,
+            file_name: file_name.filter(|n| !n.is_empty()),
+            filters: spec.filters.clone(),
             owner,
-        })
-    }
-
-    pub fn dialog(&self) -> DialogRequest {
-        DialogRequest {
-            kind: Some(self.kind),
-            title: self.title.clone(),
-            start_dir: self.start_dir.clone(),
-            file_name: self.file_name.clone(),
-            filters: self.filters.clone(),
         }
     }
 }
@@ -79,21 +85,21 @@ fn unescape(text: &str) -> String {
     out
 }
 
-fn kind_name(kind: DialogKind) -> &'static str {
+fn kind_name(kind: HelperKind) -> &'static str {
     match kind {
-        DialogKind::OpenFile => "open-file",
-        DialogKind::OpenFiles => "open-files",
-        DialogKind::SaveFile => "save-file",
-        DialogKind::PickFolder => "pick-folder",
+        HelperKind::OpenFile => "open-file",
+        HelperKind::OpenFiles => "open-files",
+        HelperKind::SaveFile => "save-file",
+        HelperKind::PickFolder => "pick-folder",
     }
 }
 
-fn kind_from(name: &str) -> Result<DialogKind, DecodeError> {
+fn kind_from(name: &str) -> Result<HelperKind, DecodeError> {
     match name {
-        "open-file" => Ok(DialogKind::OpenFile),
-        "open-files" => Ok(DialogKind::OpenFiles),
-        "save-file" => Ok(DialogKind::SaveFile),
-        "pick-folder" => Ok(DialogKind::PickFolder),
+        "open-file" => Ok(HelperKind::OpenFile),
+        "open-files" => Ok(HelperKind::OpenFiles),
+        "save-file" => Ok(HelperKind::SaveFile),
+        "pick-folder" => Ok(HelperKind::PickFolder),
         other => Err(DecodeError::UnknownKind(other.to_owned())),
     }
 }
@@ -120,7 +126,7 @@ pub fn encode_request(request: &HelperRequest) -> String {
     lines.extend(request.filters.iter().map(|filter| {
         format!(
             "filter\t{}\t{}",
-            escape(&filter.name),
+            escape(&filter.label),
             escape(&filter.extensions.join(","))
         )
     }));
@@ -130,7 +136,7 @@ pub fn encode_request(request: &HelperRequest) -> String {
 pub fn decode_request(text: &str) -> Result<HelperRequest, DecodeError> {
     let mut kind = None;
     let mut request = HelperRequest {
-        kind: DialogKind::OpenFile,
+        kind: HelperKind::OpenFile,
         title: None,
         start_dir: None,
         file_name: None,
@@ -155,8 +161,8 @@ pub fn decode_request(text: &str) -> Result<HelperRequest, DecodeError> {
             }
             "filter" => {
                 let extensions = parts.next().map(unescape).unwrap_or_default();
-                request.filters.push(FileFilter {
-                    name: first,
+                request.filters.push(DialogFilter {
+                    label: first,
                     extensions: extensions
                         .split(',')
                         .filter(|e| !e.is_empty())

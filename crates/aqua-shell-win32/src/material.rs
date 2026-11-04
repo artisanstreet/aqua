@@ -1,10 +1,10 @@
-use crate::backdrop::{Decision, decide};
 use crate::prefs;
-use aqua_platform::material::{DwmSystemBackdrop, WindowMaterial};
+use aqua_protocol::material::{decide, DwmSystemBackdrop, MaterialDecision};
+use aqua_protocol::WindowMaterial;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{
-    DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
-    DWMWCP_ROUND, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute,
+    DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE,
+    DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
 };
 use windows::Win32::UI::Controls::MARGINS;
 
@@ -52,9 +52,8 @@ pub(crate) fn extend_frame(hwnd: HWND, full: bool, custom_chrome: bool) {
 
 pub(crate) fn apply(hwnd: HWND, requested: WindowMaterial, custom_chrome: bool) -> MaterialOutcome {
     let prefs = prefs::query();
-    let opaque = aqua_platform::prefs::prefers_opaque_frame(&prefs);
-    match decide(requested, prefs::build_number(), opaque) {
-        Decision::Fallback(reason) => {
+    match decide(requested, prefs::build_number(), &prefs) {
+        MaterialDecision::Fallback(reason) => {
             set_attribute(
                 hwnd,
                 DWMWA_SYSTEMBACKDROP_TYPE,
@@ -63,17 +62,17 @@ pub(crate) fn apply(hwnd: HWND, requested: WindowMaterial, custom_chrome: bool) 
             extend_frame(hwnd, false, custom_chrome);
             MaterialOutcome {
                 requested,
-                active: WindowMaterial::None,
+                active: WindowMaterial::Solid,
                 reason,
             }
         }
-        Decision::Apply(material) => {
+        MaterialDecision::Apply(material) => {
             let ok = set_attribute(
                 hwnd,
                 DWMWA_SYSTEMBACKDROP_TYPE,
                 DwmSystemBackdrop::of(material) as i32,
             );
-            extend_frame(hwnd, material != WindowMaterial::None, custom_chrome);
+            extend_frame(hwnd, material != WindowMaterial::Solid, custom_chrome);
             match ok {
                 true => MaterialOutcome {
                     requested,
@@ -82,7 +81,7 @@ pub(crate) fn apply(hwnd: HWND, requested: WindowMaterial, custom_chrome: bool) 
                 },
                 false => MaterialOutcome {
                     requested,
-                    active: WindowMaterial::None,
+                    active: WindowMaterial::Solid,
                     reason: "DwmSetWindowAttribute failed",
                 },
             }

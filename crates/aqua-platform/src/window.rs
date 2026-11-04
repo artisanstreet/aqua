@@ -162,15 +162,7 @@ impl ObservedWindowState {
     }
 }
 
-/// Portable OS light/dark preference. `Unknown` means "not reported on this
-/// platform yet" — never guessed from the app theme.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ThemePreference {
-    Light,
-    Dark,
-    #[default]
-    Unknown,
-}
+pub type ThemePreference = aqua_protocol::ColorScheme;
 
 /// Window frame style. Consumed from [`WindowOptions`] by
 /// `host::window_attributes` and [`crate::chrome::WindowsChrome`].

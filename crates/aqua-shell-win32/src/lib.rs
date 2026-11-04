@@ -1,17 +1,23 @@
-pub mod backdrop;
 pub mod dialog_protocol;
+pub mod hooks;
 pub mod input;
+pub mod pointer;
 pub mod regions;
 pub mod timing;
 
 mod event;
 
-pub use event::{Chrome, Handler, ShellError, ShellEvent, WindowKind, WindowOptions};
+pub use event::{Chrome, FileDrag, Handler, ShellError, ShellEvent, WindowKind, WindowOptions};
+pub use hooks::{set_message_hook, MessageHook, RawMessage};
 
 #[cfg(windows)]
 pub mod clipboard;
 #[cfg(windows)]
+mod composition;
+#[cfg(windows)]
 pub mod dialogs;
+#[cfg(windows)]
+mod drop_target;
 #[cfg(windows)]
 mod handle;
 #[cfg(windows)]
@@ -30,7 +36,7 @@ mod wndproc;
 #[cfg(windows)]
 pub use handle::NativeHandle;
 #[cfg(windows)]
-pub use looping::{Waker, now, quit, run, schedule, set_waitables};
+pub use looping::{now, quit, run, schedule, set_waitables, Waker};
 #[cfg(windows)]
 pub use material::MaterialOutcome;
 #[cfg(windows)]

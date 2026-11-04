@@ -1,11 +1,14 @@
 use crate::event::{Chrome, ShellEvent, WindowKind};
+use crate::hooks::{self, RawMessage};
 use crate::input::{self, PointerButtonSource};
 use crate::looping::turn;
-use crate::regions::{self, Geometry, ht};
+use crate::pointer::{self, Device};
+use crate::regions::{self, ht, Geometry};
 use crate::state::{self, Queued};
 use aqua_core::{CursorIcon, InputEvent, KeyEvent, Modifiers, Point, PointerEvent, PointerKind};
-use aqua_platform::chrome::RectI;
+use aqua_protocol::chrome::RectI;
 use aqua_protocol::CaptionControl;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{ClientToScreen, PtInRect, ScreenToClient, ValidateRect};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
@@ -13,12 +16,14 @@ use windows::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, GetDpiForWindow, GetSystemMetricsForDpi,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, GetKeyboardLayout, GetKeyboardState, ReleaseCapture, SetCapture, TME_LEAVE,
-    TME_NONCLIENT, TRACKMOUSEEVENT, ToUnicodeEx, TrackMouseEvent,
+    GetKeyState, GetKeyboardLayout, GetKeyboardState, ReleaseCapture, SetCapture, ToUnicodeEx,
+    TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+};
+use windows::Win32::UI::Input::Pointer::{
+    GetPointerInfo, GetPointerPenInfo, GetPointerType, POINTER_INFO, POINTER_PEN_INFO,
 };
 use windows::Win32::UI::Input::{GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTHEADER, RID_INPUT};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::PCWSTR;
 
 pub(crate) static CLASS_NAME: [u16; 12] = {
     let text = *b"AquaShell32";
@@ -204,6 +209,65 @@ fn key(raw: isize, wparam: WPARAM, lparam: LPARAM, pressed: bool) {
     );
 }
 
+fn touch_or_pen(pointer_id: u32) -> Option<Device> {
+    let mut kind = POINTER_INPUT_TYPE::default();
+    unsafe { GetPointerType(pointer_id, &mut kind) }.ok()?;
+    Device::from_pointer_type(kind.0)
+}
+
+fn pointer_contact(hwnd: HWND, raw: isize, wparam: WPARAM) -> Option<LRESULT> {
+    let id = (wparam.0 & 0xFFFF) as u32;
+    let device = touch_or_pen(id)?;
+    let mut info = POINTER_INFO::default();
+    unsafe { GetPointerInfo(id, &mut info) }.ok()?;
+    let pen_flags = match device {
+        Device::Pen => {
+            let mut pen = POINTER_PEN_INFO::default();
+            unsafe { GetPointerPenInfo(id, &mut pen) }
+                .map(|_| pen.penFlags)
+                .unwrap_or(0)
+        }
+        Device::Touch => 0,
+    };
+    let mut at = info.ptPixelLocation;
+    let _ = unsafe { ScreenToClient(hwnd, &mut at) };
+    sync_modifiers(raw);
+    let sample = pointer::Sample {
+        id,
+        device,
+        flags: info.pointerFlags.0,
+        pen_flags,
+        position: logical(raw, (at.x, at.y)),
+    };
+    let previous = state::window(raw, |w| w.touch_buttons.get(&id).copied().unwrap_or(0))?;
+    let (events, held) = pointer::translate(previous, &sample);
+    state::window(raw, |w| match held {
+        0 if sample.device == Device::Touch => {
+            w.touch_buttons.remove(&id);
+        }
+        held => {
+            w.touch_buttons.insert(id, held);
+        }
+    });
+    events.into_iter().for_each(|event| emit_input(raw, event));
+    Some(LRESULT(0))
+}
+
+fn pointer_gone(raw: isize, wparam: WPARAM, cancel: bool) -> Option<LRESULT> {
+    let id = (wparam.0 & 0xFFFF) as u32;
+    let held = state::window(raw, |w| w.touch_buttons.remove(&id))??;
+    match (cancel, held) {
+        (true, held) if held != 0 => emit_input(
+            raw,
+            InputEvent::PointerCancel {
+                contact: pointer::contact_id(id),
+            },
+        ),
+        _ => state::emit(raw, ShellEvent::PointerLeft),
+    }
+    Some(LRESULT(0))
+}
+
 fn frame_border(hwnd: HWND) -> i32 {
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     unsafe {
@@ -367,7 +431,19 @@ pub(crate) unsafe extern "system" fn wndproc(
     if !state::with(|s| s.windows.contains_key(&raw)) {
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     }
+    let hooked = hooks::window_message(&RawMessage {
+        hwnd: raw,
+        message: msg,
+        wparam: wparam.0,
+        lparam: lparam.0,
+    });
+    if let Some(result) = hooked {
+        return LRESULT(result);
+    }
     let handled = match msg {
+        WM_POINTERDOWN | WM_POINTERUPDATE | WM_POINTERUP => pointer_contact(hwnd, raw, wparam),
+        WM_POINTERCAPTURECHANGED => pointer_gone(raw, wparam, true),
+        WM_POINTERLEAVE => pointer_gone(raw, wparam, false),
         WM_ERASEBKGND => Some(LRESULT(1)),
         WM_PAINT => {
             unsafe {
@@ -487,6 +563,7 @@ pub(crate) unsafe extern "system" fn wndproc(
                 w.scale = scale;
                 w.rects = regions::drag_rects(&w.regions, scale);
             });
+            state::emit(raw, ShellEvent::ScaleChanged { scale });
             let suggested = unsafe { &*(lparam.0 as *const RECT) };
             unsafe {
                 let _ = SetWindowPos(
@@ -499,7 +576,6 @@ pub(crate) unsafe extern "system" fn wndproc(
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
             }
-            state::emit(raw, ShellEvent::ScaleChanged { scale });
             Some(LRESULT(0))
         }
         WM_SETTINGCHANGE | WM_THEMECHANGED | WM_DWMCOMPOSITIONCHANGED | WM_SYSCOLORCHANGE => {
@@ -550,6 +626,7 @@ pub(crate) unsafe extern "system" fn wndproc(
             Some(LRESULT(0))
         }
         WM_DESTROY => {
+            crate::drop_target::revoke(hwnd);
             state::emit(raw, ShellEvent::Destroyed);
             let empty = state::with(|s| {
                 s.windows.remove(&raw);

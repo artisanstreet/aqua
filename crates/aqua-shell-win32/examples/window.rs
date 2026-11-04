@@ -14,21 +14,21 @@ fn main() {
 #[cfg(windows)]
 mod demo {
     use aqua_core::{CursorIcon, InputEvent, Key, PointerButton};
-    use aqua_platform::material::WindowMaterial;
+    use aqua_protocol::WindowMaterial;
     use aqua_protocol::{CaptionControl, CaptionRegion, DragRegions, Instant, WindowId};
     use aqua_shell_win32::{
-        Chrome, Handler, ShellEvent, Window, WindowKind, WindowOptions, clipboard, dialogs, now,
-        prefs, quit, run,
+        clipboard, dialogs, now, prefs, quit, run, Chrome, Handler, ShellEvent, Window, WindowKind,
+        WindowOptions,
     };
     use std::fmt::Write as _;
     use std::path::PathBuf;
     use std::time::Duration;
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::Graphics::Gdi::{
-        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap, CreateCompatibleDC,
-        DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SelectObject,
+        CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
+        ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
     };
-    use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
+    use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
     use windows::Win32::UI::WindowsAndMessaging::*;
 
     const TITLE_HEIGHT: f64 = 40.0;
@@ -174,6 +174,10 @@ mod demo {
     fn capture(window: Window, path: &PathBuf) -> bool {
         let hwnd = HWND(window.native_handle_hwnd() as *mut _);
         let (width, height) = window.inner_size();
+        capture_hwnd(hwnd, width, height, path)
+    }
+
+    fn capture_hwnd(hwnd: HWND, width: u32, height: u32, path: &PathBuf) -> bool {
         if width == 0 || height == 0 {
             return false;
         }
@@ -300,6 +304,31 @@ mod demo {
         next: Instant,
         foreground_at_start: isize,
         dialog: Option<dialogs::DialogJob>,
+        tries: u32,
+    }
+
+    fn owned_dialog(owner: isize) -> Option<HWND> {
+        struct Search {
+            owner: isize,
+            found: Option<HWND>,
+        }
+        unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> windows::core::BOOL {
+            let search = unsafe { &mut *(lparam.0 as *mut Search) };
+            let mut class = [0u16; 16];
+            let length = unsafe { GetClassNameW(hwnd, &mut class) } as usize;
+            let is_dialog = String::from_utf16_lossy(&class[..length]) == "#32770";
+            let owned = unsafe { GetWindow(hwnd, GW_OWNER) }
+                .map(|o| o.0 as isize == search.owner)
+                .unwrap_or(false);
+            if is_dialog && owned && unsafe { IsWindowVisible(hwnd) }.as_bool() {
+                search.found = Some(hwnd);
+                return false.into();
+            }
+            true.into()
+        }
+        let mut search = Search { owner, found: None };
+        let _ = unsafe { EnumWindows(Some(visit), LPARAM(&mut search as *mut Search as isize)) };
+        search.found
     }
 
     fn foreground() -> isize {
@@ -623,7 +652,7 @@ mod demo {
                             "material {outcome:?} attribute={:?}",
                             w.backdrop_attribute()
                         ));
-                        let outcome = w.set_material(WindowMaterial::None);
+                        let outcome = w.set_material(WindowMaterial::Solid);
                         self.main.line(format!(
                             "material {outcome:?} attribute={:?}",
                             w.backdrop_attribute()
@@ -653,6 +682,59 @@ mod demo {
                     100
                 }
                 7 => {
+                    let spec = aqua_protocol::DialogSpec {
+                        kind: aqua_protocol::DialogKind::OpenFile { multiple: false },
+                        title: "aqua-shell dialog probe".into(),
+                        filters: vec![aqua_protocol::DialogFilter {
+                            label: "Text".into(),
+                            extensions: vec!["txt".into()],
+                        }],
+                    };
+                    match dialogs::open(&spec, Some(window), window.waker()) {
+                        Ok(job) => {
+                            test.dialog = Some(job);
+                            self.main.line("dialog opened");
+                        }
+                        Err(error) => self.main.line(format!("dialog open failed {error}")),
+                    }
+                    300
+                }
+                8 => {
+                    let owner = window.native_handle_hwnd();
+                    match owned_dialog(owner) {
+                        Some(dialog) if test.dialog.is_some() => {
+                            let mut rect = windows::Win32::Foundation::RECT::default();
+                            let _ = unsafe { GetWindowRect(dialog, &mut rect) };
+                            let (w, h) = (
+                                (rect.right - rect.left).max(0) as u32,
+                                (rect.bottom - rect.top).max(0) as u32,
+                            );
+                            let ok = capture_hwnd(dialog, w, h, &test.out.join("shell-dialog.bmp"));
+                            self.main.line(format!(
+                                "dialog window found size={w}x{h} capture={ok} dialog_foreground={} main_foreground={} foreground_unchanged={}",
+                                unsafe { GetForegroundWindow() } == dialog,
+                                window.is_foreground(),
+                                foreground() == test.foreground_at_start
+                            ));
+                            let _ = unsafe {
+                                PostMessageW(Some(dialog), WM_CLOSE, WPARAM(0), LPARAM(0))
+                            };
+                            300
+                        }
+                        _ if test.tries < 60 && test.dialog.is_some() => {
+                            test.tries += 1;
+                            test.next = at + Duration::from_millis(100);
+                            let next = test.next;
+                            self.selftest = Some(test);
+                            return Some(next);
+                        }
+                        _ => {
+                            self.main.line("dialog window never appeared");
+                            100
+                        }
+                    }
+                }
+                9 => {
                     window.set_logical_size(100.0, 100.0);
                     self.main.line(format!(
                         "min-size client={:?} logical_min=(480,320) scaled={:?}",
@@ -671,7 +753,7 @@ mod demo {
                     self.main.redraws = 0;
                     1100
                 }
-                8 => {
+                10 => {
                     self.main.draw_enabled = true;
                     let gaps: Vec<f64> = self
                         .main
@@ -697,7 +779,7 @@ mod demo {
                     self.main.wakes = 0;
                     3000
                 }
-                9 => {
+                11 => {
                     self.main.line(format!(
                         "idle-3s ticks={} redraws={} wakes={} events_total={} mouse={:?}",
                         self.main.ticks,
@@ -783,6 +865,7 @@ mod demo {
                 next: start + Duration::from_millis(500),
                 foreground_at_start,
                 dialog: None,
+                tries: 0,
             }),
             last_report: start,
         };

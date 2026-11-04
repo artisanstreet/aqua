@@ -1,6 +1,6 @@
 use crate::event::{Chrome, Handler, ShellEvent, WindowKind};
 use aqua_core::{CursorIcon, Modifiers};
-use aqua_platform::chrome::DragRects;
+use aqua_protocol::chrome::DragRects;
 use aqua_protocol::{CaptionControl, DragRegions, Instant, WindowId};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
@@ -31,6 +31,8 @@ pub(crate) struct WindowState {
     pub raw_mouse: bool,
     pub minimized: bool,
     pub text: crate::input::Utf16Assembler,
+    pub touch_buttons: HashMap<u32, u8>,
+    pub composition: Option<crate::composition::Composition>,
 }
 
 #[derive(Default)]

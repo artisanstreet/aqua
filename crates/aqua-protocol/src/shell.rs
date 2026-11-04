@@ -4,7 +4,7 @@ use crate::chrome::{CaptionControl, DragRegions};
 use crate::time::Instant;
 use crate::window::{FrameReason, WindowId};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RequestId(pub u64);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

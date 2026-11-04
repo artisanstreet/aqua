@@ -1,17 +1,21 @@
-use aqua_platform::dialogs::{DialogKind, FileFilter};
+use aqua_protocol::{DialogFilter, DialogKind, DialogSpec};
 use aqua_shell_win32::dialog_protocol::*;
 use std::path::PathBuf;
 
+fn filter(label: &str, extensions: &[&str]) -> DialogFilter {
+    DialogFilter {
+        label: label.into(),
+        extensions: extensions.iter().map(|e| e.to_string()).collect(),
+    }
+}
+
 fn sample() -> HelperRequest {
     HelperRequest {
-        kind: DialogKind::SaveFile,
+        kind: HelperKind::SaveFile,
         title: Some("Save\tas\nnow \\ done".into()),
         start_dir: Some(PathBuf::from("C:\\Users\\a b")),
         file_name: Some("untitled.txt".into()),
-        filters: vec![
-            FileFilter::new("Images", &["png", "jpg"]),
-            FileFilter::new("Any", &[]),
-        ],
+        filters: vec![filter("Images", &["png", "jpg"]), filter("Any", &[])],
         owner: Some(65934),
     }
 }
@@ -43,4 +47,38 @@ fn response_round_trips_paths_and_errors() {
     let failed = HelperResponse::Failed("no\nparent".into());
     assert_eq!(decode_response(&encode_response(&failed)), Ok(failed));
     assert_eq!(decode_response(""), Err(DecodeError::EmptyResponse));
+}
+
+#[test]
+fn spec_maps_to_helper_kinds_and_drops_empty_names() {
+    let spec = |kind| DialogSpec {
+        kind,
+        title: String::new(),
+        filters: vec![],
+    };
+    let open = HelperRequest::from_spec(&spec(DialogKind::OpenFile { multiple: false }), None);
+    assert_eq!((open.kind, open.title), (HelperKind::OpenFile, None));
+    let many = HelperRequest::from_spec(&spec(DialogKind::OpenFile { multiple: true }), Some(7));
+    assert_eq!((many.kind, many.owner), (HelperKind::OpenFiles, Some(7)));
+    let save = HelperRequest::from_spec(
+        &spec(DialogKind::SaveFile {
+            suggested_name: "a.txt".into(),
+        }),
+        None,
+    );
+    assert_eq!(
+        (save.kind, save.file_name.as_deref()),
+        (HelperKind::SaveFile, Some("a.txt"))
+    );
+    let blank = HelperRequest::from_spec(
+        &spec(DialogKind::SaveFile {
+            suggested_name: String::new(),
+        }),
+        None,
+    );
+    assert_eq!(blank.file_name, None);
+    assert_eq!(
+        HelperRequest::from_spec(&spec(DialogKind::PickFolder), None).kind,
+        HelperKind::PickFolder
+    );
 }

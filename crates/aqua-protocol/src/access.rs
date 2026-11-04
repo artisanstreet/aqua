@@ -1,6 +1,6 @@
 use aqua_core::{NodeId, Rect, SemanticNode};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct A11yNode {
     pub text: Option<A11yText>,
     pub semantic: SemanticNode,
@@ -56,14 +56,14 @@ pub enum A11yActionData {
     Custom(i32),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct A11yText {
     pub runs: Vec<A11yTextRun>,
     pub selection: Option<(usize, usize)>,
     pub selection_enabled: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct A11yTextRun {
     pub text: String,
     pub byte_start: usize,
@@ -75,7 +75,7 @@ pub struct A11yTextRun {
     pub rtl: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AccessTreeUpdate {
     pub root: NodeId,
     pub focus: NodeId,

@@ -1,7 +1,7 @@
-use aqua_platform::chrome::{DragRects, HitInput, RectI, hit_test_chrome};
+use aqua_protocol::chrome::{hit_test_chrome, DragRects, HitInput, RectI};
 use aqua_protocol::DragRegions;
 
-pub use aqua_platform::chrome::ht;
+pub use aqua_protocol::chrome::ht;
 
 fn to_rect(scale: f64, (left, top, width, height): (f64, f64, f64, f64)) -> RectI {
     RectI {

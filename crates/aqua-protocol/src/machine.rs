@@ -18,12 +18,13 @@ pub enum Input {
     Shell(ShellEvent),
     Ime(ImeEvent),
     Access(AccessAction),
+    AccessClient { connected: bool },
     Gpu(GpuEvent),
     Render(RenderEvent),
     Tick(Instant),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Output {
     pub shell: Vec<ShellCommand>,
     pub ime: Vec<ImeCommand>,

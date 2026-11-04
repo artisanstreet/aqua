@@ -83,7 +83,7 @@ pub unsafe fn apply_material_hwnd(
         }
         _ => {}
     }
-    set_backdrop(hwnd_raw, DwmSystemBackdrop::of(requested)).map(|_| MaterialCapability {
+    set_backdrop(hwnd_raw, DwmSystemBackdrop::of(requested.into())).map(|_| MaterialCapability {
         requested,
         supported: true,
         active: requested,

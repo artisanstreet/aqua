@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use accesskit_windows::{HWND, SubclassingAdapter};
+use accesskit_windows::{SubclassingAdapter, HWND};
 use aqua_protocol::{A11yActionRequest, AccessTreeUpdate};
 use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
 

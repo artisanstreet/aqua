@@ -1,26 +1,33 @@
 #![cfg(windows)]
 
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use aqua_a11y_uia::{Connection, UiaAdapter};
+use aqua_core::NumericRangeSemantics;
 use aqua_core::{NodeId, RawId, Rect, Role, SemanticNode};
-use aqua_protocol::{A11yAction, A11yActionRequest, A11yNode, AccessTreeUpdate};
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-};
-use windows::Win32::UI::Accessibility::{
-    CUIAutomation8, IUIAutomation, IUIAutomationInvokePattern, TreeScope_Descendants,
-    UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId, UIA_InvokePatternId, UIA_TextControlTypeId,
-};
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, MSG, PostMessageW, SW_SHOWNA,
-    ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WS_POPUP,
+use aqua_protocol::{
+    A11yAction, A11yActionData, A11yActionRequest, A11yNode, A11yText, A11yTextRun,
+    AccessTreeUpdate,
 };
 use windows::core::w;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+};
+use windows::Win32::UI::Accessibility::{
+    CUIAutomation8, IUIAutomation, IUIAutomationInvokePattern, IUIAutomationRangeValuePattern,
+    IUIAutomationTextPattern, IUIAutomationTogglePattern, IUIAutomationValuePattern,
+    ToggleState_Off, ToggleState_On, TreeScope_Descendants, UIA_ButtonControlTypeId,
+    UIA_CheckBoxControlTypeId, UIA_InvokePatternId, UIA_RangeValuePatternId, UIA_TextControlTypeId,
+    UIA_TextPatternId, UIA_TogglePatternId, UIA_ValuePatternId,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, PostMessageW, ShowWindow,
+    TranslateMessage, MSG, SW_SHOWNA, WINDOW_EX_STYLE, WM_APP, WS_POPUP,
+};
 
 const WM_SET_VERSION: u32 = WM_APP + 1;
 const WM_STOP: u32 = WM_APP + 2;
@@ -52,14 +59,49 @@ fn tree(version: usize) -> AccessTreeUpdate {
     let mut checkbox = item(3, Role::Checkbox, "Enable logging", vec![]);
     checkbox.semantic.checked = Some(version > 1);
     let run_label = if version > 1 { "Run again" } else { "Run" };
+    let mut field = item(4, Role::TextField, "Name", vec![]);
+    field.semantic.value_text = Some("héllo".into());
+    field.text = Some(A11yText {
+        selection_enabled: true,
+        selection: Some((0, 0)),
+        runs: vec![A11yTextRun {
+            text: "héllo".into(),
+            byte_start: 0,
+            bounds: Rect {
+                x: 10.0,
+                y: 130.0,
+                w: 100.0,
+                h: 24.0,
+            },
+            word_starts: vec![0],
+            character_lengths: vec![1, 2, 1, 1, 1],
+            character_positions: vec![0.0, 10.0, 20.0, 30.0, 40.0],
+            character_widths: vec![10.0; 5],
+            rtl: false,
+        }],
+    });
+    let mut slider = item(5, Role::Slider, "Volume", vec![]);
+    slider.semantic.numeric_range = Some(NumericRangeSemantics {
+        min: 0.0,
+        max: 10.0,
+        value: 4.0,
+        step: 1.0,
+    });
     AccessTreeUpdate {
         root: id(0),
         focus: id(1),
         nodes: vec![
-            item(0, Role::Group, "Aqua test", vec![id(1), id(2), id(3)]),
+            item(
+                0,
+                Role::Group,
+                "Aqua test",
+                vec![id(1), id(2), id(3), id(4), id(5)],
+            ),
             item(1, Role::Button, run_label, vec![]),
             item(2, Role::Text, "Status ready", vec![]),
             checkbox,
+            field,
+            slider,
         ],
     }
 }
@@ -262,6 +304,102 @@ fn uia_client_sees_the_tree_invokes_actions_and_observes_live_updates() {
         descendants(&client, host.hwnd)
             .iter()
             .any(|(seen, _)| seen.name == "Run again")
+            .then_some(())
+    });
+    stop(host);
+}
+
+fn element_named(
+    client: &IUIAutomation,
+    host: &Host,
+    name: &str,
+) -> windows::Win32::UI::Accessibility::IUIAutomationElement {
+    wait_for(|| {
+        descendants(client, host.hwnd)
+            .into_iter()
+            .find(|(seen, _)| seen.name == name)
+            .map(|(_, element)| element)
+    })
+}
+
+fn post_version(host: &Host, version: usize) {
+    unsafe {
+        PostMessageW(
+            Some(HWND(host.hwnd as *mut _)),
+            WM_SET_VERSION,
+            WPARAM(version),
+            LPARAM(0),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn uia_toggle_value_range_and_text_patterns_work() {
+    let host = spawn_host();
+    let client = automation();
+
+    let checkbox = element_named(&client, &host, "Enable logging");
+    let toggle: IUIAutomationTogglePattern =
+        unsafe { checkbox.GetCurrentPatternAs(UIA_TogglePatternId) }.unwrap();
+    assert_eq!(
+        unsafe { toggle.CurrentToggleState() }.unwrap(),
+        ToggleState_Off
+    );
+    post_version(&host, 2);
+    wait_for(|| {
+        (unsafe { toggle.CurrentToggleState() }.ok() == Some(ToggleState_On)).then_some(())
+    });
+    unsafe { toggle.Toggle() }.unwrap();
+    let mut received = Vec::new();
+    wait_for(|| {
+        received.extend(host.actions.try_iter());
+        received
+            .iter()
+            .any(|action| action.node == id(3) && action.action == A11yAction::Press)
+            .then_some(())
+    });
+
+    let field = element_named(&client, &host, "Name");
+    let value: IUIAutomationValuePattern =
+        unsafe { field.GetCurrentPatternAs(UIA_ValuePatternId) }.unwrap();
+    assert_eq!(
+        unsafe { value.CurrentValue() }.unwrap().to_string(),
+        "héllo"
+    );
+    unsafe { value.SetValue(&"wörld".into()) }.unwrap();
+    wait_for(|| {
+        received.extend(host.actions.try_iter());
+        received
+            .iter()
+            .any(|action| {
+                action.node == id(4)
+                    && action.action == A11yAction::SetValue
+                    && action.data == A11yActionData::Value("wörld".into())
+            })
+            .then_some(())
+    });
+
+    let text: IUIAutomationTextPattern =
+        unsafe { field.GetCurrentPatternAs(UIA_TextPatternId) }.unwrap();
+    let range = unsafe { text.DocumentRange() }.unwrap();
+    assert_eq!(unsafe { range.GetText(-1) }.unwrap().to_string(), "héllo");
+
+    let slider = element_named(&client, &host, "Volume");
+    let range_value: IUIAutomationRangeValuePattern =
+        unsafe { slider.GetCurrentPatternAs(UIA_RangeValuePatternId) }.unwrap();
+    assert_eq!(unsafe { range_value.CurrentValue() }.unwrap(), 4.0);
+    assert_eq!(unsafe { range_value.CurrentMaximum() }.unwrap(), 10.0);
+    unsafe { range_value.SetValue(7.0) }.unwrap();
+    wait_for(|| {
+        received.extend(host.actions.try_iter());
+        received
+            .iter()
+            .any(|action| {
+                action.node == id(5)
+                    && action.action == A11yAction::SetValue
+                    && action.data == A11yActionData::Numeric(7.0)
+            })
             .then_some(())
     });
     stop(host);

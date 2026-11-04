@@ -1,16 +1,17 @@
 use crate::dialog_protocol::{
-    HelperRequest, HelperResponse, decode_request, decode_response, encode_request, encode_response,
+    decode_request, decode_response, encode_request, encode_response, HelperKind, HelperRequest,
+    HelperResponse,
 };
 use crate::event::ShellError;
 use crate::handle::NativeHandle;
 use crate::looping::Waker;
 use crate::window::Window;
-use aqua_platform::dialogs::{DialogKind, DialogRequest};
+use aqua_protocol::DialogSpec;
 use std::io::{Read, Write};
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::mpsc::{channel, Receiver, TryRecvError};
 
 const HELPER_FLAG: &str = "--aqua-shell-dialog-helper";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -67,12 +68,11 @@ fn run_helper(request: &HelperRequest) -> DialogResult {
 }
 
 pub fn open(
-    request: &DialogRequest,
+    spec: &DialogSpec,
     owner: Option<Window>,
     waker: Waker,
 ) -> Result<DialogJob, ShellError> {
-    let helper = HelperRequest::new(request, owner.map(|w| w.hwnd))
-        .ok_or_else(|| ShellError::Dialog("dialog request has no kind".into()))?;
+    let helper = HelperRequest::from_spec(spec, owner.map(|w| w.hwnd));
     let (sender, receiver) = channel();
     std::thread::Builder::new()
         .name("aqua-dialog".into())
@@ -103,13 +103,13 @@ fn show(request: &HelperRequest) -> HelperResponse {
     }
     for filter in &request.filters {
         let extensions: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
-        dialog = dialog.add_filter(&filter.name, &extensions);
+        dialog = dialog.add_filter(&filter.label, &extensions);
     }
     HelperResponse::Selected(match request.kind {
-        DialogKind::OpenFile => dialog.pick_file().into_iter().collect(),
-        DialogKind::OpenFiles => dialog.pick_files().unwrap_or_default(),
-        DialogKind::SaveFile => dialog.save_file().into_iter().collect(),
-        DialogKind::PickFolder => dialog.pick_folder().into_iter().collect(),
+        HelperKind::OpenFile => dialog.pick_file().into_iter().collect(),
+        HelperKind::OpenFiles => dialog.pick_files().unwrap_or_default(),
+        HelperKind::SaveFile => dialog.save_file().into_iter().collect(),
+        HelperKind::PickFolder => dialog.pick_folder().into_iter().collect(),
     })
 }
 

@@ -19,6 +19,7 @@ pub enum FeatureTier {
 pub struct Features {
     pub compute: bool,
     pub custom_passes: bool,
+    pub color_matrix: bool,
     pub enhanced_barriers: bool,
     pub tearing: bool,
     pub software: bool,
@@ -28,7 +29,8 @@ pub struct Features {
 impl Features {
     pub const REFERENCE: Features = Features {
         compute: true,
-        custom_passes: false,
+        custom_passes: true,
+        color_matrix: true,
         enhanced_barriers: false,
         tearing: false,
         software: true,

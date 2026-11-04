@@ -5,9 +5,10 @@ pub mod chrome;
 pub mod gpu;
 pub mod ime;
 pub mod machine;
+pub mod material;
+pub mod prefs;
 pub mod render;
 pub mod shell;
-pub mod step;
 pub mod time;
 pub mod window;
 
@@ -24,8 +25,8 @@ pub use gpu::{
 };
 pub use ime::{ImeBackend, ImeCommand, ImeDocument, ImeEvent, Utf16Range};
 pub use machine::{
-    Input as RuntimeInput, Machine, Output as RuntimeOutput, Recorded, Recorder, first_divergence,
-    replay,
+    first_divergence, replay, Input as RuntimeInput, Machine, Output as RuntimeOutput, Recorded,
+    Recorder,
 };
 pub use render::{
     Feedback, FrameId, GpuEvent, RenderCommand, RenderEvent, RenderInput, RenderOutput, RenderWake,
@@ -36,6 +37,5 @@ pub use shell::{
     PixelSize, RequestId, ShellCommand, ShellEvent, TitlebarMode, WindowKind, WindowMaterial,
     WindowOp, WindowSpec,
 };
-pub use step::{Input, Output};
 pub use time::Instant;
 pub use window::{FrameReason, WindowId};

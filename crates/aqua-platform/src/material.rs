@@ -30,9 +30,7 @@ pub enum WindowMaterial {
     Acrylic,
 }
 
-/// Minimum Windows 11 build for `DWMWA_SYSTEMBACKDROP_TYPE`
-/// (per `DWM_SYSTEMBACKDROP_TYPE` requirements table).
-pub const DWM_BACKDROP_MIN_BUILD: u32 = 22621;
+pub use aqua_protocol::material::DWM_BACKDROP_MIN_BUILD;
 
 /// Whether a material can show through without a transparent window +
 /// alpha surface + transparent content layers (per Mica guidance: "set the
@@ -118,25 +116,15 @@ pub fn material_capability(requested: WindowMaterial) -> MaterialCapability {
     }
 }
 
-/// DWM `DWM_SYSTEMBACKDROP_TYPE` values (Win32 `dwmapi`, attribute 38).
-/// Documented at learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwm_systembackdrop_type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub enum DwmSystemBackdrop {
-    Auto = 0,
-    None = 1,
-    MainWindow = 2,      // Mica
-    TransientWindow = 3, // Acrylic-like transient
-    TabbedWindow = 4,    // Mica Alt
-}
+pub use aqua_protocol::material::DwmSystemBackdrop;
 
-impl DwmSystemBackdrop {
-    pub fn of(material: WindowMaterial) -> Self {
+impl From<WindowMaterial> for aqua_protocol::WindowMaterial {
+    fn from(material: WindowMaterial) -> Self {
         match material {
-            WindowMaterial::None => DwmSystemBackdrop::None,
-            WindowMaterial::Mica => DwmSystemBackdrop::MainWindow,
-            WindowMaterial::MicaAlt => DwmSystemBackdrop::TabbedWindow,
-            WindowMaterial::Acrylic => DwmSystemBackdrop::TransientWindow,
+            WindowMaterial::None => aqua_protocol::WindowMaterial::Solid,
+            WindowMaterial::Mica => aqua_protocol::WindowMaterial::Mica,
+            WindowMaterial::MicaAlt => aqua_protocol::WindowMaterial::Tabbed,
+            WindowMaterial::Acrylic => aqua_protocol::WindowMaterial::Acrylic,
         }
     }
 }
@@ -171,10 +159,16 @@ mod tests {
 
     #[test]
     fn backdrop_mapping_covers_all_materials() {
-        assert_eq!(DwmSystemBackdrop::of(WindowMaterial::Mica) as i32, 2);
-        assert_eq!(DwmSystemBackdrop::of(WindowMaterial::Acrylic) as i32, 3);
-        assert_eq!(DwmSystemBackdrop::of(WindowMaterial::MicaAlt) as i32, 4);
-        assert_eq!(DwmSystemBackdrop::of(WindowMaterial::None) as i32, 1);
+        assert_eq!(DwmSystemBackdrop::of(WindowMaterial::Mica.into()) as i32, 2);
+        assert_eq!(
+            DwmSystemBackdrop::of(WindowMaterial::Acrylic.into()) as i32,
+            3
+        );
+        assert_eq!(
+            DwmSystemBackdrop::of(WindowMaterial::MicaAlt.into()) as i32,
+            4
+        );
+        assert_eq!(DwmSystemBackdrop::of(WindowMaterial::None.into()) as i32, 1);
     }
 
     #[test]

@@ -3,14 +3,17 @@ use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::raw::types::BoundingBox;
 use skrifa::{GlyphId, MetadataProvider};
-use zeno::{Command, Mask, Origin, Point, Transform};
+use zeno::{Command, Mask, Origin, Point, Stroke, Transform, Vector};
 
 use crate::font::{FontEntry, FontId, FontManager};
 use crate::layout::LaidGlyph;
+use crate::strike::rasterize_strike;
 use crate::style::FontStretch;
 
 const SUBPIXEL_STEPS: u8 = 4;
+pub const SIZE_STEPS: f32 = 64.0;
 const ITALIC_SKEW: f32 = 0.2126;
+const EMBOLDEN_EM: f32 = 1.0 / 24.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RasterKey {
@@ -78,6 +81,10 @@ pub fn quantize_x(x: f32) -> (i32, u8) {
     (quarters.div_euclid(steps), quarters.rem_euclid(steps) as u8)
 }
 
+pub fn quantize_size(size_px: f32) -> f32 {
+    (size_px * SIZE_STEPS).round().max(1.0) / SIZE_STEPS
+}
+
 pub fn raster_key(glyph: &LaidGlyph, subpixel: u8) -> RasterKey {
     RasterKey {
         font_id: glyph.font_id,
@@ -85,7 +92,7 @@ pub fn raster_key(glyph: &LaidGlyph, subpixel: u8) -> RasterKey {
         stretch: glyph.font_stretch,
         synthetic_italic: glyph.synthetic_italic,
         glyph_id: glyph.glyph_id,
-        size_bits: glyph.font_size_px.to_bits(),
+        size_bits: quantize_size(glyph.font_size_px).to_bits(),
         subpixel,
     }
 }
@@ -156,16 +163,49 @@ fn outline_commands(
     Some(pen.commands)
 }
 
-fn mask_from_commands(commands: &[Command], subpixel: u8, italic: bool) -> Option<Bitmap> {
+pub fn embolden_width(size_px: f32) -> f32 {
+    size_px * EMBOLDEN_EM
+}
+
+fn mask_from_commands(
+    commands: &[Command],
+    subpixel: u8,
+    italic: bool,
+    embolden: f32,
+) -> Option<Bitmap> {
     if commands.is_empty() {
         return None;
     }
     let skew = if italic { ITALIC_SKEW } else { 0.0 };
     let shift = f32::from(subpixel) / f32::from(SUBPIXEL_STEPS);
-    let (data, placement) = Mask::new(commands)
-        .origin(Origin::TopLeft)
-        .transform(Some(Transform::new(1.0, 0.0, skew, -1.0, shift, 0.0)))
-        .render();
+    let transform = Some(Transform::new(1.0, 0.0, skew, -1.0, shift, 0.0));
+    let (data, placement) = match embolden > 0.0 {
+        false => Mask::new(commands)
+            .origin(Origin::TopLeft)
+            .transform(transform)
+            .render(),
+        true => {
+            let (mut data, placement) = Mask::new(commands)
+                .origin(Origin::TopLeft)
+                .style(Stroke::new(embolden))
+                .transform(transform)
+                .render();
+            let mut fill = vec![0u8; data.len()];
+            Mask::new(commands)
+                .origin(Origin::TopLeft)
+                .transform(transform)
+                .size(placement.width, placement.height)
+                .offset(Vector::new(
+                    -(placement.left as f32),
+                    -(placement.top as f32),
+                ))
+                .render_into(&mut fill, None);
+            data.iter_mut()
+                .zip(&fill)
+                .for_each(|(stroke, fill)| *stroke = (*stroke).max(*fill));
+            (data, placement)
+        }
+    };
     (placement.width > 0 && placement.height > 0).then_some(Bitmap {
         left: placement.left,
         top: -placement.top,
@@ -192,9 +232,18 @@ impl Rasterizer {
                 if let Some(color) = rasterize_color(font, &entry, glyph, size, key.subpixel) {
                     return Some(GlyphImage::Color(color));
                 }
+                if let Some(color) = rasterize_strike(font, glyph, size, entry.units_per_em()) {
+                    return Some(GlyphImage::Color(color));
+                }
             }
             let commands = outline_commands(font, &entry, glyph, size)?;
-            mask_from_commands(&commands, key.subpixel, key.synthetic_italic).map(GlyphImage::Mask)
+            let embolden = if entry.synthetic_bold() {
+                embolden_width(size)
+            } else {
+                0.0
+            };
+            mask_from_commands(&commands, key.subpixel, key.synthetic_italic, embolden)
+                .map(GlyphImage::Mask)
         })?
     }
 }
@@ -288,7 +337,11 @@ impl ColorRaster<'_, '_> {
             Extend::Repeat => t.rem_euclid(1.0),
             Extend::Reflect => {
                 let m = t.rem_euclid(2.0);
-                if m > 1.0 { 2.0 - m } else { m }
+                if m > 1.0 {
+                    2.0 - m
+                } else {
+                    m
+                }
             }
             _ => t.clamp(0.0, 1.0),
         };

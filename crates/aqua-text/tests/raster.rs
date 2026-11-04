@@ -1,4 +1,4 @@
-use aqua_text::raster::{GlyphImage, Rasterizer, place_glyph, quantize_x};
+use aqua_text::raster::{place_glyph, quantize_x, GlyphImage, Rasterizer};
 use aqua_text::{FontManager, TextLayout, TextStyle};
 
 fn glyph_image(
@@ -77,5 +77,35 @@ fn subpixel_offsets_shift_coverage_without_changing_total_ink() {
     }
     for total in &totals {
         assert!((total - totals[0]).abs() / totals[0] < 0.02, "{totals:?}");
+    }
+}
+
+#[test]
+fn bold_requests_never_lose_ink_and_fake_bold_widens_stems() {
+    let (_, placement) = glyph_image("H", 24.0, false);
+    let mut fonts = FontManager::new();
+    let regular = placement.key;
+    let bold = aqua_text::raster::RasterKey {
+        weight: 700,
+        ..regular
+    };
+    let ink = |fonts: &mut FontManager, key: &aqua_text::raster::RasterKey| -> (u64, u32) {
+        let image = Rasterizer::new().rasterize(fonts, key).expect("raster");
+        let bitmap = image.bitmap();
+        (
+            bitmap.data.iter().map(|v| u64::from(*v)).sum(),
+            bitmap.width,
+        )
+    };
+    let (regular_ink, regular_width) = ink(&mut fonts, &regular);
+    let (bold_ink, bold_width) = ink(&mut fonts, &bold);
+    assert!(bold_ink >= regular_ink);
+    let synthetic = fonts
+        .entry_with(bold.font_id, 700, bold.stretch, false)
+        .expect("entry")
+        .synthetic_bold();
+    if synthetic {
+        assert!(bold_ink as f64 > regular_ink as f64 * 1.08);
+        assert!(bold_width >= regular_width);
     }
 }

@@ -10,7 +10,10 @@ aqua-fonts-system = { path = "../aqua-fonts-system" }
 harfrust = "0.12"
 skrifa = "0.46.2"
 zeno = "0.3"
-etagere = "0.3.0"
+png = "0.18"
+aqua-media = { path = "../aqua-media" }
+aqua-graph = { path = "../aqua-graph" }
+aqua-core = { path = "../aqua-core" }
 unicode-bidi = "0.3"
 unicode-script = "0.5"
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }

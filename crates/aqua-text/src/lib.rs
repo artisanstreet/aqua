@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
-pub mod atlas;
 pub mod document;
 pub mod editor;
+pub mod fallback;
 pub mod font;
 pub mod input_service;
 pub mod layout;
@@ -10,18 +10,20 @@ pub mod model;
 pub mod navigation;
 pub mod overflow;
 pub mod raster;
+pub mod residency;
 pub mod runs;
 pub mod selection;
 mod shape;
+pub mod strike;
 pub mod style;
-pub mod tone;
 
+pub use aqua_graph::tone;
 pub use editor::TextEditor;
-pub use font::{FontEntry, FontId, FontManager, SharedFonts};
+pub use font::{FontEntry, FontId, FontManager, PrewarmJob, PrewarmedEntry, SharedFonts};
 pub use layout::{
-    CaretAffinity, CaretPosition, CaretRect, DecorationKind, LaidGlyph, LaidLine, LaidOut, Rect,
-    SharedLayoutCache, TextBackground, TextDecoration, TextInteractionRange, TextLayout,
-    measure_text,
+    measure_text, CaretAffinity, CaretPosition, CaretRect, DecorationKind, LaidGlyph, LaidLine,
+    LaidOut, Rect, SharedLayoutCache, TextBackground, TextDecoration, TextInteractionRange,
+    TextLayout,
 };
 pub use model::TextModel;
 pub use runs::{ResolveError, RunHandle, RunId, RunRegistry, SharedRuns};

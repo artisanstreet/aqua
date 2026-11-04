@@ -17,3 +17,9 @@ windows = { version = "0.62.2", features = [
 
 [target.'cfg(windows)'.dev-dependencies]
 aqua-text = { path = "../aqua-text" }
+aqua-media = { path = "../aqua-media" }
+aqua-core = { path = "../aqua-core" }
+aqua-graph = { path = "../aqua-graph" }
+aqua-protocol = { path = "../aqua-protocol" }
+aqua-gpu-d3d12 = { path = "../aqua-gpu-d3d12" }
+aqua-gpu-ref = { path = "../aqua-gpu-ref" }

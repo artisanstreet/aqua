@@ -1,14 +1,17 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use aqua_fonts_system::{FaceBytes, Family, FontDatabase, ID, Query, Stretch, Style, Weight};
-use skrifa::MetadataProvider;
+use aqua_fonts_system::{FaceBytes, Family, FontDatabase, Query, Stretch, Style, Weight, ID};
 use skrifa::raw::TableProvider;
+use skrifa::MetadataProvider;
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::fallback::{Coverage, FallbackIndex};
 use crate::style::{FontFamily, FontSlant, FontStretch, TextStyle};
 
 pub type FontId = ID;
+
+pub const SYNTHETIC_BOLD_FROM: u16 = 600;
 
 const COLOR_FONT_POSTSCRIPT: [&str; 5] = [
     "NotoColorEmoji",
@@ -86,16 +89,59 @@ fn default_ignorable(character: char) -> bool {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct EntryKey {
+pub struct EntryKey {
     id: ID,
     weight: u16,
     stretch: FontStretch,
     fake_italic: bool,
 }
 
+pub struct PrewarmJob {
+    key: EntryKey,
+    revision: u64,
+    face_weight: u16,
+    postscript_name: String,
+    bytes: FaceBytes,
+}
+
+#[derive(Clone)]
+pub struct PrewarmedEntry {
+    key: EntryKey,
+    revision: u64,
+    entry: Arc<FontEntry>,
+}
+
+impl PrewarmJob {
+    pub fn face(&self) -> ID {
+        self.key.id
+    }
+
+    pub fn build(self) -> Option<PrewarmedEntry> {
+        let entry = FontEntry::build(
+            self.key.id,
+            self.bytes,
+            self.key.weight,
+            self.face_weight,
+            self.key.stretch,
+            self.key.fake_italic,
+            self.postscript_name,
+        )?;
+        (0x20u8..0x7f).for_each(|byte| {
+            entry.glyph_for(char::from(byte));
+        });
+        Some(PrewarmedEntry {
+            key: self.key,
+            revision: self.revision,
+            entry: Arc::new(entry),
+        })
+    }
+}
+
 pub struct FontEntry {
     id: ID,
     weight: u16,
+    face_weight: u16,
+    synthetic_bold: bool,
     stretch: FontStretch,
     fake_italic: bool,
     bytes: FaceBytes,
@@ -117,6 +163,7 @@ impl FontEntry {
         id: ID,
         bytes: FaceBytes,
         weight: u16,
+        face_weight: u16,
         stretch: FontStretch,
         fake_italic: bool,
         postscript_name: String,
@@ -135,6 +182,9 @@ impl FontEntry {
             };
             settings.push((skrifa::Tag::new(b"wdth"), width));
         }
+        let variable_weight = axes.get_by_tag(skrifa::Tag::new(b"wght")).is_some();
+        let synthetic_bold =
+            !variable_weight && weight >= SYNTHETIC_BOLD_FROM && face_weight < SYNTHETIC_BOLD_FROM;
         let location = axes.location(settings.iter().copied());
         let metrics = font.metrics(skrifa::instance::Size::unscaled(), &location);
         let units_per_em = f32::from(metrics.units_per_em.max(1));
@@ -163,6 +213,8 @@ impl FontEntry {
         Some(Self {
             id,
             weight,
+            face_weight,
+            synthetic_bold,
             stretch,
             fake_italic,
             shaper_data,
@@ -186,6 +238,14 @@ impl FontEntry {
 
     pub fn weight(&self) -> u16 {
         self.weight
+    }
+
+    pub fn face_weight(&self) -> u16 {
+        self.face_weight
+    }
+
+    pub fn synthetic_bold(&self) -> bool {
+        self.synthetic_bold
     }
 
     pub fn stretch(&self) -> FontStretch {
@@ -288,6 +348,7 @@ pub struct FontManager {
     face_coverage: HashMap<(ID, char), bool>,
     candidate_cache: HashMap<CandidateKey, Vec<Arc<FontEntry>>>,
     shape_buffer: Option<harfrust::UnicodeBuffer>,
+    fallback_index: Option<FallbackIndex>,
 }
 
 impl FontManager {
@@ -310,6 +371,7 @@ impl FontManager {
             face_coverage: HashMap::new(),
             candidate_cache: HashMap::new(),
             shape_buffer: None,
+            fallback_index: None,
         }
     }
 
@@ -438,6 +500,60 @@ impl FontManager {
         found
     }
 
+    fn entry_job(
+        &mut self,
+        id: ID,
+        weight: u16,
+        stretch: FontStretch,
+        slant: FontSlant,
+    ) -> Option<PrewarmJob> {
+        let face = self.database.face(id)?;
+        let fake_italic = slant != FontSlant::Normal && face.style == Style::Normal;
+        let key = EntryKey {
+            id,
+            weight,
+            stretch,
+            fake_italic,
+        };
+        if self.entries.contains_key(&key) {
+            return None;
+        }
+        let (face_weight, postscript_name) = (face.weight.0, face.post_script_name.clone());
+        let bytes = self.database.face_bytes(id)?;
+        Some(PrewarmJob {
+            key,
+            revision: self.revision,
+            face_weight,
+            postscript_name,
+            bytes,
+        })
+    }
+
+    pub fn prewarm_jobs(&mut self, styles: &[TextStyle]) -> Vec<PrewarmJob> {
+        let mut jobs: Vec<PrewarmJob> = Vec::new();
+        for style in styles {
+            let mut ids: Vec<ID> = self.primary_id(style).into_iter().collect();
+            for name in Self::fallback_names(style) {
+                ids.extend(self.query_name(&name, style.weight.0, style.stretch, style.slant));
+            }
+            for id in ids {
+                let job = self.entry_job(id, style.weight.0, style.stretch, style.slant);
+                let fresh = job.filter(|job| jobs.iter().all(|queued| queued.key != job.key));
+                jobs.extend(fresh);
+            }
+        }
+        jobs
+    }
+
+    pub fn install_prewarmed(&mut self, prewarmed: PrewarmedEntry) -> bool {
+        let current =
+            prewarmed.revision == self.revision && !self.entries.contains_key(&prewarmed.key);
+        if current {
+            self.entries.insert(prewarmed.key, Some(prewarmed.entry));
+        }
+        current
+    }
+
     fn entry_for(
         &mut self,
         id: ID,
@@ -457,8 +573,17 @@ impl FontManager {
             return found.clone();
         }
         let postscript_name = self.database.face(id)?.post_script_name.clone();
+        let face_weight = self.database.face(id)?.weight.0;
         let built = self.database.face_bytes(id).and_then(|bytes| {
-            FontEntry::build(id, bytes, weight, stretch, fake_italic, postscript_name)
+            FontEntry::build(
+                id,
+                bytes,
+                weight,
+                face_weight,
+                stretch,
+                fake_italic,
+                postscript_name,
+            )
         });
         let built = built.map(Arc::new);
         self.entries.insert(key, built.clone());
@@ -485,13 +610,18 @@ impl FontManager {
     }
 
     pub fn primary(&mut self, style: &TextStyle) -> Option<Arc<FontEntry>> {
+        let id = self.primary_id(style)?;
+        self.entry(id, style)
+    }
+
+    fn primary_id(&mut self, style: &TextStyle) -> Option<ID> {
         let default = [FontFamily::SansSerif];
         let families = if style.families.is_empty() {
             &default[..]
         } else {
             &style.families[..]
         };
-        let id = families
+        families
             .iter()
             .find_map(|family| {
                 self.resolve_family(family, style.weight.0, style.stretch, style.slant)
@@ -504,8 +634,7 @@ impl FontManager {
                     style.slant,
                 )
             })
-            .or_else(|| self.first_face())?;
-        self.entry(id, style)
+            .or_else(|| self.first_face())
     }
 
     fn fallback_candidates(&mut self, style: &TextStyle) -> Vec<Arc<FontEntry>> {
@@ -523,7 +652,7 @@ impl FontManager {
         candidates
     }
 
-    fn build_fallback_candidates(&mut self, style: &TextStyle) -> Vec<Arc<FontEntry>> {
+    fn fallback_names(style: &TextStyle) -> Vec<String> {
         let mut names: Vec<String> = style
             .families
             .iter()
@@ -541,6 +670,11 @@ impl FontManager {
                     .map(|name| (*name).to_owned()),
             );
         }
+        names
+    }
+
+    fn build_fallback_candidates(&mut self, style: &TextStyle) -> Vec<Arc<FontEntry>> {
+        let names = Self::fallback_names(style);
         let mut candidates: Vec<Arc<FontEntry>> = Vec::new();
         for name in names {
             let Some(id) = self.query_name(&name, style.weight.0, style.stretch, style.slant)
@@ -557,15 +691,57 @@ impl FontManager {
         candidates
     }
 
+    pub fn use_fallback_index(&mut self, persisted: Option<&[u8]>) {
+        self.fallback_index = Some(
+            persisted
+                .and_then(FallbackIndex::decode)
+                .unwrap_or_default(),
+        );
+        self.face_coverage.clear();
+        self.scan_cache.clear();
+    }
+
+    pub fn fallback_index_snapshot(&mut self) -> Option<Vec<u8>> {
+        self.fallback_index
+            .as_mut()
+            .and_then(FallbackIndex::take_snapshot)
+    }
+
+    pub fn fallback_index_len(&self) -> usize {
+        self.fallback_index.as_ref().map_or(0, FallbackIndex::len)
+    }
+
+    fn indexed_cover(&mut self, id: ID, character: char) -> Option<bool> {
+        self.fallback_index.as_ref()?;
+        let fingerprint = self.database.fingerprint(id)?;
+        if let Some(coverage) = self
+            .fallback_index
+            .as_ref()
+            .and_then(|index| index.lookup(&fingerprint))
+        {
+            return Some(coverage.contains(character as u32));
+        }
+        let bytes = self.database.face_bytes(id)?;
+        let font = skrifa::FontRef::from_index(bytes.bytes(), bytes.index()).ok()?;
+        let coverage =
+            Coverage::from_codepoints(font.charmap().mappings().map(|(codepoint, _)| codepoint));
+        let covered = coverage.contains(character as u32);
+        self.fallback_index.as_mut()?.insert(&fingerprint, coverage);
+        Some(covered)
+    }
+
     fn face_covers(&mut self, id: ID, character: char) -> bool {
         if let Some(found) = self.face_coverage.get(&(id, character)) {
             return *found;
         }
-        let covered = self.database.face_bytes(id).is_some_and(|bytes| {
-            skrifa::FontRef::from_index(bytes.bytes(), bytes.index())
-                .ok()
-                .and_then(|font| font.charmap().map(character))
-                .is_some()
+        let indexed = self.indexed_cover(id, character);
+        let covered = indexed.unwrap_or_else(|| {
+            self.database.face_bytes(id).is_some_and(|bytes| {
+                skrifa::FontRef::from_index(bytes.bytes(), bytes.index())
+                    .ok()
+                    .and_then(|font| font.charmap().map(character))
+                    .is_some()
+            })
         });
         self.face_coverage.insert((id, character), covered);
         covered

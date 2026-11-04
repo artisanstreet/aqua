@@ -1,6 +1,6 @@
-use aqua_text::FontManager;
 use aqua_text::raster::{RasterKey, Rasterizer as GlyphRasterizer};
 use aqua_text::style::FontStretch;
+use aqua_text::FontManager;
 
 use crate::text::image::{Content, Image};
 

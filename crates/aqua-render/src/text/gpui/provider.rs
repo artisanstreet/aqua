@@ -1,8 +1,8 @@
-use super::RenderingParameters;
 use super::atlas::{AtlasPages, GlyphBitmap, GlyphKey, Tile};
 use super::map::{indistinguishable, shimmer_color};
 use super::pipeline::{GlyphInstance, MaskDraw, Pipelines};
-use super::raster::{GlyphRequest, Rasterizer, atlas_rgba};
+use super::raster::{atlas_rgba, GlyphRequest, Rasterizer};
+use super::RenderingParameters;
 use crate::gpui_atlas::{AtlasKey, SharedGpuiAtlas};
 use crate::text::{ShapedRun, TextBackend, TextFrame, TextStats};
 use aqua_core::scene::TextRasterMode;

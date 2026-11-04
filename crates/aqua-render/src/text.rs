@@ -41,8 +41,8 @@ pub mod gpui;
 mod image;
 mod raster;
 
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
+use aqua_core::Oklch;
 use aqua_text::{ResolveError, RunHandle, RunId, RunRegistry, SharedFonts, SharedRuns};
 
 use glyphon::{
@@ -89,7 +89,7 @@ pub struct ShapedRun {
     /// Glyph color, sRGB-ish u8 (see [`resolve_scene_text`]), alpha ALREADY
     /// multiplied by the item opacity for top-level text. Group text keeps
     /// full alpha: the group composite applies opacity once.
-    pub color_glyphon: glyphon::Color,
+    pub color_srgb8: [u8; 4],
     pub gpui_color: Option<aqua_core::GpuiHsla>,
     pub gpui_opacity: f32,
     pub gpui_subpixel: Option<bool>,
@@ -463,7 +463,12 @@ impl TextProvider for GlyphonProvider {
                 top: 0.0,
                 scale: 1.0,
                 bounds: clip_to_bounds(run.clip_physical),
-                default_color: run.color_glyphon,
+                default_color: glyphon::Color::rgba(
+                    run.color_srgb8[0],
+                    run.color_srgb8[1],
+                    run.color_srgb8[2],
+                    run.color_srgb8[3],
+                ),
                 custom_glyphs: glyphs,
             })
             .collect();
@@ -601,7 +606,7 @@ pub fn resolve_scene_text(
         id: run.id,
         revision: run.revision,
         at_physical: [at_logical[0] * scale, at_logical[1] * scale],
-        color_glyphon: glyphon::Color::rgba(r, g, b, a),
+        color_srgb8: [r, g, b, a],
         gpui_color: None,
         gpui_opacity: 1.0,
         gpui_subpixel: None,
@@ -627,7 +632,7 @@ pub fn resolve_gpui_scene_text(
         id: run.id,
         revision: run.revision,
         at_physical: [at_logical[0] * scale, at_logical[1] * scale],
-        color_glyphon: glyphon::Color::rgba(0, 0, 0, 0),
+        color_srgb8: [0; 4],
         gpui_color: Some(color),
         gpui_opacity: opacity,
         gpui_subpixel: None,
@@ -666,7 +671,7 @@ mod tests {
             id,
             revision,
             at_physical: [0.0, 0.0],
-            color_glyphon: glyphon::Color::rgba(255, 255, 255, 255),
+            color_srgb8: [255; 4],
             gpui_color: None,
             gpui_opacity: 1.0,
             gpui_subpixel: None,

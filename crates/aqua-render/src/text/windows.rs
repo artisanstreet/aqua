@@ -6,8 +6,8 @@ use aqua_text::raster::RasterKey;
 use aqua_text::{FontEntry, FontManager};
 
 use super::super::image::{Content, Image, Placement};
-use windows::Win32::Graphics::DirectWrite::*;
 use windows::core::{IUnknown, Interface};
+use windows::Win32::Graphics::DirectWrite::*;
 
 struct NativeFace {
     face: IDWriteFontFace,

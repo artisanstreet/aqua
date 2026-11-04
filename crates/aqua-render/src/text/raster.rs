@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use aqua_text::FontManager;
 use aqua_text::raster::{RasterKey, Rasterizer};
+use aqua_text::FontManager;
 use glyphon::{ContentType, RasterizedCustomGlyph};
 
 use aqua_core::scene::TextRasterMode;

@@ -6,16 +6,30 @@ use super::util::{create_buffer, map_whole};
 use super::Error;
 use crate::policy::ticks_to_duration;
 
-const STAMPS_PER_SLOT: u32 = 2;
+const STAMPS_PER_SLOT: u32 = 64;
 const STAMP_BYTES: u64 = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PassTime {
+    pub label: &'static str,
+    pub duration: Duration,
+}
 
 pub struct Timestamps {
     heap: ID3D12QueryHeap,
     readback: ID3D12Resource,
     mapped: *const u64,
     frequency: u64,
-    pending: Vec<Option<u64>>,
+    pending: Vec<Option<Resolved>>,
+    labels: Vec<Vec<&'static str>>,
     latest: Option<Duration>,
+    latest_passes: Vec<PassTime>,
+}
+
+#[derive(Clone, Copy)]
+struct Resolved {
+    fence: u64,
+    count: u32,
 }
 
 fn frequency_of(device: &ID3D12Device) -> Option<u64> {
@@ -66,11 +80,16 @@ impl Timestamps {
             mapped,
             frequency,
             pending: vec![None; slots],
+            labels: (0..slots)
+                .map(|_| Vec::with_capacity(STAMPS_PER_SLOT as usize))
+                .collect(),
             latest: None,
+            latest_passes: Vec::with_capacity(STAMPS_PER_SLOT as usize),
         }))
     }
 
-    pub fn begin(&self, list: &ID3D12GraphicsCommandList, slot: usize) {
+    pub fn begin(&mut self, list: &ID3D12GraphicsCommandList, slot: usize) {
+        self.labels[slot].clear();
         unsafe {
             list.EndQuery(
                 &self.heap,
@@ -80,36 +99,58 @@ impl Timestamps {
         };
     }
 
+    pub fn mark(&mut self, list: &ID3D12GraphicsCommandList, slot: usize, label: &'static str) {
+        let used = self.labels[slot].len() as u32 + 1;
+        if used + 1 >= STAMPS_PER_SLOT {
+            return;
+        }
+        self.labels[slot].push(label);
+        unsafe {
+            list.EndQuery(
+                &self.heap,
+                D3D12_QUERY_TYPE_TIMESTAMP,
+                slot as u32 * STAMPS_PER_SLOT + used,
+            )
+        };
+    }
+
     pub fn end(&mut self, list: &ID3D12GraphicsCommandList, slot: usize, fence: u64) {
         let first = slot as u32 * STAMPS_PER_SLOT;
+        let count = self.labels[slot].len() as u32 + 2;
         unsafe {
-            list.EndQuery(&self.heap, D3D12_QUERY_TYPE_TIMESTAMP, first + 1);
+            list.EndQuery(&self.heap, D3D12_QUERY_TYPE_TIMESTAMP, first + count - 1);
             list.ResolveQueryData(
                 &self.heap,
                 D3D12_QUERY_TYPE_TIMESTAMP,
                 first,
-                STAMPS_PER_SLOT,
+                count,
                 &self.readback,
                 first as u64 * STAMP_BYTES,
             );
         }
-        self.pending[slot] = Some(fence);
+        self.pending[slot] = Some(Resolved { fence, count });
     }
 
     pub fn poll(&mut self, completed: u64) {
         let frequency = self.frequency;
         for slot in 0..self.pending.len() {
-            if self.pending[slot].is_some_and(|fence| fence <= completed) {
-                self.pending[slot] = None;
-                let first = slot * STAMPS_PER_SLOT as usize;
-                let (start, end) = unsafe {
-                    (
-                        std::ptr::read_volatile(self.mapped.add(first)),
-                        std::ptr::read_volatile(self.mapped.add(first + 1)),
-                    )
-                };
-                if let Some(duration) = ticks_to_duration(start, end, frequency) {
-                    self.latest = Some(duration);
+            let Some(resolved) = self.pending[slot].filter(|resolved| resolved.fence <= completed)
+            else {
+                continue;
+            };
+            self.pending[slot] = None;
+            let first = slot * STAMPS_PER_SLOT as usize;
+            let read =
+                |index: usize| unsafe { std::ptr::read_volatile(self.mapped.add(first + index)) };
+            let last = resolved.count as usize - 1;
+            let Some(duration) = ticks_to_duration(read(0), read(last), frequency) else {
+                continue;
+            };
+            self.latest = Some(duration);
+            self.latest_passes.clear();
+            for (index, label) in self.labels[slot].iter().enumerate() {
+                if let Some(duration) = ticks_to_duration(read(index), read(index + 1), frequency) {
+                    self.latest_passes.push(PassTime { label, duration });
                 }
             }
         }
@@ -117,5 +158,9 @@ impl Timestamps {
 
     pub fn latest(&self) -> Option<Duration> {
         self.latest
+    }
+
+    pub fn latest_passes(&self) -> &[PassTime] {
+        &self.latest_passes
     }
 }

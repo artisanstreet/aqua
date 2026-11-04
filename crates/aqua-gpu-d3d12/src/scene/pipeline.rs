@@ -117,6 +117,7 @@ fn shaders(kind: Kind) -> Shaders {
 pub struct PipelineStats {
     pub compiled: u32,
     pub loaded: u32,
+    pub late: u32,
 }
 
 impl Kind {
@@ -139,6 +140,8 @@ pub struct Pipelines {
     device: ID3D12Device,
     library: Option<ID3D12PipelineLibrary>,
     stats: PipelineStats,
+    warmed: bool,
+    late: Vec<(Kind, i32)>,
     binding: Binding,
     pub root_signature: ID3D12RootSignature,
     instance_layout: Vec<D3D12_INPUT_ELEMENT_DESC>,
@@ -283,6 +286,8 @@ impl Pipelines {
             device: device.clone(),
             library: open_library(device, cache),
             stats: PipelineStats::default(),
+            warmed: false,
+            late: Vec::new(),
             binding,
             root_signature: match binding {
                 Binding::Table => root_signature(device)?,
@@ -380,6 +385,10 @@ impl Pipelines {
                 state
             }
         };
+        if self.warmed {
+            self.stats.late += 1;
+            self.late.push((kind, format.0));
+        }
         self.built.insert((kind, format.0), state.clone());
         Ok(state)
     }
@@ -390,7 +399,12 @@ impl Pipelines {
                 self.get(kind, *format)?;
             }
         }
+        self.warmed = true;
         Ok(())
+    }
+
+    pub fn late(&self) -> &[(Kind, i32)] {
+        &self.late
     }
 
     pub fn stats(&self) -> PipelineStats {

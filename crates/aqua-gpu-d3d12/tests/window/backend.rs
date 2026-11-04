@@ -23,18 +23,10 @@ pub(crate) fn options(preference: AdapterPreference) -> WindowOptions {
     }
 }
 
-pub(crate) fn backend(preference: AdapterPreference) -> Option<WindowBackend> {
+pub(crate) fn backend(preference: AdapterPreference) -> WindowBackend {
     crate::support::hold_software();
-    match WindowBackend::new(options(preference)) {
-        Ok(backend) => Some(backend),
-        Err(error) => match preference {
-            AdapterPreference::Warp => panic!("WARP must always be available: {error}"),
-            _ => {
-                eprintln!("SKIP-NO-ADAPTER {preference:?}: {error}");
-                None
-            }
-        },
-    }
+    WindowBackend::new(options(preference))
+        .unwrap_or_else(|error| panic!("no adapter {preference:?}: {error}"))
 }
 
 pub(crate) fn scene(extent: Extent, shade: f32) -> FramePlan {
@@ -129,9 +121,7 @@ pub(crate) fn matches_reference(
 }
 
 fn presents_and_matches(preference: AdapterPreference, label: &str) {
-    let Some(mut backend) = backend(preference) else {
-        return;
-    };
+    let mut backend = backend(preference);
     let window = TestWindow::open(520, 340);
     let (id, extent) = open(&mut backend, &window);
     eprintln!(
@@ -166,9 +156,7 @@ fn warp_window_presents_and_matches_the_reference() {
 }
 
 fn resize_cycle(preference: AdapterPreference, label: &str) {
-    let Some(mut backend) = backend(preference) else {
-        return;
-    };
+    let mut backend = backend(preference);
     let window = TestWindow::open(520, 340);
     let (id, extent) = open(&mut backend, &window);
     frame(&mut backend, &window, id, &scene(extent, 0.0));
@@ -215,9 +203,7 @@ fn warp_window_survives_repeated_resizes() {
 
 #[test]
 fn damage_ages_follow_the_two_buffer_swapchain() {
-    let Some(mut backend) = backend(AdapterPreference::Warp) else {
-        return;
-    };
+    let mut backend = backend(AdapterPreference::Warp);
     let window = TestWindow::open(400, 300);
     let (id, extent) = open(&mut backend, &window);
     assert_eq!(backend.buffer_age(id), Some(0));
@@ -266,9 +252,7 @@ fn damage_ages_follow_the_two_buffer_swapchain() {
 }
 
 fn survive_loss(preference: AdapterPreference, label: &str) {
-    let Some(mut backend) = backend(preference) else {
-        return;
-    };
+    let mut backend = backend(preference);
     let notices: Rc<RefCell<Vec<RecoveryNotice>>> = Rc::default();
     let sink = notices.clone();
     backend.set_recovery_listener(Box::new(move |notice| sink.borrow_mut().push(notice)));
@@ -328,9 +312,7 @@ fn warp_window_recovers_from_device_loss() {
 
 #[test]
 fn surfaces_can_be_destroyed_and_recreated_on_the_same_window() {
-    let Some(mut backend) = backend(AdapterPreference::Warp) else {
-        return;
-    };
+    let mut backend = backend(AdapterPreference::Warp);
     let window = TestWindow::open(400, 300);
     let (first, extent) = open(&mut backend, &window);
     frame(&mut backend, &window, first, &scene(extent, 0.0));

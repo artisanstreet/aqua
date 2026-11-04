@@ -100,14 +100,13 @@ fn every_hardware_adapter_presents_to_a_window_native_or_across_adapters() {
             "{name} (native={native}) missed {missed} of {frames} vblanks"
         );
     }
-    if adapters.len() == 1 {
-        eprintln!(
-            "SKIP-NO-SECOND-ADAPTER only {} is enabled: cross-adapter present is untested",
-            adapters[0].name
-        );
-    }
     assert!(
-        adapters.len() < 2 || results.iter().any(|(_, native, _, _)| !native),
+        adapters.len() >= 2,
+        "cross-adapter present needs a second adapter, only {} is enabled",
+        adapters[0].name
+    );
+    assert!(
+        results.iter().any(|(_, native, _, _)| !native),
         "a second adapter exists but none presented across adapters"
     );
 }
@@ -119,12 +118,13 @@ fn the_integrated_adapter_presents_and_matches_the_reference() {
         .iter()
         .min_by_key(|info| info.dedicated_video_bytes)
     else {
-        return;
+        panic!("no hardware adapter is enabled");
     };
-    if adapters.len() < 2 {
-        eprintln!("SKIP-NO-INTEGRATED-GPU only {} is enabled", integrated.name);
-        return;
-    }
+    assert!(
+        adapters.len() >= 2,
+        "no integrated adapter: only {} is enabled",
+        integrated.name
+    );
     crate::support::hold_software();
     let mut backend = WindowBackend::new(WindowOptions {
         device: options(AdapterPreference::Luid(integrated.luid)).device,

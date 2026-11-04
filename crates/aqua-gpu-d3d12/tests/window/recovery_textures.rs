@@ -112,28 +112,21 @@ type Setup = (
     Rc<RefCell<Vec<RecoveryNotice>>>,
 );
 
-fn setup(mirror: bool, preference: AdapterPreference) -> Option<Setup> {
+fn setup(mirror: bool, preference: AdapterPreference) -> Setup {
     crate::support::hold_software();
     let options = options(preference).with_mirror(mirror);
-    let mut backend = match WindowBackend::new(options) {
-        Ok(backend) => backend,
-        Err(error) => {
-            eprintln!("SKIP-NO-ADAPTER {preference:?}: {error}");
-            return None;
-        }
-    };
+    let mut backend = WindowBackend::new(options)
+        .unwrap_or_else(|error| panic!("no adapter {preference:?}: {error}"));
     let notices: Rc<RefCell<Vec<RecoveryNotice>>> = Rc::default();
     let sink = notices.clone();
     backend.set_recovery_listener(Box::new(move |notice| sink.borrow_mut().push(notice)));
     let window = TestWindow::open(300, 200);
     let (id, extent) = crate::backend::open(&mut backend, &window);
-    Some((backend, window, id, extent, notices))
+    (backend, window, id, extent, notices)
 }
 
 fn mirrored_textures_survive_device_loss(preference: AdapterPreference, label: &str) {
-    let Some((mut backend, window, id, extent, notices)) = setup(true, preference) else {
-        return;
-    };
+    let (mut backend, window, id, extent, notices) = setup(true, preference);
     let mut residency = Residency::new(ResidencyConfig::default());
     let (placement, batch) = residency_image(&mut residency);
     backend.upload(batch.clone()).unwrap();
@@ -164,9 +157,7 @@ fn mirrored_textures_survive_device_loss(preference: AdapterPreference, label: &
 }
 
 fn unmirrored_textures_need_the_host_to_reupload(preference: AdapterPreference, label: &str) {
-    let Some((mut backend, window, id, extent, notices)) = setup(false, preference) else {
-        return;
-    };
+    let (mut backend, window, id, extent, notices) = setup(false, preference);
     let mut residency = Residency::new(ResidencyConfig::default());
     let (placement, batch) = residency_image(&mut residency);
     backend.upload(batch.clone()).unwrap();

@@ -46,9 +46,7 @@ fn everything() -> Trim {
 }
 
 fn breakdown_and_trim(preference: AdapterPreference, label: &str) {
-    let Some(mut backend) = backend(preference) else {
-        return;
-    };
+    let mut backend = backend(preference);
     let window = TestWindow::open(640, 400);
     let before = backend.memory_breakdown().unwrap();
     assert_eq!(before.swapchain_bytes, 0);
@@ -105,9 +103,7 @@ fn hardware_memory_is_attributed_and_trim_releases_transients() {
 }
 
 fn stages_at_editor_size(preference: AdapterPreference, label: &str) {
-    let Some(mut backend) = backend(preference) else {
-        return;
-    };
+    let mut backend = backend(preference);
     let window = TestWindow::open(2560, 1440);
     let (id, extent) = open(&mut backend, &window);
     let plan = blurred(extent);

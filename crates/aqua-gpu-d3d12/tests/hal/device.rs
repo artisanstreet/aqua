@@ -413,7 +413,7 @@ fn descriptor_heaps_recycle_static_slots_and_wait_on_dynamic_ring() {
     for _ in 0..200 {
         let frame = core.begin_frame().expect("begin");
         let range = core.allocate_descriptors(1000).expect("dynamic");
-        assert!(range.first >= 1024);
+        assert!(range.first >= 64);
         let list = core.create_command_list().expect("list");
         unsafe {
             list.Reset(&frame.allocator, None).expect("reset");

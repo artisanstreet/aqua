@@ -9,6 +9,6 @@ pub mod timing;
 
 #[cfg(windows)]
 pub use backend::{
-    MemoryBreakdown, RecoveryNotice, SurfaceKind, TextureRecovery, WindowBackend, WindowOptions,
-    WindowStats,
+    MemoryBreakdown, PhaseTimes, RecoveryNotice, SurfaceKind, TextureRecovery, WindowBackend,
+    WindowOptions, WindowStats,
 };

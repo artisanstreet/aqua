@@ -122,9 +122,7 @@ fn warmed(backend: &mut WindowBackend, window: &TestWindow, id: SurfaceId, exten
 }
 
 fn damage_limited(preference: AdapterPreference, label: &str) {
-    let Some(mut backend) = backend(preference) else {
-        return;
-    };
+    let mut backend = backend(preference);
     let window = TestWindow::open(420, 300);
     let (id, extent) = open(&mut backend, &window);
     let width = extent.width as usize;
@@ -185,9 +183,7 @@ fn warp_scissored_repaint_matches_the_full_reference_every_frame() {
 }
 
 fn pixels_outside_the_region_are_not_touched(preference: AdapterPreference, label: &str) {
-    let Some(mut backend) = backend(preference) else {
-        return;
-    };
+    let mut backend = backend(preference);
     let window = TestWindow::open(420, 300);
     let (id, extent) = open(&mut backend, &window);
     let width = extent.width as usize;
@@ -242,9 +238,7 @@ fn warp_pixels_outside_the_repaint_region_are_skipped() {
 
 #[test]
 fn a_resize_or_an_occluded_history_forces_a_full_repaint() {
-    let Some(mut backend) = backend(AdapterPreference::Warp) else {
-        return;
-    };
+    let mut backend = backend(AdapterPreference::Warp);
     let window = TestWindow::open(420, 300);
     let (id, extent) = open(&mut backend, &window);
     warmed(&mut backend, &window, id, extent);

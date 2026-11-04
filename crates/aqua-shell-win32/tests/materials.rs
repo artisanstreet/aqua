@@ -26,6 +26,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
 };
 
+#[path = "../../aqua-verify/tests/support/desktop.rs"]
+mod desktop;
+
 static DESKTOP: Mutex<()> = Mutex::new(());
 
 fn pump(window: Option<Window>, behind: Option<(Window, u32, u32, &[u8])>, duration: Duration) {
@@ -72,8 +75,11 @@ impl Chain {
         use windows::Win32::Graphics::Direct3D11::ID3D11RenderTargetView;
         let buffer: ID3D11Texture2D = unsafe { self.chain.GetBuffer(0) }.expect("buffer");
         let mut view: Option<ID3D11RenderTargetView> = None;
-        unsafe { self._device.CreateRenderTargetView(&buffer, None, Some(&mut view)) }
-            .expect("rtv");
+        unsafe {
+            self._device
+                .CreateRenderTargetView(&buffer, None, Some(&mut view))
+        }
+        .expect("rtv");
         let context = unsafe { self._device.GetImmediateContext() }.expect("context");
         unsafe { context.ClearRenderTargetView(view.as_ref().expect("view"), &[0.0; 4]) };
         unsafe { self.chain.Present(0, Default::default()) }
@@ -122,8 +128,8 @@ fn attach_transparent(window: Window) -> Chain {
         AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
         ..Default::default()
     };
-    let chain = unsafe { factory.CreateSwapChainForComposition(&device, &desc, None) }
-        .expect("swapchain");
+    let chain =
+        unsafe { factory.CreateSwapChainForComposition(&device, &desc, None) }.expect("swapchain");
     let chain = Chain {
         _device: device,
         chain,
@@ -280,7 +286,14 @@ fn measure(material: WindowMaterial, name: &str) -> Measurement {
     let window = panel((x, y), (320.0, 200.0), material);
     let chain = attach_transparent(window);
     window.show();
-    let behind = || Some((backdrop.window, backdrop.width, backdrop.height, &backdrop.pixels[..]));
+    let behind = || {
+        Some((
+            backdrop.window,
+            backdrop.width,
+            backdrop.height,
+            &backdrop.pixels[..],
+        ))
+    };
     pump(Some(window), behind(), Duration::from_millis(400));
     chain.clear_and_present();
     pump(Some(window), behind(), Duration::from_millis(1200));
@@ -310,6 +323,9 @@ fn measure(material: WindowMaterial, name: &str) -> Measurement {
 
 #[test]
 fn mica_mica_alt_and_acrylic_pixels_follow_the_system_backdrop_contract() {
+    if !desktop::require("materials") {
+        return;
+    }
     let _desktop = DESKTOP.lock().unwrap_or_else(|p| p.into_inner());
     let mica = measure(WindowMaterial::Mica, "mica");
     let alt = measure(WindowMaterial::Tabbed, "mica-alt");
@@ -351,26 +367,50 @@ fn occlusion_loop(window: Window, expect_covered: bool, within: Duration) -> boo
     false
 }
 
+const COVERAGE_SPOTS: [(i32, i32); 5] = [
+    (200, 200),
+    (1100, 150),
+    (1700, 250),
+    (600, 450),
+    (1300, 500),
+];
+
+fn uncovered_victim(left: i32, top: i32) -> Option<(Window, i32, i32)> {
+    COVERAGE_SPOTS.iter().find_map(|(dx, dy)| {
+        let victim = panel((left + dx, top + dy), (300.0, 200.0), WindowMaterial::Solid);
+        victim.show();
+        pump(None, None, Duration::from_millis(300));
+        match victim.is_covered() {
+            false => Some((victim, left + dx, top + dy)),
+            true => {
+                victim.destroy();
+                None
+            }
+        }
+    })
+}
+
 #[test]
 fn coverage_by_other_windows_is_detected_and_reverts_when_they_move_away() {
     let _desktop = DESKTOP.lock().unwrap_or_else(|p| p.into_inner());
     let scout = panel((0, 0), (10.0, 10.0), WindowMaterial::Solid);
     let (left, top, _, _) = scout.monitor().expect("monitor").work_area;
     scout.destroy();
-    let victim = panel((left + 200, top + 200), (300.0, 200.0), WindowMaterial::Solid);
-    victim.show();
-    pump(None, None, Duration::from_millis(300));
-    assert!(!victim.is_covered());
-    let blocker = panel((left + 100, top + 100), (900.0, 700.0), WindowMaterial::Solid);
+    let (victim, x, y) = uncovered_victim(left, top)
+        .expect("no spot on the monitor is free of other processes' windows");
+    let blocker = panel((x - 100, y - 100), (900.0, 700.0), WindowMaterial::Solid);
     blocker.show();
     assert!(occlusion_loop(victim, true, Duration::from_secs(2)));
     blocker.set_position(left + 5000, top);
     pump(None, None, Duration::from_millis(100));
     assert!(occlusion_loop(victim, false, Duration::from_secs(2)));
-    let half = panel((left + 200, top + 100), (300.0, 200.0), WindowMaterial::Solid);
+    let half = panel((x, y - 100), (300.0, 200.0), WindowMaterial::Solid);
     half.show();
     pump(None, None, Duration::from_millis(300));
-    assert!(!victim.is_covered(), "a partial overlap leaves pixels visible");
+    assert!(
+        !victim.is_covered(),
+        "a partial overlap leaves pixels visible"
+    );
     half.destroy();
     blocker.destroy();
     victim.destroy();

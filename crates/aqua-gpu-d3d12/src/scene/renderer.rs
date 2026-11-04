@@ -17,7 +17,7 @@ use super::formats::{dxgi, state_for};
 use super::pipeline::{Kind, PipelineStats, Pipelines};
 use super::sprites;
 use super::tiers::{resolve, Active, SceneOptions};
-use super::timestamps::Timestamps;
+use super::timestamps::{PassTime, Timestamps};
 use super::transients::Transients;
 use super::util::*;
 use super::Error;
@@ -66,6 +66,21 @@ struct Slot {
     capacity: u64,
     srv_heap: ID3D12DescriptorHeap,
     srv_capacity: u32,
+}
+
+fn pass_label(kind: &PassKind) -> &'static str {
+    match kind {
+        PassKind::Instanced { .. } => "quads",
+        PassKind::Shadows { .. } => "shadows",
+        PassKind::Glyphs { .. } => "glyphs",
+        PassKind::Images { .. } => "images",
+        PassKind::Slug { .. } => "slug",
+        PassKind::Fullscreen { .. } => "fullscreen",
+        PassKind::Filter { .. } => "filter",
+        PassKind::Compute { .. } => "compute",
+        PassKind::Copy { .. } => "copy",
+        PassKind::Custom(_) => "custom",
+    }
 }
 
 pub struct SceneRenderer {
@@ -316,6 +331,13 @@ impl SceneRenderer {
         self.active.tiers
     }
 
+    pub fn gpu_pass_times(&self) -> &[PassTime] {
+        self.timestamps
+            .as_ref()
+            .map(Timestamps::latest_passes)
+            .unwrap_or(&[])
+    }
+
     pub fn gpu_time(&self) -> Option<std::time::Duration> {
         self.timestamps.as_ref().and_then(Timestamps::latest)
     }
@@ -359,6 +381,10 @@ impl SceneRenderer {
 
     pub fn warm(&mut self, formats: &[DXGI_FORMAT]) -> Result<(), Error> {
         self.pipelines.warm(formats)
+    }
+
+    pub fn late_pipelines(&self) -> &[(Kind, i32)] {
+        self.pipelines.late()
     }
 
     pub fn pipeline_stats(&self) -> PipelineStats {
@@ -537,7 +563,7 @@ impl SceneRenderer {
             list.SetGraphicsRootSignature(&self.pipelines.root_signature);
             list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         }
-        if let Some(timestamps) = &self.timestamps {
+        if let Some(timestamps) = &mut self.timestamps {
             timestamps.begin(list, slot);
         }
         self.emitter.attach(list)?;
@@ -570,6 +596,9 @@ impl SceneRenderer {
         }
         let mut next_descriptor = 0u32;
         for (pass_index, pass) in plan.passes.iter().enumerate() {
+            if let Some(timestamps) = &mut self.timestamps {
+                timestamps.mark(list, slot, pass_label(&pass.kind));
+            }
             let mut barriers = emitter.batch();
             let rewrites_unordered = matches!(pass.kind, PassKind::Compute { .. })
                 && pass.writes.first().is_some_and(|write| {

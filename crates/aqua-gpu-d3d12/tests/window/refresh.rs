@@ -10,9 +10,7 @@ use crate::test_window::TestWindow;
 const FRAMES: usize = 180;
 
 fn paced(preference: AdapterPreference, label: &str) {
-    let Some(mut backend) = backend(preference) else {
-        return;
-    };
+    let mut backend = backend(preference);
     let window = TestWindow::open(480, 320);
     let (id, extent) = open(&mut backend, &window);
     let interval = backend.refresh_interval(id).expect("interval");

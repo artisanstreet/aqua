@@ -206,13 +206,8 @@ fn render(backend: &mut WindowBackend, id: SurfaceId, plan: &FramePlan) {
 
 fn composes(preference: AdapterPreference, material: WindowMaterial, label: &str) {
     crate::support::hold_software();
-    let mut backend = match WindowBackend::new(options(preference)) {
-        Ok(backend) => backend,
-        Err(error) => {
-            eprintln!("SKIP-NO-ADAPTER {preference:?}: {error}");
-            return;
-        }
-    };
+    let mut backend = WindowBackend::new(options(preference))
+        .unwrap_or_else(|error| panic!("no adapter {preference:?}: {error}"));
     let (window, id, extent) = open_composed(&mut backend, material);
     let plan = translucent_scene(extent);
 
@@ -360,9 +355,8 @@ fn warp_mica_composes_premultiplied_alpha() {
 #[test]
 fn composition_surface_survives_resize_and_device_loss() {
     crate::support::hold_software();
-    let Ok(mut backend) = WindowBackend::new(options(AdapterPreference::HighPerformance)) else {
-        return;
-    };
+    let mut backend = WindowBackend::new(options(AdapterPreference::HighPerformance))
+        .unwrap_or_else(|error| panic!("no hardware adapter: {error}"));
     let (window, id, extent) = open_composed(&mut backend, WindowMaterial::Mica);
     let plan = translucent_scene(extent);
     for _ in 0..3 {

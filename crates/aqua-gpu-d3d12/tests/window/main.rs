@@ -1,4 +1,6 @@
 mod damage;
+#[cfg(windows)]
+mod gpu_time;
 mod mirror;
 mod pacing;
 
@@ -8,6 +10,8 @@ mod backend;
 mod composition;
 #[cfg(windows)]
 mod cross_adapter;
+#[cfg(windows)]
+mod idle;
 #[cfg(windows)]
 mod memory;
 #[cfg(windows)]
@@ -19,8 +23,8 @@ mod scissor;
 #[cfg(windows)]
 mod shared_device;
 #[cfg(windows)]
-#[path = "../hal/window.rs"]
-mod test_window;
-#[cfg(windows)]
 #[path = "../support/mod.rs"]
 mod support;
+#[cfg(windows)]
+#[path = "../hal/window.rs"]
+mod test_window;

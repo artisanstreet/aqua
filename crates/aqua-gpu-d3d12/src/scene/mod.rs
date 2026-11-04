@@ -19,9 +19,10 @@ pub(crate) mod util;
 pub use device::AdapterPreference;
 pub use offscreen::{OffscreenBackend, SurfaceFormat};
 pub use persistent::{PersistentStats, PersistentTextures};
-pub use pipeline::PipelineStats;
+pub use pipeline::{Kind as PipelineKind, PipelineStats};
 pub use renderer::{PersistentView, SceneRenderer, SceneStats, SceneTarget};
 pub use tiers::{SceneOptions, TierLimit};
+pub use timestamps::PassTime;
 
 #[derive(Debug)]
 pub enum Error {

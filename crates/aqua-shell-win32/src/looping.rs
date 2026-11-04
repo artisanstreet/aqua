@@ -125,7 +125,9 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
                 wparam: msg.wParam.0,
                 lparam: msg.lParam.0,
             });
-            if !consumed {
+            if consumed {
+                state::with(|s| s.queue.push_back(Queued::Wake));
+            } else {
                 unsafe {
                     let _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);

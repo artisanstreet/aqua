@@ -7,7 +7,7 @@ use super::ring::{RingError, RingLayout};
 use super::timeline::Timeline;
 use super::util::*;
 
-pub const INITIAL_UPLOAD_BYTES: u64 = 1 << 20;
+pub const INITIAL_UPLOAD_BYTES: u64 = 1 << 16;
 
 pub struct UploadAlloc {
     pub resource: ID3D12Resource,

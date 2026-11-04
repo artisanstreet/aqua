@@ -57,6 +57,8 @@ impl Handler for Script {
     }
 }
 
+static DRAG_SESSION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn drive(log: Log, steps: Vec<Step>) {
     let script = Script {
         log,
@@ -258,6 +260,9 @@ fn file_data_object(path: &std::path::Path) -> IDataObject {
 
 #[test]
 fn file_drag_and_drop_reaches_the_handler_in_logical_coordinates() {
+    let _drag = DRAG_SESSION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let log: Log = Default::default();
     let window = Window::create(&hidden()).expect("window");
     let scale = window.scale();
@@ -526,6 +531,9 @@ fn client_origin(window: Window) -> windows::Win32::Foundation::POINT {
 
 #[test]
 fn dragging_a_non_file_object_is_refused_and_emits_no_file_events() {
+    let _drag = DRAG_SESSION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let log: Log = Default::default();
     let window = Window::create(&hidden()).expect("window");
     let target = drop_target_of(window);
@@ -555,6 +563,9 @@ fn dragging_a_non_file_object_is_refused_and_emits_no_file_events() {
 
 #[test]
 fn leaving_a_file_drag_reports_leave_after_enter_and_never_a_drop() {
+    let _drag = DRAG_SESSION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let log: Log = Default::default();
     let window = Window::create(&hidden()).expect("window");
     let target = drop_target_of(window);
@@ -583,6 +594,9 @@ fn leaving_a_file_drag_reports_leave_after_enter_and_never_a_drop() {
 
 #[test]
 fn a_file_drag_handed_from_one_window_to_another_is_attributed_to_each_window() {
+    let _drag = DRAG_SESSION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let log: Log = Default::default();
     let source = Window::create(&hidden()).expect("source window");
     let sink = Window::create(&hidden()).expect("sink window");
@@ -644,7 +658,12 @@ fn a_file_drag_handed_from_one_window_to_another_is_attributed_to_each_window() 
         .collect();
     assert_eq!(
         timeline,
-        vec![(false, "enter"), (false, "leave"), (true, "enter"), (true, "drop")],
+        vec![
+            (false, "enter"),
+            (false, "leave"),
+            (true, "enter"),
+            (true, "drop")
+        ],
         "source={source_id:?} sink={sink_id:?}"
     );
     source.destroy();
@@ -689,6 +708,9 @@ fn clipboard_window_messages_reach_the_handler_as_control_shortcuts() {
             _ => None,
         })
         .collect();
-    assert_eq!(letters, vec![Key::Char('v'), Key::Char('c'), Key::Char('x')]);
+    assert_eq!(
+        letters,
+        vec![Key::Char('v'), Key::Char('c'), Key::Char('x')]
+    );
     window.destroy();
 }

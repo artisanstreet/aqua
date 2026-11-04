@@ -6,9 +6,7 @@ use crate::backend::{backend, frame, matches_reference, open, scene};
 use crate::test_window::TestWindow;
 
 fn two_windows_share_one_device(preference: AdapterPreference, label: &str) {
-    let Some(mut backend) = backend(preference) else {
-        return;
-    };
+    let mut backend = backend(preference);
     let left = TestWindow::open(480, 320);
     let right = TestWindow::open(360, 240);
     let (left_id, left_extent) = open(&mut backend, &left);
@@ -56,9 +54,7 @@ fn warp_windows_share_one_device_queue_and_renderer() {
 
 #[test]
 fn closing_or_resizing_one_window_leaves_the_other_untouched() {
-    let Some(mut backend) = backend(AdapterPreference::Warp) else {
-        return;
-    };
+    let mut backend = backend(AdapterPreference::Warp);
     let first = TestWindow::open(400, 300);
     let second = TestWindow::open(400, 300);
     let (first_id, first_extent) = open(&mut backend, &first);
@@ -98,9 +94,7 @@ fn closing_or_resizing_one_window_leaves_the_other_untouched() {
 
 #[test]
 fn device_loss_rebuilds_every_window_on_the_new_device() {
-    let Some(mut backend) = backend(AdapterPreference::HighPerformance) else {
-        return;
-    };
+    let mut backend = backend(AdapterPreference::HighPerformance);
     let first = TestWindow::open(400, 300);
     let second = TestWindow::open(320, 220);
     let (first_id, first_extent) = open(&mut backend, &first);

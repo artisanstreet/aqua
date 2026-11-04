@@ -17,6 +17,8 @@ use super::tier::{Tier, Tiers};
 use super::timeline::Timeline;
 
 const RTV_CAPACITY: u32 = 64;
+const STATIC_DESCRIPTORS: u32 = 64;
+const DYNAMIC_DESCRIPTORS: u32 = 2_048;
 const LOSS_WINDOW: Duration = Duration::from_secs(10);
 const LOSS_LIMIT: usize = 2;
 
@@ -125,15 +127,11 @@ fn build(options: &DeviceOptions) -> Result<Built, Error> {
             NodeMask: 0,
         })?
     };
-    let (static_count, dynamic_count) = match selected.info.tiers.binding {
-        Tier::Bindless => (65_536, 4_096),
-        Tier::Baseline => (1_024, 2_048),
-    };
     Ok(Built {
         timeline: Timeline::new(&device)?,
         frames: FrameRing::new(&device, options.frames_in_flight.max(2))?,
         rtv: CpuHeap::new(&device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, RTV_CAPACITY)?,
-        srv: ShaderVisibleHeap::new(&device, static_count, dynamic_count)?,
+        srv: ShaderVisibleHeap::new(&device, STATIC_DESCRIPTORS, DYNAMIC_DESCRIPTORS)?,
         monitor: BudgetMonitor::new(&selected.adapter)?,
         info: selected.info,
         factory,

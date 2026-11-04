@@ -2,11 +2,12 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use aqua_core::geometry::Rect;
-use aqua_graph::{validate, Extent, FramePlan};
+use aqua_core::Oklch;
+use aqua_graph::{plan_paint, validate, Extent, FramePlan, PaintCommand, Quad};
 use aqua_protocol::{
     DeviceStatus, FeatureTier, Features, FrameInputs, FrameReport, GpuBackend, GpuCapabilities,
     GpuError, GpuReadback, PresentHint, PresentTimes, RecoveryReport, SurfaceId, SurfacePixels,
-    SurfaceTarget, UploadBatch,
+    SurfaceTarget, UploadBatch, WindowId,
 };
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -17,14 +18,22 @@ use super::mirror::TextureMirror;
 use super::pacing::{PaceReport, Pacer};
 use super::timing;
 use crate::hal::budget::{Trim, Visibility};
-use crate::hal::{self, BudgetStatus, Core, DeviceOptions, PresentMode, PresentStatus, Swapchain, RENDER_FORMAT};
+use crate::hal::{
+    self, BudgetStatus, Core, DeviceOptions, PresentMode, PresentStatus, Swapchain, RENDER_FORMAT,
+};
 use crate::half::bgra8_srgb_rows_to_linear_rgba8;
 use crate::scene::util::{footprint_location, texture_location};
 use crate::scene::{
-    PersistentStats, PersistentTextures, PipelineStats, SceneRenderer, SceneTarget,
+    PassTime, PersistentStats, PersistentTextures, PipelineStats, SceneRenderer, SceneTarget,
 };
 
 const FRAME_WAIT_MS: u32 = 1000;
+const AMD_VENDOR: u32 = 0x1002;
+const AMD_TRACKER_FRAMES: u32 = 160;
+const AMD_TRACKER_EXTENT: Extent = Extent {
+    width: 64,
+    height: 64,
+};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WindowOptions {
@@ -77,6 +86,18 @@ pub struct WindowStats {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PhaseTimes {
+    pub validate: Duration,
+    pub slot_wait: Duration,
+    pub reserve: Duration,
+    pub record: Duration,
+    pub submit: Duration,
+    pub present: Duration,
+    pub resize: Duration,
+    pub reserve_created: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MemoryBreakdown {
     pub swapchain_bytes: u64,
     pub transient_heap_bytes: u64,
@@ -118,6 +139,14 @@ struct WindowSurface {
     monitor: isize,
 }
 
+struct Handoff<T>(T);
+
+unsafe impl<T> Send for Handoff<T> {}
+
+type Early = std::thread::JoinHandle<Handoff<Result<WindowBackend, GpuError>>>;
+
+static EARLY: std::sync::Mutex<Option<Early>> = std::sync::Mutex::new(None);
+
 struct Gpu {
     list: ID3D12GraphicsCommandList,
     renderer: SceneRenderer,
@@ -135,6 +164,7 @@ pub struct WindowBackend {
     next_surface: u32,
     lost: bool,
     stats: WindowStats,
+    phases: PhaseTimes,
     listener: Option<Box<dyn FnMut(RecoveryNotice)>>,
 }
 
@@ -147,6 +177,28 @@ fn build_gpu(core: &Core, options: &WindowOptions, cache: Option<&[u8]>) -> Resu
         renderer,
         textures: PersistentTextures::new(core.device()),
     })
+}
+
+fn tracker_plan() -> Result<FramePlan, GpuError> {
+    let quad = PaintCommand::Quad(Quad {
+        bounds: Rect {
+            x: 0.0,
+            y: 0.0,
+            w: AMD_TRACKER_EXTENT.width as f32,
+            h: AMD_TRACKER_EXTENT.height as f32,
+        },
+        radius: 0.0,
+        border_width: 0.0,
+        fill: Oklch::WHITE,
+        border_color: Oklch::BLACK,
+    });
+    plan_paint(AMD_TRACKER_EXTENT, Oklch::BLACK, &[quad])
+        .map_err(|_| GpuError::Unsupported("amd frame tracker plan"))
+}
+
+fn runs_amd_frame_tracker(core: &Core) -> bool {
+    let adapter = &core.info().adapter;
+    adapter.vendor_id == AMD_VENDOR && adapter.kind == hal::selection::Adapter::Hardware
 }
 
 fn describe(core: &Core) -> GpuCapabilities {
@@ -243,7 +295,71 @@ impl WindowBackend {
     ) -> Result<Self, GpuError> {
         let core = Core::new(options.device)?;
         let gpu = build_gpu(&core, &options, cache)?;
-        Ok(Self {
+        let mut backend = Self::assemble(options, core, gpu);
+        backend.settle_amd_frame_tracker();
+        Ok(backend)
+    }
+
+    pub fn begin_early(
+        options: WindowOptions,
+        cache: impl FnOnce() -> Option<Vec<u8>> + Send + 'static,
+    ) {
+        let mut slot = EARLY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot.is_some() {
+            return;
+        }
+        *slot = Some(std::thread::spawn(move || {
+            let cache = cache();
+            let outcome = Core::new(options.device)
+                .map_err(GpuError::from)
+                .and_then(|core| {
+                    build_gpu(&core, &options, cache.as_deref()).map(|gpu| (core, gpu))
+                });
+            Handoff(outcome.map(|(core, gpu)| {
+                let mut backend = Self::assemble(options, core, gpu);
+                backend.settle_amd_frame_tracker();
+                backend
+            }))
+        }));
+    }
+
+    pub fn take_early() -> Option<Result<Self, GpuError>> {
+        let handle = EARLY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()?;
+        let Handoff(outcome) = handle.join().ok()?;
+        Some(outcome)
+    }
+
+    fn settle_amd_frame_tracker(&mut self) {
+        if !self.core.as_ref().is_some_and(runs_amd_frame_tracker) {
+            return;
+        }
+        let (stats, phases, next_surface) = (self.stats, self.phases, self.next_surface);
+        let _ = self.present_tracker_frames();
+        self.stats = stats;
+        self.phases = phases;
+        self.next_surface = next_surface;
+    }
+
+    fn present_tracker_frames(&mut self) -> Result<(), GpuError> {
+        let plan = tracker_plan()?;
+        let window = WindowId::new(1).ok_or(GpuError::Unsupported("window id"))?;
+        let surface = self.create_composition_surface(window, AMD_TRACKER_EXTENT)?;
+        let presented = (0..AMD_TRACKER_FRAMES).try_for_each(|_| {
+            self.wait_for_frame_slot(surface)?;
+            self.execute(&plan, &FrameInputs::new(surface))?;
+            self.present(surface, PresentHint::Immediate).map(|_| ())
+        });
+        let destroyed = self.destroy_surface(surface);
+        presented.and(destroyed)
+    }
+
+    fn assemble(options: WindowOptions, core: Core, gpu: Gpu) -> Self {
+        Self {
             options,
             capabilities: describe(&core),
             surfaces: HashMap::new(),
@@ -254,8 +370,9 @@ impl WindowBackend {
             next_surface: 0,
             lost: false,
             stats: WindowStats::default(),
+            phases: PhaseTimes::default(),
             listener: None,
-        })
+        }
     }
 
     pub fn set_recovery_listener(&mut self, listener: Box<dyn FnMut(RecoveryNotice)>) {
@@ -283,6 +400,10 @@ impl WindowBackend {
 
     pub fn stats(&self) -> WindowStats {
         self.stats
+    }
+
+    pub fn phases(&self) -> PhaseTimes {
+        self.phases
     }
 
     pub fn memory_breakdown(&self) -> Result<MemoryBreakdown, GpuError> {
@@ -353,6 +474,30 @@ impl WindowBackend {
         let freed = gpu.renderer.trim(trim, completed);
         gpu.renderer.retire(completed);
         Ok(freed)
+    }
+
+    pub fn gpu_frame_time(&self) -> Option<Duration> {
+        self.gpu.as_ref().and_then(|gpu| gpu.renderer.gpu_time())
+    }
+
+    pub fn gpu_pass_times(&self) -> &[PassTime] {
+        self.gpu
+            .as_ref()
+            .map(|gpu| gpu.renderer.gpu_pass_times())
+            .unwrap_or(&[])
+    }
+
+    pub fn late_pipelines(&self) -> Vec<String> {
+        self.gpu
+            .as_ref()
+            .map(|gpu| {
+                gpu.renderer
+                    .late_pipelines()
+                    .iter()
+                    .map(|(kind, format)| format!("{kind:?}/{format}"))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn pipeline_stats(&self) -> Option<PipelineStats> {
@@ -480,6 +625,7 @@ impl WindowBackend {
             Some(gpu) => gpu.renderer.validate(plan)?,
             None => validate(plan)?,
         }
+        let validated = started.elapsed();
         let core = self.core.as_mut().ok_or(no_device())?;
         let gpu = self.gpu.as_mut().ok_or(no_device())?;
         let entry = self
@@ -508,10 +654,12 @@ impl WindowBackend {
         let completed = core.completed_fence();
         gpu.renderer.retire(completed);
         gpu.textures.retire(completed);
+        let reserve_started = Instant::now();
         let created = gpu
             .renderer
             .reserve(plan, core.timeline().next_value())
             .map_err(GpuError::from)?;
+        let reserve = reserve_started.elapsed();
         if created && crate::scene::debug::requested() {
             core.wait_idle()?;
         }
@@ -523,6 +671,7 @@ impl WindowBackend {
             format: RENDER_FORMAT,
             rest_state: D3D12_RESOURCE_STATE_PRESENT,
         };
+        let record_started = Instant::now();
         unsafe { gpu.list.Reset(&frame.allocator, None) }.map_err(hal::Error::from)?;
         let recorded = gpu
             .textures
@@ -550,9 +699,21 @@ impl WindowBackend {
             }
         };
         unsafe { gpu.list.Close() }.map_err(hal::Error::from)?;
+        let recorded_in = record_started.elapsed();
+        let submit_started = Instant::now();
         core.execute(&gpu.list)?;
         let signalled = core.end_frame(&frame)?;
         debug_assert_eq!(signalled, frame_fence);
+        self.phases = PhaseTimes {
+            validate: validated,
+            slot_wait: Duration::from_micros(frame.waited_us as u64),
+            reserve,
+            record: recorded_in,
+            submit: submit_started.elapsed(),
+            present: self.phases.present,
+            resize: self.phases.resize,
+            reserve_created: created,
+        };
         entry.rendered = Some(back.index);
         entry.pending = true;
         entry.frame_damage = current;
@@ -608,7 +769,9 @@ impl WindowBackend {
                 Damage::Full
             }
         };
+        let present_started = Instant::now();
         let status = entry.swapchain.present(mode, &dirty_rects(&damage))?;
+        self.phases.present = present_started.elapsed();
         entry.pending = false;
         let now = Instant::now();
         match status {
@@ -693,6 +856,7 @@ impl WindowBackend {
         self.core = Some(core);
         self.gpu = Some(gpu);
         self.lost = false;
+        self.settle_amd_frame_tracker();
         self.stats.recoveries += 1;
         if let Some(listener) = self.listener.as_mut() {
             listener(notice);
@@ -818,7 +982,9 @@ impl GpuBackend for WindowBackend {
             .surfaces
             .get_mut(&surface)
             .ok_or(GpuError::UnknownSurface(surface))?;
+        let resize_started = Instant::now();
         let outcome = core.resize_swapchain(&mut entry.swapchain, extent.width, extent.height);
+        self.phases.resize = resize_started.elapsed();
         match outcome {
             Ok(changed) => {
                 if changed {

@@ -14,6 +14,37 @@ pub const PURE_CRATES: &[&str] = &[
     "aqua-kernels",
 ];
 
+pub const ADAPTER_CRATES: &[&str] = &[
+    "aqua-gpu-d3d12",
+    "aqua-gpu-ref",
+    "aqua-shell-win32",
+    "aqua-ime-tsf",
+    "aqua-a11y-uia",
+    "aqua-fonts-system",
+    "aqua-shaders",
+    "aqua-transport",
+    "aqua-oracle-dwrite",
+];
+
+pub const HOST_CRATES: &[&str] = &["aqua"];
+
+pub const VERIFY_CRATES: &[&str] = &["aqua-verify"];
+
+pub const BANNED_EVERYWHERE: &[&str] = &[
+    "wgpu",
+    "wgpu-core",
+    "wgpu-hal",
+    "wgpu-types",
+    "glyphon",
+    "cosmic-text",
+    "winit",
+    "accesskit_winit",
+    "fontdb",
+    "aqua-render",
+    "aqua-platform",
+    "aqua-gpu-wgpu",
+];
+
 pub const UNSAFE_AUDITED_CRATES: &[&str] = &["aqua-kernels"];
 
 pub const FORBIDDEN_ADAPTER_CRATES: &[&str] = &[
@@ -33,7 +64,16 @@ pub const FORBIDDEN_ADAPTER_CRATES: &[&str] = &[
     "aqua-verify",
 ];
 
-pub const FORBIDDEN_EXTERNAL_CRATES: &[&str] = &["windows", "ash", "objc2", "winit", "wgpu"];
+pub const FORBIDDEN_EXTERNAL_CRATES: &[&str] = &[
+    "windows",
+    "ash",
+    "objc2",
+    "winit",
+    "wgpu",
+    "glyphon",
+    "cosmic-text",
+    "fontdb",
+];
 
 pub const FORBIDDEN_SOURCE_TOKENS: &[&str] = &[
     "Instant::now",

@@ -26,7 +26,9 @@ aqua-motion = { path = "../aqua-motion" }
 aqua-runtime = { path = "../aqua-runtime" }
 aqua-scene = { path = "../aqua-scene" }
 aqua-text = { path = "../aqua-text" }
+aqua-transport = { path = "../aqua-transport" }
 aqua-ui = { path = "../aqua-ui" }
 
 [target.'cfg(windows)'.dev-dependencies]
 aqua-gpu-d3d12 = { path = "../aqua-gpu-d3d12" }
+windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging"] }

@@ -9,6 +9,13 @@ pub const RENDERER_OFFSCREEN: MemoryBudget = MemoryBudget {
     vram_total: 48 * MIB,
 };
 
+pub const RENDERER_WINDOWED: MemoryBudget = MemoryBudget {
+    private_total: 140 * MIB,
+    framework_heap: 4 * MIB,
+    steady_growth: MIB,
+    vram_total: 64 * MIB,
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemoryBudget {
     pub private_total: u64,

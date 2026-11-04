@@ -8,9 +8,21 @@ def fields(line):
     return {k: v for k, v in re.findall(r"(\w+)=(\S+)", line)}
 
 
+exited = []
+
+
+def frame_stats(which, run):
+    path = out / f"{which}-{run}-stderr.log"
+    if not path.exists():
+        return []
+    return [fields(line) for line in path.read_text(errors="replace").splitlines()
+            if line.startswith("aqua-frame-stats")]
+
+
 def load(which, run):
     text = (out / f"{which}-{run}.log").read_text(errors="replace")
     marks, lats, wakes, gpu, final = {}, {}, None, {}, {}
+    exited.append(any(line.startswith("probe-exited") for line in text.splitlines()))
     for line in text.splitlines():
         f = fields(line)
         if line.startswith("probe-cpu"):
@@ -41,17 +53,22 @@ def med(values):
 
 
 rows = {}
-for which in ("port", "gpui"):
+for which in ("aqua", "gpui"):
     cols = {k: [] for k in (
         "idle_cpu_pct", "ctx_per_s", "idle_latency_p99", "scroll_p50", "scroll_p90",
         "scroll_p99", "scroll_max", "scroll_over16", "scroll_over50", "scroll_timeouts",
         "scroll_cpu_ms_per_frame", "private_boot", "private_settle", "working_set_settle",
-        "gpu_dedicated_mb", "threads")}
+        "gpu_dedicated_mb", "threads", "frame_cpu_avg", "frame_cpu_max", "failed_runs")}
     for run in range(1, runs + 1):
         try:
             marks, lats, wakes, gpu, final = load(which, run)
         except FileNotFoundError:
             continue
+        cols["failed_runs"].append(1.0 if exited[-1] or not marks else 0.0)
+        stats = frame_stats(which, run)
+        if stats:
+            cols["frame_cpu_avg"].append(med([num(f, "cpu_avg_ms") for f in stats]))
+            cols["frame_cpu_max"].append(max(num(f, "cpu_max_ms") for f in stats))
         i0, i1 = marks.get("idle0"), marks.get("idle1")
         if i0 and i1:
             wall = (num(i1, "unix_ms") - num(i0, "unix_ms")) / 1000.0
@@ -103,7 +120,32 @@ labels = [
     ("working_set_settle", "working set MB after settle"),
     ("gpu_dedicated_mb", "GPU dedicated MB"),
     ("threads", "threads"),
+    ("frame_cpu_avg", "frame CPU avg ms (aqua frame stats)"),
+    ("frame_cpu_max", "frame CPU worst ms (aqua frame stats)"),
+    ("failed_runs", "runs that exited or never ran (median 0/1)"),
 ]
 print(f"{'metric':44} {'aqua':>10} {'gpui':>10}")
 for key, label in labels:
-    print(f"{label:44} {fmt(rows['port'][key]):>10} {fmt(rows['gpui'][key]):>10}")
+    print(f"{label:44} {fmt(rows['aqua'][key]):>10} {fmt(rows['gpui'][key]):>10}")
+
+
+WINDOWED_PRIVATE_MIB = 142.0
+WINDOWED_GPU_MIB = 64.0
+verdict = []
+aqua = rows["aqua"]
+if aqua["private_settle"] is None:
+    verdict.append("windowed memory gate: NOT MEASURED (aqua never ran)")
+else:
+    verdict.append(
+        f"windowed private memory gate ({WINDOWED_PRIVATE_MIB:.0f} MiB): "
+        f"{'PASS' if aqua['private_settle'] <= WINDOWED_PRIVATE_MIB else 'FAIL'} ({aqua['private_settle']:.1f})")
+    if aqua["gpu_dedicated_mb"] is not None:
+        verdict.append(
+            f"windowed GPU dedicated gate ({WINDOWED_GPU_MIB:.0f} MiB): "
+            f"{'PASS' if aqua['gpu_dedicated_mb'] <= WINDOWED_GPU_MIB else 'FAIL'} ({aqua['gpu_dedicated_mb']:.1f})")
+    gpui = rows["gpui"]
+    for key, label in (("scroll_p99", "scroll p99"), ("scroll_over16", "scroll samples over 16.7 ms"), ("idle_cpu_pct", "idle CPU")):
+        if aqua[key] is not None and gpui[key] is not None:
+            verdict.append(f"{label}: aqua {'no worse than' if aqua[key] <= gpui[key] else 'WORSE than'} gpui ({aqua[key]:.2f} vs {gpui[key]:.2f})")
+print()
+print("\n".join(verdict))

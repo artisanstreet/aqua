@@ -74,7 +74,6 @@ Contracts: [`docs/APPLICATION.md`](docs/APPLICATION.md),
 | `aqua-reactive` | Explicit-dependency graph, scopes, batching, flush boundary |
 | `aqua-text` | Shaping, editing model, shared fonts + run registry |
 | `aqua-render` | wgpu 2D renderer, scene store, surface, media + viewport passes |
-| `aqua-platform` | winit host, scheduler, materials, clipboard/dialogs/prefs, AccessKit bridge |
 | `aqua-ui` | Tree, layout, overlays, motion, element and collection builders, virtualized row realization |
 
 `aqua::ui` ≡ `aqua_ui::element::ui`.

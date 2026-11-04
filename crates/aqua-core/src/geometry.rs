@@ -406,6 +406,19 @@ impl Transform2D {
     }
 }
 
+pub fn snap_device_pixel(logical: f32, scale: f32) -> f32 {
+    let value = logical * scale;
+    (value.abs() - 0.5).ceil().copysign(value)
+}
+
+pub fn snap_device_stroke(logical: f32, scale: f32) -> f32 {
+    if logical == 0.0 {
+        0.0
+    } else {
+        snap_device_pixel(logical.max(0.0), scale).max(1.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

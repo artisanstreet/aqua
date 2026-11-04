@@ -289,6 +289,74 @@ fn lch_to_oklab(c: f32, h_deg: f32) -> (f32, f32) {
     (c * h.cos(), c * h.sin())
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorProfile {
+    #[default]
+    AquaLinear,
+    GpuiWindowsEncoded,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuiHsla {
+    pub h: f32,
+    pub s: f32,
+    pub l: f32,
+    pub a: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuiTextColor {
+    pub hue_degrees: f32,
+    pub saturation: f32,
+    pub lightness: f32,
+    pub alpha: f32,
+}
+
+impl GpuiHsla {
+    pub fn to_srgba(self) -> [f32; 4] {
+        let h = self.h * 6.0;
+        let c = (1.0 - (2.0 * self.l - 1.0).abs()) * self.s;
+        let x = c * (1.0 - ((h % 2.0) - 1.0).abs());
+        let m = self.l - c * 0.5;
+        let (r, g, b) = if (0.0..1.0).contains(&h) {
+            (c, x, 0.0)
+        } else if (1.0..2.0).contains(&h) {
+            (x, c, 0.0)
+        } else if (2.0..3.0).contains(&h) {
+            (0.0, c, x)
+        } else if (3.0..4.0).contains(&h) {
+            (0.0, x, c)
+        } else if (4.0..5.0).contains(&h) {
+            (x, 0.0, c)
+        } else {
+            (c, 0.0, x)
+        };
+        [r + m, g + m, b + m, self.a]
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuiGradientColorSpace {
+    Srgb,
+    Oklab,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuiGradientStop {
+    pub percentage: f32,
+    pub color: GpuiHsla,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GpuiBackground {
+    Solid(GpuiHsla),
+    LinearGradient {
+        angle: f32,
+        color_space: GpuiGradientColorSpace,
+        stops: [GpuiGradientStop; 2],
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

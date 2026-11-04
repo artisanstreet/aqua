@@ -106,11 +106,41 @@ pub struct SnapshotTransition {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuiSnapshotTransition {
+    pub duration: std::time::Duration,
+    pub band: f32,
+    pub shimmer: crate::GpuiHsla,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuiSourceSnapshotTransition {
+    pub duration: std::time::Duration,
+    pub band: f32,
+    pub shimmer: crate::GpuiTextColor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextColorMap {
     pub start: f32,
     pub end: f32,
     pub target: Oklch,
     pub strength: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuiTextColorMap {
+    pub bounds: Rect,
+    pub phase: f32,
+    pub spread: f32,
+    pub target: crate::GpuiTextColor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuiTextShimmer {
+    pub map: GpuiTextColorMap,
+    pub key: u64,
+    pub duration: std::time::Duration,
+    pub delay: std::time::Duration,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -138,8 +168,110 @@ impl ShadowLayer {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuiShadowLayer {
+    pub dx: f32,
+    pub dy: f32,
+    pub blur: f32,
+    pub spread: f32,
+    pub inset: bool,
+    pub color: crate::GpuiHsla,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuiSvgTransform {
+    pub scale: crate::Point,
+    pub translation: crate::Point,
+    pub rotation_radians: f32,
+}
+
+impl Default for GpuiSvgTransform {
+    fn default() -> Self {
+        Self {
+            scale: crate::Point::new(1.0, 1.0),
+            translation: crate::Point::ZERO,
+            rotation_radians: 0.0,
+        }
+    }
+}
+
+impl GpuiShadowLayer {
+    pub fn bounds(self, bounds: Rect) -> Rect {
+        if self.inset {
+            return bounds;
+        }
+        Rect::from_edges(
+            bounds.x + self.dx - self.spread,
+            bounds.y + self.dy - self.spread,
+            bounds.right() + self.dx + self.spread,
+            bounds.bottom() + self.dy + self.spread,
+        )
+        .inflate(1.5 * self.blur.max(0.0))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GpuiTextOpacityRange {
+    pub bytes: std::ops::Range<usize>,
+    pub opacity: f32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum DisplayItem {
+    PushGpuiQuadPulse(GpuiQuadPulse),
+    PopGpuiQuadPulse,
+    GpuiSvg {
+        bounds: Rect,
+        source: std::sync::Arc<str>,
+        tint: Option<crate::GpuiHsla>,
+        opacity: f32,
+    },
+    GpuiTransformedSvg {
+        bounds: Rect,
+        source: std::sync::Arc<str>,
+        tint: crate::GpuiHsla,
+        opacity: f32,
+        transform: GpuiSvgTransform,
+    },
+    GpuiShadow {
+        bounds: Rect,
+        corners: crate::geometry::CornerRadii,
+        layer: GpuiShadowLayer,
+    },
+    GpuiPath {
+        transformed_window_logical_bounds: Rect,
+        path: std::sync::Arc<crate::vector::GpuiPath>,
+    },
+    GpuiMesh {
+        bounds: Rect,
+        corners: crate::geometry::CornerRadii,
+        mesh: std::sync::Arc<crate::gpui_mesh::GpuiMesh>,
+        style: crate::gpui_mesh::GpuiMeshStyle,
+    },
+    GpuiBorder {
+        bounds: Rect,
+        corners: crate::geometry::CornerRadii,
+        widths: crate::geometry::Insets,
+        color: crate::GpuiHsla,
+        dashed: bool,
+    },
+    GpuiBackground {
+        bounds: Rect,
+        corners: crate::geometry::CornerRadii,
+        background: crate::GpuiBackground,
+    },
+    Quad {
+        bounds: Rect,
+        corners: crate::geometry::CornerRadii,
+        fill: Oklch,
+        border_widths: crate::geometry::Insets,
+        border_color: Oklch,
+        dashed: bool,
+    },
+    PushRoundedClip {
+        bounds: Rect,
+        corners: crate::geometry::CornerRadii,
+    },
     Shadow {
         bounds: Rect,
         corners: crate::geometry::CornerRadii,
@@ -147,6 +279,15 @@ pub enum DisplayItem {
     },
     PushTextColorMap(TextColorMap),
     PopTextColorMap,
+    PushGpuiTextColorMap(GpuiTextColorMap),
+    PushGpuiTextShimmer(GpuiTextShimmer),
+    PopGpuiTextColorMap,
+    PushGpuiTextColor(crate::GpuiHsla),
+    PopGpuiTextColor,
+    PushGpuiTextOpacity(std::sync::Arc<[GpuiTextOpacityRange]>),
+    PopGpuiTextOpacity,
+    PushGpuiSourceTextColor(crate::GpuiTextColor),
+    PopGpuiSourceTextColor,
     PushContentBlur {
         bounds: Rect,
         radius: f32,
@@ -190,12 +331,20 @@ pub enum DisplayItem {
         /// Uniform corner radius.
         radius: f32,
     },
+    PushGpuiContentMask {
+        bounds: Rect,
+    },
     /// End the innermost clip.
     PopClip,
     /// Group opacity multiplier for subsequent siblings until `PopOpacity`.
     PushOpacity(f32),
     /// End the innermost opacity group.
     PopOpacity,
+    BackdropBlurRounded {
+        bounds: Rect,
+        radius: f32,
+        corners: crate::geometry::CornerRadii,
+    },
     /// In-app backdrop blur of content behind this rect.
     BackdropBlur {
         /// Area to blur.
@@ -230,6 +379,19 @@ pub enum DisplayItem {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GpuiQuadPulse {
+    pub start_ms: u32,
+    pub period_ms: u32,
+    pub min_opacity: f32,
+}
+
+pub fn gpui_pulse_clock_ms() -> u32 {
+    static EPOCH: std::sync::LazyLock<std::time::Instant> =
+        std::sync::LazyLock::new(std::time::Instant::now);
+    EPOCH.elapsed().as_millis() as u32
+}
+
 impl DisplayItem {
     /// Conservative logical bounds of the item INCLUDING effect footprints
     /// (shadow blur/offset, backdrop sampling padding). Used for damage.
@@ -238,6 +400,7 @@ impl DisplayItem {
     pub fn bounds(&self) -> Option<Rect> {
         match self {
             DisplayItem::Shadow { bounds, layer, .. } => Some(layer.bounds(*bounds)),
+            DisplayItem::GpuiShadow { bounds, layer, .. } => Some(layer.bounds(*bounds)),
             DisplayItem::Rect { bounds, shadow, .. } => {
                 let mut r = *bounds;
                 if let Some((ox, oy, blur, _)) = shadow {
@@ -252,10 +415,22 @@ impl DisplayItem {
                 }
                 Some(r)
             }
-            DisplayItem::Image { bounds, .. }
+            DisplayItem::GpuiPath {
+                transformed_window_logical_bounds,
+                ..
+            } => Some(*transformed_window_logical_bounds),
+            DisplayItem::GpuiSvg { .. } | DisplayItem::GpuiTransformedSvg { .. } => None,
+            DisplayItem::GpuiBorder { bounds, .. }
+            | DisplayItem::GpuiMesh { bounds, .. }
+            | DisplayItem::GpuiBackground { bounds, .. }
+            | DisplayItem::Quad { bounds, .. }
+            | DisplayItem::PushRoundedClip { bounds, .. }
+            | DisplayItem::Image { bounds, .. }
             | DisplayItem::Vector { bounds, .. }
             | DisplayItem::PushContentBlur { bounds, .. }
             | DisplayItem::PushClip { bounds, .. }
+            | DisplayItem::PushGpuiContentMask { bounds }
+            | DisplayItem::BackdropBlurRounded { bounds, .. }
             | DisplayItem::BackdropBlur { bounds, .. }
             | DisplayItem::External { bounds, .. } => Some(*bounds),
             DisplayItem::Text { at, .. } => {
@@ -267,6 +442,17 @@ impl DisplayItem {
             }
             DisplayItem::PushTextColorMap(_)
             | DisplayItem::PopTextColorMap
+            | DisplayItem::PushGpuiTextColorMap(_)
+            | DisplayItem::PushGpuiTextShimmer(_)
+            | DisplayItem::PopGpuiTextColorMap
+            | DisplayItem::PushGpuiTextColor(_)
+            | DisplayItem::PopGpuiTextColor
+            | DisplayItem::PushGpuiTextOpacity(_)
+            | DisplayItem::PopGpuiTextOpacity
+            | DisplayItem::PushGpuiSourceTextColor(_)
+            | DisplayItem::PopGpuiSourceTextColor
+            | DisplayItem::PushGpuiQuadPulse(_)
+            | DisplayItem::PopGpuiQuadPulse
             | DisplayItem::PopContentBlur
             | DisplayItem::PushOpacity(_)
             | DisplayItem::PopClip

@@ -9,6 +9,7 @@ pub mod color;
 pub mod cursor;
 pub mod event;
 pub mod geometry;
+pub mod gpui_mesh;
 pub mod id;
 pub mod image;
 pub mod scene;
@@ -17,13 +18,17 @@ pub mod vector;
 
 pub use arena::Arena;
 pub use click::ClickSettings;
-pub use color::Oklch;
+pub use color::{
+    ColorProfile, GpuiBackground, GpuiGradientColorSpace, GpuiGradientStop, GpuiHsla,
+    GpuiTextColor, Oklch,
+};
 pub use cursor::CursorIcon;
 pub use event::{
     ImeEvent, InputEvent, Key, KeyEvent, Modifiers, NamedKey, PointerButton, PointerEvent,
     PointerKind, ScrollDelta,
 };
 pub use geometry::{CornerRadii, Insets, Point, Rect, Size, Transform2D};
+pub use gpui_mesh::{GpuiMesh, GpuiMeshStyle, GpuiMeshVertex};
 pub use id::{ImageId, NodeId, RawId, ViewportId};
 pub use scene::{
     decode_layer, media_layer, viewport_layer, DisplayItem, LayerKind, TextRun,

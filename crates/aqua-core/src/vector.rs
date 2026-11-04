@@ -125,6 +125,48 @@ impl PaintedPath {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum GpuiPathStyle {
+    Fill {
+        rule: FillRule,
+    },
+    Stroke {
+        width: f32,
+        cap: LineCap,
+        join: LineJoin,
+        dash: Vec<f32>,
+        dash_offset: f32,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GpuiPath {
+    pub commands_local: Vec<PathCommand>,
+    pub origin_window_logical: Point,
+    pub element_transform: Transform2D,
+    pub style: GpuiPathStyle,
+    pub background: crate::GpuiBackground,
+}
+
+impl GpuiPath {
+    pub fn window_logical_position(&self, local: Point) -> Point {
+        let window = Point::new(
+            local.x + self.origin_window_logical.x,
+            local.y + self.origin_window_logical.y,
+        );
+        self.element_transform.apply(window)
+    }
+
+    pub fn device_position(&self, local: Point, device_scale: f32) -> Point {
+        let transformed = self.window_logical_position(local);
+        Point::new(transformed.x * device_scale, transformed.y * device_scale)
+    }
+
+    pub fn apply_element_transform(&mut self, transform: Transform2D) {
+        self.element_transform = self.element_transform.then(transform);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Drawing {
     pub view_box: Rect,
     pub paths: Vec<PaintedPath>,

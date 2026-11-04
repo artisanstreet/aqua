@@ -83,15 +83,36 @@ pub fn translate(previous: u8, sample: &Sample) -> (Vec<InputEvent>, u8) {
                 position: sample.position,
                 buttons,
             };
-            let released = BUTTONS
+            let released: Vec<u8> = BUTTONS
                 .iter()
-                .filter(|(bit, _)| previous & bit != 0 && mask & bit == 0)
-                .map(|(bit, button)| InputEvent::PointerUp(event(previous & !bit), *button));
-            let pressed = BUTTONS
+                .map(|(bit, _)| *bit)
+                .filter(|bit| previous & bit != 0 && mask & bit == 0)
+                .collect();
+            let pressed: Vec<u8> = BUTTONS
                 .iter()
-                .filter(|(bit, _)| previous & bit == 0 && mask & bit != 0)
-                .map(|(bit, button)| InputEvent::PointerDown(event(previous | bit), *button));
-            let transitions: Vec<InputEvent> = released.chain(pressed).collect();
+                .map(|(bit, _)| *bit)
+                .filter(|bit| previous & bit == 0 && mask & bit != 0)
+                .collect();
+            let button_of = |bit: u8| {
+                BUTTONS
+                    .iter()
+                    .find(|(b, _)| *b == bit)
+                    .map(|(_, button)| *button)
+            };
+            let mut held = previous;
+            let mut transitions: Vec<InputEvent> = Vec::new();
+            released.into_iter().for_each(|bit| {
+                held &= !bit;
+                transitions.extend(
+                    button_of(bit).map(|button| InputEvent::PointerUp(event(held), button)),
+                );
+            });
+            pressed.into_iter().for_each(|bit| {
+                held |= bit;
+                transitions.extend(
+                    button_of(bit).map(|button| InputEvent::PointerDown(event(held), button)),
+                );
+            });
             match transitions.is_empty() {
                 true => (vec![InputEvent::PointerMove(event(mask))], mask),
                 false => (transitions, mask),

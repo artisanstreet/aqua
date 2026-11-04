@@ -1,20 +1,21 @@
 #![cfg(windows)]
 
 use aqua_core::{ImeEvent as Composition, Rect};
-use aqua_ime_tsf::TsfIme;
+use aqua_ime_tsf::{Keystrokes, TsfIme};
 use aqua_protocol::{ImeBackend, ImeCommand, ImeDocument, ImeEvent, Utf16Range};
 use std::cell::RefCell;
 use std::rc::Rc;
-use windows::core::{implement, Interface, Ref, Result};
-use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::core::{implement, Interface, Ref, Result, BOOL, BSTR, GUID, PCWSTR};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::TextServices::{
     CLSID_TF_ThreadMgr, ITfComposition, ITfCompositionSink, ITfCompositionSink_Impl, ITfContext,
-    ITfContextComposition, ITfEditSession, ITfEditSession_Impl, ITfInsertAtSelection, ITfRange,
-    ITfRangeACP, ITfThreadMgr, INSERT_TEXT_AT_SELECTION_FLAGS, TF_ANCHOR_END, TF_DEFAULT_SELECTION,
-    TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
+    ITfContextComposition, ITfEditSession, ITfEditSession_Impl, ITfInsertAtSelection,
+    ITfKeyEventSink, ITfKeystrokeMgr, ITfKeystrokeMgr_Impl, ITfRange, ITfRangeACP, ITfThreadMgr,
+    INSERT_TEXT_AT_SELECTION_FLAGS, TF_ANCHOR_END, TF_DEFAULT_SELECTION, TF_ES_READWRITE,
+    TF_ES_SYNC, TF_PRESERVEDKEY, TF_SELECTION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, ShowWindow, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE,
@@ -391,4 +392,126 @@ fn disable_removes_tsf_focus_and_enable_restores_it() {
         .command(ImeCommand::Enable(document("y", (0, 0))))
         .unwrap();
     assert_eq!(harness.context().as_raw(), ours);
+}
+
+#[derive(Default)]
+struct KeyLog {
+    tested: Vec<(bool, usize)>,
+    delivered: Vec<(bool, usize)>,
+}
+
+#[implement(ITfKeystrokeMgr)]
+struct EatingService {
+    eats: usize,
+    log: Rc<RefCell<KeyLog>>,
+}
+
+impl EatingService_Impl {
+    fn test(&self, down: bool, wparam: WPARAM) -> Result<BOOL> {
+        self.log.borrow_mut().tested.push((down, wparam.0));
+        Ok((wparam.0 == self.eats).into())
+    }
+
+    fn deliver(&self, down: bool, wparam: WPARAM) -> Result<BOOL> {
+        self.log.borrow_mut().delivered.push((down, wparam.0));
+        Ok(true.into())
+    }
+}
+
+impl ITfKeystrokeMgr_Impl for EatingService_Impl {
+    fn AdviseKeyEventSink(&self, _: u32, _: Ref<ITfKeyEventSink>, _: BOOL) -> Result<()> {
+        Ok(())
+    }
+    fn UnadviseKeyEventSink(&self, _: u32) -> Result<()> {
+        Ok(())
+    }
+    fn GetForeground(&self) -> Result<GUID> {
+        Ok(GUID::zeroed())
+    }
+    fn TestKeyDown(&self, wparam: WPARAM, _: LPARAM) -> Result<BOOL> {
+        self.test(true, wparam)
+    }
+    fn TestKeyUp(&self, wparam: WPARAM, _: LPARAM) -> Result<BOOL> {
+        self.test(false, wparam)
+    }
+    fn KeyDown(&self, wparam: WPARAM, _: LPARAM) -> Result<BOOL> {
+        self.deliver(true, wparam)
+    }
+    fn KeyUp(&self, wparam: WPARAM, _: LPARAM) -> Result<BOOL> {
+        self.deliver(false, wparam)
+    }
+    fn GetPreservedKey(&self, _: Ref<ITfContext>, _: *const TF_PRESERVEDKEY) -> Result<GUID> {
+        Ok(GUID::zeroed())
+    }
+    fn IsPreservedKey(&self, _: *const GUID, _: *const TF_PRESERVEDKEY) -> Result<BOOL> {
+        Ok(false.into())
+    }
+    fn PreserveKey(
+        &self,
+        _: u32,
+        _: *const GUID,
+        _: *const TF_PRESERVEDKEY,
+        _: &PCWSTR,
+        _: u32,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn UnpreserveKey(&self, _: *const GUID, _: *const TF_PRESERVEDKEY) -> Result<()> {
+        Ok(())
+    }
+    fn SetPreservedKeyDescription(&self, _: *const GUID, _: &PCWSTR, _: u32) -> Result<()> {
+        Ok(())
+    }
+    fn GetPreservedKeyDescription(&self, _: *const GUID) -> Result<BSTR> {
+        Ok(BSTR::new())
+    }
+    fn SimulatePreservedKey(&self, _: Ref<ITfContext>, _: *const GUID) -> Result<BOOL> {
+        Ok(false.into())
+    }
+}
+
+const WM_KEYDOWN: u32 = 0x0100;
+const WM_KEYUP: u32 = 0x0101;
+const WM_CHAR: u32 = 0x0102;
+const VK_A: usize = 0x41;
+const VK_B: usize = 0x42;
+
+fn eating_hook(eats: usize) -> (Keystrokes, Rc<RefCell<KeyLog>>) {
+    let log = Rc::new(RefCell::new(KeyLog::default()));
+    let service: ITfKeystrokeMgr = EatingService {
+        eats,
+        log: log.clone(),
+    }
+    .into();
+    (Keystrokes::with_manager(service), log)
+}
+
+#[test]
+fn a_text_service_that_eats_keys_swallows_them_before_the_app_sees_them() {
+    let harness = Harness::new(&document("hello", (5, 5)));
+    let (mut hook, log) = eating_hook(VK_A);
+
+    assert!(hook.pre_translate(WM_KEYDOWN, VK_A, 0x001e_0001));
+    assert!(hook.pre_translate(WM_KEYUP, VK_A, 0xc01e_0001u32 as isize));
+    assert!(!hook.pre_translate(WM_KEYDOWN, VK_B, 0x0030_0001));
+    assert!(!hook.pre_translate(WM_CHAR, VK_A, 0x001e_0001));
+
+    let log = log.borrow();
+    assert_eq!(log.tested, vec![(true, VK_A), (false, VK_A), (true, VK_B)]);
+    assert_eq!(log.delivered, vec![(true, VK_A), (false, VK_A)]);
+    drop(harness);
+}
+
+#[test]
+fn keys_pass_through_when_the_ime_is_disabled_even_if_a_service_would_eat_them() {
+    let doc = document("hello", (5, 5));
+    let mut harness = Harness::new(&doc);
+    let (mut hook, log) = eating_hook(VK_A);
+    assert!(hook.pre_translate(WM_KEYDOWN, VK_A, 1));
+    harness.ime.command(ImeCommand::Disable).unwrap();
+    let before = log.borrow().tested.len();
+    assert!(!hook.pre_translate(WM_KEYDOWN, VK_A, 1));
+    assert_eq!(log.borrow().tested.len(), before);
+    harness.ime.command(ImeCommand::Enable(doc)).unwrap();
+    assert!(hook.pre_translate(WM_KEYDOWN, VK_A, 1));
 }

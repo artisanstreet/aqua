@@ -9,10 +9,13 @@ use aqua_shell_win32::{
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
-use windows::core::{w, Interface, PCWSTR};
+use windows::core::{implement, w, Interface, Ref, PCWSTR};
+use windows::Win32::Foundation::{DV_E_FORMATETC, E_NOTIMPL};
 use windows::Win32::Foundation::{HWND, LPARAM, POINTL, RECT, WPARAM};
-use windows::Win32::System::Com::IDataObject;
-use windows::Win32::System::Ole::{IDropTarget, DROPEFFECT, DROPEFFECT_COPY};
+use windows::Win32::System::Com::{
+    IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, FORMATETC, STGMEDIUM,
+};
+use windows::Win32::System::Ole::{IDropTarget, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE};
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetPropW, PostMessageW, SendMessageW, WM_APP, WM_DPICHANGED, WM_POINTERDOWN, WM_POINTERUPDATE,
@@ -427,6 +430,153 @@ fn composition_swapchain_attaches_to_an_alpha_window_with_a_backdrop() {
     assert!(
         matches!(outcome.active, WindowMaterial::Mica | WindowMaterial::Solid),
         "{outcome:?}"
+    );
+    window.destroy();
+}
+
+#[implement(IDataObject)]
+struct TextOnly;
+
+impl IDataObject_Impl for TextOnly_Impl {
+    fn GetData(&self, _: *const FORMATETC) -> windows::core::Result<STGMEDIUM> {
+        Err(DV_E_FORMATETC.into())
+    }
+    fn GetDataHere(&self, _: *const FORMATETC, _: *mut STGMEDIUM) -> windows::core::Result<()> {
+        Err(DV_E_FORMATETC.into())
+    }
+    fn QueryGetData(&self, _: *const FORMATETC) -> windows::core::HRESULT {
+        DV_E_FORMATETC
+    }
+    fn GetCanonicalFormatEtc(
+        &self,
+        _: *const FORMATETC,
+        _: *mut FORMATETC,
+    ) -> windows::core::HRESULT {
+        DV_E_FORMATETC
+    }
+    fn SetData(
+        &self,
+        _: *const FORMATETC,
+        _: *const STGMEDIUM,
+        _: windows::core::BOOL,
+    ) -> windows::core::Result<()> {
+        Err(DV_E_FORMATETC.into())
+    }
+    fn EnumFormatEtc(&self, _: u32) -> windows::core::Result<IEnumFORMATETC> {
+        Err(E_NOTIMPL.into())
+    }
+    fn DAdvise(
+        &self,
+        _: *const FORMATETC,
+        _: u32,
+        _: Ref<IAdviseSink>,
+    ) -> windows::core::Result<u32> {
+        Err(E_NOTIMPL.into())
+    }
+    fn DUnadvise(&self, _: u32) -> windows::core::Result<()> {
+        Err(E_NOTIMPL.into())
+    }
+    fn EnumDAdvise(&self) -> windows::core::Result<IEnumSTATDATA> {
+        Err(E_NOTIMPL.into())
+    }
+}
+
+fn drop_target_of(window: Window) -> IDropTarget {
+    let raw = unsafe { GetPropW(hwnd(window), w!("OleDropTargetInterface")) };
+    unsafe { IDropTarget::from_raw_borrowed(&raw.0) }
+        .expect("drop target registered")
+        .clone()
+}
+
+fn drags_of(log: &Log) -> Vec<FileDrag> {
+    events_of(log)
+        .into_iter()
+        .filter_map(|e| match e {
+            ShellEvent::FileDrag(d) => Some(d),
+            _ => None,
+        })
+        .collect()
+}
+
+fn run_once(log: &Log, body: impl FnOnce() + 'static) {
+    let body = RefCell::new(Some(body));
+    drive(
+        log.clone(),
+        vec![
+            Box::new(move |_| {
+                if let Some(body) = body.borrow_mut().take() {
+                    body();
+                }
+                true
+            }),
+            Box::new(|log| {
+                log.borrow()
+                    .iter()
+                    .any(|(_, e)| matches!(e, ShellEvent::FileDrag(FileDrag::Leave)))
+            }),
+        ],
+    );
+}
+
+fn client_origin(window: Window) -> windows::Win32::Foundation::POINT {
+    let mut p = windows::Win32::Foundation::POINT::default();
+    let _ = unsafe { windows::Win32::Graphics::Gdi::ClientToScreen(hwnd(window), &mut p) };
+    p
+}
+
+#[test]
+fn dragging_a_non_file_object_is_refused_and_emits_no_file_events() {
+    let log: Log = Default::default();
+    let window = Window::create(&hidden()).expect("window");
+    let target = drop_target_of(window);
+    let object: IDataObject = TextOnly.into();
+    let at = POINTL {
+        x: client_origin(window).x + 10,
+        y: client_origin(window).y + 10,
+    };
+    let effects = Rc::new(RefCell::new(Vec::new()));
+    let seen = effects.clone();
+    run_once(&log, move || unsafe {
+        let mut effect = DROPEFFECT_COPY;
+        target
+            .DragEnter(&object, MODIFIERKEYS_FLAGS(0), at, &mut effect)
+            .expect("enter");
+        seen.borrow_mut().push(effect);
+        let mut effect = DROPEFFECT_COPY;
+        target
+            .Drop(&object, MODIFIERKEYS_FLAGS(0), at, &mut effect)
+            .expect("drop");
+        seen.borrow_mut().push(effect);
+    });
+    assert_eq!(*effects.borrow(), vec![DROPEFFECT_NONE, DROPEFFECT_NONE]);
+    assert_eq!(drags_of(&log), vec![FileDrag::Leave]);
+    window.destroy();
+}
+
+#[test]
+fn leaving_a_file_drag_reports_leave_after_enter_and_never_a_drop() {
+    let log: Log = Default::default();
+    let window = Window::create(&hidden()).expect("window");
+    let target = drop_target_of(window);
+    let path = std::env::temp_dir().join("aqua-shell-drop-leave.txt");
+    std::fs::write(&path, b"x").expect("probe file");
+    let object = file_data_object(&path);
+    let origin = client_origin(window);
+    let at = POINTL {
+        x: origin.x + 5,
+        y: origin.y + 5,
+    };
+    run_once(&log, move || unsafe {
+        let mut effect = DROPEFFECT(0);
+        target
+            .DragEnter(&object, MODIFIERKEYS_FLAGS(0), at, &mut effect)
+            .expect("enter");
+        target.DragLeave().expect("leave");
+    });
+    let drags = drags_of(&log);
+    assert!(
+        matches!(drags.as_slice(), [FileDrag::Enter { paths, .. }, FileDrag::Leave] if paths.len() == 1),
+        "{drags:?}"
     );
     window.destroy();
 }

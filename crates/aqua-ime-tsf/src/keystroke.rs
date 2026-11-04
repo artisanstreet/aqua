@@ -59,6 +59,13 @@ mod imp {
             Self::default()
         }
 
+        #[must_use]
+        pub fn with_manager(manager: ITfKeystrokeMgr) -> Self {
+            Self {
+                manager: Some(manager),
+            }
+        }
+
         fn manager(&mut self) -> Option<&ITfKeystrokeMgr> {
             if self.manager.is_none() {
                 let thread: ITfThreadMgr =

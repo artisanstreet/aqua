@@ -8,6 +8,7 @@ use windows::Win32::System::Threading::WaitForSingleObjectEx;
 use super::error::Error;
 
 pub const BACK_BUFFER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
+pub const RENDER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
 const BUFFER_COUNT: u32 = 2;
 const OCCLUDED: i32 = 0x087A0001;
 
@@ -41,7 +42,7 @@ pub struct Swapchain {
     rtv_heap: ID3D12DescriptorHeap,
     rtv_stride: usize,
     waitable: HANDLE,
-    hwnd: isize,
+    target: SwapchainTarget,
     tearing: bool,
     width: u32,
     height: u32,
@@ -55,6 +56,12 @@ fn flags(tearing: bool) -> u32 {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwapchainTarget {
+    Hwnd(isize),
+    Composition,
+}
+
 impl Swapchain {
     pub fn new(
         device: &ID3D12Device,
@@ -65,8 +72,45 @@ impl Swapchain {
         height: u32,
         tearing: bool,
     ) -> Result<Self, Error> {
+        Self::create(
+            device,
+            factory,
+            queue,
+            SwapchainTarget::Hwnd(hwnd),
+            width,
+            height,
+            tearing,
+        )
+    }
+
+    pub fn new_composition(
+        device: &ID3D12Device,
+        factory: &IDXGIFactory6,
+        queue: &ID3D12CommandQueue,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, Error> {
+        Self::create(
+            device,
+            factory,
+            queue,
+            SwapchainTarget::Composition,
+            width,
+            height,
+            false,
+        )
+    }
+
+    fn create(
+        device: &ID3D12Device,
+        factory: &IDXGIFactory6,
+        queue: &ID3D12CommandQueue,
+        target: SwapchainTarget,
+        width: u32,
+        height: u32,
+        tearing: bool,
+    ) -> Result<Self, Error> {
         let (width, height) = (width.max(1), height.max(1));
-        let handle = HWND(hwnd as *mut _);
         let desc = DXGI_SWAP_CHAIN_DESC1 {
             Width: width,
             Height: height,
@@ -80,13 +124,31 @@ impl Swapchain {
             BufferCount: BUFFER_COUNT,
             Scaling: DXGI_SCALING_STRETCH,
             SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-            AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+            AlphaMode: match target {
+                SwapchainTarget::Hwnd(_) => DXGI_ALPHA_MODE_IGNORE,
+                SwapchainTarget::Composition => DXGI_ALPHA_MODE_PREMULTIPLIED,
+            },
             Flags: flags(tearing),
         };
-        let swapchain1 = unsafe {
-            factory.CreateSwapChainForHwnd(queue, handle, &desc, None, None::<&IDXGIOutput>)?
+        let swapchain1 = match target {
+            SwapchainTarget::Hwnd(hwnd) => {
+                let handle = HWND(hwnd as *mut _);
+                let created = unsafe {
+                    factory.CreateSwapChainForHwnd(
+                        queue,
+                        handle,
+                        &desc,
+                        None,
+                        None::<&IDXGIOutput>,
+                    )?
+                };
+                unsafe { factory.MakeWindowAssociation(handle, DXGI_MWA_NO_ALT_ENTER)? };
+                created
+            }
+            SwapchainTarget::Composition => unsafe {
+                factory.CreateSwapChainForComposition(queue, &desc, None::<&IDXGIOutput>)?
+            },
         };
-        unsafe { factory.MakeWindowAssociation(handle, DXGI_MWA_NO_ALT_ENTER)? };
         let swapchain: IDXGISwapChain3 = swapchain1.cast()?;
         unsafe { swapchain.SetMaximumFrameLatency(1)? };
         let waitable = unsafe { swapchain.GetFrameLatencyWaitableObject() };
@@ -106,13 +168,21 @@ impl Swapchain {
             } as usize,
             rtv_heap,
             waitable,
-            hwnd,
+            target,
             tearing,
             width,
             height,
         };
         created.acquire(device)?;
         Ok(created)
+    }
+
+    pub fn content(&self) -> Result<windows::core::IUnknown, Error> {
+        Ok(self.swapchain.cast()?)
+    }
+
+    pub fn target(&self) -> SwapchainTarget {
+        self.target
     }
 
     fn rtv_start(&self) -> usize {
@@ -126,14 +196,20 @@ impl Swapchain {
             let handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: self.rtv_start() + index as usize * self.rtv_stride,
             };
-            unsafe { device.CreateRenderTargetView(&buffer, None, handle) };
+            let view = D3D12_RENDER_TARGET_VIEW_DESC {
+                Format: RENDER_FORMAT,
+                ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
+                Anonymous: D3D12_RENDER_TARGET_VIEW_DESC_0 {
+                    Texture2D: D3D12_TEX2D_RTV {
+                        MipSlice: 0,
+                        PlaneSlice: 0,
+                    },
+                },
+            };
+            unsafe { device.CreateRenderTargetView(&buffer, Some(&view), handle) };
             self.buffers.push(buffer);
         }
         Ok(())
-    }
-
-    pub fn hwnd(&self) -> isize {
-        self.hwnd
     }
 
     pub fn extent(&self) -> (u32, u32) {

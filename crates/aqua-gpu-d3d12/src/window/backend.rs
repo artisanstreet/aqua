@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use aqua_core::geometry::Rect;
 use aqua_graph::{validate, Extent, FramePlan};
@@ -12,11 +12,12 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use super::damage::{Damage, DamageTracker};
-use crate::hal::{
-    self, Core, DeviceOptions, PresentMode, PresentStatus, Swapchain, BACK_BUFFER_FORMAT,
-};
-use crate::half::bgra8_rows_to_rgba8;
+use super::damage::{Damage, DamageTracker, PixelRect};
+use super::mirror::TextureMirror;
+use super::pacing::{PaceReport, Pacer};
+use super::timing;
+use crate::hal::{self, Core, DeviceOptions, PresentMode, PresentStatus, Swapchain, RENDER_FORMAT};
+use crate::half::bgra8_srgb_rows_to_linear_rgba8;
 use crate::scene::util::{footprint_location, texture_location};
 use crate::scene::{
     PersistentStats, PersistentTextures, PipelineStats, SceneRenderer, SceneTarget,
@@ -24,31 +25,43 @@ use crate::scene::{
 
 const FRAME_WAIT_MS: u32 = 1000;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct WindowOptions {
     pub device: DeviceOptions,
-}
-
-impl Default for WindowOptions {
-    fn default() -> Self {
-        Self {
-            device: DeviceOptions::default(),
-        }
-    }
+    pub mirror_textures: bool,
 }
 
 impl WindowOptions {
     pub fn from_env() -> Self {
         Self {
             device: DeviceOptions::from_env(),
+            mirror_textures: std::env::var("AQUA_MIRROR_TEXTURES").as_deref() == Ok("1"),
         }
     }
+
+    pub fn with_mirror(mut self, mirror: bool) -> Self {
+        self.mirror_textures = mirror;
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceKind {
+    Hwnd(u64),
+    Composition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextureRecovery {
+    Replayed { textures: u32 },
+    HostMustReupload,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecoveryNotice {
     pub generation: u32,
     pub software: bool,
+    pub textures: TextureRecovery,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -58,15 +71,21 @@ pub struct WindowStats {
     pub occluded: u64,
     pub recoveries: u32,
     pub last_repaint_area: i64,
+    pub scissored_frames: u64,
+    pub skipped_pixels: u64,
 }
 
 struct WindowSurface {
     swapchain: Swapchain,
-    hwnd: u64,
+    kind: SurfaceKind,
     window: aqua_protocol::WindowId,
     damage: DamageTracker,
     rendered: Option<usize>,
     pending: bool,
+    frame_damage: Option<Damage>,
+    pacer: Pacer,
+    last_present: Option<Instant>,
+    monitor: isize,
 }
 
 struct Gpu {
@@ -82,6 +101,7 @@ pub struct WindowBackend {
     gpu: Option<Gpu>,
     core: Option<Core>,
     pending_uploads: Vec<UploadBatch>,
+    mirror: TextureMirror,
     next_surface: u32,
     lost: bool,
     stats: WindowStats,
@@ -91,7 +111,7 @@ pub struct WindowBackend {
 fn build_gpu(core: &Core, options: &WindowOptions, cache: Option<&[u8]>) -> Result<Gpu, GpuError> {
     let slots = options.device.frames_in_flight.max(2);
     let mut renderer = SceneRenderer::with_pipeline_cache(core.device(), slots, cache)?;
-    renderer.warm(&[DXGI_FORMAT_R16G16B16A16_FLOAT, BACK_BUFFER_FORMAT])?;
+    renderer.warm(&[DXGI_FORMAT_R16G16B16A16_FLOAT, RENDER_FORMAT])?;
     Ok(Gpu {
         list: core.create_command_list()?,
         renderer,
@@ -108,9 +128,9 @@ fn describe(core: &Core) -> GpuCapabilities {
         max_texture_extent: D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION,
         heap_alignment: D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT as u64,
         features: Features {
-            compute: false,
-            custom_passes: false,
-            color_matrix: false,
+            compute: true,
+            custom_passes: true,
+            color_matrix: true,
             enhanced_barriers: false,
             tearing: info.tearing,
             software: info.adapter.kind == hal::selection::Adapter::Software,
@@ -135,18 +155,51 @@ fn dirty_rects(damage: &Damage) -> Vec<RECT> {
 fn new_surface(
     core: &Core,
     window: aqua_protocol::WindowId,
-    hwnd: u64,
+    kind: SurfaceKind,
     extent: Extent,
 ) -> Result<WindowSurface, GpuError> {
-    let swapchain = core.create_swapchain(hwnd as isize, extent.width, extent.height)?;
+    let monitor = timing::monitor_of(owner(window, kind));
+    let swapchain = match kind {
+        SurfaceKind::Hwnd(hwnd) => {
+            core.create_swapchain(hwnd as isize, extent.width, extent.height)?
+        }
+        SurfaceKind::Composition => {
+            core.create_composition_swapchain(extent.width, extent.height)?
+        }
+    };
     Ok(WindowSurface {
         swapchain,
-        hwnd,
+        kind,
         window,
         damage: DamageTracker::new(2),
         rendered: None,
         pending: false,
+        frame_damage: None,
+        pacer: Pacer::new(timing::monitor_interval(monitor)),
+        last_present: None,
+        monitor,
     })
+}
+
+fn owner(window: aqua_protocol::WindowId, kind: SurfaceKind) -> isize {
+    match kind {
+        SurfaceKind::Hwnd(hwnd) => hwnd as isize,
+        SurfaceKind::Composition => window.raw() as isize,
+    }
+}
+
+fn bounding_rect(damage: &Damage) -> Option<RECT> {
+    let rects = damage.present_rects();
+    rects
+        .iter()
+        .copied()
+        .reduce(PixelRect::union)
+        .map(|rect| RECT {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        })
 }
 
 impl WindowBackend {
@@ -167,6 +220,7 @@ impl WindowBackend {
             gpu: Some(gpu),
             core: Some(core),
             pending_uploads: Vec::new(),
+            mirror: TextureMirror::default(),
             next_surface: 0,
             lost: false,
             stats: WindowStats::default(),
@@ -229,6 +283,78 @@ impl WindowBackend {
         Some(entry.damage.repaint(index, &current))
     }
 
+    pub fn surface_kind(&self, surface: SurfaceId) -> Option<SurfaceKind> {
+        self.surfaces.get(&surface).map(|entry| entry.kind)
+    }
+
+    pub fn create_composition_surface(
+        &mut self,
+        window: aqua_protocol::WindowId,
+        extent: Extent,
+    ) -> Result<SurfaceId, GpuError> {
+        let core = self.core.as_ref().ok_or(no_device())?;
+        let surface = match new_surface(core, window, SurfaceKind::Composition, extent) {
+            Ok(surface) => surface,
+            Err(error) => {
+                self.note_failure();
+                return Err(error);
+            }
+        };
+        let id = SurfaceId(self.next_surface);
+        self.next_surface += 1;
+        self.surfaces.insert(id, surface);
+        Ok(id)
+    }
+
+    pub fn composition_content(
+        &self,
+        surface: SurfaceId,
+    ) -> Result<windows::core::IUnknown, GpuError> {
+        let entry = self
+            .surfaces
+            .get(&surface)
+            .ok_or(GpuError::UnknownSurface(surface))?;
+        match entry.kind {
+            SurfaceKind::Composition => Ok(entry.swapchain.content()?),
+            SurfaceKind::Hwnd(_) => Err(GpuError::Unsupported(
+                "composition content of a window surface",
+            )),
+        }
+    }
+
+    pub fn refresh_interval(&self, surface: SurfaceId) -> Option<Duration> {
+        self.surfaces
+            .get(&surface)
+            .map(|entry| entry.pacer.interval())
+    }
+
+    pub fn pacing(&self, surface: SurfaceId) -> Option<PaceReport> {
+        self.surfaces
+            .get(&surface)
+            .map(|entry| entry.pacer.report())
+    }
+
+    pub fn until_next_vblank(&self) -> Option<Duration> {
+        timing::query().map(|vblank| vblank.until_next)
+    }
+
+    pub fn mirrored_textures(&self) -> usize {
+        self.mirror.textures()
+    }
+
+    pub fn execute_damaged(
+        &mut self,
+        plan: &FramePlan,
+        inputs: &FrameInputs,
+        damage: &[Rect],
+    ) -> Result<FrameReport, GpuError> {
+        let outcome = self.execute_region(plan, inputs.surface, Some(damage));
+        if outcome.is_err() {
+            self.note_failure();
+        }
+        outcome
+    }
+
     pub fn inject_device_removal(&self) -> Result<(), GpuError> {
         let core = self.core.as_ref().ok_or(no_device())?;
         Ok(core.inject_device_removal()?)
@@ -243,13 +369,17 @@ impl WindowBackend {
         self.lost |= removed;
     }
 
-    fn execute_inner(
+    fn execute_region(
         &mut self,
         plan: &FramePlan,
         surface: SurfaceId,
+        damage: Option<&[Rect]>,
     ) -> Result<FrameReport, GpuError> {
         let started = Instant::now();
-        validate(plan)?;
+        match self.gpu.as_mut() {
+            Some(gpu) => gpu.renderer.validate(plan)?,
+            None => validate(plan)?,
+        }
         let core = self.core.as_mut().ok_or(no_device())?;
         let gpu = self.gpu.as_mut().ok_or(no_device())?;
         let entry = self
@@ -264,6 +394,16 @@ impl WindowBackend {
                 surface: extent,
             });
         }
+        let (repaint, current) = match damage {
+            None => (None, None),
+            Some(rects) => {
+                let current = Damage::from_rects(rects, extent);
+                let region = entry
+                    .damage
+                    .repaint(entry.swapchain.current().index, &current);
+                (bounding_rect(&region), Some(current))
+            }
+        };
         let frame = core.begin_frame()?;
         let completed = core.completed_fence();
         gpu.renderer.retire(completed);
@@ -273,29 +413,53 @@ impl WindowBackend {
         let target = SceneTarget {
             resource: back.resource,
             rtv: back.rtv,
-            format: BACK_BUFFER_FORMAT,
+            format: RENDER_FORMAT,
             rest_state: D3D12_RESOURCE_STATE_PRESENT,
         };
         unsafe { gpu.list.Reset(&frame.allocator, None) }.map_err(hal::Error::from)?;
-        gpu.textures
-            .record(&gpu.list, &self.pending_uploads, frame_fence, completed)?;
-        self.pending_uploads.clear();
-        let textures = &gpu.textures;
-        let stats = gpu.renderer.record(
-            &gpu.list,
-            frame.index,
-            frame_fence,
-            plan,
-            &target,
-            &|handle| textures.view(handle),
-        )?;
+        let recorded = gpu
+            .textures
+            .record(&gpu.list, &self.pending_uploads, frame_fence, completed)
+            .and_then(|_| {
+                let textures = &gpu.textures;
+                gpu.renderer.record_region(
+                    &gpu.list,
+                    frame.index,
+                    frame_fence,
+                    plan,
+                    &target,
+                    &|handle| textures.view(handle),
+                    repaint,
+                )
+            });
+        let stats = match recorded {
+            Ok(stats) => {
+                self.pending_uploads.clear();
+                stats
+            }
+            Err(error) => {
+                let _ = unsafe { gpu.list.Close() };
+                return Err(error.into());
+            }
+        };
         unsafe { gpu.list.Close() }.map_err(hal::Error::from)?;
         core.execute(&gpu.list)?;
         let signalled = core.end_frame(&frame)?;
         debug_assert_eq!(signalled, frame_fence);
         entry.rendered = Some(back.index);
         entry.pending = true;
+        entry.frame_damage = current;
         self.stats.frames += 1;
+        if let Some(rect) = repaint {
+            let area =
+                (rect.right - rect.left).max(0) as i64 * (rect.bottom - rect.top).max(0) as i64;
+            let total = extent.width as i64 * extent.height as i64;
+            self.stats.scissored_frames += 1;
+            self.stats.last_repaint_area = area;
+            self.stats.skipped_pixels += (total - area).max(0) as u64;
+        } else {
+            self.stats.last_repaint_area = extent.width as i64 * extent.height as i64;
+        }
         Ok(FrameReport {
             passes: stats.passes,
             instances: stats.instances,
@@ -330,15 +494,34 @@ impl WindowBackend {
             PresentHint::Immediate => PresentMode::Immediate,
             PresentHint::Vsync => PresentMode::Vsync,
         };
+        let damage = match entry.damage.has_presented() {
+            true => entry.frame_damage.take().unwrap_or(damage),
+            false => {
+                entry.frame_damage = None;
+                Damage::Full
+            }
+        };
         let status = entry.swapchain.present(mode, &dirty_rects(&damage))?;
         entry.pending = false;
+        let now = Instant::now();
         match status {
             PresentStatus::Presented => {
                 entry.damage.commit(buffer, damage);
                 self.stats.presents += 1;
+                let monitor = timing::monitor_of(owner(entry.window, entry.kind));
+                if monitor != entry.monitor {
+                    entry.monitor = monitor;
+                    entry.pacer.set_interval(timing::monitor_interval(monitor));
+                    entry.last_present = None;
+                }
+                if let Some(previous) = entry.last_present.replace(now) {
+                    entry.pacer.observe(now - previous);
+                }
             }
             PresentStatus::Occluded => {
                 entry.damage.reset();
+                entry.pacer.restart();
+                entry.last_present = None;
                 self.stats.occluded += 1;
             }
         }
@@ -349,12 +532,12 @@ impl WindowBackend {
 
     fn recover_inner(&mut self) -> Result<RecoveryReport, GpuError> {
         let cache = self.pipeline_cache();
-        let layout: Vec<(SurfaceId, aqua_protocol::WindowId, u64, Extent)> = self
+        let layout: Vec<(SurfaceId, aqua_protocol::WindowId, SurfaceKind, Extent)> = self
             .surfaces
             .iter()
             .map(|(id, entry)| {
                 let (width, height) = entry.swapchain.extent();
-                (*id, entry.window, entry.hwnd, Extent { width, height })
+                (*id, entry.window, entry.kind, Extent { width, height })
             })
             .collect();
         if let Some(core) = self.core.as_mut() {
@@ -379,14 +562,26 @@ impl WindowBackend {
         };
         let gpu = build_gpu(&core, &self.options, cache.as_deref())
             .or_else(|_| build_gpu(&core, &self.options, None))?;
-        for (id, window, hwnd, extent) in &layout {
+        for (id, window, kind, extent) in &layout {
             self.surfaces
-                .insert(*id, new_surface(&core, *window, *hwnd, *extent)?);
+                .insert(*id, new_surface(&core, *window, *kind, *extent)?);
         }
         self.capabilities = describe(&core);
+        let textures = match self.options.mirror_textures {
+            true => {
+                let replay = self.mirror.replay();
+                let count = self.mirror.textures() as u32;
+                if count > 0 {
+                    self.pending_uploads.push(replay);
+                }
+                TextureRecovery::Replayed { textures: count }
+            }
+            false => TextureRecovery::HostMustReupload,
+        };
         let notice = RecoveryNotice {
             generation,
             software: self.capabilities.features.software,
+            textures,
         };
         self.core = Some(core);
         self.gpu = Some(gpu);
@@ -432,7 +627,12 @@ impl GpuBackend for WindowBackend {
         match target {
             SurfaceTarget::Native(native) => {
                 let core = self.core.as_ref().ok_or(no_device())?;
-                let surface = new_surface(core, native.window, native.hwnd, native.extent);
+                let surface = new_surface(
+                    core,
+                    native.window,
+                    SurfaceKind::Hwnd(native.hwnd),
+                    native.extent,
+                );
                 let surface = match surface {
                     Ok(surface) => surface,
                     Err(error) => {
@@ -456,13 +656,16 @@ impl GpuBackend for WindowBackend {
 
     fn upload(&mut self, batch: UploadBatch) -> Result<(), GpuError> {
         if !batch.textures.is_empty() {
+            if self.options.mirror_textures {
+                self.mirror.apply(&batch);
+            }
             self.pending_uploads.push(batch);
         }
         Ok(())
     }
 
     fn execute(&mut self, plan: &FramePlan, inputs: &FrameInputs) -> Result<FrameReport, GpuError> {
-        let outcome = self.execute_inner(plan, inputs.surface);
+        let outcome = self.execute_region(plan, inputs.surface, None);
         if outcome.is_err() {
             self.note_failure();
         }
@@ -596,7 +799,7 @@ impl WindowBackend {
         core.wait_for(fence)?;
         let pointer = crate::scene::util::map_whole(&readback).map_err(GpuError::from)?;
         let bytes = unsafe { std::slice::from_raw_parts(pointer as *const u8, total as usize) };
-        let rgba8 = bgra8_rows_to_rgba8(
+        let rgba8 = bgra8_srgb_rows_to_linear_rgba8(
             bytes,
             footprint.Footprint.RowPitch as usize,
             width as usize,

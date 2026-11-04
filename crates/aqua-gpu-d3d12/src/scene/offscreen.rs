@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use aqua_graph::{validate, Extent, FramePlan};
+use aqua_graph::{Extent, FramePlan};
 use aqua_protocol::{
     DeviceStatus, FeatureTier, Features, FrameInputs, FrameReport, GpuBackend, GpuCapabilities,
     GpuError, GpuReadback, PresentHint, PresentTimes, RecoveryReport, SurfaceId, SurfacePixels,
@@ -292,9 +292,9 @@ impl OffscreenBackend {
             max_texture_extent: D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION,
             heap_alignment: D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT as u64,
             features: Features {
-                compute: false,
-                custom_passes: false,
-                color_matrix: false,
+                compute: true,
+                custom_passes: true,
+                color_matrix: true,
                 enhanced_barriers: tiers.enhanced_barriers,
                 tearing: false,
                 software: selected.software,
@@ -341,6 +341,22 @@ impl OffscreenBackend {
         Ok(freed)
     }
 
+    pub fn register_compute(
+        &mut self,
+        id: aqua_graph::CustomShaderId,
+        hlsl: &str,
+        entry: &str,
+    ) -> Result<(), GpuError> {
+        self.gpu
+            .renderer
+            .register_compute(id, hlsl, entry)
+            .map_err(GpuError::from)
+    }
+
+    pub fn debug_errors(&self) -> Vec<String> {
+        super::debug::drain_errors(&self.gpu.device)
+    }
+
     pub fn is_software(&self) -> bool {
         self.software
     }
@@ -363,7 +379,7 @@ impl OffscreenBackend {
 
     fn run_frame(&mut self, plan: &FramePlan, surface: SurfaceId) -> Result<FrameReport, GpuError> {
         let started = Instant::now();
-        validate(plan)?;
+        self.gpu.renderer.validate(plan)?;
         let entry = self
             .surfaces
             .get_mut(&surface)
@@ -401,11 +417,18 @@ impl OffscreenBackend {
                 .record(&gpu.list, &gpu.pending_uploads, frame_fence, completed)?;
             gpu.pending_uploads.clear();
             let textures = &gpu.textures;
-            let stats =
+            let recorded =
                 gpu.renderer
                     .record(&gpu.list, slot, frame_fence, plan, &target, &|handle| {
                         textures.view(handle)
-                    })?;
+                    });
+            let stats = match recorded {
+                Ok(stats) => stats,
+                Err(error) => {
+                    let _ = unsafe { gpu.list.Close() };
+                    return Err(error);
+                }
+            };
             unsafe {
                 gpu.list.Close()?;
                 gpu.queue.ExecuteCommandLists(&[Some(gpu.list.cast()?)]);

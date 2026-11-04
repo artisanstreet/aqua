@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use aqua_graph::{ImageInstance, TextureRef};
+use aqua_graph::{Blend, ImageInstance, TextureRef};
 use windows::core::{s, PCSTR};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -37,17 +37,21 @@ pub fn image_layout() -> [D3D12_INPUT_ELEMENT_DESC; 4] {
     ]
 }
 
-pub fn image_runs(instances: &[ImageInstance]) -> Vec<(TextureRef, Range<u32>)> {
-    let mut runs: Vec<(TextureRef, Range<u32>)> = Vec::new();
-    for (index, image) in instances.iter().enumerate() {
-        match runs.last_mut() {
-            Some((last, range)) if *last == image.source && range.end == index as u32 => {
-                range.end += 1
-            }
-            _ => runs.push((image.source, index as u32..index as u32 + 1)),
+pub fn image_runs(
+    instances: &[ImageInstance],
+) -> impl Iterator<Item = (TextureRef, Blend, Range<u32>)> + '_ {
+    let mut index = 0usize;
+    std::iter::from_fn(move || {
+        let first = instances.get(index)?;
+        let start = index;
+        while instances
+            .get(index)
+            .is_some_and(|next| next.source == first.source && next.blend == first.blend)
+        {
+            index += 1;
         }
-    }
-    runs
+        Some((first.source, first.blend, start as u32..index as u32))
+    })
 }
 
 pub fn draw(list: &ID3D12GraphicsCommandList, buffer: u64, range: Range<u32>) {

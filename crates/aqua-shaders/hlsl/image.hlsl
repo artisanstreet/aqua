@@ -54,12 +54,20 @@ float4 fetch(float2 texel, float4 region)
     return page.Load(int3(int2(clamped), 0));
 }
 
-float4 ps_image(ImageOut i) : SV_Target
+struct ReplaceOut
+{
+    float4 color : SV_Target0;
+    float4 weight : SV_Target1;
+};
+
+float4 shade_image(ImageOut i, out float weight)
 {
     float2 p = i.position.xy;
     float radius = i.params.x;
     float opacity_factor = i.params.y;
-    float cover = saturate(0.5 - box_distance(p, i.bounds, radius)) * clip_cover(p, i.clip);
+    float clip_radius = i.params.z;
+    float cover = saturate(0.5 - box_distance(p, i.bounds, radius))
+        * saturate(0.5 - box_distance(p, i.clip, clip_radius));
     float2 uv = (p - i.bounds.xy) / max(i.bounds.zw, float2(1.0e-4, 1.0e-4));
     float2 position = i.texels.xy + uv * i.texels.zw;
     float2 shifted = position - 0.5;
@@ -70,5 +78,23 @@ float4 ps_image(ImageOut i) : SV_Target
     float4 c = fetch(base + float2(0.0, 1.0), i.texels);
     float4 d = fetch(base + float2(1.0, 1.0), i.texels);
     float4 color = lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
-    return color * (cover * opacity_factor);
+    weight = cover * opacity_factor;
+    return color;
+}
+
+float4 ps_image(ImageOut i) : SV_Target
+{
+    float weight;
+    float4 color = shade_image(i, weight);
+    return color * weight;
+}
+
+ReplaceOut ps_image_replace(ImageOut i)
+{
+    float weight;
+    ReplaceOut o;
+    float4 color = shade_image(i, weight);
+    o.color = color * weight;
+    o.weight = float4(weight, weight, weight, weight);
+    return o;
 }

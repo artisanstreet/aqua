@@ -129,6 +129,18 @@ pub fn align_up(value: u64, alignment: u64) -> u64 {
     value.div_ceil(alignment) * alignment
 }
 
+pub fn unordered_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
+    D3D12_RESOURCE_BARRIER {
+        Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
+        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+        Anonymous: D3D12_RESOURCE_BARRIER_0 {
+            UAV: std::mem::ManuallyDrop::new(D3D12_RESOURCE_UAV_BARRIER {
+                pResource: unsafe { transmute_copy(resource) },
+            }),
+        },
+    }
+}
+
 pub fn aliasing(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
     D3D12_RESOURCE_BARRIER {
         Type: D3D12_RESOURCE_BARRIER_TYPE_ALIASING,

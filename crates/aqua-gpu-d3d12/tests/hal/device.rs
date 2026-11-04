@@ -147,19 +147,16 @@ fn present_and_resize(preference: AdapterPreference, label: &str) -> Core {
     for (outer_width, outer_height) in [(900, 600), (333, 222), (1200, 800), (640, 420)] {
         window.resize(outer_width, outer_height);
         let (width, height) = window.client();
-        assert!(
-            core.resize_swapchain(&mut swapchain, width, height)
-                .expect("resize")
-        );
+        assert!(core
+            .resize_swapchain(&mut swapchain, width, height)
+            .expect("resize"));
         assert_eq!(swapchain.extent(), (width, height));
         present_frames(&mut core, &swapchain, &window, 6);
     }
     let (width, height) = window.client();
-    assert!(
-        !core
-            .resize_swapchain(&mut swapchain, width, height)
-            .expect("same size")
-    );
+    assert!(!core
+        .resize_swapchain(&mut swapchain, width, height)
+        .expect("same size"));
     core.wait_idle().expect("idle");
     core
 }
@@ -552,7 +549,7 @@ fn evicting_a_resource_returns_video_memory_until_it_is_made_resident_again() {
         windows::core::Interface::cast(&resource.expect("resource")).expect("pageable");
     core.wait_idle().expect("idle");
     let resident = core.memory().expect("memory").local.usage;
-    aqua_gpu_d3d12::hal::evict(core.device(), &[pageable.clone()]).expect("evict");
+    aqua_gpu_d3d12::hal::evict(core.device(), std::slice::from_ref(&pageable)).expect("evict");
     let evicted = core.memory().expect("memory").local.usage;
     aqua_gpu_d3d12::hal::make_resident(core.device(), &[pageable]).expect("resident");
     let restored = core.memory().expect("memory").local.usage;

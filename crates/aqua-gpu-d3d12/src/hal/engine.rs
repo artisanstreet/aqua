@@ -287,6 +287,14 @@ impl Core {
         )
     }
 
+    pub fn create_composition_swapchain(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<Swapchain, Error> {
+        Swapchain::new_composition(&self.device, &self.factory, &self.queue, width, height)
+    }
+
     pub fn resize_swapchain(
         &mut self,
         swapchain: &mut Swapchain,

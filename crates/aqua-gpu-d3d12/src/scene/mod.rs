@@ -1,5 +1,9 @@
 mod barriers;
 mod bindless;
+mod compile;
+mod compute;
+mod custom;
+mod debug;
 mod device;
 mod formats;
 mod offscreen;
@@ -11,6 +15,7 @@ mod tiers;
 mod timestamps;
 mod transients;
 pub(crate) mod util;
+mod validated;
 
 pub use device::AdapterPreference;
 pub use offscreen::{OffscreenBackend, SurfaceFormat};
@@ -24,6 +29,7 @@ pub enum Error {
     Windows(windows::core::Error),
     NoAdapter,
     MissingShader(&'static str),
+    Shader(String),
     Unsupported(&'static str),
     RootSignature(String),
     DeviceRemoved(String),
@@ -37,6 +43,7 @@ impl std::fmt::Display for Error {
             Error::Windows(error) => write!(f, "windows error: {error}"),
             Error::NoAdapter => write!(f, "no usable D3D12 adapter"),
             Error::MissingShader(name) => write!(f, "shader blob {name} is missing"),
+            Error::Shader(message) => write!(f, "shader compilation: {message}"),
             Error::Unsupported(what) => write!(f, "unsupported: {what}"),
             Error::RootSignature(message) => write!(f, "root signature: {message}"),
             Error::DeviceRemoved(reason) => write!(f, "device removed: {reason}"),

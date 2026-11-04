@@ -32,27 +32,28 @@ pub fn pack_glyph(glyph: &GlyphInstance) -> SpriteGpu {
     }
 }
 
-pub fn pack_glyphs(glyphs: &[GlyphInstance]) -> Vec<SpriteGpu> {
+pub fn glyph_packer() -> impl FnMut(&GlyphInstance) -> SpriteGpu {
     let mut memo: Option<(Oklch, [f32; 4])> = None;
-    glyphs
-        .iter()
-        .map(|glyph| {
-            let linear = match memo {
-                Some((color, linear)) if color == glyph.color => linear,
-                _ => {
-                    let linear = glyph.color.to_gpu();
-                    memo = Some((glyph.color, linear));
-                    linear
-                }
-            };
-            SpriteGpu {
-                bounds: rect(glyph.bounds),
-                texels: rect(glyph.texels),
-                clip: clip(glyph.clip),
-                tail: linear.map(|channel| channel * glyph.opacity),
+    move |glyph| {
+        let linear = match memo {
+            Some((color, linear)) if color == glyph.color => linear,
+            _ => {
+                let linear = glyph.color.to_gpu();
+                memo = Some((glyph.color, linear));
+                linear
             }
-        })
-        .collect()
+        };
+        SpriteGpu {
+            bounds: rect(glyph.bounds),
+            texels: rect(glyph.texels),
+            clip: clip(glyph.clip),
+            tail: linear.map(|channel| channel * glyph.opacity),
+        }
+    }
+}
+
+pub fn pack_glyphs(glyphs: &[GlyphInstance]) -> Vec<SpriteGpu> {
+    glyphs.iter().map(glyph_packer()).collect()
 }
 
 pub fn pack_image(image: &ImageInstance) -> SpriteGpu {
@@ -60,6 +61,11 @@ pub fn pack_image(image: &ImageInstance) -> SpriteGpu {
         bounds: rect(image.bounds),
         texels: rect(image.texels),
         clip: clip(image.clip),
-        tail: [image.radius, image.opacity, 0.0, 0.0],
+        tail: [
+            image.radius,
+            image.opacity,
+            image.clip.map_or(0.0, |_| image.clip_radius),
+            0.0,
+        ],
     }
 }

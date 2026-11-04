@@ -8,6 +8,7 @@ cbuffer Frame : register(b0)
     float2 source_size;
     uint texture_index;
     uint frame_pad2;
+    float4 matrix_rows[5];
 };
 
 #ifdef BINDLESS

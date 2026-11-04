@@ -22,7 +22,10 @@ fn pixels(left: i32, top: i32, right: i32, bottom: i32) -> PixelRect {
 
 #[test]
 fn rects_snap_outward_and_clamp_to_the_surface() {
-    let damage = Damage::from_rects(&[rect(10.4, 5.6, 20.2, 10.0), rect(-5.0, 70.0, 20.0, 30.0)], EXTENT);
+    let damage = Damage::from_rects(
+        &[rect(10.4, 5.6, 20.2, 10.0), rect(-5.0, 70.0, 20.0, 30.0)],
+        EXTENT,
+    );
     assert_eq!(
         damage,
         Damage::Rects(vec![pixels(10, 5, 31, 16), pixels(0, 70, 15, 80)])
@@ -46,7 +49,9 @@ fn rects_outside_the_surface_are_dropped() {
 
 #[test]
 fn too_many_rects_collapse_into_their_bounds() {
-    let many: Vec<Rect> = (0..40).map(|i| rect(i as f32 * 2.0, 0.0, 1.0, 1.0)).collect();
+    let many: Vec<Rect> = (0..40)
+        .map(|i| rect(i as f32 * 2.0, 0.0, 1.0, 1.0))
+        .collect();
     assert_eq!(
         Damage::from_rects(&many, EXTENT),
         Damage::Rects(vec![pixels(0, 0, 79, 1)])
@@ -105,4 +110,14 @@ fn full_damage_anywhere_in_the_window_forces_full() {
     tracker.commit(0, Damage::none());
     tracker.commit(1, Damage::Full);
     assert_eq!(tracker.repaint(0, &Damage::none()), Damage::Full);
+}
+
+#[test]
+fn presented_state_follows_commits_and_resets() {
+    let mut tracker = DamageTracker::new(2);
+    assert!(!tracker.has_presented());
+    tracker.commit(0, Damage::Full);
+    assert!(tracker.has_presented());
+    tracker.reset();
+    assert!(!tracker.has_presented());
 }

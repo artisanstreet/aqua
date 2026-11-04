@@ -120,48 +120,31 @@ fn exercise(
 }
 
 fn matrix(preference: AdapterPreference, format: SurfaceFormat, tolerance: Tolerance) {
-    let baseline = exercise(preference, format, tolerance, COMBINATIONS[0]);
-    let Some(baseline) = baseline else {
-        return;
-    };
-    eprintln!("baseline failures: {:?}", baseline.failing);
-    for combination in &COMBINATIONS[1..] {
-        let Some(outcome) = exercise(preference, format, tolerance, *combination) else {
-            continue;
+    for combination in COMBINATIONS {
+        let Some(outcome) = exercise(preference, format, tolerance, combination) else {
+            return;
         };
-        let regressions: Vec<&String> = outcome
-            .failing
-            .iter()
-            .filter(|name| !baseline.failing.contains(name))
-            .collect();
-        eprintln!(
-            "{preference:?} {format:?} {} (binding {:?}, enhanced {}): {} failures, {} beyond the baseline tier",
+        assert!(
+            outcome.failing.is_empty(),
+            "{preference:?} {format:?} {} (binding {:?}, enhanced {}) fails: {:?}",
             combination.name,
             outcome.binding,
             outcome.enhanced_barriers,
-            outcome.failing.len(),
-            regressions.len()
-        );
-        assert!(
-            regressions.is_empty(),
-            "{} regresses against the baseline tier: {regressions:?}",
-            combination.name
+            outcome.failing
         );
     }
 }
 
 fn top_tier(preference: AdapterPreference, format: SurfaceFormat, tolerance: Tolerance) {
-    let baseline = exercise(preference, format, tolerance, COMBINATIONS[0]);
-    let top = exercise(preference, format, tolerance, COMBINATIONS[3]);
-    if let (Some(baseline), Some(top)) = (baseline, top) {
-        let regressions: Vec<&String> = top
-            .failing
-            .iter()
-            .filter(|name| !baseline.failing.contains(name))
-            .collect();
+    for combination in [COMBINATIONS[0], COMBINATIONS[3]] {
+        let Some(outcome) = exercise(preference, format, tolerance, combination) else {
+            return;
+        };
         assert!(
-            regressions.is_empty(),
-            "top tier regresses against the baseline tier: {regressions:?}"
+            outcome.failing.is_empty(),
+            "{preference:?} {format:?} {} fails: {:?}",
+            combination.name,
+            outcome.failing
         );
     }
 }

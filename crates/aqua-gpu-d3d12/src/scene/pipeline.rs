@@ -10,6 +10,8 @@ use super::bindless::{self, Binding};
 use super::Error;
 
 pub const CONSTANT_DWORDS: u32 = 16;
+pub const MATRIX_DWORDS: u32 = 20;
+pub const ROOT_DWORDS: u32 = CONSTANT_DWORDS + MATRIX_DWORDS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
@@ -17,17 +19,26 @@ pub enum Kind {
     Shadow,
     Glyph,
     Image,
+    ImageReplace,
     Layer,
     Copy,
     BlurDown,
     BlurUp,
+    ColorMatrix,
 }
 
 struct Shaders {
     vertex: &'static str,
     pixel: &'static str,
     instanced: bool,
-    blend: bool,
+    blend: Blending,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Blending {
+    Opaque,
+    Over,
+    Dual,
 }
 
 fn shaders(kind: Kind) -> Shaders {
@@ -36,49 +47,61 @@ fn shaders(kind: Kind) -> Shaders {
             vertex: "vs_quad",
             pixel: "ps_quad",
             instanced: true,
-            blend: true,
+            blend: Blending::Over,
         },
         Kind::Shadow => Shaders {
             vertex: "vs_shadow",
             pixel: "ps_shadow",
             instanced: true,
-            blend: true,
+            blend: Blending::Over,
         },
         Kind::Glyph => Shaders {
             vertex: "vs_glyph",
             pixel: "ps_glyph",
             instanced: true,
-            blend: true,
+            blend: Blending::Over,
         },
         Kind::Image => Shaders {
             vertex: "vs_image",
             pixel: "ps_image",
             instanced: true,
-            blend: true,
+            blend: Blending::Over,
+        },
+        Kind::ImageReplace => Shaders {
+            vertex: "vs_image",
+            pixel: "ps_image_replace",
+            instanced: true,
+            blend: Blending::Dual,
         },
         Kind::Layer => Shaders {
             vertex: "vs_fullscreen",
             pixel: "ps_layer",
             instanced: false,
-            blend: true,
+            blend: Blending::Over,
         },
         Kind::Copy => Shaders {
             vertex: "vs_fullscreen",
             pixel: "ps_copy",
             instanced: false,
-            blend: false,
+            blend: Blending::Opaque,
         },
         Kind::BlurDown => Shaders {
             vertex: "vs_fullscreen",
             pixel: "ps_blur_down",
             instanced: false,
-            blend: false,
+            blend: Blending::Opaque,
+        },
+        Kind::ColorMatrix => Shaders {
+            vertex: "vs_fullscreen",
+            pixel: "ps_color_matrix",
+            instanced: false,
+            blend: Blending::Opaque,
         },
         Kind::BlurUp => Shaders {
             vertex: "vs_fullscreen",
             pixel: "ps_blur_up",
             instanced: false,
-            blend: false,
+            blend: Blending::Opaque,
         },
     }
 }
@@ -90,15 +113,17 @@ pub struct PipelineStats {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 10] = [
         Kind::Quad,
         Kind::Shadow,
         Kind::Glyph,
         Kind::Image,
+        Kind::ImageReplace,
         Kind::Layer,
         Kind::Copy,
         Kind::BlurDown,
         Kind::BlurUp,
+        Kind::ColorMatrix,
     ];
 }
 
@@ -136,7 +161,7 @@ fn root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, Error> {
                 Constants: D3D12_ROOT_CONSTANTS {
                     ShaderRegister: 0,
                     RegisterSpace: 0,
-                    Num32BitValues: CONSTANT_DWORDS,
+                    Num32BitValues: ROOT_DWORDS,
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
@@ -215,16 +240,24 @@ fn instance_element(name: PCSTR, index: u32) -> D3D12_INPUT_ELEMENT_DESC {
     }
 }
 
-fn blend_state(enabled: bool) -> D3D12_BLEND_DESC {
+fn blend_state(blending: Blending) -> D3D12_BLEND_DESC {
     let mut blend = D3D12_BLEND_DESC::default();
+    let destination = match blending {
+        Blending::Dual => D3D12_BLEND_INV_SRC1_COLOR,
+        _ => D3D12_BLEND_INV_SRC_ALPHA,
+    };
+    let destination_alpha = match blending {
+        Blending::Dual => D3D12_BLEND_INV_SRC1_ALPHA,
+        _ => D3D12_BLEND_INV_SRC_ALPHA,
+    };
     blend.RenderTarget[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-        BlendEnable: enabled.into(),
+        BlendEnable: (blending != Blending::Opaque).into(),
         LogicOpEnable: false.into(),
         SrcBlend: D3D12_BLEND_ONE,
-        DestBlend: D3D12_BLEND_INV_SRC_ALPHA,
+        DestBlend: destination,
         BlendOp: D3D12_BLEND_OP_ADD,
         SrcBlendAlpha: D3D12_BLEND_ONE,
-        DestBlendAlpha: D3D12_BLEND_INV_SRC_ALPHA,
+        DestBlendAlpha: destination_alpha,
         BlendOpAlpha: D3D12_BLEND_OP_ADD,
         LogicOp: D3D12_LOGIC_OP_NOOP,
         RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
@@ -279,7 +312,7 @@ impl Pipelines {
         let layout: &[D3D12_INPUT_ELEMENT_DESC] = match (shaders.instanced, kind) {
             (false, _) => &[],
             (true, Kind::Glyph) => &glyph_layout,
-            (true, Kind::Image) => &image_layout,
+            (true, Kind::Image | Kind::ImageReplace) => &image_layout,
             (true, Kind::Shadow) => &self.shadow_layout,
             (true, _) => &self.instance_layout,
         };

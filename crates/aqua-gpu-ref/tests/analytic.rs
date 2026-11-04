@@ -1,9 +1,9 @@
-use aqua_core::{Oklch, geometry::Rect};
-use aqua_gpu_ref::RefBackend;
-use aqua_gpu_ref::conformance::Session;
+use aqua_core::{geometry::Rect, Oklch};
 use aqua_gpu_ref::conformance::cases::{build, hex, rect, shadow};
+use aqua_gpu_ref::conformance::Session;
 use aqua_gpu_ref::erf::normal_cdf;
 use aqua_gpu_ref::shadow::blurred_coverage;
+use aqua_gpu_ref::RefBackend;
 use aqua_graph::{
     Extent, Gradient, GradientQuad, GradientStop, PaintCommand, Quad, ShadowInstance,
 };
@@ -221,14 +221,92 @@ fn shadow_alpha_never_exceeds_the_color_alpha_and_decays_monotonically_outside()
     );
     let pixels = render_pixels(&case);
     let alpha = |x: usize, y: usize| pixels.rgba8[(y * 80 + x) * 4 + 3];
-    assert!(
-        pixels
-            .rgba8
-            .chunks(4)
-            .all(|p| p[3] <= (0.6f32 * 255.0).round() as u8)
-    );
+    assert!(pixels
+        .rgba8
+        .chunks(4)
+        .all(|p| p[3] <= (0.6f32 * 255.0).round() as u8));
     let row: Vec<u8> = (50..80).map(|x| alpha(x, 20)).collect();
     assert!(row.windows(2).all(|pair| pair[0] >= pair[1]));
     assert_eq!(alpha(79, 20), 0);
     assert!(alpha(35, 20) >= 150);
+}
+
+fn dense_reference(shadow: &ShadowInstance, px: f64, py: f64) -> f64 {
+    let sigma = shadow.sigma as f64;
+    let spread = shadow.spread as f64;
+    let half = (
+        shadow.bounds.w as f64 / 2.0 + spread,
+        shadow.bounds.h as f64 / 2.0 + spread,
+    );
+    let center = (
+        shadow.bounds.x as f64 + shadow.bounds.w as f64 / 2.0 + shadow.offset[0] as f64,
+        shadow.bounds.y as f64 + shadow.bounds.h as f64 / 2.0 + shadow.offset[1] as f64,
+    );
+    let radius = (shadow.radius as f64 + spread)
+        .max(0.0)
+        .min(half.0.min(half.1));
+    let low = (center.1 - half.1).max(py - 6.0 * sigma);
+    let high = (center.1 + half.1).min(py + 6.0 * sigma);
+    let steps = (((high - low) / 0.05).ceil() as usize).max(1);
+    let step = (high - low) / steps as f64;
+    let scale = sigma * std::f64::consts::SQRT_2;
+    (0..steps)
+        .map(|index| {
+            let y = low + step * (index as f64 + 0.5);
+            let dy = (y - center.1).abs();
+            let straight = half.1 - radius;
+            let width = match dy <= straight {
+                true => half.0,
+                false => {
+                    let into = dy - straight;
+                    half.0 - radius + (radius * radius - into * into).max(0.0).sqrt()
+                }
+            };
+            let weight = normal_cdf((y + step / 2.0 - py) / sigma)
+                - normal_cdf((y - step / 2.0 - py) / sigma);
+            let dx = px - center.0;
+            weight
+                * 0.5
+                * (aqua_gpu_ref::erf::erf((dx + width) / scale)
+                    - aqua_gpu_ref::erf::erf((dx - width) / scale))
+        })
+        .sum()
+}
+
+#[test]
+fn large_shadows_render_a_1440p_frame_quickly_and_match_dense_integration() {
+    use aqua_gpu_ref::raster::Layer;
+    use aqua_gpu_ref::shadow::draw_shadow;
+    let shadow = instance(
+        rect(300.0, 200.0, 1800.0, 900.0),
+        24.0,
+        40.0,
+        10.0,
+        [0.0, 20.0],
+    );
+    let mut layer = Layer::filled(2560, 1440, [0.0; 4]);
+    let started = std::time::Instant::now();
+    draw_shadow(&mut layer, &shadow);
+    assert!(
+        started.elapsed().as_secs_f32() < 10.0,
+        "{:?}",
+        started.elapsed()
+    );
+    [
+        (1200usize, 600usize),
+        (320, 220),
+        (150, 600),
+        (2100, 1100),
+        (1200, 1000),
+        (305, 205),
+    ]
+    .iter()
+    .for_each(|&(x, y)| {
+        let expected = dense_reference(&shadow, x as f64 + 0.5, y as f64 + 0.5);
+        let actual = layer.at(x, y)[3] as f64;
+        assert!(
+            (actual - expected).abs() < 5e-4,
+            "({x},{y}) {actual} vs {expected}"
+        );
+    });
 }

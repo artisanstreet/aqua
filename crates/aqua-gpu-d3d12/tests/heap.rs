@@ -1,7 +1,9 @@
 #![cfg(windows)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat, TierLimit};
 use aqua_gpu_ref::conformance::{cases, Case, Session};
@@ -10,11 +12,37 @@ use aqua_protocol::{FrameInputs, GpuBackend};
 struct Counting;
 
 static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+static TRACING: AtomicBool = AtomicBool::new(false);
+static SITES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+thread_local! {
+    static INSIDE: Cell<bool> = const { Cell::new(false) };
+}
+
+fn record_site() {
+    if !TRACING.load(Ordering::Relaxed) {
+        return;
+    }
+    INSIDE.with(|inside| {
+        if inside.replace(true) {
+            return;
+        }
+        let trace = std::backtrace::Backtrace::force_capture().to_string();
+        let frames: Vec<&str> = trace
+            .lines()
+            .filter(|line| line.contains("aqua_") && !line.contains("heap::"))
+            .take(6)
+            .collect();
+        SITES.lock().unwrap().push(frames.join(" <- "));
+        inside.set(false);
+    });
+}
 static BYTES: AtomicU64 = AtomicU64::new(0);
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        record_site();
         BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
         unsafe { System.alloc(layout) }
     }
@@ -25,6 +53,7 @@ unsafe impl GlobalAlloc for Counting {
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        record_site();
         BYTES.fetch_add(size as u64, Ordering::Relaxed);
         unsafe { System.realloc(pointer, layout, size) }
     }
@@ -61,57 +90,62 @@ fn settle(backend: &mut OffscreenBackend, case: &Case) -> aqua_protocol::Surface
     surface
 }
 
-struct Budget {
-    case: &'static str,
-    allocations: u64,
-    bytes: u64,
-}
-
-const BUDGETS: [Budget; 3] = [
-    Budget {
-        case: "isolated_group_opacity",
-        allocations: 23,
-        bytes: 3768,
-    },
-    Budget {
-        case: "glyph_run_one_to_one",
-        allocations: 11,
-        bytes: 1868,
-    },
-    Budget {
-        case: "image_unscaled",
-        allocations: 14,
-        bytes: 1644,
-    },
+const CASES: [&str; 11] = [
+    "isolated_group_opacity",
+    "glyph_run_one_to_one",
+    "image_unscaled",
+    "backdrop_blur_large_radius",
+    "content_blur_crossfade_radius",
+    "rounded_clip_basic",
+    "color_matrix_grayscale_over_stripes",
+    "color_matrix_offsets_and_alpha",
+    "custom_invert_full_amount",
+    "custom_invert_half_amount_fractional_bounds",
+    "compute_row_box_blur",
 ];
 
 #[test]
 fn steady_state_frames_stay_inside_their_allocation_budget() {
     let mut over: Vec<String> = Vec::new();
-    for preference in [AdapterPreference::Warp, AdapterPreference::HighPerformance] {
+    let combinations = [
+        (AdapterPreference::Warp, TierLimit::MAX),
+        (AdapterPreference::Warp, TierLimit::BASELINE),
+        (AdapterPreference::HighPerformance, TierLimit::MAX),
+        (AdapterPreference::HighPerformance, TierLimit::BASELINE),
+    ];
+    for (preference, limit) in combinations {
         let Ok(mut backend) =
-            OffscreenBackend::with_tiers(preference, SurfaceFormat::Rgba16Float, TierLimit::MAX)
+            OffscreenBackend::with_tiers(preference, SurfaceFormat::Rgba16Float, limit)
         else {
             continue;
         };
-        for budget in &BUDGETS {
-            let case = named(budget.case);
+        for name in CASES {
+            let case = named(name);
             let surface = settle(&mut backend, &case);
             let inputs = FrameInputs { surface };
             let mut worst = (0, 0);
+            if std::env::var("AQUA_HEAP_TRACE").is_ok() {
+                SITES.lock().unwrap().clear();
+                TRACING.store(true, Ordering::Relaxed);
+                backend.execute(&case.plan, &inputs).unwrap();
+                TRACING.store(false, Ordering::Relaxed);
+                for site in SITES.lock().unwrap().iter() {
+                    eprintln!("{name} site: {site}");
+                }
+            }
             for _ in 0..16 {
                 let (result, allocations, bytes) = counted(|| backend.execute(&case.plan, &inputs));
                 result.unwrap();
                 worst = (worst.0.max(allocations), worst.1.max(bytes));
             }
             eprintln!(
-                "{preference:?} {}: {} allocations, {} bytes per steady frame",
-                budget.case, worst.0, worst.1
+                "{preference:?} {limit:?} {name}: {} allocations, {} bytes per steady frame",
+                worst.0, worst.1
             );
-            if worst.0 > budget.allocations || worst.1 > budget.bytes {
+            if worst != (0, 0) {
                 over.push(format!(
-                    "{preference:?} {}: {} allocations / {} bytes exceed the budget of {} / {}",
-                    budget.case, worst.0, worst.1, budget.allocations, budget.bytes
+                    "{preference:?} {limit:?} {name}: {} allocations / {} bytes in a steady frame, the gate is 0",
+                    worst.0, worst.1
                 ));
             }
         }

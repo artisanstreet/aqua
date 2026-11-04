@@ -62,6 +62,18 @@ const ENTRIES: &[Entry] = &[
         file: "image.hlsl",
         entry: "ps_image",
     },
+    Entry {
+        file: "image.hlsl",
+        entry: "ps_image_replace",
+    },
+    Entry {
+        file: "color_matrix.hlsl",
+        entry: "ps_color_matrix",
+    },
+    Entry {
+        file: "compute.hlsl",
+        entry: "cs_row_box_blur",
+    },
 ];
 
 enum Host {

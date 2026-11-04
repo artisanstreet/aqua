@@ -6,11 +6,11 @@ use aqua_core::geometry::Rect;
 use aqua_core::vector::{Brush, Drawing, GradientStop, PaintedPath, PathCommand, VectorSource};
 use aqua_core::{Oklch, Point};
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend};
-use aqua_gpu_ref::{RefBackend, conformance};
+use aqua_gpu_ref::{conformance, RefBackend};
 use aqua_graph::{Extent, FramePlan, PlanLimits, RenderGraph, TextureRef};
 use aqua_media::atlas::{
-    AtlasConfig, GlyphBitmap, GlyphKey, ImageKey, PageFormat, Placement, SUBPIXEL_BINS, Slot,
-    StreamBudget,
+    AtlasConfig, GlyphBitmap, GlyphKey, ImageKey, PageFormat, Placement, Slot, StreamBudget,
+    SUBPIXEL_BINS,
 };
 use aqua_media::residency::{Residency, ResidencyConfig, VectorMode};
 use aqua_media::upload::{glyph_instance, glyph_passes, image_instance, image_pass, upload_batch};
@@ -93,7 +93,9 @@ fn check(label: &str, case: &str, rig: &mut Rig, plan: &FramePlan, tolerance: u8
     );
     let lit = actual
         .rgba8
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[3] > 0)
         .count();
     assert!(lit > 0, "{label} {case}: the frame is empty");

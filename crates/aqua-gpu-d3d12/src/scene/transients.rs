@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use aqua_graph::{Extent, FramePlan, TextureFormat, TransientId};
+use aqua_graph::{Extent, FramePlan, PassKind, TextureFormat, TextureRef, TransientId};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use windows::core::Interface;
@@ -21,6 +21,7 @@ struct Key {
     format: TextureFormat,
     offset: u64,
     bytes: u64,
+    unordered: bool,
 }
 
 pub struct Entry {
@@ -48,8 +49,8 @@ pub struct Transients {
     retired: Vec<Retired>,
 }
 
-fn desc1_of(extent: Extent, format: TextureFormat) -> D3D12_RESOURCE_DESC1 {
-    let desc = desc_of(extent, format);
+fn desc1_of(extent: Extent, format: TextureFormat, unordered: bool) -> D3D12_RESOURCE_DESC1 {
+    let desc = desc_of(extent, format, unordered);
     D3D12_RESOURCE_DESC1 {
         Dimension: desc.Dimension,
         Alignment: desc.Alignment,
@@ -65,12 +66,17 @@ fn desc1_of(extent: Extent, format: TextureFormat) -> D3D12_RESOURCE_DESC1 {
     }
 }
 
-fn desc_of(extent: Extent, format: TextureFormat) -> D3D12_RESOURCE_DESC {
+fn desc_of(extent: Extent, format: TextureFormat, unordered: bool) -> D3D12_RESOURCE_DESC {
     texture_desc(
         extent.width,
         extent.height,
         dxgi(format),
-        D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+        match unordered {
+            true => {
+                D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
+            }
+            false => D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+        },
     )
 }
 
@@ -78,7 +84,7 @@ fn place_keys(device: &ID3D12Device, keys: &[Key]) -> crate::placement::Placemen
     let real: Vec<u64> = keys
         .iter()
         .map(|key| unsafe {
-            device.GetResourceAllocationInfo(0, &[desc_of(key.extent, key.format)])
+            device.GetResourceAllocationInfo(0, &[desc_of(key.extent, key.format, key.unordered)])
         }
         .SizeInBytes)
         .collect();
@@ -101,8 +107,16 @@ fn keys_of(plan: &FramePlan) -> Vec<Key> {
             format: texture.format,
             offset: texture.heap_offset,
             bytes: texture.bytes(),
+            unordered: unordered_write(plan, texture.id),
         })
         .collect()
+}
+
+fn unordered_write(plan: &FramePlan, id: TransientId) -> bool {
+    plan.passes.iter().any(|pass| {
+        matches!(pass.kind, PassKind::Compute { .. })
+            && pass.writes.contains(&TextureRef::Transient(id))
+    })
 }
 
 impl Transients {
@@ -182,6 +196,7 @@ impl Transients {
                     && key.format == texture.format
                     && key.offset == texture.heap_offset
                     && key.bytes == texture.bytes()
+                    && key.unordered == unordered_write(plan, texture.id)
             })
     }
 
@@ -202,7 +217,7 @@ impl Transients {
                 device10.CreatePlacedResource2(
                     heap,
                     offset,
-                    &desc1_of(key.extent, key.format),
+                    &desc1_of(key.extent, key.format, key.unordered),
                     initial_layout(D3D12_RESOURCE_STATE_RENDER_TARGET),
                     Some(&clear),
                     None,
@@ -213,7 +228,7 @@ impl Transients {
                 device.CreatePlacedResource(
                     heap,
                     offset,
-                    &desc_of(key.extent, key.format),
+                    &desc_of(key.extent, key.format, key.unordered),
                     D3D12_RESOURCE_STATE_RENDER_TARGET,
                     Some(&clear),
                     &mut resource,

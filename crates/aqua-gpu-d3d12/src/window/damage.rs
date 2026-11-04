@@ -150,6 +150,10 @@ impl DamageTracker {
         self.history.clear();
     }
 
+    pub fn has_presented(&self) -> bool {
+        self.last_presented.iter().any(Option::is_some)
+    }
+
     pub fn age(&self, buffer: usize) -> u32 {
         match self.last_presented.get(buffer).copied().flatten() {
             Some(frame) => (self.frame - frame + 1) as u32,

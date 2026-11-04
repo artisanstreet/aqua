@@ -1,7 +1,7 @@
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D12::*;
 
-use super::pipeline::CONSTANT_DWORDS;
+use super::pipeline::{CONSTANT_DWORDS, MATRIX_DWORDS, ROOT_DWORDS};
 use super::Error;
 use crate::hal::tier::Tier;
 
@@ -50,6 +50,17 @@ impl Binding {
         };
     }
 
+    pub fn set_matrix(self, list: &ID3D12GraphicsCommandList, matrix: &[f32; 20]) {
+        unsafe {
+            list.SetGraphicsRoot32BitConstants(
+                0,
+                MATRIX_DWORDS,
+                matrix.as_ptr() as *const _,
+                CONSTANT_DWORDS,
+            )
+        };
+    }
+
     pub fn bind_table(self, list: &ID3D12GraphicsCommandList, table: D3D12_GPU_DESCRIPTOR_HANDLE) {
         if self == Binding::Table {
             unsafe { list.SetGraphicsRootDescriptorTable(1, table) };
@@ -78,7 +89,7 @@ pub fn root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, Erro
             Constants: D3D12_ROOT_CONSTANTS {
                 ShaderRegister: 0,
                 RegisterSpace: 0,
-                Num32BitValues: CONSTANT_DWORDS,
+                Num32BitValues: ROOT_DWORDS,
             },
         },
         ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,

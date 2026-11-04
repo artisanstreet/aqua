@@ -88,6 +88,7 @@ fn hardware(factory: &IDXGIFactory6, preference: DXGI_GPU_PREFERENCE) -> Result<
 }
 
 pub fn select(preference: AdapterPreference) -> Result<Selected, Error> {
+    super::debug::enable();
     let factory2: IDXGIFactory2 = unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))? };
     let factory: IDXGIFactory6 = factory2.cast()?;
     match preference {

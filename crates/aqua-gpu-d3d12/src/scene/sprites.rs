@@ -19,21 +19,33 @@ fn element(name: PCSTR, index: u32) -> D3D12_INPUT_ELEMENT_DESC {
     }
 }
 
-pub fn glyph_layout() -> [D3D12_INPUT_ELEMENT_DESC; 4] {
+pub fn glyph_layout() -> [D3D12_INPUT_ELEMENT_DESC; 5] {
     [
         element(s!("BOUNDS"), 0),
         element(s!("TEXELS"), 1),
         element(s!("CLIP"), 2),
         element(s!("COLOR"), 3),
+        element(s!("EXTRA"), 4),
     ]
 }
 
-pub fn image_layout() -> [D3D12_INPUT_ELEMENT_DESC; 4] {
+pub fn image_layout() -> [D3D12_INPUT_ELEMENT_DESC; 5] {
     [
         element(s!("BOUNDS"), 0),
         element(s!("TEXELS"), 1),
         element(s!("CLIP"), 2),
         element(s!("PARAMS"), 3),
+        element(s!("XFORM"), 4),
+    ]
+}
+
+pub fn slug_layout() -> [D3D12_INPUT_ELEMENT_DESC; 5] {
+    [
+        element(s!("PLACEMENT"), 0),
+        element(s!("GLYPH"), 1),
+        element(s!("EMBOUNDS"), 2),
+        element(s!("CLIP"), 3),
+        element(s!("COLOR"), 4),
     ]
 }
 

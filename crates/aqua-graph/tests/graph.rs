@@ -24,6 +24,7 @@ fn quad_instance(x: f32) -> QuadInstance {
         clip: None,
         gradient: None,
         opacity: 1.0,
+        linear: aqua_graph::Linear2::IDENTITY,
     }
 }
 
@@ -155,6 +156,7 @@ fn glyph_passes_bind_the_atlas_and_survive_validation() {
                 color: Oklch::WHITE,
                 clip: None,
                 opacity: 1.0,
+                backdrop: None,
             }],
         },
         vec![TextureRef::Persistent(atlas)],

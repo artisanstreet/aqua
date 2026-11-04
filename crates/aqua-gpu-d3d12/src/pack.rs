@@ -17,6 +17,7 @@ pub struct QuadGpu {
     pub stop_a: [f32; 4],
     pub stop_b: [f32; 4],
     pub stop_offsets: [f32; 4],
+    pub xform: [f32; 4],
 }
 
 #[repr(C)]
@@ -76,6 +77,7 @@ pub fn pack_quad(instance: &QuadInstance) -> QuadGpu {
         stop_a,
         stop_b,
         stop_offsets: offsets,
+        xform: instance.linear.pack(),
     }
 }
 

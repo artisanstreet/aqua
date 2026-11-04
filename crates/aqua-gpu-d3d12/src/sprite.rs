@@ -1,6 +1,6 @@
 use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
-use aqua_graph::{GlyphInstance, ImageInstance};
+use aqua_graph::{GlyphInstance, ImageInstance, SlugInstance};
 
 pub const SPRITE_STRIDE: usize = std::mem::size_of::<SpriteGpu>();
 
@@ -13,7 +13,22 @@ pub struct SpriteGpu {
     pub texels: [f32; 4],
     pub clip: [f32; 4],
     pub tail: [f32; 4],
+    pub extra: [f32; 4],
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SlugGpu {
+    pub placement: [f32; 4],
+    pub glyph: [f32; 4],
+    pub bounds: [f32; 4],
+    pub clip: [f32; 4],
+    pub color: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<SlugGpu>() == SPRITE_STRIDE);
+
+const NO_BACKDROP: f32 = -1.0;
 
 fn rect(rect: Rect) -> [f32; 4] {
     [rect.x, rect.y, rect.w, rect.h]
@@ -29,6 +44,7 @@ pub fn pack_glyph(glyph: &GlyphInstance) -> SpriteGpu {
         texels: rect(glyph.texels),
         clip: clip(glyph.clip),
         tail: glyph.color.to_gpu().map(|channel| channel * glyph.opacity),
+        extra: [glyph.backdrop.unwrap_or(NO_BACKDROP), 0.0, 0.0, 0.0],
     }
 }
 
@@ -48,6 +64,7 @@ pub fn glyph_packer() -> impl FnMut(&GlyphInstance) -> SpriteGpu {
             texels: rect(glyph.texels),
             clip: clip(glyph.clip),
             tail: linear.map(|channel| channel * glyph.opacity),
+            extra: [glyph.backdrop.unwrap_or(NO_BACKDROP), 0.0, 0.0, 0.0],
         }
     }
 }
@@ -67,5 +84,22 @@ pub fn pack_image(image: &ImageInstance) -> SpriteGpu {
             image.clip.map_or(0.0, |_| image.clip_radius),
             0.0,
         ],
+        extra: image.linear.pack(),
+    }
+}
+
+pub fn pack_slug(glyph: &SlugInstance) -> SlugGpu {
+    let linear = glyph.linear.pack();
+    SlugGpu {
+        placement: [glyph.origin[0], glyph.origin[1], linear[0], linear[1]],
+        glyph: [
+            linear[2],
+            linear[3],
+            glyph.glyph as f32,
+            glyph.backdrop.unwrap_or(NO_BACKDROP),
+        ],
+        bounds: glyph.em_bounds,
+        clip: clip(glyph.clip),
+        color: glyph.color.to_gpu().map(|channel| channel * glyph.opacity),
     }
 }

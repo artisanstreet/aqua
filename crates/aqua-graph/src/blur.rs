@@ -155,6 +155,7 @@ fn mix(
         clip: None,
         clip_radius: 0.0,
         blend: Blend::Replace,
+        linear: crate::linear::Linear2::IDENTITY,
     };
     graph.push(Pass::new(
         PassKind::Images {

@@ -18,6 +18,7 @@ pub enum Kind {
     Quad,
     Shadow,
     Glyph,
+    Slug,
     Image,
     ImageReplace,
     Layer,
@@ -58,6 +59,12 @@ fn shaders(kind: Kind) -> Shaders {
         Kind::Glyph => Shaders {
             vertex: "vs_glyph",
             pixel: "ps_glyph",
+            instanced: true,
+            blend: Blending::Over,
+        },
+        Kind::Slug => Shaders {
+            vertex: "vs_slug",
+            pixel: "ps_slug",
             instanced: true,
             blend: Blending::Over,
         },
@@ -113,10 +120,11 @@ pub struct PipelineStats {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 10] = [
+    pub const ALL: [Kind; 11] = [
         Kind::Quad,
         Kind::Shadow,
         Kind::Glyph,
+        Kind::Slug,
         Kind::Image,
         Kind::ImageReplace,
         Kind::Layer,
@@ -290,6 +298,7 @@ impl Pipelines {
                 instance_element(s!("STOPA"), 6),
                 instance_element(s!("STOPB"), 7),
                 instance_element(s!("STOPOFFSETS"), 8),
+                instance_element(s!("XFORM"), 9),
             ],
             shadow_layout: vec![
                 instance_element(s!("BOUNDS"), 0),
@@ -309,9 +318,11 @@ impl Pipelines {
         let shaders = shaders(kind);
         let glyph_layout = super::sprites::glyph_layout();
         let image_layout = super::sprites::image_layout();
+        let slug_layout = super::sprites::slug_layout();
         let layout: &[D3D12_INPUT_ELEMENT_DESC] = match (shaders.instanced, kind) {
             (false, _) => &[],
             (true, Kind::Glyph) => &glyph_layout,
+            (true, Kind::Slug) => &slug_layout,
             (true, Kind::Image | Kind::ImageReplace) => &image_layout,
             (true, Kind::Shadow) => &self.shadow_layout,
             (true, _) => &self.instance_layout,

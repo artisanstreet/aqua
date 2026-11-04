@@ -55,3 +55,41 @@ float4 vs_fullscreen(uint vertex : SV_VertexID) : SV_Position
     float2 corner = float2(vertex & 1, vertex >> 1);
     return float4(corner.x * 2.0 - 1.0, 1.0 - corner.y * 2.0, 0.0, 1.0);
 }
+
+bool is_identity(float4 xform)
+{
+    return xform.x == 1.0 && xform.y == 0.0 && xform.z == 0.0 && xform.w == 1.0;
+}
+
+float xform_scale(float4 xform)
+{
+    return sqrt(abs(xform.x * xform.w - xform.y * xform.z));
+}
+
+float2 xform_apply(float4 xform, float2 v)
+{
+    return float2(xform.x * v.x + xform.z * v.y, xform.y * v.x + xform.w * v.y);
+}
+
+float4 xform_inverse(float4 xform)
+{
+    float det = xform.x * xform.w - xform.y * xform.z;
+    float reciprocal = 1.0 / (abs(det) > 1.0e-12 ? det : 1.0);
+    return float4(xform.w * reciprocal, -xform.y * reciprocal, -xform.z * reciprocal, xform.x * reciprocal);
+}
+
+float2 to_local(float4 xform, float2 center, float2 p)
+{
+    if (is_identity(xform))
+    {
+        return p;
+    }
+    return center + xform_apply(xform_inverse(xform), p - center);
+}
+
+float2 covered_reach(float4 xform, float2 half_size)
+{
+    return float2(
+        abs(xform.x) * half_size.x + abs(xform.z) * half_size.y,
+        abs(xform.y) * half_size.x + abs(xform.w) * half_size.y);
+}

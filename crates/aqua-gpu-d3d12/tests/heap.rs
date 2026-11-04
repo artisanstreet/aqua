@@ -90,7 +90,7 @@ fn settle(backend: &mut OffscreenBackend, case: &Case) -> aqua_protocol::Surface
     surface
 }
 
-const CASES: [&str; 11] = [
+const CASES: [&str; 14] = [
     "isolated_group_opacity",
     "glyph_run_one_to_one",
     "image_unscaled",
@@ -102,6 +102,9 @@ const CASES: [&str; 11] = [
     "custom_invert_full_amount",
     "custom_invert_half_amount_fractional_bounds",
     "compute_row_box_blur",
+    "slug_rotated_and_skewed",
+    "quad_rotated_rounded_bordered",
+    "image_rotated_rounded",
 ];
 
 #[test]

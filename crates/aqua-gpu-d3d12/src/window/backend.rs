@@ -408,6 +408,13 @@ impl WindowBackend {
         let completed = core.completed_fence();
         gpu.renderer.retire(completed);
         gpu.textures.retire(completed);
+        let created = gpu
+            .renderer
+            .reserve(plan, core.timeline().next_value())
+            .map_err(GpuError::from)?;
+        if created && crate::scene::debug::requested() {
+            core.wait_idle()?;
+        }
         let frame_fence = core.timeline().next_value();
         let back = entry.swapchain.current();
         let target = SceneTarget {

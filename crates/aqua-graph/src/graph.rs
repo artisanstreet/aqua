@@ -161,7 +161,7 @@ fn cull_instances(graph: &RenderGraph, passes: &mut Vec<Pass>) -> usize {
                     && (quad.fill.alpha > 0.0
                         || quad.gradient.is_some()
                         || (quad.border_width > 0.0 && quad.border_color.alpha > 0.0));
-                paints && visible(quad.bounds, quad.clip, target)
+                paints && visible(quad.covered(), quad.clip, target)
             }),
             PassKind::Shadows { instances } => instances.retain(|shadow| {
                 shadow.opacity > 0.0
@@ -173,8 +173,14 @@ fn cull_instances(graph: &RenderGraph, passes: &mut Vec<Pass>) -> usize {
                     && glyph.color.alpha > 0.0
                     && visible(glyph.bounds, glyph.clip, target)
             }),
-            PassKind::Images { instances } => instances
-                .retain(|image| image.opacity > 0.0 && visible(image.bounds, image.clip, target)),
+            PassKind::Images { instances } => instances.retain(|image| {
+                image.opacity > 0.0 && visible(image.covered(), image.clip, target)
+            }),
+            PassKind::Slug { instances, .. } => instances.retain(|glyph| {
+                glyph.opacity > 0.0
+                    && glyph.color.alpha > 0.0
+                    && visible(glyph.covered(), glyph.clip, target)
+            }),
             PassKind::Fullscreen { .. }
             | PassKind::Filter { .. }
             | PassKind::Compute { .. }
@@ -190,6 +196,7 @@ fn cull_instances(graph: &RenderGraph, passes: &mut Vec<Pass>) -> usize {
                 | PassKind::Shadows { .. }
                 | PassKind::Glyphs { .. }
                 | PassKind::Images { .. }
+                | PassKind::Slug { .. }
         );
         !drawing || pass.kind.draw_count() > 0
     });
@@ -239,6 +246,7 @@ fn same_batch(a: &Pass, b: &Pass) -> bool {
             (PassKind::Shadows { .. }, PassKind::Shadows { .. }) => true,
             (PassKind::Glyphs { atlas: x, .. }, PassKind::Glyphs { atlas: y, .. }) => x == y,
             (PassKind::Images { .. }, PassKind::Images { .. }) => true,
+            (PassKind::Slug { store: x, .. }, PassKind::Slug { store: y, .. }) => x == y,
             _ => false,
         }
     }
@@ -258,6 +266,12 @@ fn absorb(target: &mut Pass, source: Pass) {
         (
             PassKind::Glyphs { instances, .. },
             PassKind::Glyphs {
+                instances: more, ..
+            },
+        ) => instances.extend(more),
+        (
+            PassKind::Slug { instances, .. },
+            PassKind::Slug {
                 instances: more, ..
             },
         ) => instances.extend(more),

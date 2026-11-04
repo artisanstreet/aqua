@@ -1,5 +1,5 @@
 use aqua_core::geometry::Rect;
-use aqua_graph::{Extent, FramePlan, PassKind, TextureRef};
+use aqua_graph::{Extent, FramePlan, Linear2, PassKind, TextureRef};
 use aqua_protocol::SurfacePixels;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +70,7 @@ struct Footprint {
     radius: f32,
     clip: Option<Rect>,
     soft: Option<Rect>,
+    linear: Linear2,
 }
 
 fn footprints(plan: &FramePlan) -> Vec<Footprint> {
@@ -79,13 +80,17 @@ fn footprints(plan: &FramePlan) -> Vec<Footprint> {
         radius,
         clip,
         soft: None,
+        linear: Linear2::IDENTITY,
     };
     plan.passes
         .iter()
         .flat_map(|pass| match &pass.kind {
             PassKind::Instanced { instances, .. } => instances
                 .iter()
-                .map(|q| hard(q.bounds, q.radius, q.border_width, q.clip))
+                .map(|q| Footprint {
+                    linear: q.linear,
+                    ..hard(q.bounds, q.radius, q.border_width, q.clip)
+                })
                 .collect::<Vec<_>>(),
             PassKind::Shadows { instances } => instances
                 .iter()
@@ -98,11 +103,19 @@ fn footprints(plan: &FramePlan) -> Vec<Footprint> {
                 .iter()
                 .map(|g| hard(g.bounds, 0.0, 0.0, g.clip))
                 .collect(),
+            PassKind::Slug { instances, .. } => instances
+                .iter()
+                .map(|g| Footprint {
+                    soft: Some(g.covered()),
+                    ..hard(g.covered(), 0.0, 0.0, g.clip)
+                })
+                .collect(),
             PassKind::Images { instances } => instances
                 .iter()
                 .flat_map(|i| {
                     let image = Footprint {
-                        soft: matches!(i.source, TextureRef::Transient(_)).then_some(i.bounds),
+                        soft: matches!(i.source, TextureRef::Transient(_)).then_some(i.covered()),
+                        linear: i.linear,
                         ..hard(i.bounds, i.radius, 0.0, i.clip)
                     };
                     let rounded_clip = i
@@ -121,7 +134,7 @@ fn footprints(plan: &FramePlan) -> Vec<Footprint> {
         .collect()
 }
 
-fn band_rects(footprint: &Footprint) -> Vec<Rect> {
+fn shape_rects(footprint: &Footprint) -> Vec<Rect> {
     let bounds = footprint.bounds;
     let inset = footprint.border;
     let inner = Rect {
@@ -130,10 +143,21 @@ fn band_rects(footprint: &Footprint) -> Vec<Rect> {
         w: (bounds.w - inset * 2.0).max(0.0),
         h: (bounds.h - inset * 2.0).max(0.0),
     };
-    [Some(bounds), (inset > 0.0).then_some(inner), footprint.clip]
+    [Some(bounds), (inset > 0.0).then_some(inner)]
         .into_iter()
         .flatten()
         .collect()
+}
+
+fn to_local(footprint: &Footprint, x: f32, y: f32) -> (f32, f32) {
+    match footprint.linear.inverse() {
+        Some(inverse) if !footprint.linear.is_identity() => {
+            let center = footprint.bounds.center();
+            let moved = inverse.apply([x - center.x, y - center.y]);
+            (center.x + moved[0], center.y + moved[1])
+        }
+        _ => (x, y),
+    }
 }
 
 fn near_boundary(rect: Rect, x: f32, y: f32, band: f32) -> bool {
@@ -185,15 +209,26 @@ pub fn class_mask(plan: &FramePlan, band: f32) -> Vec<Class> {
                 }
             }
         }
-        let bounds = footprint.bounds;
-        let rects = band_rects(&footprint);
-        let ys = pixel_range(bounds.y - band - 1.0, bounds.bottom() + band + 1.0, height);
-        let xs = pixel_range(bounds.x - band - 1.0, bounds.right() + band + 1.0, width);
+        let reach = footprint.linear.cover(footprint.bounds);
+        let rects = shape_rects(&footprint);
+        let scale = match footprint.linear.is_identity() {
+            true => 1.0,
+            false => footprint.linear.scale_factor().max(1.0e-3),
+        };
+        let local_band = band / scale + if scale == 1.0 { 0.0 } else { 0.5 };
+        let ys = pixel_range(reach.y - band - 1.0, reach.bottom() + band + 1.0, height);
+        let xs = pixel_range(reach.x - band - 1.0, reach.right() + band + 1.0, width);
         for y in ys {
             for x in xs.clone() {
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-                let near = rects.iter().any(|rect| near_boundary(*rect, px, py, band))
-                    || near_rounded_corner(&footprint, px, py, band);
+                let (lx, ly) = to_local(&footprint, px, py);
+                let near = rects
+                    .iter()
+                    .any(|rect| near_boundary(*rect, lx, ly, local_band))
+                    || near_rounded_corner(&footprint, lx, ly, local_band)
+                    || footprint
+                        .clip
+                        .is_some_and(|clip| near_boundary(clip, px, py, band));
                 if near {
                     mark(x, y, Class::Edge);
                 }

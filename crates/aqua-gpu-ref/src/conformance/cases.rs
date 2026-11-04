@@ -128,6 +128,7 @@ pub fn glyph_run(glyphs: &[(Rect, Rect, &str, f32)]) -> PaintCommand {
                 bounds: *bounds,
                 texels: *texels,
                 color: hex(color, *alpha),
+                backdrop: None,
             })
             .collect(),
     })
@@ -183,11 +184,11 @@ pub fn stripes(extent: Extent) -> Vec<PaintCommand> {
     commands
 }
 
-fn standard(name: &str, clear: Oklch, commands: Vec<PaintCommand>) -> Case {
+pub(super) fn standard(name: &str, clear: Oklch, commands: Vec<PaintCommand>) -> Case {
     build(name, STANDARD, clear, &commands)
 }
 
-fn backdrop() -> PaintCommand {
+pub(super) fn backdrop() -> PaintCommand {
     quad(0.0, 0.0, 96.0, 72.0, "#253040", 1.0, 0.0, 0.0)
 }
 
@@ -421,6 +422,8 @@ pub fn cases() -> Vec<Case> {
     cases.push(standard("sibling_groups_alias", Oklch::TRANSPARENT, nested));
     cases.extend(effect_cases());
     cases.extend(super::effects::cases());
+    cases.extend(super::text::cases());
+    cases.extend(super::transforms::cases());
     cases.push(build(
         "extent_one_by_one",
         Extent {

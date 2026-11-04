@@ -1,5 +1,5 @@
 use aqua_core::{geometry::Rect, Oklch};
-use aqua_graph::{Gradient, QuadInstance};
+use aqua_graph::{Gradient, Linear2, QuadInstance};
 
 pub type Pixel = [f32; 4];
 
@@ -59,11 +59,45 @@ pub fn saturate(value: f32) -> f32 {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct Placement {
+    center: (f32, f32),
+    inverse: Linear2,
+    identity: bool,
+    pub scale: f32,
+}
+
+impl Placement {
+    pub fn new(bounds: Rect, linear: Linear2) -> Self {
+        let center = bounds.center();
+        Self {
+            center: (center.x, center.y),
+            inverse: linear.inverse().unwrap_or(Linear2::IDENTITY),
+            identity: linear.is_identity(),
+            scale: match linear.is_identity() {
+                true => 1.0,
+                false => linear.scale_factor(),
+            },
+        }
+    }
+
+    pub fn local(&self, px: f32, py: f32) -> (f32, f32) {
+        match self.identity {
+            true => (px, py),
+            false => {
+                let moved = self.inverse.apply([px - self.center.0, py - self.center.1]);
+                (self.center.0 + moved[0], self.center.1 + moved[1])
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct QuadShape {
     pub center: (f32, f32),
     pub half: (f32, f32),
     pub radius: f32,
     pub edge: f32,
+    pub distance_scale: f32,
 }
 
 impl QuadShape {
@@ -77,6 +111,14 @@ impl QuadShape {
             } else {
                 border_width
             },
+            distance_scale: 1.0,
+        }
+    }
+
+    pub fn scaled_by(self, distance_scale: f32) -> Self {
+        Self {
+            distance_scale,
+            ..self
         }
     }
 
@@ -84,10 +126,11 @@ impl QuadShape {
         let relative = (px - self.center.0, py - self.center.1);
         let qx = relative.0.abs() - self.half.0 + self.radius;
         let qy = relative.1.abs() - self.half.1 + self.radius;
-        match self.radius == 0.0 {
+        let distance = match self.radius == 0.0 {
             true => qx.max(qy),
             false => length(qx.max(0.0), qy.max(0.0)) + qx.max(qy).min(0.0) - self.radius,
-        }
+        };
+        distance * self.distance_scale
     }
 
     pub fn inner_distance(&self, px: f32, py: f32, outer: f32) -> f32 {
@@ -99,11 +142,11 @@ impl QuadShape {
         let corner = (offset.0 + self.radius, offset.1 + self.radius);
         let straight = (offset.0 + self.edge, offset.1 + self.edge);
         if corner.0 <= 0.0 || corner.1 <= 0.0 {
-            -straight.0.max(straight.1)
+            -straight.0.max(straight.1) * self.distance_scale
         } else if straight.0 > 0.0 || straight.1 > 0.0 {
             -1.0
         } else {
-            -(outer + self.edge)
+            -(outer + self.edge * self.distance_scale)
         }
     }
 
@@ -210,12 +253,14 @@ pub fn expand(rect: Rect, by: f32) -> Rect {
 
 pub fn draw_quad(layer: &mut Layer, instance: &QuadInstance) {
     let (x0, y0, x1, y1) = pixel_window(
-        expand(instance.bounds, 1.0),
+        expand(instance.covered(), 1.0),
         instance.clip,
         layer.width,
         layer.height,
     );
-    let shape = QuadShape::new(instance.bounds, instance.radius, instance.border_width);
+    let placement = Placement::new(instance.bounds, instance.linear);
+    let shape = QuadShape::new(instance.bounds, instance.radius, instance.border_width)
+        .scaled_by(placement.scale);
     let flat_fill = premultiplied(instance.fill);
     (y0..y1).for_each(|y| {
         (x0..x1).for_each(|x| {
@@ -224,12 +269,13 @@ pub fn draw_quad(layer: &mut Layer, instance: &QuadInstance) {
             if cover <= 0.0 {
                 return;
             }
+            let (lx, ly) = placement.local(px, py);
             let fill = match &instance.gradient {
-                Some(gradient) => gradient_color(gradient, px, py),
+                Some(gradient) => gradient_color(gradient, lx, ly),
                 None => flat_fill,
             };
             let color = scaled(
-                quad_color(&shape, fill, instance.border_color, px, py),
+                quad_color(&shape, fill, instance.border_color, lx, ly),
                 cover * instance.opacity,
             );
             layer.put(x, y, over(color, layer.at(x, y)));

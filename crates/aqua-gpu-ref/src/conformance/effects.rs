@@ -443,6 +443,7 @@ fn compute_case() -> Case {
         clip: None,
         gradient: None,
         opacity: 1.0,
+        linear: aqua_graph::Linear2::IDENTITY,
     };
     graph.push(Pass::new(
         PassKind::Instanced {
@@ -481,6 +482,7 @@ fn compute_case() -> Case {
                 clip: None,
                 clip_radius: 0.0,
                 blend: Blend::Over,
+                linear: aqua_graph::Linear2::IDENTITY,
             }],
         },
         vec![blurred],

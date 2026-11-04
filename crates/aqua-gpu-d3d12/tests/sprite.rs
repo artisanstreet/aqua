@@ -19,6 +19,7 @@ fn glyph(x: f32, color: Oklch, opacity: f32) -> GlyphInstance {
         color,
         clip: None,
         opacity,
+        backdrop: None,
     }
 }
 
@@ -55,6 +56,7 @@ fn image_parameters_carry_radius_and_opacity() {
         clip: Some(rect(0.0)),
         clip_radius: 0.0,
         blend: aqua_graph::Blend::Over,
+        linear: aqua_graph::Linear2::IDENTITY,
     };
     let packed = pack_image(&image);
     assert_eq!(&packed.tail[..2], &[4.0, 0.25]);

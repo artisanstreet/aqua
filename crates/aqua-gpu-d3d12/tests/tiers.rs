@@ -1,5 +1,7 @@
 #![cfg(windows)]
 
+mod support;
+
 use aqua_gpu_d3d12::hal::tier::Tier;
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat, TierLimit};
 use aqua_gpu_ref::conformance::{run_suite, SuiteConfig, Tolerance};
@@ -48,6 +50,7 @@ struct Outcome {
     binding: Tier,
     enhanced_barriers: bool,
     failing: Vec<String>,
+    skipped: usize,
 }
 
 fn failing_names(report: &aqua_gpu_ref::conformance::SuiteReport) -> Vec<String> {
@@ -73,15 +76,12 @@ fn exercise(
     format: SurfaceFormat,
     tolerance: Tolerance,
     combination: Combination,
-) -> Option<Outcome> {
+) -> Outcome {
     let mut backend = match OffscreenBackend::with_tiers(preference, format, combination.limit) {
         Ok(backend) => backend,
         Err(error) => match preference {
             AdapterPreference::Warp => panic!("WARP must always be available: {error}"),
-            _ => {
-                eprintln!("SKIP-NO-ADAPTER {preference:?}: {error}");
-                return None;
-            }
+            _ => panic!("adapter {preference:?} required but unavailable: {error}"),
         },
     };
     let tiers = backend.tiers();
@@ -112,18 +112,22 @@ fn exercise(
         Tier::Bindless => FeatureTier::Bindless,
     };
     assert_eq!(report.tier, reported);
-    Some(Outcome {
+    Outcome {
         binding: tiers.binding,
         enhanced_barriers: tiers.enhanced_barriers,
         failing: failing_names(&report),
-    })
+        skipped: report.skipped(),
+    }
 }
 
 fn matrix(preference: AdapterPreference, format: SurfaceFormat, tolerance: Tolerance) {
     for combination in COMBINATIONS {
-        let Some(outcome) = exercise(preference, format, tolerance, combination) else {
-            return;
-        };
+        let outcome = exercise(preference, format, tolerance, combination);
+        assert_eq!(
+            outcome.skipped, 0,
+            "{preference:?} {format:?} {} skipped cases",
+            combination.name
+        );
         assert!(
             outcome.failing.is_empty(),
             "{preference:?} {format:?} {} (binding {:?}, enhanced {}) fails: {:?}",
@@ -137,9 +141,12 @@ fn matrix(preference: AdapterPreference, format: SurfaceFormat, tolerance: Toler
 
 fn top_tier(preference: AdapterPreference, format: SurfaceFormat, tolerance: Tolerance) {
     for combination in [COMBINATIONS[0], COMBINATIONS[3]] {
-        let Some(outcome) = exercise(preference, format, tolerance, combination) else {
-            return;
-        };
+        let outcome = exercise(preference, format, tolerance, combination);
+        assert_eq!(
+            outcome.skipped, 0,
+            "{preference:?} {format:?} {} skipped cases",
+            combination.name
+        );
         assert!(
             outcome.failing.is_empty(),
             "{preference:?} {format:?} {} fails: {:?}",
@@ -151,6 +158,7 @@ fn top_tier(preference: AdapterPreference, format: SurfaceFormat, tolerance: Tol
 
 #[test]
 fn warp_float_matches_reference_on_every_tier() {
+    let _software = support::software();
     matrix(
         AdapterPreference::Warp,
         SurfaceFormat::Rgba16Float,
@@ -160,6 +168,7 @@ fn warp_float_matches_reference_on_every_tier() {
 
 #[test]
 fn hardware_float_matches_reference_on_every_tier() {
+    let _software = support::software();
     matrix(
         AdapterPreference::HighPerformance,
         SurfaceFormat::Rgba16Float,
@@ -169,6 +178,7 @@ fn hardware_float_matches_reference_on_every_tier() {
 
 #[test]
 fn integrated_float_matches_reference_on_every_tier() {
+    let _software = support::software();
     matrix(
         AdapterPreference::MinimumPower,
         SurfaceFormat::Rgba16Float,
@@ -178,6 +188,7 @@ fn integrated_float_matches_reference_on_every_tier() {
 
 #[test]
 fn warp_unorm_matches_the_baseline_tier_on_the_top_tier() {
+    let _software = support::software();
     top_tier(
         AdapterPreference::Warp,
         SurfaceFormat::Bgra8Unorm,
@@ -187,6 +198,7 @@ fn warp_unorm_matches_the_baseline_tier_on_the_top_tier() {
 
 #[test]
 fn hardware_unorm_matches_the_baseline_tier_on_the_top_tier() {
+    let _software = support::software();
     top_tier(
         AdapterPreference::HighPerformance,
         SurfaceFormat::Bgra8Unorm,
@@ -196,6 +208,7 @@ fn hardware_unorm_matches_the_baseline_tier_on_the_top_tier() {
 
 #[test]
 fn the_default_backend_reaches_the_best_tier_the_adapter_offers() {
+    let _software = support::software();
     for preference in [AdapterPreference::Warp, AdapterPreference::HighPerformance] {
         let Ok(default) = OffscreenBackend::new(preference) else {
             continue;

@@ -1,4 +1,5 @@
 use std::mem::ManuallyDrop;
+use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
 use aqua_gpu_d3d12::hal::budget::Visibility;
@@ -10,6 +11,26 @@ use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY
 use windows::Win32::System::Threading::GetCurrentProcess;
 
 use super::window::TestWindow;
+
+static DEVICES: RwLock<()> = RwLock::new(());
+static SOFTWARE: Mutex<()> = Mutex::new(());
+
+fn shared() -> (RwLockReadGuard<'static, ()>, MutexGuard<'static, ()>) {
+    (
+        DEVICES
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        SOFTWARE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
+}
+
+fn exclusive() -> RwLockWriteGuard<'static, ()> {
+    DEVICES
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn options(preference: AdapterPreference) -> DeviceOptions {
     DeviceOptions::default().with_preference(preference)
@@ -163,6 +184,7 @@ fn present_and_resize(preference: AdapterPreference, label: &str) -> Core {
 
 #[test]
 fn hardware_gpu_presents_and_resizes() {
+    let _guard = shared();
     let core = present_and_resize(AdapterPreference::HighPerformance, "hardware");
     let info = core.info();
     match info.adapter.kind {
@@ -173,6 +195,7 @@ fn hardware_gpu_presents_and_resizes() {
 
 #[test]
 fn warp_presents_and_resizes() {
+    let _guard = shared();
     let core = present_and_resize(AdapterPreference::Warp, "warp");
     assert_eq!(core.info().adapter.kind, Adapter::Software);
     assert!(!core.info().fell_back_to_warp);
@@ -180,6 +203,7 @@ fn warp_presents_and_resizes() {
 
 #[test]
 fn baseline_cap_disables_better_tiers_on_the_same_hardware() {
+    let _guard = shared();
     let capped =
         Core::new(options(AdapterPreference::HighPerformance).with_max_tier(Tier::Baseline))
             .expect("device");
@@ -189,6 +213,7 @@ fn baseline_cap_disables_better_tiers_on_the_same_hardware() {
 
 #[test]
 fn adapters_are_listed_and_luid_selection_is_exact() {
+    let _guard = shared();
     let core = Core::new(options(AdapterPreference::HighPerformance)).expect("device");
     let adapters = aqua_gpu_d3d12::hal::list_adapters(core.factory());
     eprintln!("adapters: {adapters:#?}");
@@ -249,11 +274,13 @@ fn survive_removal(preference: AdapterPreference, label: &str) {
 
 #[test]
 fn device_removal_is_detected_recovered_and_repeated_loss_falls_back_to_warp() {
+    let _guard = exclusive();
     survive_removal(AdapterPreference::HighPerformance, "hardware-removal");
 }
 
 #[test]
 fn warp_survives_device_removal() {
+    let _guard = exclusive();
     let window = TestWindow::open(500, 320);
     let mut core = Core::new(options(AdapterPreference::Warp)).expect("device");
     let (width, height) = window.client();
@@ -275,6 +302,7 @@ fn warp_survives_device_removal() {
 
 #[test]
 fn upload_ring_grows_without_stalling_and_returns_memory_when_hidden() {
+    let _guard = exclusive();
     let mut core = Core::new(options(AdapterPreference::HighPerformance)).expect("device");
     let list = core.create_command_list().expect("list");
     let destination = {
@@ -365,6 +393,7 @@ fn upload_ring_grows_without_stalling_and_returns_memory_when_hidden() {
 
 #[test]
 fn descriptor_heaps_recycle_static_slots_and_wait_on_dynamic_ring() {
+    let _guard = shared();
     let mut core = Core::new(options(AdapterPreference::Warp)).expect("device");
     let first = core.srv_heap().allocate_static().expect("static");
     let second = core.srv_heap().allocate_static().expect("static");
@@ -399,6 +428,7 @@ fn descriptor_heaps_recycle_static_slots_and_wait_on_dynamic_ring() {
 
 #[test]
 fn memory_budget_is_reported_and_the_private_footprint_is_small() {
+    let _guard = exclusive();
     let window = TestWindow::open(1280, 720);
     let baseline = private_bytes();
     let mut core = Core::new(options(AdapterPreference::HighPerformance)).expect("device");
@@ -423,6 +453,7 @@ fn memory_budget_is_reported_and_the_private_footprint_is_small() {
 
 #[test]
 fn footprint_breakdown() {
+    let _guard = exclusive();
     let window = TestWindow::open(1280, 720);
     let mut stages = vec![("process", private_bytes())];
     let mut bare: Option<ID3D12Device> = None;
@@ -507,6 +538,7 @@ fn footprint_breakdown() {
 
 #[test]
 fn evicting_a_resource_returns_video_memory_until_it_is_made_resident_again() {
+    let _guard = exclusive();
     let mut core = Core::new(options(AdapterPreference::HighPerformance)).expect("device");
     if core.info().unified_memory {
         return;

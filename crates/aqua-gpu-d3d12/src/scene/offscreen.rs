@@ -401,6 +401,15 @@ impl OffscreenBackend {
         self.gpu.renderer.retire(completed);
         self.gpu.textures.retire(completed);
         let frame_fence = self.gpu.fence_value + 1;
+        let created = self
+            .gpu
+            .renderer
+            .reserve(plan, frame_fence)
+            .map_err(GpuError::from)?;
+        if created && super::debug::requested() {
+            self.gpu.wait_idle().map_err(GpuError::from)?;
+        }
+        let frame_fence = self.gpu.fence_value + 1;
         let gpu = &mut self.gpu;
         let target = SceneTarget {
             resource: &entry.resource,

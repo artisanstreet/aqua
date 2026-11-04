@@ -22,7 +22,7 @@ use super::transients::Transients;
 use super::util::*;
 use super::Error;
 use crate::pack::{pack_quad, pack_shadow, QUAD_STRIDE, SHADOW_STRIDE};
-use crate::sprite::{glyph_packer, pack_image};
+use crate::sprite::{glyph_packer, pack_image, pack_slug};
 
 const INITIAL_UPLOAD_BYTES: u64 = 1 << 16;
 const INITIAL_DESCRIPTORS: u32 = 8;
@@ -75,7 +75,6 @@ pub struct SceneRenderer {
     compute: ComputePipelines,
     emitter: Emitter,
     scratch: Scratch,
-    validated: super::validated::Validated,
     slots: Vec<Slot>,
     rtv_heap: ID3D12DescriptorHeap,
     rtv_capacity: u32,
@@ -202,6 +201,10 @@ impl Scratch {
                     let (offset, count) = append_all(bytes, instances.iter().map(glyph_packer()));
                     Upload::Sprites { offset, count }
                 }
+                PassKind::Slug { instances, .. } if !instances.is_empty() => {
+                    let (offset, count) = append_all(bytes, instances.iter().map(pack_slug));
+                    Upload::Sprites { offset, count }
+                }
                 PassKind::Custom(spec) => Upload::Parameters {
                     offset: custom::pack_parameters(bytes, &spec.params),
                 },
@@ -284,7 +287,6 @@ impl SceneRenderer {
             pipelines,
             emitter: Emitter::new(active.sync),
             scratch: Scratch::default(),
-            validated: Default::default(),
             custom: CustomPipelines::create(device)?,
             compute: ComputePipelines::create(device)?,
             slots,
@@ -334,8 +336,12 @@ impl SceneRenderer {
         }
     }
 
-    pub fn validate(&mut self, plan: &FramePlan) -> Result<(), aqua_graph::PlanError> {
-        self.validated.check(plan)
+    pub fn reserve(&mut self, plan: &FramePlan, frame_fence: u64) -> Result<bool, Error> {
+        self.transients.ensure(&self.device, plan, frame_fence)
+    }
+
+    pub fn validate(&self, plan: &FramePlan) -> Result<(), aqua_graph::PlanError> {
+        aqua_graph::validate(plan)
     }
 
     pub fn register_compute(
@@ -970,6 +976,22 @@ impl SceneRenderer {
                     sprites::draw(list, upload_address + offset, 0..count);
                     stats.draws += 1;
                 },
+                (PassKind::Slug { .. }, Upload::Sprites { offset, count }) => unsafe {
+                    list.SetPipelineState(&self.pipelines.get(Kind::Slug, write_bound.format)?);
+                    let tone = ToneCurve::native();
+                    let values = constants(
+                        extent,
+                        1.0,
+                        tone.ratios(),
+                        [tone.contrast(), 0.0, 0.0, 0.0],
+                        source_extent,
+                    );
+                    self.active
+                        .binding
+                        .set_constants(list, &values, bound_index);
+                    sprites::draw(list, upload_address + offset, 0..count);
+                    stats.draws += 1;
+                },
                 (PassKind::Images { instances }, Upload::Sprites { offset, .. }) => unsafe {
                     let values = constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent);
                     self.active
@@ -994,6 +1016,7 @@ impl SceneRenderer {
                     PassKind::Instanced { .. }
                     | PassKind::Shadows { .. }
                     | PassKind::Glyphs { .. }
+                    | PassKind::Slug { .. }
                     | PassKind::Images { .. },
                     Upload::None,
                 ) => {}

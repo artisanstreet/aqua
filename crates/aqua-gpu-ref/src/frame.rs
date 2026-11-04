@@ -8,7 +8,7 @@ use crate::kernels::{ComputeCall, Kernels};
 use crate::raster::{composite_layer, draw_quad, premultiplied, Layer};
 use crate::sample::draw_image;
 use crate::shadow::draw_shadow;
-use crate::sprites::{draw_glyphs, draw_images, Textures};
+use crate::sprites::{draw_glyphs, draw_images, draw_slug, Textures};
 
 pub struct Frame<'a> {
     plan: &'a FramePlan,
@@ -152,6 +152,14 @@ impl<'a> Frame<'a> {
                     .get(*atlas)
                     .ok_or_else(|| failure(format!("unknown atlas {}", atlas.0)))?;
                 draw_glyphs(target, atlas, instances);
+                Ok(())
+            }
+            PassKind::Slug { store, instances } => {
+                let store = self
+                    .persistent
+                    .get(*store)
+                    .ok_or_else(|| failure(format!("unknown slug store {}", store.0)))?;
+                draw_slug(target, store, instances);
                 Ok(())
             }
             PassKind::Images { instances } => {

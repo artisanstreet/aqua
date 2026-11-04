@@ -55,6 +55,14 @@ const ENTRIES: &[Entry] = &[
         entry: "ps_glyph",
     },
     Entry {
+        file: "slug.hlsl",
+        entry: "vs_slug",
+    },
+    Entry {
+        file: "slug.hlsl",
+        entry: "ps_slug",
+    },
+    Entry {
         file: "image.hlsl",
         entry: "vs_image",
     },

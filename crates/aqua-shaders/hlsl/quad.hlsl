@@ -11,6 +11,7 @@ struct QuadIn
     float4 stop_a : STOPA;
     float4 stop_b : STOPB;
     float4 stop_offsets : STOPOFFSETS;
+    float4 xform : XFORM;
     uint vertex : SV_VertexID;
 };
 
@@ -26,14 +27,18 @@ struct QuadOut
     nointerpolation float4 stop_a : STOPA;
     nointerpolation float4 stop_b : STOPB;
     nointerpolation float4 stop_offsets : STOPOFFSETS;
+    nointerpolation float4 xform : XFORM;
 };
 
 QuadOut vs_quad(QuadIn i)
 {
     QuadOut o;
     float2 corner = float2(i.vertex & 1, i.vertex >> 1);
-    float2 lo = max(i.bounds.xy - 1.0, i.clip.xy - 1.0);
-    float2 hi = min(i.bounds.xy + i.bounds.zw + 1.0, i.clip.xy + i.clip.zw + 1.0);
+    float2 half_size = i.bounds.zw * 0.5;
+    float2 center = i.bounds.xy + half_size;
+    float2 reach = covered_reach(i.xform, half_size);
+    float2 lo = max(center - reach - 1.0, i.clip.xy - 1.0);
+    float2 hi = min(center + reach + 1.0, i.clip.xy + i.clip.zw + 1.0);
     hi = max(hi, lo);
     o.position = to_clip(lerp(lo, hi, corner));
     o.bounds = i.bounds;
@@ -45,10 +50,11 @@ QuadOut vs_quad(QuadIn i)
     o.stop_a = i.stop_a;
     o.stop_b = i.stop_b;
     o.stop_offsets = i.stop_offsets;
+    o.xform = i.xform;
     return o;
 }
 
-float inner_distance(float2 p, float4 bounds, float radius, float edge, float outer)
+float inner_distance(float2 p, float4 bounds, float radius, float edge, float outer, float scale)
 {
     float2 half_size = bounds.zw * 0.5;
     float2 relative = p - bounds.xy - half_size;
@@ -57,13 +63,13 @@ float inner_distance(float2 p, float4 bounds, float radius, float edge, float ou
     float2 straight = offset + edge;
     if (corner.x <= 0.0 || corner.y <= 0.0)
     {
-        return -max(straight.x, straight.y);
+        return -max(straight.x, straight.y) * scale;
     }
     if (straight.x > 0.0 || straight.y > 0.0)
     {
         return -1.0;
     }
-    return -(outer + edge);
+    return -(outer + edge * scale);
 }
 
 float3 oklab_to_linear(float3 lab)
@@ -95,12 +101,14 @@ float4 gradient_fill(QuadOut i, float2 p)
 float4 ps_quad(QuadOut i) : SV_Target
 {
     float2 p = i.position.xy;
+    float2 q = to_local(i.xform, i.bounds.xy + i.bounds.zw * 0.5, p);
+    float scale = is_identity(i.xform) ? 1.0 : xform_scale(i.xform);
     float radius = i.shape.x;
     float border_width = i.shape.y;
     float edge = border_width == 0.0 ? -0.5 : border_width;
-    float outer = box_distance(p, i.bounds, radius);
-    float inner = inner_distance(p, i.bounds, radius, edge, outer);
-    float4 fill = i.shape.w > 0.5 ? gradient_fill(i, p) : i.fill;
+    float outer = box_distance(q, i.bounds, radius) * scale;
+    float inner = inner_distance(q, i.bounds, radius, edge, outer, scale);
+    float4 fill = i.shape.w > 0.5 ? gradient_fill(i, q) : i.fill;
     float4 color = fill;
     if (max(inner, outer) < 0.5)
     {

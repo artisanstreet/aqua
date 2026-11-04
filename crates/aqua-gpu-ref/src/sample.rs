@@ -1,7 +1,7 @@
 use aqua_core::geometry::Rect;
 use aqua_graph::{Blend, ImageInstance};
 
-use crate::raster::{over, pixel_window, scaled, Layer, Pixel, QuadShape};
+use crate::raster::{over, pixel_window, scaled, Layer, Pixel, Placement, QuadShape};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Window {
@@ -78,14 +78,16 @@ pub fn draw_image(layer: &mut Layer, source: &Layer, image: &ImageInstance) {
     if image.bounds.w <= 0.0 || image.bounds.h <= 0.0 {
         return;
     }
+    let covered = image.covered();
     let expanded = Rect::from_edges(
-        image.bounds.x - 1.0,
-        image.bounds.y - 1.0,
-        image.bounds.right() + 1.0,
-        image.bounds.bottom() + 1.0,
+        covered.x - 1.0,
+        covered.y - 1.0,
+        covered.right() + 1.0,
+        covered.bottom() + 1.0,
     );
     let (x0, y0, x1, y1) = pixel_window(expanded, image.clip, layer.width, layer.height);
-    let shape = QuadShape::new(image.bounds, image.radius, 0.0);
+    let placement = Placement::new(image.bounds, image.linear);
+    let shape = QuadShape::new(image.bounds, image.radius, 0.0).scaled_by(placement.scale);
     let clip_shape = image
         .clip
         .map(|clip| QuadShape::new(clip, image.clip_radius, 0.0));
@@ -93,12 +95,13 @@ pub fn draw_image(layer: &mut Layer, source: &Layer, image: &ImageInstance) {
     (y0..y1).for_each(|y| {
         (x0..x1).for_each(|x| {
             let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let (lx, ly) = placement.local(px, py);
             let cover =
-                shape.coverage(px, py) * clip_shape.map_or(1.0, |clip| clip.coverage(px, py));
+                shape.coverage(lx, ly) * clip_shape.map_or(1.0, |clip| clip.coverage(px, py));
             if cover <= 0.0 {
                 return;
             }
-            let (u, v) = texel_position(image.bounds, image.texels, px, py);
+            let (u, v) = texel_position(image.bounds, image.texels, lx, ly);
             let sample = bilinear(source, u, v, window);
             layer.put(
                 x,

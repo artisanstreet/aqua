@@ -3,7 +3,7 @@ mod bindless;
 mod compile;
 mod compute;
 mod custom;
-mod debug;
+pub(crate) mod debug;
 mod device;
 mod formats;
 mod offscreen;
@@ -15,7 +15,6 @@ mod tiers;
 mod timestamps;
 mod transients;
 pub(crate) mod util;
-mod validated;
 
 pub use device::AdapterPreference;
 pub use offscreen::{OffscreenBackend, SurfaceFormat};

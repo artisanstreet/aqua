@@ -43,6 +43,14 @@ pub fn lifetimes(passes: &[Pass]) -> HashMap<TransientId, Lifetime> {
     result
 }
 
+pub fn lifetime_of(passes: &[Pass], id: TransientId) -> Option<Lifetime> {
+    let target = TextureRef::Transient(id);
+    let touches = |pass: &Pass| pass.reads.contains(&target) || pass.writes.contains(&target);
+    let first = passes.iter().position(touches)?;
+    let last = passes.iter().rposition(touches)?;
+    Some(Lifetime { first, last })
+}
+
 pub fn first_writers(passes: &[Pass]) -> HashMap<TextureRef, usize> {
     let mut result = HashMap::new();
     for (index, pass) in passes.iter().enumerate() {

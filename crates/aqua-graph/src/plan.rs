@@ -1,5 +1,8 @@
 use aqua_core::{geometry::Rect, Oklch};
 
+use crate::linear::Linear2;
+use crate::slug::SlugInstance;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Extent {
     pub width: u32,
@@ -52,6 +55,7 @@ pub enum TextureRef {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextureFormat {
     Rgba16Float,
+    Rgba32Float,
     Rgba8Unorm,
     Bgra8Unorm,
     R8Unorm,
@@ -60,6 +64,7 @@ pub enum TextureFormat {
 impl TextureFormat {
     pub fn bytes_per_texel(self) -> u64 {
         match self {
+            TextureFormat::Rgba32Float => 16,
             TextureFormat::Rgba16Float => 8,
             TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm => 4,
             TextureFormat::R8Unorm => 1,
@@ -112,6 +117,13 @@ pub struct QuadInstance {
     pub clip: Option<Rect>,
     pub gradient: Option<Gradient>,
     pub opacity: f32,
+    pub linear: Linear2,
+}
+
+impl QuadInstance {
+    pub fn covered(&self) -> Rect {
+        self.linear.cover(self.bounds)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -149,6 +161,7 @@ pub struct GlyphInstance {
     pub color: Oklch,
     pub clip: Option<Rect>,
     pub opacity: f32,
+    pub backdrop: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -168,6 +181,13 @@ pub struct ImageInstance {
     pub clip: Option<Rect>,
     pub clip_radius: f32,
     pub blend: Blend,
+    pub linear: Linear2,
+}
+
+impl ImageInstance {
+    pub fn covered(&self) -> Rect {
+        self.linear.cover(self.bounds)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -292,6 +312,10 @@ pub enum PassKind {
     Images {
         instances: Vec<ImageInstance>,
     },
+    Slug {
+        store: TextureHandle,
+        instances: Vec<SlugInstance>,
+    },
     Fullscreen {
         shader: ShaderId,
         opacity: f32,
@@ -320,6 +344,7 @@ impl PassKind {
             PassKind::Shadows { instances } => instances.len(),
             PassKind::Glyphs { instances, .. } => instances.len(),
             PassKind::Images { instances } => instances.len(),
+            PassKind::Slug { instances, .. } => instances.len(),
             PassKind::Fullscreen { .. }
             | PassKind::Filter { .. }
             | PassKind::Compute { .. }

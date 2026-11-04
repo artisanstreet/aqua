@@ -21,6 +21,7 @@ struct ImageIn
     float4 texels : TEXELS;
     float4 clip : CLIP;
     float4 params : PARAMS;
+    float4 xform : XFORM;
     uint vertex : SV_VertexID;
 };
 
@@ -31,20 +32,25 @@ struct ImageOut
     nointerpolation float4 texels : TEXELS;
     nointerpolation float4 clip : CLIP;
     nointerpolation float4 params : PARAMS;
+    nointerpolation float4 xform : XFORM;
 };
 
 ImageOut vs_image(ImageIn i)
 {
     ImageOut o;
     float2 corner = float2(i.vertex & 1, i.vertex >> 1);
-    float2 lo = max(i.bounds.xy - 1.0, i.clip.xy - 1.0);
-    float2 hi = min(i.bounds.xy + i.bounds.zw + 1.0, i.clip.xy + i.clip.zw + 1.0);
+    float2 half_size = i.bounds.zw * 0.5;
+    float2 center = i.bounds.xy + half_size;
+    float2 reach = covered_reach(i.xform, half_size);
+    float2 lo = max(center - reach - 1.0, i.clip.xy - 1.0);
+    float2 hi = min(center + reach + 1.0, i.clip.xy + i.clip.zw + 1.0);
     hi = max(hi, lo);
     o.position = to_clip(lerp(lo, hi, corner));
     o.bounds = i.bounds;
     o.texels = i.texels;
     o.clip = i.clip;
     o.params = i.params;
+    o.xform = i.xform;
     return o;
 }
 
@@ -66,9 +72,11 @@ float4 shade_image(ImageOut i, out float weight)
     float radius = i.params.x;
     float opacity_factor = i.params.y;
     float clip_radius = i.params.z;
-    float cover = saturate(0.5 - box_distance(p, i.bounds, radius))
+    float2 q = to_local(i.xform, i.bounds.xy + i.bounds.zw * 0.5, p);
+    float scale = is_identity(i.xform) ? 1.0 : xform_scale(i.xform);
+    float cover = saturate(0.5 - box_distance(q, i.bounds, radius) * scale)
         * saturate(0.5 - box_distance(p, i.clip, clip_radius));
-    float2 uv = (p - i.bounds.xy) / max(i.bounds.zw, float2(1.0e-4, 1.0e-4));
+    float2 uv = (q - i.bounds.xy) / max(i.bounds.zw, float2(1.0e-4, 1.0e-4));
     float2 position = i.texels.xy + uv * i.texels.zw;
     float2 shifted = position - 0.5;
     float2 base = floor(shifted);

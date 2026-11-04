@@ -6,6 +6,8 @@ pub mod effects;
 pub mod fuzz;
 pub mod session;
 pub mod suite;
+pub mod text;
+pub mod transforms;
 
 pub use cases::{cases, Case};
 pub use compare::{class_mask, compare, Class, Comparison, Failure, Tolerance};

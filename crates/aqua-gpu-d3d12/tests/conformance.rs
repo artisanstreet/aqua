@@ -1,18 +1,17 @@
 #![cfg(windows)]
 
+mod support;
+
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
+use aqua_gpu_ref::conformance::{run_suite, SuiteConfig, Tolerance};
 use aqua_gpu_ref::RefBackend;
-use aqua_gpu_ref::conformance::{SuiteConfig, Tolerance, run_suite};
 
 fn run(preference: AdapterPreference, format: SurfaceFormat, tolerance: Tolerance) {
     let mut backend = match OffscreenBackend::with_format(preference, format) {
         Ok(backend) => backend,
         Err(error) => match preference {
             AdapterPreference::Warp => panic!("WARP must always be available: {error}"),
-            _ => {
-                eprintln!("SKIP-NO-ADAPTER {preference:?}: {error}");
-                return;
-            }
+            _ => panic!("adapter {preference:?} required but unavailable: {error}"),
         },
     };
     eprintln!(
@@ -27,7 +26,12 @@ fn run(preference: AdapterPreference, format: SurfaceFormat, tolerance: Toleranc
     };
     let report = run_suite(&mut reference, &mut backend, &config);
     eprintln!("{report}");
-    assert!(report.passed(), "{}", report.failures().join("\n"));
+    assert_eq!(report.skipped(), 0, "{report}");
+    assert!(
+        report.passed_without_skips(),
+        "{}",
+        report.failures().join("\n")
+    );
 }
 
 const EIGHT_BIT: Tolerance = Tolerance {
@@ -45,6 +49,7 @@ const SRGB_ENCODED: Tolerance = Tolerance {
 
 #[test]
 fn warp_float_surface_matches_reference() {
+    let _software = support::software();
     run(
         AdapterPreference::Warp,
         SurfaceFormat::Rgba16Float,
@@ -54,6 +59,7 @@ fn warp_float_surface_matches_reference() {
 
 #[test]
 fn hardware_float_surface_matches_reference() {
+    let _software = support::software();
     run(
         AdapterPreference::HighPerformance,
         SurfaceFormat::Rgba16Float,
@@ -63,6 +69,7 @@ fn hardware_float_surface_matches_reference() {
 
 #[test]
 fn warp_unorm_surface_matches_reference() {
+    let _software = support::software();
     run(
         AdapterPreference::Warp,
         SurfaceFormat::Bgra8Unorm,
@@ -72,6 +79,7 @@ fn warp_unorm_surface_matches_reference() {
 
 #[test]
 fn hardware_unorm_surface_matches_reference() {
+    let _software = support::software();
     run(
         AdapterPreference::HighPerformance,
         SurfaceFormat::Bgra8Unorm,
@@ -81,6 +89,7 @@ fn hardware_unorm_surface_matches_reference() {
 
 #[test]
 fn warp_srgb_surface_matches_reference() {
+    let _software = support::software();
     run(
         AdapterPreference::Warp,
         SurfaceFormat::Bgra8UnormSrgb,
@@ -90,6 +99,7 @@ fn warp_srgb_surface_matches_reference() {
 
 #[test]
 fn hardware_srgb_surface_matches_reference() {
+    let _software = support::software();
     run(
         AdapterPreference::HighPerformance,
         SurfaceFormat::Bgra8UnormSrgb,

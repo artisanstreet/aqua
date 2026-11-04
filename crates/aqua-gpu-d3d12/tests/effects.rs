@@ -1,5 +1,7 @@
 #![cfg(windows)]
 
+mod support;
+
 use aqua_core::Oklch;
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
 use aqua_gpu_ref::conformance::cases::{build, quad, STANDARD};
@@ -43,6 +45,7 @@ float4 entry(CustomInput input) : SV_Target { return float4(parameters[4].x, par
 
 #[test]
 fn custom_passes_read_every_packed_parameter() {
+    let _software = support::software();
     let mut params = vec![0.0f32; 20];
     params[16] = 1.0;
     params[17] = 0.5;
@@ -62,6 +65,7 @@ fn custom_passes_read_every_packed_parameter() {
 
 #[test]
 fn invalid_custom_hlsl_is_reported_without_poisoning_the_backend() {
+    let _software = support::software();
     let mut backend = backend();
     let broken = build(
         "broken",
@@ -86,6 +90,7 @@ cbuffer Parameters : register(b0) { float4 parameters; };\n\
 
 #[test]
 fn registered_compute_shaders_write_their_output() {
+    let _software = support::software();
     let mut backend = backend();
     let id = CustomShaderId(7);
     backend.register_compute(id, FILL_HLSL, "fill").unwrap();
@@ -111,6 +116,7 @@ fn registered_compute_shaders_write_their_output() {
                 clip: None,
                 clip_radius: 0.0,
                 blend: Blend::Over,
+                linear: aqua_graph::Linear2::IDENTITY,
             }],
         },
         vec![target],

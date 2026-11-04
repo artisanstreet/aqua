@@ -3,11 +3,13 @@ use aqua_core::{geometry::Rect, Oklch};
 use crate::analysis::{intersect, union};
 use crate::blur::{blur_chain, BlurRequest};
 use crate::graph::{PlanLimits, RenderGraph};
+use crate::linear::Linear2;
 use crate::plan::{
     Blend, ColorMatrix, CustomPassSpec, Extent, FilterParams, FramePlan, GlyphInstance, Gradient,
     ImageInstance, Pass, PassKind, QuadInstance, ShaderId, ShadowInstance, TextureFormat,
     TextureHandle, TextureRef,
 };
+use crate::slug::SlugInstance;
 use crate::validate::PlanError;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -40,12 +42,19 @@ pub struct Glyph {
     pub bounds: Rect,
     pub texels: Rect,
     pub color: Oklch,
+    pub backdrop: Option<f32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlyphRun {
     pub atlas: TextureHandle,
     pub glyphs: Vec<Glyph>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SlugRun {
+    pub store: TextureHandle,
+    pub glyphs: Vec<SlugInstance>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,17 +79,34 @@ pub enum PaintCommand {
     Shadow(Shadow),
     Glyphs(GlyphRun),
     Image(Image),
+    Slug(SlugRun),
+    Linear {
+        linear: Linear2,
+        leaf: Box<PaintCommand>,
+    },
     BackdropBlur(BackdropBlur),
     PushClip(Rect),
-    PushRoundedClip { rect: Rect, radius: f32 },
+    PushRoundedClip {
+        rect: Rect,
+        radius: f32,
+    },
     PopClip,
     PushOpacity(f32),
     PopOpacity,
-    PushContentBlur { bounds: Rect, radius: f32 },
+    PushContentBlur {
+        bounds: Rect,
+        radius: f32,
+    },
     PopContentBlur,
-    PushColorMatrix { bounds: Rect, matrix: ColorMatrix },
+    PushColorMatrix {
+        bounds: Rect,
+        matrix: ColorMatrix,
+    },
     PopColorMatrix,
-    PushCustomEffect { bounds: Rect, spec: CustomPassSpec },
+    PushCustomEffect {
+        bounds: Rect,
+        spec: CustomPassSpec,
+    },
     PopCustomEffect,
 }
 
@@ -110,10 +136,11 @@ impl Effect {
 
 #[derive(Clone, Debug)]
 enum Leaf {
-    Quad(Quad, Option<Gradient>),
+    Quad(Quad, Option<Gradient>, Linear2),
     Shadow(Shadow),
     Glyphs(GlyphRun),
-    Image(Image),
+    Slug(SlugRun),
+    Image(Image, Linear2),
     Backdrop(BackdropBlur),
 }
 
@@ -169,14 +196,36 @@ fn parse(commands: &[PaintCommand]) -> Result<Vec<Node>, PlanError> {
     };
     for command in commands {
         match command {
-            PaintCommand::Quad(quad) => push(&mut stack, Node::Leaf(Leaf::Quad(*quad, None))),
+            PaintCommand::Quad(quad) => push(
+                &mut stack,
+                Node::Leaf(Leaf::Quad(*quad, None, Linear2::IDENTITY)),
+            ),
             PaintCommand::GradientQuad(item) => push(
                 &mut stack,
-                Node::Leaf(Leaf::Quad(item.quad, Some(item.gradient))),
+                Node::Leaf(Leaf::Quad(
+                    item.quad,
+                    Some(item.gradient),
+                    Linear2::IDENTITY,
+                )),
             ),
+            PaintCommand::Slug(run) => push(&mut stack, Node::Leaf(Leaf::Slug(run.clone()))),
+            PaintCommand::Linear { linear, leaf } => {
+                let leaf = match &**leaf {
+                    PaintCommand::Quad(quad) => Leaf::Quad(*quad, None, *linear),
+                    PaintCommand::GradientQuad(item) => {
+                        Leaf::Quad(item.quad, Some(item.gradient), *linear)
+                    }
+                    PaintCommand::Image(image) => Leaf::Image(*image, *linear),
+                    _ => return Err(PlanError::NotTransformable),
+                };
+                push(&mut stack, Node::Leaf(leaf));
+            }
             PaintCommand::Shadow(shadow) => push(&mut stack, Node::Leaf(Leaf::Shadow(*shadow))),
             PaintCommand::Glyphs(run) => push(&mut stack, Node::Leaf(Leaf::Glyphs(run.clone()))),
-            PaintCommand::Image(image) => push(&mut stack, Node::Leaf(Leaf::Image(*image))),
+            PaintCommand::Image(image) => push(
+                &mut stack,
+                Node::Leaf(Leaf::Image(*image, Linear2::IDENTITY)),
+            ),
             PaintCommand::BackdropBlur(blur) => push(&mut stack, Node::Leaf(Leaf::Backdrop(*blur))),
             PaintCommand::PushClip(rect) => stack.push((Some(Frame::Clip(*rect)), Vec::new())),
             PaintCommand::PushRoundedClip { rect, radius } => stack.push((
@@ -248,7 +297,7 @@ fn parse(commands: &[PaintCommand]) -> Result<Vec<Node>, PlanError> {
 
 fn leaf_bounds(leaf: &Leaf) -> Option<Rect> {
     match leaf {
-        Leaf::Quad(quad, _) => Some(quad.bounds),
+        Leaf::Quad(quad, _, linear) => Some(linear.cover(quad.bounds)),
         Leaf::Shadow(shadow) => Some(
             ShadowInstance {
                 bounds: shadow.bounds,
@@ -263,7 +312,8 @@ fn leaf_bounds(leaf: &Leaf) -> Option<Rect> {
             .covered(),
         ),
         Leaf::Glyphs(run) => run.glyphs.iter().map(|glyph| glyph.bounds).reduce(union),
-        Leaf::Image(image) => Some(image.bounds),
+        Leaf::Slug(run) => run.glyphs.iter().map(SlugInstance::covered).reduce(union),
+        Leaf::Image(image, linear) => Some(linear.cover(image.bounds)),
         Leaf::Backdrop(blur) => Some(blur.bounds),
     }
 }
@@ -528,6 +578,7 @@ impl Emitter {
                     clip: context.local_clip(),
                     clip_radius: 0.0,
                     blend,
+                    linear: Linear2::IDENTITY,
                 }],
             },
             vec![layer],
@@ -561,6 +612,7 @@ impl Emitter {
                     clip: Some(context.local(rect)),
                     clip_radius: radius,
                     blend: Blend::Over,
+                    linear: Linear2::IDENTITY,
                 }],
             },
             vec![layer],
@@ -658,6 +710,7 @@ impl Emitter {
                     clip: context.local_clip(),
                     clip_radius: 0.0,
                     blend,
+                    linear: Linear2::IDENTITY,
                 }],
             },
             vec![output.texture],
@@ -670,7 +723,7 @@ impl Emitter {
         let target = context.target;
         let clip = context.local_clip();
         match leaf {
-            Leaf::Quad(quad, gradient) => self.draw(
+            Leaf::Quad(quad, gradient, linear) => self.draw(
                 PassKind::Instanced {
                     shader: ShaderId::Quad,
                     instances: vec![QuadInstance {
@@ -682,6 +735,7 @@ impl Emitter {
                         clip,
                         gradient: gradient.map(|g| context.local_gradient(g)),
                         opacity,
+                        linear: *linear,
                     }],
                 },
                 Vec::new(),
@@ -715,13 +769,34 @@ impl Emitter {
                             color: glyph.color,
                             clip,
                             opacity,
+                            backdrop: glyph.backdrop,
                         })
                         .collect(),
                 },
                 vec![TextureRef::Persistent(run.atlas)],
                 target,
             ),
-            Leaf::Image(image) => self.draw(
+            Leaf::Slug(run) => self.draw(
+                PassKind::Slug {
+                    store: run.store,
+                    instances: run
+                        .glyphs
+                        .iter()
+                        .map(|glyph| SlugInstance {
+                            origin: [
+                                glyph.origin[0] - context.origin[0],
+                                glyph.origin[1] - context.origin[1],
+                            ],
+                            clip,
+                            opacity: glyph.opacity * opacity,
+                            ..*glyph
+                        })
+                        .collect(),
+                },
+                vec![TextureRef::Persistent(run.store)],
+                target,
+            ),
+            Leaf::Image(image, linear) => self.draw(
                 PassKind::Images {
                     instances: vec![ImageInstance {
                         source: TextureRef::Persistent(image.source),
@@ -732,6 +807,7 @@ impl Emitter {
                         clip,
                         clip_radius: 0.0,
                         blend: Blend::Over,
+                        linear: *linear,
                     }],
                 },
                 vec![TextureRef::Persistent(image.source)],

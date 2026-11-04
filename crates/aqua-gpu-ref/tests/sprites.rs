@@ -48,6 +48,7 @@ fn glyph_pixels_take_their_coverage_from_the_matching_atlas_texel() {
         color: white(1.0),
         clip: None,
         opacity: 1.0,
+        backdrop: None,
     };
     draw_glyphs(&mut layer, &atlas, &[glyph]);
     for y in 0..16usize {
@@ -79,6 +80,7 @@ fn glyph_clip_and_opacity_scale_the_coverage() {
         color: white(1.0),
         clip: Some(rect(0.0, 0.0, 2.0, 4.0)),
         opacity: 0.5,
+        backdrop: None,
     };
     draw_glyphs(&mut layer, &atlas, &[glyph]);
     assert!((layer.pixels[1][3] - 0.5).abs() < 1e-6);
@@ -95,6 +97,7 @@ fn glyph_sampling_clamps_inside_its_atlas_rectangle() {
         color: white(1.0),
         clip: None,
         opacity: 1.0,
+        backdrop: None,
     };
     draw_glyphs(&mut layer, &atlas, &[glyph]);
     assert!(layer
@@ -174,6 +177,7 @@ fn image_corners_are_rounded_and_opacity_applies() {
         clip: None,
         clip_radius: 0.0,
         blend: aqua_graph::Blend::Over,
+        linear: aqua_graph::Linear2::IDENTITY,
     };
     draw_images(&mut layer, &textures, &[image]);
     assert!((layer.pixels[12 * 24 + 12][3] - 0.5).abs() < 1e-6);

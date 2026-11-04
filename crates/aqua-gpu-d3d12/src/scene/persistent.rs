@@ -48,6 +48,7 @@ pub fn dxgi_format(format: TextureFormat) -> Option<DXGI_FORMAT> {
     match format {
         TextureFormat::R8Unorm => Some(DXGI_FORMAT_R8_UNORM),
         TextureFormat::Rgba8Unorm => Some(DXGI_FORMAT_R8G8B8A8_UNORM),
+        TextureFormat::Rgba32Float => Some(DXGI_FORMAT_R32G32B32A32_FLOAT),
         _ => None,
     }
 }

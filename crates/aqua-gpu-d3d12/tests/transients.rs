@@ -1,5 +1,7 @@
 #![cfg(windows)]
 
+mod support;
+
 use aqua_gpu_d3d12::hal::budget::Trim;
 use aqua_gpu_d3d12::scene::{
     AdapterPreference, OffscreenBackend, SceneOptions, SurfaceFormat, TierLimit,
@@ -27,6 +29,7 @@ fn backends() -> Vec<(AdapterPreference, OffscreenBackend)> {
 
 #[test]
 fn trimming_releases_the_transient_heap_and_the_next_frame_still_matches() {
+    let _software = support::software();
     let case = layered_case();
     for (preference, mut backend) in backends() {
         let first = Session::new(&mut backend).render_case(&case).unwrap();
@@ -53,6 +56,7 @@ fn trimming_releases_the_transient_heap_and_the_next_frame_still_matches() {
 
 #[test]
 fn steady_frames_neither_grow_nor_churn_the_transient_heap() {
+    let _software = support::software();
     let case = layered_case();
     for (preference, mut backend) in backends() {
         let mut session = Session::new(&mut backend);
@@ -76,6 +80,7 @@ fn steady_frames_neither_grow_nor_churn_the_transient_heap() {
 
 #[test]
 fn the_heap_is_no_larger_than_the_plan_with_its_slack() {
+    let _software = support::software();
     let case = layered_case();
     for (preference, mut backend) in backends() {
         Session::new(&mut backend).render_case(&case).unwrap();
@@ -90,6 +95,7 @@ fn the_heap_is_no_larger_than_the_plan_with_its_slack() {
 
 #[test]
 fn a_ceiling_below_the_plan_rejects_the_frame_instead_of_allocating() {
+    let _software = support::software();
     let case = layered_case();
     for preference in [AdapterPreference::Warp, AdapterPreference::HighPerformance] {
         let Ok(mut backend) = OffscreenBackend::with_options(
@@ -113,6 +119,7 @@ fn a_ceiling_below_the_plan_rejects_the_frame_instead_of_allocating() {
 
 #[test]
 fn gpu_timestamps_report_a_frame_time_once_the_queue_catches_up() {
+    let _software = support::software();
     let case = layered_case();
     for (preference, mut backend) in backends() {
         let mut session = Session::new(&mut backend);

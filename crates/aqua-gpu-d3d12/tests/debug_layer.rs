@@ -1,8 +1,12 @@
 #![cfg(windows)]
 
+use std::sync::Mutex;
+
 use aqua_gpu_d3d12::hal::tier::Tier;
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat, TierLimit};
 use aqua_gpu_ref::conformance::{cases, Session};
+
+static SERIAL: Mutex<()> = Mutex::new(());
 
 const COMBINATIONS: [(&str, TierLimit); 4] = [
     ("baseline", TierLimit::BASELINE),
@@ -24,6 +28,9 @@ const COMBINATIONS: [(&str, TierLimit); 4] = [
 ];
 
 fn validation_errors(preference: AdapterPreference, format: SurfaceFormat) -> Vec<String> {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("AQUA_D3D12_DEBUG", "1");
     std::env::set_var("AQUA_D3D12_GBV", "1");
     let mut found = Vec::new();

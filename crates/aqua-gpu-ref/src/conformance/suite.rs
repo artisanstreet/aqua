@@ -93,6 +93,17 @@ impl SuiteReport {
         cases.chain(contract).collect()
     }
 
+    pub fn skipped(&self) -> usize {
+        self.cases
+            .iter()
+            .filter(|case| matches!(case.outcome, Outcome::Unsupported(_)))
+            .count()
+    }
+
+    pub fn passed_without_skips(&self) -> bool {
+        self.passed() && self.skipped() == 0
+    }
+
     pub fn worst_interior(&self) -> u8 {
         self.compared().map(|c| c.interior_max).max().unwrap_or(0)
     }

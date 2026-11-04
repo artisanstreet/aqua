@@ -1,5 +1,7 @@
 #![cfg(windows)]
 
+mod support;
+
 use std::sync::Arc;
 
 use aqua_core::geometry::Rect;
@@ -228,6 +230,7 @@ const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height=
 
 #[test]
 fn glyph_runs_from_the_residency_match_the_reference() {
+    let _software = support::software();
     for mut rig in rigs() {
         let mut residency = Residency::new(ResidencyConfig::default());
         residency.begin_frame();
@@ -280,6 +283,7 @@ fn glyph_runs_from_the_residency_match_the_reference() {
 
 #[test]
 fn images_sampled_at_every_scale_match_the_reference() {
+    let _software = support::software();
     for mut rig in rigs() {
         let mut residency = Residency::new(ResidencyConfig::default());
         residency.begin_frame();
@@ -319,6 +323,7 @@ fn images_sampled_at_every_scale_match_the_reference() {
 
 #[test]
 fn vector_paths_and_svg_through_the_atlas_match_the_reference() {
+    let _software = support::software();
     for mut rig in rigs() {
         let mut residency = Residency::new(ResidencyConfig::default());
         residency.begin_frame();
@@ -364,6 +369,7 @@ fn vector_paths_and_svg_through_the_atlas_match_the_reference() {
 
 #[test]
 fn atlas_eviction_and_page_reuse_keep_every_frame_identical_to_the_reference() {
+    let _software = support::software();
     for mut rig in rigs() {
         let small = AtlasConfig {
             format: PageFormat::Mask8,
@@ -435,6 +441,7 @@ fn atlas_eviction_and_page_reuse_keep_every_frame_identical_to_the_reference() {
 
 #[test]
 fn streamed_images_render_identically_while_partial_and_when_complete() {
+    let _software = support::software();
     for mut rig in rigs() {
         let config = ResidencyConfig {
             stream: StreamBudget {
@@ -496,6 +503,7 @@ fn streamed_images_render_identically_while_partial_and_when_complete() {
 
 #[test]
 fn released_pages_free_gpu_memory_and_recycled_indices_render_correctly() {
+    let _software = support::software();
     for mut rig in rigs() {
         let masks = AtlasConfig {
             format: PageFormat::Mask8,
@@ -555,6 +563,7 @@ fn released_pages_free_gpu_memory_and_recycled_indices_render_correctly() {
 
 #[test]
 fn dedicated_image_pages_are_released_and_replaced_without_corrupting_frames_in_flight() {
+    let _software = support::software();
     for mut rig in rigs() {
         let mut residency = Residency::new(ResidencyConfig::default());
         let label = rig.label.clone();

@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-
-use crate::analysis::{align_up, first_writers, lifetimes, transient_of};
+use crate::analysis::{align_up, lifetime_of, transient_of, Lifetime};
 use crate::plan::{
     Barrier, FramePlan, LoadOp, PassKind, QuadInstance, ResourceState, ShaderId, ShadowInstance,
     TextureRef, TransientId,
@@ -58,6 +56,7 @@ pub enum PlanError {
         first: TransientId,
         second: TransientId,
     },
+    NotTransformable,
 }
 
 impl std::fmt::Display for PlanError {
@@ -65,6 +64,10 @@ impl std::fmt::Display for PlanError {
         match self {
             PlanError::UnbalancedPop => write!(f, "pop without matching push"),
             PlanError::UnclosedScope => write!(f, "push without matching pop"),
+            PlanError::NotTransformable => write!(
+                f,
+                "only quads, images and slug glyphs take a linear transform"
+            ),
             PlanError::UnknownTexture { pass } => write!(f, "pass {pass} names an unknown texture"),
             PlanError::ReadBeforeWrite { pass } => {
                 write!(f, "pass {pass} reads a texture nothing wrote yet")
@@ -159,6 +162,7 @@ fn finite_quad(instance: &QuadInstance) -> bool {
         && instance.opacity.is_finite()
         && (0.0..=1.0).contains(&instance.opacity)
         && instance.clip.is_none_or(finite_rect)
+        && instance.linear.is_invertible()
 }
 
 fn finite_shadow(instance: &ShadowInstance) -> bool {
@@ -179,15 +183,11 @@ fn finite_shadow(instance: &ShadowInstance) -> bool {
         && instance.clip.is_none_or(finite_rect)
 }
 
-fn sorted_unique(mut refs: Vec<TextureRef>) -> Vec<TextureRef> {
-    let key = |reference: &TextureRef| match reference {
-        TextureRef::Surface => (0u8, 0u32),
-        TextureRef::Transient(id) => (1, id.0),
-        TextureRef::Persistent(handle) => (2, handle.0),
-    };
-    refs.sort_by_key(key);
-    refs.dedup();
-    refs
+fn same_textures(sources: impl Iterator<Item = TextureRef> + Clone, reads: &[TextureRef]) -> bool {
+    sources.clone().all(|source| reads.contains(&source))
+        && reads
+            .iter()
+            .all(|read| sources.clone().any(|source| source == *read))
 }
 
 fn check_kind(plan: &FramePlan, index: usize) -> Result<(), PlanError> {
@@ -230,6 +230,9 @@ fn check_kind(plan: &FramePlan, index: usize) -> Result<(), PlanError> {
                         && finite_rect(glyph.texels)
                         && (0.0..=1.0).contains(&glyph.opacity)
                         && glyph.clip.is_none_or(finite_rect)
+                        && glyph
+                            .backdrop
+                            .is_none_or(|backdrop| (0.0..=1.0).contains(&backdrop))
                 })
                 .then_some(())
                 .ok_or(non_finite)
@@ -238,8 +241,7 @@ fn check_kind(plan: &FramePlan, index: usize) -> Result<(), PlanError> {
             if !single_target {
                 return Err(bad_bindings);
             }
-            let declared = sorted_unique(instances.iter().map(|image| image.source).collect());
-            if declared != sorted_unique(pass.reads.clone()) {
+            if !same_textures(instances.iter().map(|image| image.source), &pass.reads) {
                 return Err(bad_bindings);
             }
             instances
@@ -253,6 +255,26 @@ fn check_kind(plan: &FramePlan, index: usize) -> Result<(), PlanError> {
                         && image.clip_radius >= 0.0
                         && (0.0..=1.0).contains(&image.opacity)
                         && image.clip.is_none_or(finite_rect)
+                        && image.linear.is_invertible()
+                })
+                .then_some(())
+                .ok_or(non_finite)
+        }
+        PassKind::Slug { store, instances } => {
+            if pass.reads.as_slice() != [TextureRef::Persistent(*store)] || !single_target {
+                return Err(bad_bindings);
+            }
+            instances
+                .iter()
+                .all(|glyph| {
+                    glyph.origin.iter().all(|value| value.is_finite())
+                        && glyph.linear.is_invertible()
+                        && glyph.em_bounds.iter().all(|value| value.is_finite())
+                        && (0.0..=1.0).contains(&glyph.opacity)
+                        && glyph.clip.is_none_or(finite_rect)
+                        && glyph
+                            .backdrop
+                            .is_none_or(|backdrop| (0.0..=1.0).contains(&backdrop))
                 })
                 .then_some(())
                 .ok_or(non_finite)
@@ -324,26 +346,55 @@ fn check_kind(plan: &FramePlan, index: usize) -> Result<(), PlanError> {
     }
 }
 
-fn check_states(plan: &FramePlan) -> Result<(), PlanError> {
-    let mut state: HashMap<TextureRef, ResourceState> = HashMap::new();
-    state.insert(TextureRef::Surface, ResourceState::Present);
-    let current = |state: &HashMap<TextureRef, ResourceState>, reference: TextureRef| {
-        state.get(&reference).copied().unwrap_or(match reference {
-            TextureRef::Persistent(_) => ResourceState::ShaderRead,
-            _ => ResourceState::Undefined,
-        })
-    };
-    for (index, pass) in plan.passes.iter().enumerate() {
-        for barrier in &pass.barriers {
-            match barrier {
-                Barrier::Transition { resource, from, to } => {
-                    if current(&state, *resource) != *from {
-                        return Err(PlanError::BarrierMismatch { pass: index });
-                    }
-                    state.insert(*resource, *to);
+fn default_state(reference: TextureRef) -> ResourceState {
+    match reference {
+        TextureRef::Surface => ResourceState::Present,
+        TextureRef::Persistent(_) => ResourceState::ShaderRead,
+        TextureRef::Transient(_) => ResourceState::Undefined,
+    }
+}
+
+fn barriers_of(plan: &FramePlan, pass: usize) -> &[Barrier] {
+    match plan.passes.get(pass) {
+        Some(pass) => &pass.barriers,
+        None => &plan.final_barriers,
+    }
+}
+
+fn state_before(
+    plan: &FramePlan,
+    pass: usize,
+    barrier: usize,
+    reference: TextureRef,
+) -> ResourceState {
+    let mut at = pass;
+    let mut end = barrier;
+    loop {
+        for entry in barriers_of(plan, at)[..end].iter().rev() {
+            match entry {
+                Barrier::Transition { resource, to, .. } if *resource == reference => return *to,
+                Barrier::Alias { after, .. } if reference == TextureRef::Transient(*after) => {
+                    return ResourceState::Undefined;
                 }
-                Barrier::Alias { after, .. } => {
-                    state.insert(TextureRef::Transient(*after), ResourceState::Undefined);
+                _ => {}
+            }
+        }
+        match at {
+            0 => return default_state(reference),
+            _ => {
+                at -= 1;
+                end = barriers_of(plan, at).len();
+            }
+        }
+    }
+}
+
+fn check_states(plan: &FramePlan) -> Result<(), PlanError> {
+    for (index, pass) in plan.passes.iter().enumerate() {
+        for (position, barrier) in pass.barriers.iter().enumerate() {
+            if let Barrier::Transition { resource, from, .. } = barrier {
+                if state_before(plan, index, position, *resource) != *from {
+                    return Err(PlanError::BarrierMismatch { pass: index });
                 }
             }
         }
@@ -357,7 +408,7 @@ fn check_states(plan: &FramePlan) -> Result<(), PlanError> {
                     .map(|write| (*write, pass.kind.write_state())),
             );
         for (reference, required) in wanted {
-            let actual = current(&state, reference);
+            let actual = state_before(plan, index, pass.barriers.len(), reference);
             let satisfied = actual == required
                 || (matches!(reference, TextureRef::Persistent(_))
                     && required == ResourceState::ShaderRead);
@@ -366,28 +417,55 @@ fn check_states(plan: &FramePlan) -> Result<(), PlanError> {
             }
         }
     }
-    for barrier in &plan.final_barriers {
-        if let Barrier::Transition { resource, from, to } = barrier {
-            if current(&state, *resource) != *from {
-                return Err(PlanError::BarrierMismatch {
-                    pass: plan.passes.len(),
-                });
+    let end = plan.passes.len();
+    for (position, barrier) in plan.final_barriers.iter().enumerate() {
+        if let Barrier::Transition { resource, from, .. } = barrier {
+            if state_before(plan, end, position, *resource) != *from {
+                return Err(PlanError::BarrierMismatch { pass: end });
             }
-            state.insert(*resource, *to);
         }
     }
-    (current(&state, TextureRef::Surface) == ResourceState::Present)
+    (state_before(plan, end, plan.final_barriers.len(), TextureRef::Surface)
+        == ResourceState::Present)
         .then_some(())
         .ok_or(PlanError::SurfaceNotPresented)
 }
 
+const CACHED_LIFETIMES: usize = 64;
+
+struct Lives<'a> {
+    plan: &'a FramePlan,
+    cached: [Option<Lifetime>; CACHED_LIFETIMES],
+}
+
+impl<'a> Lives<'a> {
+    fn new(plan: &'a FramePlan) -> Self {
+        let mut cached = [None; CACHED_LIFETIMES];
+        for (slot, texture) in cached.iter_mut().zip(&plan.textures) {
+            *slot = lifetime_of(&plan.passes, texture.id);
+        }
+        Self { plan, cached }
+    }
+
+    fn of(&self, position: usize) -> Option<Lifetime> {
+        match self.cached.get(position) {
+            Some(known) => *known,
+            None => lifetime_of(&self.plan.passes, self.plan.textures[position].id),
+        }
+    }
+}
+
+fn written_before(plan: &FramePlan, pass: usize, id: TransientId) -> bool {
+    plan.passes[..pass]
+        .iter()
+        .any(|earlier| earlier.writes.contains(&TextureRef::Transient(id)))
+}
+
 pub fn validate(plan: &FramePlan) -> Result<(), PlanError> {
-    let mut written: HashMap<TransientId, usize> = HashMap::new();
     let known = |reference: &TextureRef| match reference {
         TextureRef::Surface | TextureRef::Persistent(_) => true,
         TextureRef::Transient(id) => plan.texture(*id).is_some(),
     };
-    let first = first_writers(&plan.passes);
     for (index, pass) in plan.passes.iter().enumerate() {
         if !pass.reads.iter().chain(&pass.writes).all(known) {
             return Err(PlanError::UnknownTexture { pass: index });
@@ -408,39 +486,38 @@ pub fn validate(plan: &FramePlan) -> Result<(), PlanError> {
         }
         check_kind(plan, index)?;
         for read in pass.reads.iter().filter_map(transient_of) {
-            if !written.contains_key(&read) {
+            if !written_before(plan, index, read) {
                 return Err(PlanError::ReadBeforeWrite { pass: index });
             }
         }
-        for write in &pass.writes {
-            if let TextureRef::Transient(id) = write {
-                written.entry(*id).or_insert(index);
-                let is_first = first.get(write) == Some(&index);
-                if is_first && pass.load == LoadOp::Load {
-                    return Err(PlanError::LoadOfUndefined { pass: index });
-                }
+        for write in pass.writes.iter().filter_map(transient_of) {
+            if pass.load == LoadOp::Load && !written_before(plan, index, write) {
+                return Err(PlanError::LoadOfUndefined { pass: index });
             }
         }
     }
-    let lives = lifetimes(&plan.passes);
-    let used: Vec<_> = plan
-        .textures
-        .iter()
-        .filter(|texture| lives.contains_key(&texture.id))
-        .collect();
+    let lives = Lives::new(plan);
     let mut heap_end = 0;
-    for texture in &used {
-        heap_end = heap_end.max(texture.heap_offset + texture.bytes());
+    for (position, texture) in plan.textures.iter().enumerate() {
+        if lives.of(position).is_some() {
+            heap_end = heap_end.max(texture.heap_offset + texture.bytes());
+        }
     }
     if plan.heap_bytes < heap_end {
         return Err(PlanError::HeapTooSmall);
     }
-    for (a_index, a) in used.iter().enumerate() {
+    for (a_position, a) in plan.textures.iter().enumerate() {
+        let Some(a_life) = lives.of(a_position) else {
+            continue;
+        };
         if a.heap_offset != align_up(a.heap_offset, 256) {
             return Err(PlanError::HeapMisaligned { texture: a.id });
         }
-        for b in &used[a_index + 1..] {
-            if !lives[&a.id].overlaps(lives[&b.id]) {
+        for (b_position, b) in plan.textures.iter().enumerate().skip(a_position + 1) {
+            let Some(b_life) = lives.of(b_position) else {
+                continue;
+            };
+            if !a_life.overlaps(b_life) {
                 continue;
             }
             let overlap = a.heap_offset < b.heap_offset + b.bytes()
@@ -453,9 +530,15 @@ pub fn validate(plan: &FramePlan) -> Result<(), PlanError> {
             }
         }
     }
-    for a in &used {
-        for b in &used {
-            if a.id == b.id || lives[&b.id].last >= lives[&a.id].first {
+    for (a_position, a) in plan.textures.iter().enumerate() {
+        let Some(a_life) = lives.of(a_position) else {
+            continue;
+        };
+        for (b_position, b) in plan.textures.iter().enumerate() {
+            let Some(b_life) = lives.of(b_position) else {
+                continue;
+            };
+            if a.id == b.id || b_life.last >= a_life.first {
                 continue;
             }
             let overlap = a.heap_offset < b.heap_offset + b.bytes()
@@ -463,7 +546,7 @@ pub fn validate(plan: &FramePlan) -> Result<(), PlanError> {
             if !overlap {
                 continue;
             }
-            let covered = plan.passes[lives[&a.id].first]
+            let covered = plan.passes[a_life.first]
                 .barriers
                 .iter()
                 .any(|barrier| matches!(barrier, Barrier::Alias { after, .. } if *after == a.id));

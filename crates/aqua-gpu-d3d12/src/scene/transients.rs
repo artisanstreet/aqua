@@ -235,7 +235,12 @@ impl Transients {
                 )?
             },
         }
-        resource.ok_or(Error::NoAdapter)
+        let resource = resource.ok_or(Error::NoAdapter)?;
+        if super::debug::requested() {
+            let name = format!("transient {} offset {offset}", key.id.0);
+            let _ = unsafe { resource.SetName(&windows::core::HSTRING::from(name)) };
+        }
+        Ok(resource)
     }
 
     pub fn ensure(
@@ -243,7 +248,7 @@ impl Transients {
         device: &ID3D12Device,
         plan: &FramePlan,
         frame_fence: u64,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         let same = self.matches(plan);
         let fresh = match same {
             true => None,
@@ -263,7 +268,7 @@ impl Transients {
             }
         };
         if same && resize.is_none() {
-            return Ok(());
+            return Ok(false);
         }
         let keys = fresh.unwrap_or_else(|| self.keys.clone());
         let placement = placement.unwrap_or_else(|| place_keys(device, &keys));
@@ -316,6 +321,6 @@ impl Transients {
         self.entries = created;
         self.keys = keys;
         self.needed = placement.total;
-        Ok(())
+        Ok(true)
     }
 }

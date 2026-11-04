@@ -51,6 +51,18 @@ impl Default for ImageAssetBudget {
         }
     }
 }
+impl ImageAssetBudget {
+    pub fn editor() -> Self {
+        Self {
+            decoded_bytes: u64::MAX,
+            pending_bytes: usize::MAX,
+            images: usize::MAX,
+            workers: usize::MAX,
+            gpu_bytes: u64::MAX,
+            gpu_images: usize::MAX,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImageStatus {
@@ -78,6 +90,11 @@ pub struct ImageAssets {
 #[derive(Clone)]
 pub struct ImageHandle {
     lease: Arc<Lease>,
+}
+
+#[derive(Clone)]
+pub struct WeakImageHandle {
+    lease: Weak<Lease>,
 }
 
 #[derive(Default)]
@@ -152,11 +169,20 @@ enum Phase {
 struct Slot {
     generation: u32,
     phase: Option<Phase>,
+    preview: bool,
 }
 struct DecodeJob {
     id: ImageId,
     encoded: Arc<[u8]>,
+    preview: bool,
+    _guard: Option<Box<dyn Send>>,
 }
+
+#[cfg(test)]
+type DecodeStarted = Arc<dyn Fn(ImageId) + Send + Sync>;
+#[cfg(test)]
+static DECODE_STARTED: std::sync::LazyLock<Mutex<Option<DecodeStarted>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
 
 struct State {
     queue: VecDeque<DecodeJob>,
@@ -183,7 +209,7 @@ impl State {
             .get_mut(&id.raw().index)
             .filter(|slot| slot.generation == id.raw().generation && slot.phase.is_some())
     }
-    fn allocate(&mut self, phase: Phase) -> Result<ImageId, ImageAssetError> {
+    fn allocate(&mut self, phase: Phase, preview: bool) -> Result<ImageId, ImageAssetError> {
         if self.stats.images >= self.budget.images {
             return Err(ImageAssetError::OverBudget);
         }
@@ -200,6 +226,7 @@ impl State {
                     Slot {
                         generation: 0,
                         phase: None,
+                        preview: false,
                     },
                 );
                 index
@@ -207,6 +234,7 @@ impl State {
         };
         let slot = self.slots.get_mut(&index).unwrap();
         slot.phase = Some(phase);
+        slot.preview = preview;
         self.stats.images += 1;
         self.revision = self.revision.wrapping_add(1);
         Ok(ImageId::from_raw(RawId {
@@ -328,7 +356,7 @@ impl ImageAssets {
             if state.stats.decoded_bytes.saturating_add(bytes) > state.budget.decoded_bytes {
                 return Err(ImageAssetError::OverBudget);
             }
-            let id = state.allocate(Phase::Ready(data))?;
+            let id = state.allocate(Phase::Ready(data), false)?;
             state.stats.decoded_bytes += bytes;
             (id, state.wake.clone())
         };
@@ -343,7 +371,27 @@ impl ImageAssets {
         })
     }
     pub fn decode(&self, encoded: impl Into<Arc<[u8]>>) -> Result<ImageHandle, ImageAssetError> {
-        let encoded = encoded.into();
+        self.enqueue(encoded.into(), false, None)
+    }
+    pub fn decode_preview(
+        &self,
+        encoded: impl Into<Arc<[u8]>>,
+    ) -> Result<ImageHandle, ImageAssetError> {
+        self.enqueue(encoded.into(), true, None)
+    }
+    pub fn decode_preview_with_guard(
+        &self,
+        encoded: impl Into<Arc<[u8]>>,
+        guard: impl Send + 'static,
+    ) -> Result<ImageHandle, ImageAssetError> {
+        self.enqueue(encoded.into(), true, Some(Box::new(guard)))
+    }
+    fn enqueue(
+        &self,
+        encoded: Arc<[u8]>,
+        preview: bool,
+        guard: Option<Box<dyn Send>>,
+    ) -> Result<ImageHandle, ImageAssetError> {
         let (id, start_worker) = {
             let mut state = lock(&self.state);
             if state.budget.workers == 0
@@ -352,9 +400,14 @@ impl ImageAssets {
             {
                 return Err(ImageAssetError::OverBudget);
             }
-            let id = state.allocate(Phase::Pending)?;
+            let id = state.allocate(Phase::Pending, preview)?;
             state.stats.pending_bytes += encoded.len();
-            state.queue.push_back(DecodeJob { id, encoded });
+            state.queue.push_back(DecodeJob {
+                id,
+                encoded,
+                preview,
+                _guard: guard,
+            });
             let start = state.stats.workers < state.budget.workers;
             if start {
                 state.stats.workers += 1;
@@ -376,6 +429,9 @@ impl ImageAssets {
             Some(Phase::Ready(data)) => Some(data.clone()),
             _ => None,
         }
+    }
+    fn is_preview(&self, id: ImageId) -> bool {
+        lock(&self.state).slot(id).is_some_and(|slot| slot.preview)
     }
     fn budget(&self) -> ImageAssetBudget {
         lock(&self.state).budget
@@ -432,21 +488,49 @@ fn spawn_worker(shared: &Arc<Mutex<State>>) {
                 };
                 (job, state.budget.decoded_bytes)
             };
-            let result = decode_animation(
-                &job.encoded,
-                AnimationBudget {
-                    max_bytes: budget.min(64 * 1024 * 1024),
-                    ..Default::default()
-                },
-            )
-            .map(|animation| {
-                if animation.frames().len() == 1 {
-                    Data::Still(Arc::new(animation.frames()[0].image.clone()))
+            #[cfg(test)]
+            let callback = DECODE_STARTED
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+            #[cfg(test)]
+            if let Some(callback) = callback {
+                callback(job.id);
+            }
+            let result = if job.preview && job.encoded.len() > 32 * 1024 * 1024 {
+                Err(ImageAssetError::Decode(
+                    "image source exceeds 32 MiB".into(),
+                ))
+            } else if aqua_render::media::is_svg(&job.encoded) {
+                aqua_render::media::decode_svg(&job.encoded, budget)
+                    .map(|image| Data::Still(Arc::new(image)))
+                    .map_err(|error| ImageAssetError::Decode(error.to_string()))
+            } else if job.preview && !aqua_render::media::is_gif(&job.encoded) {
+                aqua_render::media::decode_preview_still(&job.encoded, budget)
+                    .map(|image| Data::Still(Arc::new(image)))
+                    .map_err(|error| ImageAssetError::Decode(error.to_string()))
+            } else {
+                let result = if job.preview {
+                    aqua_render::media::animation::decode_preview_gif(&job.encoded, budget)
                 } else {
-                    Data::Animation(Arc::new(animation))
-                }
-            })
-            .map_err(|error| ImageAssetError::Decode(error.to_string()));
+                    decode_animation(
+                        &job.encoded,
+                        AnimationBudget {
+                            max_bytes: budget.min(64 * 1024 * 1024),
+                            ..Default::default()
+                        },
+                    )
+                };
+                result
+                    .map(|animation| {
+                        if animation.frames().len() == 1 {
+                            Data::Still(Arc::new(animation.frames()[0].image.clone()))
+                        } else {
+                            Data::Animation(Arc::new(animation))
+                        }
+                    })
+                    .map_err(|error| ImageAssetError::Decode(error.to_string()))
+            };
             if let Some(shared) = weak.upgrade() {
                 complete(&shared, job.id, job.encoded.len(), result);
             }
@@ -510,6 +594,21 @@ impl ImageHandle {
     pub fn id(&self) -> ImageId {
         self.lease.id
     }
+
+    pub fn downgrade(&self) -> WeakImageHandle {
+        WeakImageHandle {
+            lease: Arc::downgrade(&self.lease),
+        }
+    }
+
+    pub fn decoded_bytes(&self) -> Option<u64> {
+        let shared = self.lease.state.upgrade()?;
+        let state = lock(&shared);
+        match state.slot(self.id())?.phase.as_ref()? {
+            Phase::Ready(data) => Some(data.bytes()),
+            Phase::Pending | Phase::Failed(_) => None,
+        }
+    }
     pub fn cancel(&self) {
         if let Some(state) = self.lease.state.upgrade() {
             let wake = lock(&state).release(self.id());
@@ -538,6 +637,15 @@ impl ImageHandle {
         }
     }
 }
+
+impl WeakImageHandle {
+    pub fn upgrade(&self) -> Option<ImageHandle> {
+        let lease = self.lease.upgrade()?;
+        let state = lease.state.upgrade()?;
+        lock(&state).slot(lease.id)?;
+        Some(ImageHandle { lease })
+    }
+}
 impl From<ImageHandle> for ImageRef {
     fn from(handle: ImageHandle) -> Self {
         ImageRef::with_lease(handle.id(), handle.lease)
@@ -562,3 +670,7 @@ impl Drop for Lease {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/images/guard.rs"]
+mod guard_tests;

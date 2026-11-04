@@ -63,6 +63,7 @@ fn setup(request: Option<WindowRequest>) -> (Aqua, Consumer, AquaWindowId) {
         focused: false,
         visible: false,
         occluded: false,
+        maximized: false,
     });
     let consumer = Consumer {
         messages: Mailbox::new(NonZeroUsize::new(16).unwrap()),

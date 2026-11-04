@@ -27,6 +27,7 @@ fn observed(id: u64) -> ObservedWindowState {
         focused: false,
         visible: true,
         occluded: false,
+        maximized: false,
     }
 }
 

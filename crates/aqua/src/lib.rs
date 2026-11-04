@@ -1,3 +1,6 @@
+pub use aqua_core::{
+    ColorProfile, GpuiBackground, GpuiGradientColorSpace, GpuiGradientStop, GpuiHsla, GpuiTextColor,
+};
 pub mod app;
 pub mod config;
 pub mod error;
@@ -8,7 +11,12 @@ pub mod runtime;
 pub mod ui_app;
 
 pub use app::{App, Context, IntoView, ReactiveView};
-pub use aqua_platform::chrome::DragRegions;
+pub use aqua_platform::chrome::{CaptionControl, CaptionRegion, DragRegions};
+pub use aqua_platform::events::ExternalFileDrag;
+#[cfg(windows)]
+pub use aqua_platform::ime_windows::NativeImeClient;
+#[cfg(windows)]
+pub use aqua_platform::local_time;
 pub use config::{
     AquaConfig, Config, ConfigError, Material, ResolvedConfig, ResolvedMaterial, Theme, Titlebar,
     Window,
@@ -24,6 +32,7 @@ pub use aqua_runtime::Scheduler;
 pub use aqua_ui::element::ui;
 pub use aqua_ui::style::{auto, pct, px, Axis, Style, Typography};
 pub use aqua_ui::style::{Border, Length, Paint, Shadow, ShadowLayer};
+pub use aqua_ui::ActivationSource;
 
 pub mod prelude {
     pub use crate::images::{
@@ -33,12 +42,15 @@ pub mod prelude {
     pub use crate::mailbox::{Mailbox, SendError, Sender};
     pub use crate::{
         auto, fr, pct, px, ui, App, AppCtx, Application, Aqua, AquaConfig, AquaUserEvent, Axis,
-        Column, ColumnBuilder, ColumnWidth, Config, Context, DragRegions, Error, ExternalFrame,
-        IntoView, List, Material, ReactiveView, ResolvedMaterial, Style, Table, Theme, Titlebar,
-        Typography, UiApp, UiAppError, Window,
+        CaptionControl, CaptionRegion, Column, ColumnBuilder, ColumnWidth, Config, Context,
+        DragRegions, Error, ExternalFrame, IntoView, List, Material, ReactiveView,
+        ResolvedMaterial, Style, Table, Theme, Titlebar, Typography, UiApp, UiAppError, Window,
     };
     pub use aqua_core::image::*;
-    pub use aqua_core::scene::{SnapshotTransition, TextColorMap, TextRasterMode};
+    pub use aqua_core::scene::{
+        GpuiSnapshotTransition, GpuiSourceSnapshotTransition, GpuiTextColorMap, SnapshotTransition,
+        TextColorMap, TextRasterMode,
+    };
     pub use aqua_core::vector::*;
     pub use aqua_core::{
         CursorIcon, DisplayItem, ImeEvent, InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId,

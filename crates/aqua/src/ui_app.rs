@@ -14,6 +14,27 @@ use crate::runtime::{AppCtx, Application, Aqua};
 
 pub use aqua_runtime::{Runtime as UiApp, RuntimeError as UiAppError};
 
+#[cfg(windows)]
+struct NativeImeClient(aqua_runtime::NativeTextService);
+
+#[cfg(windows)]
+impl aqua_platform::ime_windows::NativeImeClient for NativeImeClient {
+    fn selected_bounds(&self) -> Option<aqua_platform::services::ImeCursorArea> {
+        let bounds = self.0.selected_bounds()?;
+        Some(aqua_platform::services::ImeCursorArea {
+            origin: aqua_platform::geometry::LogicalPosition {
+                x: bounds.x as f64,
+                y: bounds.y as f64,
+            },
+            size: aqua_platform::geometry::LogicalSize::new(bounds.w as f64, bounds.h as f64),
+        })
+    }
+
+    fn replace(&self, text: &str, selected: Option<std::ops::Range<usize>>) {
+        self.0.replace_utf16(text, selected);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClipboardOutcome {
     Unhandled,
@@ -40,7 +61,10 @@ pub fn dispatch_clipboard(
         let mut redraw = false;
         if let Some(text) = app.selected_text() {
             clipboard.set_text(text)?;
-            redraw = cut && app.delete_selected_text();
+            redraw = cut
+                && app
+                    .cut_external_selection()
+                    .unwrap_or_else(|| app.delete_selected_text());
         }
         return Ok(ClipboardOutcome::Handled { redraw });
     }
@@ -78,8 +102,16 @@ pub fn dispatch_input_with_clipboard(
     clipboard: &mut dyn Clipboard,
     event: &CoreInputEvent,
 ) -> Result<Output, ClipboardError> {
+    dispatch_input_with_clipboard_outcome(app, clipboard, event).map(|result| result.output)
+}
+
+pub fn dispatch_input_with_clipboard_outcome(
+    app: &mut UiApp,
+    clipboard: &mut dyn Clipboard,
+    event: &CoreInputEvent,
+) -> Result<aqua_runtime::InputDispatchOutcome, ClipboardError> {
     let mut error = None;
-    let output = app.step_input_with_default(event, |app| {
+    let output = app.step_input_with_default_outcome(event, |app| {
         match dispatch_clipboard(app, clipboard, event) {
             Ok(ClipboardOutcome::Unhandled) => None,
             Ok(ClipboardOutcome::Handled { redraw }) => Some(redraw),
@@ -95,6 +127,27 @@ pub fn dispatch_input_with_clipboard(
     }
 }
 
+pub fn dispatch_input(
+    app: &mut UiApp,
+    ctx: &mut AppCtx,
+    id: AquaWindowId,
+    event: &CoreInputEvent,
+) -> bool {
+    let _ = app.step(Input::Tick(ctx.now()));
+    match dispatch_input_with_clipboard_outcome(app, ctx.clipboard(), event) {
+        Ok(outcome) => {
+            if !outcome.output.redraw.is_empty() {
+                ctx.request_input_redraw(id, outcome.output.redraw);
+            }
+            outcome.consumed
+        }
+        Err(error) => {
+            eprintln!("aqua: {error}");
+            true
+        }
+    }
+}
+
 fn request_redraw(ctx: &mut AppCtx, id: AquaWindowId, output: Result<Output, UiAppError>) {
     if let Ok(output) = output {
         if !output.redraw.is_empty() {
@@ -104,6 +157,39 @@ fn request_redraw(ctx: &mut AppCtx, id: AquaWindowId, output: Result<Output, UiA
 }
 
 impl Application for UiApp {
+    fn on_external_file_drag(
+        &mut self,
+        ctx: &mut AppCtx,
+        id: AquaWindowId,
+        event: &aqua_platform::events::ExternalFileDrag,
+    ) {
+        use aqua_platform::events::ExternalFileDrag as Native;
+        use aqua_ui::input::ExternalFileDragEvent as Ui;
+        let event = match event {
+            Native::Enter { paths, position } => Ui::Enter {
+                paths: paths.clone(),
+                position: *position,
+            },
+            Native::Move { position } => Ui::Move {
+                position: *position,
+            },
+            Native::Submit { position } => Ui::Submit {
+                position: *position,
+            },
+            Native::Exit => Ui::Exit,
+        };
+        if self.external_file_drag(event) {
+            ctx.request_frame(id, aqua_protocol::FrameReason::INPUT);
+        }
+    }
+    fn input_invalidation_epoch(&self, _id: AquaWindowId) -> u64 {
+        self.tree().invalidation_epoch()
+    }
+
+    fn color_profile(&self) -> aqua_core::ColorProfile {
+        UiApp::color_profile(self)
+    }
+
     fn on_click_settings(&mut self, settings: aqua_core::ClickSettings) {
         self.set_click_settings(settings);
     }
@@ -123,12 +209,7 @@ impl Application for UiApp {
     }
 
     fn on_input(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &CoreInputEvent) {
-        let _ = self.step(Input::Tick(ctx.now()));
-        match dispatch_input_with_clipboard(self, ctx.clipboard(), event) {
-            Ok(output) if !output.redraw.is_empty() => ctx.request_frame(id, output.redraw),
-            Ok(_) => {}
-            Err(error) => eprintln!("aqua: {error}"),
-        }
+        dispatch_input(self, ctx, id, event);
     }
 
     fn on_files_dropped(
@@ -161,6 +242,15 @@ impl Application for UiApp {
 
     fn ime_cursor_area(&self) -> Option<aqua_core::Rect> {
         self.ime_anchor()
+    }
+
+    #[cfg(windows)]
+    fn native_ime_client(
+        &self,
+    ) -> Option<std::rc::Rc<dyn aqua_platform::ime_windows::NativeImeClient>> {
+        Some(std::rc::Rc::new(NativeImeClient(
+            self.native_text_service()?,
+        )))
     }
 
     fn chrome_regions(&self, _window: &ObservedWindowState) -> Option<DragRegions> {
@@ -246,6 +336,7 @@ mod chrome_regions_tests {
         let regions = DragRegions {
             draggable: vec![(0.0, 0.0, 200.0, 40.0)],
             no_drag: vec![(160.0, 4.0, 196.0, 36.0)],
+            ..Default::default()
         };
         app.set_chrome_regions(Some(regions.clone()));
         assert_eq!(

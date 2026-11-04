@@ -37,10 +37,34 @@ pub enum AquaUserEvent {
     ReplayBadges,
     A11yActions(AquaWindowId),
     GpuComplete(AquaWindowId, u64),
+    ExternalFileDrag(AquaWindowId),
+}
+
+#[cfg(windows)]
+struct WakeNativeImeClient {
+    inner: std::rc::Rc<dyn aqua_platform::ime_windows::NativeImeClient>,
+    proxy: Option<winit::event_loop::EventLoopProxy<AquaUserEvent>>,
+    window: AquaWindowId,
+}
+
+#[cfg(windows)]
+impl aqua_platform::ime_windows::NativeImeClient for WakeNativeImeClient {
+    fn selected_bounds(&self) -> Option<aqua_platform::services::ImeCursorArea> {
+        self.inner.selected_bounds()
+    }
+
+    fn replace(&self, text: &str, selected: Option<std::ops::Range<usize>>) {
+        self.inner.replace(text, selected);
+        if let Some(proxy) = &self.proxy {
+            let _ = proxy.send_event(AquaUserEvent::Messages(self.window));
+        }
+    }
 }
 
 enum ExternalUpdate {
     Register(u64, wgpu::TextureView, u32, u32),
+    RegisterGpuiImage(u64, u64, usize, Arc<[u8]>),
+    ReleaseGpuiImage(u64),
     Remove(u64),
 }
 
@@ -53,10 +77,18 @@ pub struct ExternalFrame<'a> {
     pub width: u32,
     pub height: u32,
     pub scale: f32,
+    pub gpui_meshes_supported: bool,
     register: &'a mut dyn FnMut(ExternalUpdate),
 }
 
 impl ExternalFrame<'_> {
+    pub fn register_gpui_image(&mut self, layer: u64, asset: u64, frame: usize, rgba: Arc<[u8]>) {
+        (self.register)(ExternalUpdate::RegisterGpuiImage(layer, asset, frame, rgba));
+    }
+
+    pub fn release_gpui_image(&mut self, asset: u64) {
+        (self.register)(ExternalUpdate::ReleaseGpuiImage(asset));
+    }
     pub fn unregister_external(&mut self, layer: u64) {
         (self.register)(ExternalUpdate::Remove(layer));
     }
@@ -68,12 +100,16 @@ impl ExternalFrame<'_> {
 
 struct WindowRecord {
     observed: ObservedWindowState,
+    last_invalidating_input: Option<Instant>,
     winit_id: Option<winit::window::WindowId>,
     transparent: bool,
     vsync: bool,
     snapshot_started: Option<Instant>,
+    snapshot_pending: bool,
     badge: Option<aqua_platform::badge::TaskbarBadge>,
     chrome: Option<aqua_platform::chrome::WindowsChrome>,
+    #[cfg(windows)]
+    native_file_drag: Option<aqua_platform::file_drag_windows::NativeFileDrag>,
     window: Option<Arc<winit::window::Window>>,
     chrome_overlay: bool,
     last_regions: Option<(DragRegions, f64)>,
@@ -82,6 +118,11 @@ struct WindowRecord {
     buttons: u8,
     modifiers: CoreModifiers,
     ime_active: bool,
+    #[cfg(windows)]
+    native_ime: Option<aqua_platform::ime_windows::NativeImeWindow>,
+    #[cfg(windows)]
+    native_file_events:
+        std::rc::Rc<std::cell::RefCell<VecDeque<aqua_platform::events::ExternalFileDrag>>>,
     #[cfg(windows)]
     a11y: Option<A11yAdapter>,
 }
@@ -139,6 +180,7 @@ struct SharedGpu {
 }
 
 pub struct AppCtx<'a> {
+    requested_frames: std::collections::HashSet<AquaWindowId>,
     now: Instant,
     scheduler: &'a mut Scheduler,
     quit_requested: &'a mut bool,
@@ -237,6 +279,11 @@ impl AppCtx<'_> {
     }
 
     pub fn request_frame(&mut self, id: AquaWindowId, reason: FrameReason) {
+        self.requested_frames.insert(id);
+        self.scheduler.request_frame(id, reason);
+    }
+
+    pub(crate) fn request_input_redraw(&mut self, id: AquaWindowId, reason: FrameReason) {
         self.scheduler.request_frame(id, reason);
     }
 
@@ -267,6 +314,25 @@ impl AppCtx<'_> {
 }
 
 pub trait Application {
+    fn native_external_file_drag(&self, _options: &WindowOptions) -> bool {
+        false
+    }
+
+    fn on_external_file_drag(
+        &mut self,
+        _ctx: &mut AppCtx,
+        _id: AquaWindowId,
+        _event: &aqua_platform::events::ExternalFileDrag,
+    ) {
+    }
+    fn input_invalidation_epoch(&self, _id: AquaWindowId) -> u64 {
+        0
+    }
+
+    fn color_profile(&self) -> aqua_core::ColorProfile {
+        aqua_core::ColorProfile::AquaLinear
+    }
+
     fn on_click_settings(&mut self, _settings: aqua_core::ClickSettings) {}
 
     fn on_start(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId) {}
@@ -328,6 +394,12 @@ pub trait Application {
         None
     }
     fn ime_cursor_area(&self) -> Option<aqua_core::Rect> {
+        None
+    }
+    #[cfg(windows)]
+    fn native_ime_client(
+        &self,
+    ) -> Option<std::rc::Rc<dyn aqua_platform::ime_windows::NativeImeClient>> {
         None
     }
     fn chrome_regions(&self, _window: &ObservedWindowState) -> Option<DragRegions> {
@@ -539,6 +611,7 @@ impl Aqua {
                     focused: false,
                     visible: false,
                     occluded: false,
+                    maximized: false,
                 });
                 self.dispatch_start(app, id);
                 continue;
@@ -573,6 +646,8 @@ impl Aqua {
             | WindowRequest::SetOuterPosition(id, _)
             | WindowRequest::Center(id)
             | WindowRequest::BeginSnapshotTransition(id, _)
+            | WindowRequest::BeginGpuiSnapshotTransition(id, _)
+            | WindowRequest::BeginGpuiSourceSnapshotTransition(id, _)
             | WindowRequest::SetTextRasterMode(id, _) => *id,
         };
         let window = self
@@ -584,6 +659,20 @@ impl Aqua {
         match request {
             WindowRequest::Close(_) => {
                 if self.with_ctx(|ctx| app.can_close(ctx, id)) {
+                    #[cfg(windows)]
+                    if self
+                        .windows
+                        .get(&id)
+                        .is_some_and(|record| record.native_file_drag.is_some())
+                    {
+                        self.with_ctx(|ctx| {
+                            app.on_external_file_drag(
+                                ctx,
+                                id,
+                                &aqua_platform::events::ExternalFileDrag::Exit,
+                            )
+                        });
+                    }
                     self.with_ctx(|ctx| app.on_window_event(ctx, id, &WindowEvent::Destroyed(id)));
                     self.remove_window(id);
                 }
@@ -611,12 +700,54 @@ impl Aqua {
                 if reduced {
                     gpu.renderer.cancel_snapshot_transition();
                     record.snapshot_started = None;
+                    record.snapshot_pending = false;
                 } else {
                     gpu.renderer
                         .start_snapshot_transition(*settings)
                         .map_err(|error| WindowError::Native(error.to_string()))?;
                     record.snapshot_started = Some(now);
+                    record.snapshot_pending = false;
                 }
+                gpu.surface.request_present();
+                self.scheduler.request_frame(id, FrameReason::EXPLICIT);
+            }
+            WindowRequest::BeginGpuiSnapshotTransition(_, settings) => {
+                let reduced = self.motion_reduced();
+                let record = self.windows.get_mut(&id).expect("validated window");
+                let gpu = record
+                    .gpu
+                    .as_mut()
+                    .ok_or(WindowError::Unsupported("snapshot requires a renderer"))?;
+                if reduced {
+                    gpu.renderer.cancel_snapshot_transition();
+                    record.snapshot_pending = false;
+                } else {
+                    gpu.renderer
+                        .start_gpui_snapshot_transition(*settings)
+                        .map_err(|error| WindowError::Native(error.to_string()))?;
+                    record.snapshot_pending = gpu.renderer.snapshot_transition_active();
+                }
+                record.snapshot_started = None;
+                gpu.surface.request_present();
+                self.scheduler.request_frame(id, FrameReason::EXPLICIT);
+            }
+            WindowRequest::BeginGpuiSourceSnapshotTransition(_, settings) => {
+                let reduced = self.motion_reduced();
+                let record = self.windows.get_mut(&id).expect("validated window");
+                let gpu = record
+                    .gpu
+                    .as_mut()
+                    .ok_or(WindowError::Unsupported("snapshot requires a renderer"))?;
+                if reduced {
+                    gpu.renderer.cancel_snapshot_transition();
+                    record.snapshot_pending = false;
+                } else {
+                    gpu.renderer
+                        .start_gpui_source_snapshot_transition(*settings)
+                        .map_err(|error| WindowError::Native(error.to_string()))?;
+                    record.snapshot_pending = gpu.renderer.snapshot_transition_active();
+                }
+                record.snapshot_started = None;
                 gpu.surface.request_present();
                 self.scheduler.request_frame(id, FrameReason::EXPLICIT);
             }
@@ -716,6 +847,7 @@ impl Aqua {
         let quit = &mut self.quit_requested;
         let proxy = self.proxy.clone();
         let mut ctx = AppCtx {
+            requested_frames: std::collections::HashSet::new(),
             now,
             scheduler: &mut self.scheduler,
             quit_requested: &mut *quit,
@@ -736,10 +868,12 @@ impl Aqua {
             id,
             WindowRecord {
                 observed,
+                last_invalidating_input: None,
                 winit_id: None,
                 transparent: false,
                 vsync: self.config.vsync,
                 snapshot_started: None,
+                snapshot_pending: false,
                 badge: None,
                 chrome: None,
                 chrome_overlay: false,
@@ -750,6 +884,12 @@ impl Aqua {
                 buttons: 0,
                 modifiers: CoreModifiers::NONE,
                 ime_active: false,
+                #[cfg(windows)]
+                native_ime: None,
+                #[cfg(windows)]
+                native_file_drag: None,
+                #[cfg(windows)]
+                native_file_events: std::rc::Rc::new(std::cell::RefCell::new(VecDeque::new())),
                 #[cfg(windows)]
                 a11y: None,
             },
@@ -774,7 +914,7 @@ impl Aqua {
         self.bind_app_reactive(app, id);
         self.with_ctx(|ctx| app.on_window_event(ctx, id, &ev));
         if let WindowEvent::Focused(_, focused) = event {
-            self.with_ctx(|ctx| app.on_input(ctx, id, &CoreInputEvent::Focused(*focused)));
+            self.dispatch_app_input(app, id, &CoreInputEvent::Focused(*focused));
         }
         let close = match event {
             WindowEvent::Destroyed(_) => true,
@@ -791,13 +931,46 @@ impl Aqua {
         app: &mut impl Application,
         id: AquaWindowId,
         event: &CoreInputEvent,
-    ) {
+    ) -> bool {
         if !self.windows.contains_key(&id) {
-            return;
+            return false;
         }
         self.scheduler.request_frame(id, FrameReason::INPUT);
-        let ev = event.clone();
-        self.with_ctx(|ctx| app.on_input(ctx, id, &ev));
+        self.dispatch_app_input(app, id, event)
+    }
+
+    fn dispatch_app_input(
+        &mut self,
+        app: &mut impl Application,
+        id: AquaWindowId,
+        event: &CoreInputEvent,
+    ) -> bool {
+        let count_activity = !matches!(event, CoreInputEvent::Focused(_));
+        self.dispatch_attributed_input(app, id, count_activity, |app, ctx| {
+            app.on_input(ctx, id, event)
+        })
+    }
+
+    fn dispatch_attributed_input<A: Application>(
+        &mut self,
+        app: &mut A,
+        id: AquaWindowId,
+        count_activity: bool,
+        dispatch: impl FnOnce(&mut A, &mut AppCtx<'_>),
+    ) -> bool {
+        let before = app.input_invalidation_epoch(id);
+        let requested = self.with_ctx(|ctx| {
+            dispatch(app, ctx);
+            ctx.requested_frames.contains(&id)
+        });
+        let invalidated = requested || app.input_invalidation_epoch(id) != before;
+        if invalidated && count_activity {
+            let now = self.clock();
+            if let Some(window) = self.windows.get_mut(&id) {
+                window.last_invalidating_input = Some(now);
+            }
+        }
+        invalidated
     }
 
     pub fn dispatch_file_drop(
@@ -805,8 +978,8 @@ impl Aqua {
         app: &mut impl Application,
         id: AquaWindowId,
         paths: &[std::path::PathBuf],
-    ) {
-        self.dispatch_file_drop_at(app, id, paths, None);
+    ) -> bool {
+        self.dispatch_file_drop_at(app, id, paths, None)
     }
 
     pub fn dispatch_file_drop_at(
@@ -815,13 +988,15 @@ impl Aqua {
         id: AquaWindowId,
         paths: &[std::path::PathBuf],
         at: Option<aqua_core::Point>,
-    ) {
+    ) -> bool {
         if !self.windows.contains_key(&id) {
-            return;
+            return false;
         }
         self.scheduler.request_frame(id, FrameReason::INPUT);
         let owned = paths.to_vec();
-        self.with_ctx(|ctx| app.on_files_dropped_at(ctx, id, &owned, at));
+        self.dispatch_attributed_input(app, id, true, |app, ctx| {
+            app.on_files_dropped_at(ctx, id, &owned, at)
+        })
     }
 
     fn apply_observed(&mut self, id: AquaWindowId, event: &WindowEvent) {
@@ -986,6 +1161,12 @@ impl<A: Application> Loop<A> {
     ) -> Result<AquaWindowId, aqua_platform::window::WindowError> {
         options.validated()?;
         let mut attrs = window_attributes(&options);
+        #[cfg(windows)]
+        let native_external_file_drag = self.app.native_external_file_drag(&options);
+        #[cfg(windows)]
+        if native_external_file_drag {
+            attrs = aqua_platform::host::native_file_drag_attributes(attrs);
+        }
         if self.aqua.config.material != aqua_platform::WindowMaterial::None {
             attrs = attrs.with_transparent(true);
         }
@@ -1003,6 +1184,28 @@ impl<A: Application> Loop<A> {
             }
         };
         let id = self.aqua.alloc_id();
+        #[cfg(windows)]
+        let native_file_events = std::rc::Rc::new(std::cell::RefCell::new(VecDeque::new()));
+        #[cfg(windows)]
+        let native_file_drag = if native_external_file_drag {
+            let events = native_file_events.clone();
+            let proxy = self.aqua.proxy.clone();
+            Some(
+                aqua_platform::file_drag_windows::NativeFileDrag::install(&window, move |event| {
+                    events.borrow_mut().push_back(event);
+                    if let Some(proxy) = &proxy {
+                        let _ = proxy.send_event(AquaUserEvent::ExternalFileDrag(id));
+                    }
+                })
+                .map_err(|error| {
+                    aqua_platform::window::WindowError::Native(format!(
+                        "file drag registration failed: {error}"
+                    ))
+                })?,
+            )
+        } else {
+            None
+        };
         let chrome = match aqua_platform::chrome::WindowsChrome::install(&window, &options) {
             Ok(guard) => {
                 eprintln!("aqua: window chrome installed: {:?}", guard.diagnostics());
@@ -1030,16 +1233,19 @@ impl<A: Application> Loop<A> {
             focused: false,
             visible: true,
             occluded: false,
+            maximized: window.is_maximized(),
         };
         self.aqua.winit_map.insert(window.id(), id);
         self.aqua.windows.insert(
             id,
             WindowRecord {
                 observed,
+                last_invalidating_input: None,
                 winit_id: Some(window.id()),
                 badge: None,
                 vsync: self.aqua.config.vsync,
                 snapshot_started: None,
+                snapshot_pending: false,
                 transparent: options.transparent
                     || self.aqua.config.material != aqua_platform::WindowMaterial::None,
                 chrome,
@@ -1051,6 +1257,12 @@ impl<A: Application> Loop<A> {
                 buttons: 0,
                 modifiers: CoreModifiers::NONE,
                 ime_active: false,
+                #[cfg(windows)]
+                native_ime: None,
+                #[cfg(windows)]
+                native_file_drag,
+                #[cfg(windows)]
+                native_file_events,
                 #[cfg(windows)]
                 a11y: None,
             },
@@ -1140,9 +1352,21 @@ impl<A: Application> Loop<A> {
             apply_limit_buckets: false,
         }))
         .map_err(|e| format!("no usable GPU adapter (software fallback unresolved): {e:?}"))?;
+        let required_features = match self.app.color_profile() {
+            aqua_core::ColorProfile::GpuiWindowsEncoded => {
+                wgpu::Features::DUAL_SOURCE_BLENDING | wgpu::Features::CLIP_DISTANCES
+            }
+            aqua_core::ColorProfile::AquaLinear => wgpu::Features::empty(),
+        };
+        if !adapter.features().contains(required_features) {
+            return Err(format!(
+                "GPU adapter lacks required rendering features: {:?}",
+                required_features.difference(adapter.features())
+            ));
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("aqua"),
-            required_features: wgpu::Features::empty(),
+            required_features,
             required_limits: wgpu::Limits::default(),
             experimental_features: wgpu::ExperimentalFeatures::default(),
             memory_hints: wgpu::MemoryHints::default(),
@@ -1184,16 +1408,22 @@ impl<A: Application> Loop<A> {
             .instance
             .create_surface(window.clone())
             .map_err(|e| format!("surface creation failed: {e:?}"))?;
+        let profile = self.app.color_profile();
+        let preferred_format = (profile == aqua_core::ColorProfile::GpuiWindowsEncoded)
+            .then_some(wgpu::TextureFormat::Bgra8Unorm);
         let facade = SurfaceFacade::with_adapter(
             &gpu.device,
             &gpu.adapter,
             surface,
             size.width,
             size.height,
-            None,
+            preferred_format,
             Some(mode),
         )
         .map_err(|e| format!("surface configuration failed: {e:?}"))?;
+        if preferred_format.is_some_and(|format| facade.format() != format) {
+            return Err("GPUI encoded color requires a BGRA8 unorm surface".into());
+        }
         if self
             .aqua
             .windows
@@ -1216,6 +1446,17 @@ impl<A: Application> Loop<A> {
             facade.format(),
             backend,
         );
+        renderer
+            .set_color_profile(profile)
+            .map_err(|e| format!("renderer color profile failed: {e:?}"))?;
+        if profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+            let opaque = !self
+                .aqua
+                .windows
+                .get(&id)
+                .is_some_and(|record| record.transparent);
+            renderer.set_gpui_window_opaque(opaque);
+        }
         renderer
             .set_size(size.width, size.height, scale)
             .map_err(|e| format!("renderer sizing failed: {e:?}"))?;
@@ -1260,9 +1501,9 @@ impl<A: Application> Loop<A> {
         if ready.is_empty() {
             return;
         }
-        let ids: Vec<AquaWindowId> = ready.into_iter().map(|(id, _)| id).collect();
+        let ids: Vec<AquaWindowId> = ready.iter().map(|(id, _)| *id).collect();
         self.aqua.scheduler.mark_produced(&ids, now);
-        for id in ids {
+        for (id, reasons) in ready {
             let occluded = self
                 .aqua
                 .windows
@@ -1285,130 +1526,169 @@ impl<A: Application> Loop<A> {
                 self.aqua.scheduler.mark_presented(id);
                 continue;
             };
-            {
-                let rec = self.aqua.windows.get_mut(&id).expect("window present");
-                let gpu = rec.gpu.as_mut().expect("gpu checked");
-                let format = gpu.renderer.format();
-                let scale = observed.scale_factor as f32;
-                let width = ((observed.inner_size.width as f32) * scale)
-                    .round()
-                    .max(1.0) as u32;
-                let height = ((observed.inner_size.height as f32) * scale)
-                    .round()
-                    .max(1.0) as u32;
-                let shared = self.aqua.shared_gpu.as_ref().expect("gpu exists");
-                let mut updates = Vec::new();
-                let mut register = |update| updates.push(update);
-                let mut frame = ExternalFrame {
-                    window: &observed,
-                    now,
-                    device: &shared.device,
-                    queue: &shared.queue,
-                    color_format: format,
-                    width,
-                    height,
-                    scale,
-                    register: &mut register,
-                };
-                self.app.externals(&mut frame);
-                for update in updates {
-                    match update {
-                        ExternalUpdate::Register(layer, view, width, height) => {
-                            gpu.renderer.register_external(layer, view, width, height)
-                        }
-                        ExternalUpdate::Remove(layer) => {
-                            gpu.renderer.unregister_external(layer);
+            if reasons != FrameReason::GPUI_PULSE {
+                {
+                    let rec = self.aqua.windows.get_mut(&id).expect("window present");
+                    let gpu = rec.gpu.as_mut().expect("gpu checked");
+                    let format = gpu.renderer.format();
+                    let scale = observed.scale_factor as f32;
+                    let width = ((observed.inner_size.width as f32) * scale)
+                        .round()
+                        .max(1.0) as u32;
+                    let height = ((observed.inner_size.height as f32) * scale)
+                        .round()
+                        .max(1.0) as u32;
+                    let shared = self.aqua.shared_gpu.as_ref().expect("gpu exists");
+                    let mut updates = Vec::new();
+                    let mut register = |update| updates.push(update);
+                    let mut frame = ExternalFrame {
+                        window: &observed,
+                        now,
+                        device: &shared.device,
+                        queue: &shared.queue,
+                        color_format: format,
+                        width,
+                        height,
+                        scale,
+                        gpui_meshes_supported: gpu.renderer.supports_gpui_meshes(),
+                        register: &mut register,
+                    };
+                    self.app.externals(&mut frame);
+                    for update in updates {
+                        match update {
+                            ExternalUpdate::Register(layer, view, width, height) => {
+                                gpu.renderer.register_external(layer, view, width, height)
+                            }
+                            ExternalUpdate::RegisterGpuiImage(layer, asset, frame, rgba) => {
+                                gpu.renderer.register_gpui_image(layer, asset, frame, rgba);
+                            }
+                            ExternalUpdate::ReleaseGpuiImage(asset) => {
+                                gpu.renderer.release_gpui_image(asset);
+                            }
+                            ExternalUpdate::Remove(layer) => {
+                                gpu.renderer.unregister_external(layer);
+                            }
                         }
                     }
                 }
-            }
-            if let Some(t) = self.app.build_scene(&observed, now) {
-                self.aqua.scheduler.request_animation_deadline(id, t);
-            }
-            {
-                let next = self.app.chrome_regions(&observed);
-                let scale = observed.scale_factor;
-                let scale = if scale.is_finite() && scale > 0.0 {
-                    scale
-                } else {
-                    1.0
-                };
-                if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                    if let Some(plan) = chrome_plan(&rec.last_regions, next, scale) {
-                        let cleared;
-                        let payload = match &plan {
-                            ChromePlan::Apply(regions) => regions,
-                            ChromePlan::Clear => {
-                                cleared = DragRegions::default();
-                                &cleared
-                            }
-                        };
-                        if let Some(guard) = rec.chrome.as_ref() {
-                            if let Err(e) =
-                                guard.set_drag_rects(&payload.draggable, &payload.no_drag, scale)
-                            {
-                                eprintln!("aqua: chrome regions rejected ({e:?})");
-                            }
-                        }
-                        rec.last_regions = match plan {
-                            ChromePlan::Apply(regions) => Some((regions, scale)),
-                            ChromePlan::Clear => None,
-                        };
-                    }
+                if let Some(t) = self.app.build_scene(&observed, now) {
+                    self.aqua.scheduler.request_animation_deadline(id, t);
                 }
-            }
-            #[cfg(windows)]
-            {
-                let needed = self
-                    .aqua
-                    .windows
-                    .get(&id)
-                    .and_then(|window| window.a11y.as_ref())
-                    .is_some_and(|adapter| adapter.needs_snapshot());
-                let snapshot = if needed { self.app.a11y_nodes() } else { None };
-                if let Some((root, focus, items)) = snapshot {
+                {
+                    let next = self.app.chrome_regions(&observed);
+                    let scale = observed.scale_factor;
+                    let scale = if scale.is_finite() && scale > 0.0 {
+                        scale
+                    } else {
+                        1.0
+                    };
                     if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                        if let Some(adapter) = rec.a11y.as_mut() {
-                            adapter.push_nodes(root, focus, &items);
+                        if let Some(plan) = chrome_plan(&rec.last_regions, next, scale) {
+                            let cleared;
+                            let payload = match &plan {
+                                ChromePlan::Apply(regions) => regions,
+                                ChromePlan::Clear => {
+                                    cleared = DragRegions::default();
+                                    &cleared
+                                }
+                            };
+                            if let Some(guard) = rec.chrome.as_ref() {
+                                if let Err(e) = guard.set_drag_regions(payload, scale) {
+                                    eprintln!("aqua: chrome regions rejected ({e:?})");
+                                }
+                            }
+                            rec.last_regions = match plan {
+                                ChromePlan::Apply(regions) => Some((regions, scale)),
+                                ChromePlan::Clear => None,
+                            };
                         }
                     }
                 }
-            }
-            {
-                let area = self.app.ime_cursor_area();
-                if let Some(rec) = self.aqua.windows.get(&id) {
-                    if let Some(window) = rec.window.as_ref() {
-                        use aqua_platform::services::{set_ime_cursor_area, ImeCursorArea};
-                        let cursor = self.app.cursor();
-                        window.set_cursor_visible(cursor != aqua_core::CursorIcon::Hidden);
-                        window.set_cursor(aqua_platform::host::to_winit_cursor(cursor));
-                        window.set_ime_allowed(rec.observed.focused && area.is_some());
-                        if let Some(r) = area {
-                            let logical = aqua_platform::geometry::LogicalPosition {
-                                x: r.x as f64,
-                                y: r.y as f64,
-                            };
-                            let size = aqua_platform::geometry::LogicalSize::new(
-                                r.w.max(1.0) as f64,
-                                r.h.max(1.0) as f64,
-                            );
-                            set_ime_cursor_area(
-                                window.as_ref(),
-                                ImeCursorArea {
-                                    origin: logical,
-                                    size,
-                                },
-                            );
+                #[cfg(windows)]
+                {
+                    let needed = self
+                        .aqua
+                        .windows
+                        .get(&id)
+                        .and_then(|window| window.a11y.as_ref())
+                        .is_some_and(|adapter| adapter.needs_snapshot());
+                    let snapshot = if needed { self.app.a11y_nodes() } else { None };
+                    if let Some((root, focus, items)) = snapshot {
+                        if let Some(rec) = self.aqua.windows.get_mut(&id) {
+                            if let Some(adapter) = rec.a11y.as_mut() {
+                                adapter.push_nodes(root, focus, &items);
+                            }
+                        }
+                    }
+                }
+                #[cfg(windows)]
+                {
+                    let client = self.app.native_ime_client().map(|inner| {
+                        std::rc::Rc::new(WakeNativeImeClient {
+                            inner,
+                            proxy: self.aqua.proxy.clone(),
+                            window: id,
+                        })
+                            as std::rc::Rc<dyn aqua_platform::ime_windows::NativeImeClient>
+                    });
+                    if let Some(rec) = self.aqua.windows.get_mut(&id) {
+                        let client = if rec.observed.focused { client } else { None };
+                        if let Some(window) = rec.window.as_ref() {
+                            if client.is_some() && rec.native_ime.is_none() {
+                                rec.native_ime =
+                                    aqua_platform::ime_windows::NativeImeWindow::install(window);
+                            }
+                            if let Some(native) = rec.native_ime.as_ref() {
+                                native.set_client(client, window.scale_factor());
+                            }
+                        }
+                    }
+                }
+                {
+                    let area = self.app.ime_cursor_area();
+                    if let Some(rec) = self.aqua.windows.get(&id) {
+                        if let Some(window) = rec.window.as_ref() {
+                            use aqua_platform::services::{set_ime_cursor_area, ImeCursorArea};
+                            let cursor = self.app.cursor();
+                            window.set_cursor_visible(cursor != aqua_core::CursorIcon::Hidden);
+                            window.set_cursor(aqua_platform::host::to_winit_cursor(cursor));
+                            #[cfg(windows)]
+                            let native_ime_active = rec.observed.focused
+                                && self.app.native_ime_client().is_some()
+                                && rec.native_ime.is_some();
+                            #[cfg(not(windows))]
+                            let native_ime_active = false;
+                            if !native_ime_active {
+                                window.set_ime_allowed(rec.observed.focused && area.is_some());
+                            }
+                            if let Some(r) = area.filter(|_| !native_ime_active) {
+                                let logical = aqua_platform::geometry::LogicalPosition {
+                                    x: r.x as f64,
+                                    y: r.y as f64,
+                                };
+                                let size = aqua_platform::geometry::LogicalSize::new(
+                                    r.w.max(1.0) as f64,
+                                    r.h.max(1.0) as f64,
+                                );
+                                set_ime_cursor_area(
+                                    window.as_ref(),
+                                    ImeCursorArea {
+                                        origin: logical,
+                                        size,
+                                    },
+                                );
+                            }
                         }
                     }
                 }
             }
             let rec = self.aqua.windows.get_mut(&id).expect("window present");
             let gpu = rec.gpu.as_mut().expect("gpu checked");
-            let snapshot_active = rec.snapshot_started.is_some_and(|started| {
-                gpu.renderer
-                    .set_snapshot_transition_elapsed(now.saturating_duration_since(started))
-            });
+            let snapshot_active = rec.snapshot_pending
+                || rec.snapshot_started.is_some_and(|started| {
+                    gpu.renderer
+                        .set_snapshot_transition_elapsed(now.saturating_duration_since(started))
+                });
             if rec.snapshot_started.is_some() && !snapshot_active {
                 rec.snapshot_started = None;
                 gpu.surface.request_present();
@@ -1432,6 +1712,10 @@ impl<A: Application> Loop<A> {
             };
             let outcome = match drawn {
                 Ok(true) => {
+                    if rec.snapshot_pending {
+                        rec.snapshot_pending = false;
+                        rec.snapshot_started = Some(now);
+                    }
                     gpu.ledger.submitted += 1;
                     gpu.ledger.presented += 1;
                     gpu.ledger.unreleased += 1;
@@ -1453,6 +1737,25 @@ impl<A: Application> Loop<A> {
                 self.aqua
                     .scheduler
                     .request_animation_deadline(id, now + snapshot_interval);
+            }
+            let interval = aqua_runtime::scheduler::gpui_pulse_interval(
+                snapshot_interval,
+                rec.observed.focused,
+                rec.last_invalidating_input,
+                now,
+            );
+            let pulse_delay = gpu.renderer.has_gpui_quad_pulse().then_some(interval);
+            let shimmer_delay = gpu.renderer.gpui_shimmer_delay().map(|delay| {
+                if delay.is_zero() {
+                    interval
+                } else {
+                    delay
+                }
+            });
+            if let Some(delay) = pulse_delay.into_iter().chain(shimmer_delay).min() {
+                self.aqua
+                    .scheduler
+                    .request_gpui_pulse_deadline(id, now + delay);
             }
             match outcome {
                 Outcome::Submitted { seq } => {
@@ -1505,6 +1808,11 @@ impl<A: Application> Loop<A> {
                 }
             }
         }
+        if let Some(record) = self.aqua.windows.get_mut(&id) {
+            if let Some(window) = record.window.as_ref() {
+                record.observed.maximized = window.is_maximized();
+            }
+        }
         let scale = self
             .aqua
             .windows
@@ -1549,10 +1857,8 @@ impl<A: Application> Loop<A> {
             self.aqua
                 .with_ctx(|ctx| self.app.on_window_event(ctx, id, &fw));
             if let WindowEvent::Focused(_, focused) = fw {
-                self.aqua.with_ctx(|ctx| {
-                    self.app
-                        .on_input(ctx, id, &CoreInputEvent::Focused(focused))
-                });
+                self.aqua
+                    .dispatch_app_input(&mut self.app, id, &CoreInputEvent::Focused(focused));
             }
             #[cfg(windows)]
             Self::drain_a11y_actions(&mut self.aqua, &mut self.app, id);
@@ -1564,6 +1870,21 @@ impl<A: Application> Loop<A> {
                 _ => false,
             };
             if close {
+                #[cfg(windows)]
+                if self
+                    .aqua
+                    .windows
+                    .get(&id)
+                    .is_some_and(|record| record.native_file_drag.is_some())
+                {
+                    self.aqua.with_ctx(|ctx| {
+                        self.app.on_external_file_drag(
+                            ctx,
+                            id,
+                            &aqua_platform::events::ExternalFileDrag::Exit,
+                        )
+                    });
+                }
                 self.aqua.remove_window(id);
                 if self.aqua.windows.is_empty() {
                     event_loop.exit();
@@ -1585,17 +1906,18 @@ impl<A: Application> Loop<A> {
         if let Some(drop) = translate_file_event(&event) {
             match drop {
                 FileDrop::Dropped(path) => {
-                    self.aqua.scheduler.request_frame(id, FrameReason::INPUT);
                     let at = self
                         .aqua
                         .windows
                         .get(&id)
                         .and_then(|record| record.window.as_ref())
                         .and_then(|window| aqua_platform::host::cursor_position(window));
-                    self.aqua.with_ctx(|ctx| {
-                        self.app
-                            .on_files_dropped_at(ctx, id, std::slice::from_ref(&path), at)
-                    });
+                    self.aqua.dispatch_file_drop_at(
+                        &mut self.app,
+                        id,
+                        std::slice::from_ref(&path),
+                        at,
+                    );
                 }
                 FileDrop::Hovered(_) | FileDrop::HoverCancelled => {}
             }
@@ -1606,10 +1928,11 @@ impl<A: Application> Loop<A> {
             if let Some(rec) = self.aqua.windows.get_mut(&id) {
                 rec.modifiers = modifiers;
             }
-            self.aqua.with_ctx(|ctx| {
-                self.app
-                    .on_input(ctx, id, &CoreInputEvent::ModifiersChanged(modifiers))
-            });
+            self.aqua.dispatch_app_input(
+                &mut self.app,
+                id,
+                &CoreInputEvent::ModifiersChanged(modifiers),
+            );
             return;
         }
         let mut extra: Option<CoreInputEvent> = None;
@@ -1766,12 +2089,11 @@ impl<A: Application> Loop<A> {
                         .on_click_settings(aqua_platform::host::click_settings(window));
                 }
             }
-            self.aqua.with_ctx(|ctx| self.app.on_input(ctx, id, &input));
+            self.aqua.dispatch_app_input(&mut self.app, id, &input);
         }
         if let Some(text_event) = extra {
             self.aqua.scheduler.request_frame(id, FrameReason::INPUT);
-            self.aqua
-                .with_ctx(|ctx| self.app.on_input(ctx, id, &text_event));
+            self.aqua.dispatch_app_input(&mut self.app, id, &text_event);
         }
     }
 
@@ -1816,6 +2138,14 @@ impl<A: Application> Loop<A> {
 }
 
 impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for Loop<A> {
+    fn new_events(&mut self, _: &winit::event_loop::ActiveEventLoop, _: winit::event::StartCause) {
+        for window in self.aqua.windows.values_mut() {
+            if let Some(gpu) = window.gpu.as_mut() {
+                gpu.renderer.wake_gpui_shimmers();
+            }
+        }
+    }
+
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         if self.aqua.windows.is_empty() && !self.aqua.config.headless {
             let options = self.aqua.config.window.clone();
@@ -1871,6 +2201,23 @@ impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for L
             (Some(a), None) => Some(a),
             (None, b) => b,
         };
+        let shimmer_wake = self
+            .aqua
+            .windows
+            .values()
+            .filter_map(|window| {
+                window
+                    .gpu
+                    .as_ref()
+                    .and_then(|gpu| gpu.renderer.gpui_shimmer_wake_delay())
+            })
+            .min()
+            .and_then(|delay| wall_now.checked_add(delay));
+        let wake = match (wake, shimmer_wake) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, b) => b,
+        };
         event_loop.set_control_flow(control_flow_for_next_wakeup(wake));
         if self.aqua.quit_requested {
             event_loop.exit();
@@ -1883,6 +2230,25 @@ impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for L
         event: AquaUserEvent,
     ) {
         match event {
+            AquaUserEvent::ExternalFileDrag(id) => {
+                #[cfg(windows)]
+                {
+                    let events: Vec<_> = self
+                        .aqua
+                        .windows
+                        .get(&id)
+                        .map(|window| window.native_file_events.borrow_mut().drain(..).collect())
+                        .unwrap_or_default();
+                    for event in events {
+                        self.aqua
+                            .dispatch_attributed_input(&mut self.app, id, true, |app, ctx| {
+                                app.on_external_file_drag(ctx, id, &event)
+                            });
+                    }
+                }
+                #[cfg(not(windows))]
+                let _ = id;
+            }
             AquaUserEvent::ReplayBadges => {
                 let requests: Vec<_> = self
                     .aqua
@@ -2026,6 +2392,7 @@ mod tests {
             focused: true,
             visible: true,
             occluded: false,
+            maximized: false,
         });
         (aqua, Probe::new(), id)
     }
@@ -2228,6 +2595,7 @@ mod tests {
         let rects = || DragRegions {
             draggable: vec![(0.0, 0.0, 200.0, 40.0)],
             no_drag: vec![(160.0, 0.0, 200.0, 40.0)],
+            ..Default::default()
         };
         assert!(chrome_plan(&None, None, 1.0).is_none());
         assert!(chrome_plan(&Some((rects(), 1.0)), Some(rects()), 1.0).is_none());
@@ -2246,6 +2614,7 @@ mod tests {
         let rects = || DragRegions {
             draggable: vec![(0.0, 0.0, 200.0, 40.0)],
             no_drag: vec![],
+            ..Default::default()
         };
         let cached = Some((rects(), 1.0));
         assert!(matches!(

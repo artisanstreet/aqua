@@ -247,3 +247,15 @@ fn clipboard_format_failure_is_reported_before_any_partial_paste() {
     );
     assert_eq!(text.get(), "hello world");
 }
+
+#[test]
+fn no_op_clipboard_shortcut_is_consumed_without_requesting_redraw() {
+    let (mut app, _) = field();
+    let mut clipboard = MemoryClipboard::new();
+    let copy = shortcut(Key::Char('c'), Modifiers::CONTROL);
+    let outcome =
+        aqua::ui_app::dispatch_input_with_clipboard_outcome(&mut app, &mut clipboard, &copy)
+            .unwrap();
+    assert!(outcome.consumed);
+    assert!(outcome.output.redraw.is_empty());
+}

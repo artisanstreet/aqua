@@ -25,6 +25,7 @@ pub struct ImageFrame {
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
+    pub gpui_source: Option<(u64, usize, Arc<[u8]>)>,
 }
 
 pub struct ManagedUiApp {
@@ -38,9 +39,22 @@ pub struct ManagedUiApp {
     visible: HashSet<ImageId>,
     scene_revision: Option<(u64, aqua_core::Size)>,
     started: HashMap<ImageId, Instant>,
+    preview_instances: HashMap<NodeId, PreviewInstance>,
+    preview_layers: HashMap<ImageId, NodeId>,
+    active: bool,
     now: Instant,
     prepared: Option<(Instant, Option<Instant>)>,
     released: Vec<u64>,
+    gpui_assets: HashSet<ImageId>,
+    gpui_released: Vec<u64>,
+}
+
+struct PreviewInstance {
+    source: ImageId,
+    layer: ImageId,
+    frame: usize,
+    last_frame_time: Option<Instant>,
+    observed: Option<Instant>,
 }
 
 impl ManagedUiApp {
@@ -65,11 +79,25 @@ impl ManagedUiApp {
             visible: HashSet::new(),
             scene_revision: None,
             started: HashMap::new(),
+            preview_instances: HashMap::new(),
+            preview_layers: HashMap::new(),
+            active: false,
             now: Instant::ZERO,
             prepared: None,
             released: Vec::new(),
+            gpui_assets: HashSet::new(),
+            gpui_released: Vec::new(),
         }
     }
+    pub fn dispatch_input(
+        &mut self,
+        ctx: &mut AppCtx,
+        id: AquaWindowId,
+        event: &InputEvent,
+    ) -> bool {
+        crate::ui_app::dispatch_input(&mut self.ui, ctx, id, event)
+    }
+
     pub fn ui(&self) -> &UiApp {
         &self.ui
     }
@@ -81,6 +109,94 @@ impl ManagedUiApp {
     }
     pub fn gpu_image_bytes(&self) -> u64 {
         self.gpu.resident_bytes()
+    }
+
+    fn source_id(&self, id: ImageId) -> ImageId {
+        self.preview_layers
+            .get(&id)
+            .and_then(|node| self.preview_instances.get(node))
+            .map_or(id, |instance| instance.source)
+    }
+
+    fn prepare_preview_instances(&mut self) {
+        let images: Vec<_> = self
+            .ui
+            .scene()
+            .ordered()
+            .filter_map(|(node, item)| {
+                let DisplayItem::Image { layer, .. } = item else {
+                    return None;
+                };
+                let (aqua_core::scene::LayerKind::Media, raw) =
+                    aqua_core::scene::decode_layer(*layer)?
+                else {
+                    return None;
+                };
+                let id = ImageId::from_raw(raw);
+                let source = self.source_id(id);
+                if !self.images.is_preview(source)
+                    || !matches!(self.images.ready(source), Some(Data::Animation(_)))
+                {
+                    return None;
+                }
+                Some((node, source, item.clone()))
+            })
+            .collect();
+        let live: HashSet<_> = images.iter().map(|(node, _, _)| *node).collect();
+        let stale: Vec<_> = self
+            .preview_instances
+            .keys()
+            .filter(|node| !live.contains(node))
+            .copied()
+            .collect();
+        for node in stale {
+            if let Some(instance) = self.preview_instances.remove(&node) {
+                self.preview_layers.remove(&instance.layer);
+                self.release_gpu(instance.layer);
+            }
+        }
+        for (node, source, mut item) in images {
+            let replaced = self
+                .preview_instances
+                .get(&node)
+                .is_some_and(|instance| instance.source != source);
+            if replaced {
+                if let Some(instance) = self.preview_instances.remove(&node) {
+                    self.preview_layers.remove(&instance.layer);
+                    self.release_gpu(instance.layer);
+                }
+            }
+            if !self.preview_instances.contains_key(&node) {
+                let Ok(index) = super::NEXT_IMAGE_INDEX.fetch_update(
+                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                    |index| index.checked_add(1).filter(|next| *next != u32::MAX),
+                ) else {
+                    continue;
+                };
+                let layer = ImageId::from_raw(aqua_core::RawId {
+                    index,
+                    generation: 0,
+                });
+                self.preview_layers.insert(layer, node);
+                self.preview_instances.insert(
+                    node,
+                    PreviewInstance {
+                        source,
+                        layer,
+                        frame: 0,
+                        last_frame_time: None,
+                        observed: None,
+                    },
+                );
+            }
+            if let (Some(instance), DisplayItem::Image { layer, .. }) =
+                (self.preview_instances.get(&node), &mut item)
+            {
+                *layer = aqua_core::scene::media_layer(instance.layer);
+                self.ui.scene_mut().update(node, item);
+            }
+        }
     }
 
     fn collect_visible(&mut self) {
@@ -124,7 +240,8 @@ impl ManagedUiApp {
                         transforms.pop();
                     }
                 }
-                DisplayItem::PushClip { bounds, .. } => {
+                DisplayItem::PushClip { bounds, .. }
+                | DisplayItem::PushRoundedClip { bounds, .. } => {
                     clips.push(clips.last().unwrap().intersect(world(*bounds)))
                 }
                 DisplayItem::PopClip => {
@@ -179,6 +296,32 @@ impl ManagedUiApp {
         match data {
             Data::Still(_) => (0, None),
             Data::Animation(animation) => {
+                if let Some(node) = self.preview_layers.get(&id) {
+                    let instance = self.preview_instances.get_mut(node).unwrap();
+                    instance.frame = instance.frame.min(animation.frames().len() - 1);
+                    if instance.observed != Some(now) {
+                        instance.observed = Some(now);
+                        if self.active && animation.frames().len() > 1 {
+                            if let Some(last) = instance.last_frame_time {
+                                let elapsed = now.saturating_duration_since(last);
+                                let delay = animation.frames()[instance.frame].delay;
+                                if elapsed >= delay {
+                                    instance.frame =
+                                        (instance.frame + 1) % animation.frames().len();
+                                    instance.last_frame_time = Some(now - (elapsed - delay));
+                                }
+                            } else {
+                                instance.last_frame_time = Some(now);
+                            }
+                        } else {
+                            instance.last_frame_time = None;
+                        }
+                    }
+                    let deadline = instance
+                        .last_frame_time
+                        .map(|last| last + animation.frames()[instance.frame].delay);
+                    return (instance.frame, deadline);
+                }
                 let start = *self.started.entry(id).or_insert(now);
                 let sample = animation.sample(now.saturating_duration_since(start));
                 (
@@ -196,6 +339,16 @@ impl ManagedUiApp {
         now: Instant,
     ) -> Result<Vec<ImageFrame>, ImageAssetError> {
         self.collect_visible();
+        let stale_assets: Vec<_> = self
+            .gpui_assets
+            .iter()
+            .copied()
+            .filter(|id| self.images.ready(*id).is_none())
+            .collect();
+        for id in stale_assets {
+            self.gpui_assets.remove(&id);
+            self.gpui_released.push(aqua_core::scene::media_layer(id));
+        }
         let budget = self.images.budget();
         if self.device.as_ref() != Some(device) {
             self.gpu = GpuImageCache::new(GpuMediaBudget {
@@ -208,7 +361,9 @@ impl ManagedUiApp {
         let released: Vec<_> = self
             .resident
             .keys()
-            .filter(|id| !self.visible.contains(id) || self.images.ready(**id).is_none())
+            .filter(|id| {
+                !self.visible.contains(id) || self.images.ready(self.source_id(**id)).is_none()
+            })
             .copied()
             .collect();
         for id in released {
@@ -218,7 +373,8 @@ impl ManagedUiApp {
         let mut failure = None;
         let visible: Vec<_> = self.visible.iter().copied().collect();
         for id in visible {
-            let Some(data) = self.images.ready(id) else {
+            let source = self.source_id(id);
+            let Some(data) = self.images.ready(source) else {
                 continue;
             };
             let (index, _) = self.selected_frame(id, &data, now);
@@ -242,23 +398,41 @@ impl ManagedUiApp {
                 || new_count > budget.gpu_images
             {
                 self.images
-                    .fail_upload(id, "visible image GPU budget exceeded".into());
+                    .fail_upload(source, "visible image GPU budget exceeded".into());
                 self.release_gpu(id);
                 failure = Some(ImageAssetError::OverBudget);
                 continue;
             }
-            match self.gpu.upload(device, queue, id, image) {
+            let precision = match self.ui.color_profile() {
+                aqua_core::ColorProfile::AquaLinear => aqua_render::media::ImagePrecision::Linear8,
+                aqua_core::ColorProfile::GpuiWindowsEncoded => {
+                    aqua_render::media::ImagePrecision::Encoded8
+                }
+            };
+            let gpui_source =
+                (precision == aqua_render::media::ImagePrecision::Encoded8).then(|| {
+                    (
+                        aqua_core::scene::media_layer(source),
+                        index,
+                        Arc::from(image.pixels()),
+                    )
+                });
+            match self.gpu.upload_precise(device, queue, id, image, precision) {
                 Ok(image) => {
                     frames.push(ImageFrame {
                         layer: aqua_core::scene::media_layer(id),
                         view: image.view.clone(),
                         width: image.width,
                         height: image.height,
+                        gpui_source,
                     });
+                    if precision == aqua_render::media::ImagePrecision::Encoded8 {
+                        self.gpui_assets.insert(source);
+                    }
                     self.resident.insert(id, index);
                 }
                 Err(error) => {
-                    self.images.fail_upload(id, error.to_string());
+                    self.images.fail_upload(source, error.to_string());
                     self.release_gpu(id);
                     failure = Some(ImageAssetError::Upload(error.to_string()));
                 }
@@ -274,6 +448,14 @@ impl ManagedUiApp {
 }
 
 impl Application for ManagedUiApp {
+    fn input_invalidation_epoch(&self, id: AquaWindowId) -> u64 {
+        self.ui.input_invalidation_epoch(id)
+    }
+
+    fn color_profile(&self) -> aqua_core::ColorProfile {
+        self.ui.color_profile()
+    }
+
     fn on_click_settings(&mut self, settings: aqua_core::ClickSettings) {
         self.ui.on_click_settings(settings);
     }
@@ -298,6 +480,13 @@ impl Application for ManagedUiApp {
         self.ui.cursor()
     }
     fn on_window_event(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &WindowEvent) {
+        if matches!(event, WindowEvent::Focused(_, false)) {
+            self.active = false;
+            for instance in self.preview_instances.values_mut() {
+                instance.last_frame_time = None;
+                instance.observed = None;
+            }
+        }
         self.ui.on_window_event(ctx, id, event);
     }
     fn on_input(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &InputEvent) {
@@ -319,6 +508,14 @@ impl Application for ManagedUiApp {
         at: Option<aqua_core::Point>,
     ) {
         self.ui.on_files_dropped_at(ctx, id, paths, at);
+    }
+    fn on_external_file_drag(
+        &mut self,
+        ctx: &mut AppCtx<'_>,
+        id: AquaWindowId,
+        event: &aqua_platform::events::ExternalFileDrag,
+    ) {
+        self.ui.on_external_file_drag(ctx, id, event);
     }
     fn on_a11y_action(&mut self, ctx: &mut AppCtx, id: AquaWindowId, request: &A11yActionRequest) {
         self.ui.on_a11y_action(ctx, id, request);
@@ -346,10 +543,16 @@ impl Application for ManagedUiApp {
         for layer in self.take_released_images() {
             frame.unregister_external(layer);
         }
+        for asset in self.gpui_released.drain(..) {
+            frame.release_gpui_image(asset);
+        }
         match images {
             Ok(images) => {
                 for image in images {
                     frame.register_external(image.layer, image.view, image.width, image.height);
+                    if let Some((asset, index, rgba)) = image.gpui_source {
+                        frame.register_gpui_image(image.layer, asset, index, rgba);
+                    }
                 }
             }
             Err(error) => eprintln!("aqua: {error}"),
@@ -362,12 +565,18 @@ impl Application for ManagedUiApp {
             }
         }
         self.now = now;
+        self.active = window.focused
+            && !matches!(
+                self.ui.host().motion().reduced_motion(),
+                aqua_ui::motion::ReducedMotion::Reduce
+            );
         self.images.flush_notifications();
         let mut next = self.ui.build_scene(window, now);
+        self.prepare_preview_instances();
         self.collect_visible();
         let visible: Vec<_> = self.visible.iter().copied().collect();
         for id in visible {
-            if let Some(data) = self.images.ready(id) {
+            if let Some(data) = self.images.ready(self.source_id(id)) {
                 if let (_, Some(deadline)) = self.selected_frame(id, &data, now) {
                     next = Some(next.map_or(deadline, |old| old.min(deadline)));
                 }

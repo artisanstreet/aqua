@@ -58,11 +58,17 @@ pub struct PopupMotion {
     pub kind: MotionKind,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopupExit {
+    pub kind: MotionKind,
+    pub slide: Option<(f32, f32)>,
+}
+
 struct Lingering {
     overlay: RawId,
     owner: NodeId,
     root: NodeId,
-    kind: MotionKind,
+    exit: PopupExit,
     started: bool,
 }
 
@@ -77,7 +83,7 @@ struct PopupAnimation {
 pub struct OverlayHost {
     tracks: AppMotion,
     popup_animations: Vec<PopupAnimation>,
-    exits: HashMap<RawId, MotionKind>,
+    exits: HashMap<RawId, PopupExit>,
     lingering: Vec<Lingering>,
     closed: Vec<ClosedOverlay>,
     pointer_anchors: HashMap<RawId, Point>,
@@ -791,8 +797,8 @@ impl OverlayHost {
         }
     }
 
-    pub fn set_popup_exit(&mut self, overlay: OverlayId, kind: MotionKind) {
-        self.exits.insert(overlay.raw(), kind);
+    pub fn set_popup_exit(&mut self, overlay: OverlayId, exit: PopupExit) {
+        self.exits.insert(overlay.raw(), exit);
     }
 
     #[must_use]
@@ -806,39 +812,71 @@ impl OverlayHost {
             if self.lingering[index].started {
                 continue;
             }
-            let (overlay, owner, root, kind) = {
+            let (overlay, owner, root, exit) = {
                 let entry = &self.lingering[index];
-                (entry.overlay, entry.owner, entry.root, entry.kind)
+                (entry.overlay, entry.owner, entry.root, entry.exit)
             };
-            let target = MotionValue::Scalar(0.0);
-            let existing = self.popup_animations.iter_mut().find(|animation| {
-                animation.overlay == overlay && animation.motion.property == Property::Opacity
-            });
-            match existing {
-                Some(animation) => {
-                    animation.motion.to = target;
-                    animation.motion.kind = kind;
-                    if let Some(track) = animation.track {
-                        let _ = self.tracks.set_target_with(track, target, kind, now);
-                    }
-                }
-                None => self.popup_animations.push(PopupAnimation {
+            self.exit_toward(
+                overlay,
+                owner,
+                root,
+                PopupMotion {
+                    property: Property::Opacity,
+                    from: MotionValue::Scalar(1.0),
+                    to: MotionValue::Scalar(0.0),
+                    kind: exit.kind,
+                },
+                now,
+            );
+            if let Some((dx, dy)) = exit.slide {
+                self.exit_toward(
                     overlay,
                     owner,
                     root,
-                    motion: PopupMotion {
-                        property: Property::Opacity,
-                        from: MotionValue::Scalar(1.0),
-                        to: target,
-                        kind,
+                    PopupMotion {
+                        property: Property::Translate,
+                        from: MotionValue::Pair(0.0, 0.0),
+                        to: MotionValue::Pair(dx, dy),
+                        kind: exit.kind,
                     },
-                    track: None,
-                }),
+                    now,
+                );
             }
             self.lingering[index].started = true;
             begun = true;
         }
         begun
+    }
+
+    fn exit_toward(
+        &mut self,
+        overlay: RawId,
+        owner: NodeId,
+        root: NodeId,
+        motion: PopupMotion,
+        now: Seconds,
+    ) {
+        let existing = self.popup_animations.iter_mut().find(|animation| {
+            animation.overlay == overlay && animation.motion.property == motion.property
+        });
+        match existing {
+            Some(animation) => {
+                animation.motion.to = motion.to;
+                animation.motion.kind = motion.kind;
+                if let Some(track) = animation.track {
+                    let _ = self
+                        .tracks
+                        .set_target_with(track, motion.to, motion.kind, now);
+                }
+            }
+            None => self.popup_animations.push(PopupAnimation {
+                overlay,
+                owner,
+                root,
+                motion,
+                track: None,
+            }),
+        }
     }
 
     pub fn finish_popup_exits(&mut self, tree: &mut UiTree) -> bool {
@@ -847,14 +885,17 @@ impl OverlayHost {
             .iter()
             .filter(|entry| entry.started)
             .filter(|entry| {
-                self.popup_animations
+                let mut animations = self
+                    .popup_animations
                     .iter()
-                    .find(|animation| {
-                        animation.overlay == entry.overlay
-                            && animation.motion.property == Property::Opacity
+                    .filter(|animation| animation.overlay == entry.overlay)
+                    .peekable();
+                animations.peek().is_some()
+                    && animations.all(|animation| {
+                        animation
+                            .track
+                            .is_some_and(|track| self.tracks.is_settled(track))
                     })
-                    .and_then(|animation| animation.track)
-                    .is_some_and(|track| self.tracks.is_settled(track))
             })
             .map(|entry| entry.overlay)
             .collect();
@@ -901,13 +942,14 @@ impl OverlayHost {
         self.closed.extend_from_slice(closed);
         for entry in closed {
             let raw = entry.id.raw();
-            if let (Some(kind), Some(root)) = (self.exits.remove(&raw), self.mounts.get(&raw)) {
+            if let (Some(exit), Some(root)) = (self.exits.remove(&raw), self.mounts.get(&raw)) {
                 tree.set_hit_test_excluded(*root, true);
+                tree.set_access_hidden(*root, true);
                 self.lingering.push(Lingering {
                     overlay: raw,
                     owner: entry.owner,
                     root: *root,
-                    kind,
+                    exit,
                     started: false,
                 });
                 self.mounts.remove(&raw);

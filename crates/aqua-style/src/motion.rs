@@ -190,6 +190,7 @@ impl Animate {
 pub struct Presence {
     enter: Option<MotionRef>,
     exit: Option<MotionRef>,
+    slide: Option<(f32, f32)>,
 }
 
 impl Presence {
@@ -208,6 +209,17 @@ impl Presence {
     pub fn exit(mut self, motion: impl Into<MotionRef>) -> Self {
         self.exit = Some(motion.into());
         self
+    }
+
+    #[must_use]
+    pub fn slide(mut self, dx: f32, dy: f32) -> Self {
+        self.slide = Some((dx, dy));
+        self
+    }
+
+    #[must_use]
+    pub fn slide_offset(&self) -> Option<(f32, f32)> {
+        self.slide
     }
 
     #[must_use]

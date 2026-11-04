@@ -996,6 +996,7 @@ pub struct UiTree {
     portal_order: Vec<NodeId>,
     follow_caret_queue: Vec<NodeId>,
     exiting: std::collections::HashSet<NodeId>,
+    access_hidden: std::collections::HashSet<NodeId>,
     motion_groups: HashMap<NodeId, MotionGroups>,
     hoist_guards: Vec<(taffy::NodeId, taffy::NodeId)>,
     motion_declared: bool,
@@ -1114,6 +1115,7 @@ impl UiTree {
             follow_caret_queue: Vec::new(),
             portal_order: Vec::new(),
             exiting: std::collections::HashSet::new(),
+            access_hidden: std::collections::HashSet::new(),
             motion_groups: HashMap::new(),
             hoist_guards: Vec::new(),
             motion_declared: false,
@@ -1344,9 +1346,40 @@ impl UiTree {
         true
     }
 
+    pub fn set_access_hidden(&mut self, node: NodeId, hidden: bool) {
+        let changed = match hidden {
+            true => self.access_hidden.insert(node),
+            false => self.access_hidden.remove(&node),
+        };
+        if changed {
+            self.content_version += 1;
+        }
+    }
+
+    #[must_use]
+    pub fn is_access_hidden(&self, node: NodeId) -> bool {
+        self.exiting.contains(&node) || self.access_hidden.contains(&node)
+    }
+
+    fn accessible_nodes(&self) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        let mut stack = self.root.map_or(Vec::new(), |r| vec![r]);
+        while let Some(id) = stack.pop() {
+            if self.is_access_hidden(id) {
+                continue;
+            }
+            out.push(id);
+            if let Some(rec) = self.nodes.get(id.raw()) {
+                stack.extend(rec.children.iter().rev().copied());
+            }
+        }
+        self.visited.set(self.visited.get() + out.len());
+        out
+    }
+
     pub fn emit_semantics(&self) -> Vec<SemanticNode> {
         let mut out = Vec::new();
-        for id in self.traverse() {
+        for id in self.accessible_nodes() {
             let Some(rec) = self.nodes.get(id.raw()) else {
                 continue;
             };
@@ -1427,7 +1460,12 @@ impl UiTree {
                 numeric_range,
                 expanded,
                 level: self.interaction_semantics(id).level,
-                children: rec.children.clone(),
+                children: rec
+                    .children
+                    .iter()
+                    .copied()
+                    .filter(|child| !self.is_access_hidden(*child))
+                    .collect(),
                 bounds,
                 collection: rec.semantics.collection,
             });
@@ -2532,6 +2570,7 @@ impl UiTree {
             }
             self.portal_roots.remove(&n);
             self.exiting.remove(&n);
+            self.access_hidden.remove(&n);
             self.portal_order.retain(|node| *node != n);
             self.remove_interaction(n);
             self.control_router.remove_node(n);

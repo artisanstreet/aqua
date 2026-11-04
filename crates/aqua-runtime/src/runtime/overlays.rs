@@ -188,10 +188,27 @@ impl Runtime {
                     kind,
                 },
             );
+            if let Some((dx, dy)) = options.presence.slide_offset() {
+                self.animate_popup(
+                    overlay,
+                    aqua_ui::overlay_host::PopupMotion {
+                        property: aqua_motion::Property::Translate,
+                        from: aqua_motion::MotionValue::Pair(dx, dy),
+                        to: aqua_motion::MotionValue::Pair(0.0, 0.0),
+                        kind,
+                    },
+                );
+            }
         }
         if let Some(exit) = options.presence.exit_motion() {
             let kind = self.motion_rt.theme().resolve(exit).kind();
-            self.host.set_popup_exit(overlay, kind);
+            self.host.set_popup_exit(
+                overlay,
+                aqua_ui::overlay_host::PopupExit {
+                    kind,
+                    slide: options.presence.slide_offset(),
+                },
+            );
         }
         let pending = Rc::new(RefCell::new(None));
         if let Some(reactive) = options.reactive {

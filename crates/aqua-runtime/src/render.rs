@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use aqua_core::{DisplayItem, NodeId, Size};
 use aqua_motion::{
-    Binding, MotionCommand, MotionEvent, MotionValue, Property, ReducedMotion, TrackId, TrackSet,
+    Binding, MotionCommand, MotionEvent, MotionValue, Property, ReducedMotion, Sampled, TrackId,
+    TrackSet,
 };
 use aqua_protocol::{
     Feedback, FrameId, RenderCommand, RenderEvent, RenderInput, RenderOutput, RenderWake, SceneDiff,
@@ -35,6 +36,8 @@ pub struct RenderSide {
     bindings: HashMap<TrackId, Vec<(Binding, f32)>>,
     tracks: TrackSet,
     dirty: Vec<NodeId>,
+    seen: HashSet<NodeId>,
+    sampled: Sampled,
     viewport: Option<(Size, f32)>,
     next_frame: FrameId,
     submitted: Option<Submitted>,
@@ -57,6 +60,8 @@ impl RenderSide {
             bindings: HashMap::new(),
             tracks: TrackSet::new(ReducedMotion::Full),
             dirty: Vec::new(),
+            seen: HashSet::new(),
+            sampled: Sampled::default(),
             viewport: None,
             next_frame: 1,
             submitted: None,
@@ -105,21 +110,28 @@ impl RenderSide {
                 RenderCommand::Viewport { size, scale } => self.viewport = Some((size, scale)),
             }
         }
-        let sampled = self.tracks.sample(input.present_at.as_secs_f64());
-        for presented in sampled.values {
+        let mut sampled = std::mem::take(&mut self.sampled);
+        self.tracks
+            .sample_into(input.present_at.as_secs_f64(), &mut sampled);
+        for presented in &sampled.values {
             self.present(presented.track, presented.value);
         }
-        events.extend(sampled.events.into_iter().map(RenderEvent::Motion));
+        events.extend(sampled.events.iter().copied().map(RenderEvent::Motion));
+        self.sampled = sampled;
         self.refresh();
         let frame = self.next_submission();
-        let wake = match self.tracks.is_idle() {
-            true => RenderWake::Idle,
-            false => RenderWake::NextFrame,
-        };
         RenderOutput {
             events,
             frame,
-            wake,
+            wake: self.wake(),
+        }
+    }
+
+    #[must_use]
+    pub fn wake(&self) -> RenderWake {
+        match self.tracks.is_idle() {
+            true => RenderWake::Idle,
+            false => RenderWake::NextFrame,
         }
     }
 
@@ -233,12 +245,13 @@ impl RenderSide {
         let Some(list) = self.bindings.get(&track) else {
             return;
         };
-        let targets: Vec<(Binding, MotionValue)> = list
-            .iter()
-            .map(|(binding, shift)| (*binding, shifted(binding.property, value, *shift)))
-            .collect();
-        for (binding, value) in targets {
-            self.set_override(binding, value);
+        for (binding, shift) in list {
+            record_override(
+                &mut self.overrides,
+                &mut self.dirty,
+                *binding,
+                shifted(binding.property, value, *shift),
+            );
         }
     }
 
@@ -268,22 +281,14 @@ impl RenderSide {
     }
 
     fn set_override(&mut self, binding: Binding, value: MotionValue) {
-        let overrides = self.overrides.entry(binding.node).or_default();
-        match overrides
-            .iter_mut()
-            .find(|(property, _)| *property == binding.property)
-        {
-            Some(entry) => entry.1 = value,
-            None => overrides.push((binding.property, value)),
-        }
-        self.dirty.push(binding.node);
+        record_override(&mut self.overrides, &mut self.dirty, binding, value);
     }
 
     fn refresh(&mut self) {
-        let mut seen = HashSet::new();
-        let dirty = std::mem::take(&mut self.dirty);
-        for node in dirty {
-            if !seen.insert(node) {
+        self.seen.clear();
+        let mut dirty = std::mem::take(&mut self.dirty);
+        for node in dirty.drain(..) {
+            if !self.seen.insert(node) {
                 continue;
             }
             let Some(mut item) = self.base.get(&node).cloned() else {
@@ -296,5 +301,23 @@ impl RenderSide {
             }
             self.write(node, item);
         }
+        self.dirty = dirty;
     }
+}
+
+fn record_override(
+    overrides: &mut HashMap<NodeId, Overrides>,
+    dirty: &mut Vec<NodeId>,
+    binding: Binding,
+    value: MotionValue,
+) {
+    let entry = overrides.entry(binding.node).or_default();
+    match entry
+        .iter_mut()
+        .find(|(property, _)| *property == binding.property)
+    {
+        Some(existing) => existing.1 = value,
+        None => entry.push((binding.property, value)),
+    }
+    dirty.push(binding.node);
 }

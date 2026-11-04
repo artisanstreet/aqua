@@ -35,6 +35,7 @@ pub struct TrackSet {
     reduced: ReducedMotion,
     slots: BTreeMap<(u32, u32), Slot>,
     active: BTreeSet<(u32, u32)>,
+    scratch: Vec<(u32, u32)>,
 }
 
 impl Default for TrackSet {
@@ -50,6 +51,7 @@ impl TrackSet {
             reduced,
             slots: BTreeMap::new(),
             active: BTreeSet::new(),
+            scratch: Vec::new(),
         }
     }
 
@@ -175,9 +177,18 @@ impl TrackSet {
     }
 
     pub fn sample(&mut self, at: Seconds) -> Sampled {
-        let keys: Vec<(u32, u32)> = self.active.iter().copied().collect();
         let mut sampled = Sampled::default();
-        for key in keys {
+        self.sample_into(at, &mut sampled);
+        sampled
+    }
+
+    pub fn sample_into(&mut self, at: Seconds, sampled: &mut Sampled) {
+        sampled.values.clear();
+        sampled.events.clear();
+        let mut keys = std::mem::take(&mut self.scratch);
+        keys.clear();
+        keys.extend(self.active.iter().copied());
+        for &key in &keys {
             let Some(slot) = self.slots.get_mut(&key) else {
                 self.active.remove(&key);
                 continue;
@@ -200,6 +211,6 @@ impl TrackSet {
                 self.active.remove(&key);
             }
         }
-        sampled
+        self.scratch = keys;
     }
 }

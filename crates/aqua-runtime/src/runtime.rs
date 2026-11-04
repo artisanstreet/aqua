@@ -2492,11 +2492,7 @@ impl Runtime {
                     w: bounds.w * self.scale,
                     h: bounds.h * self.scale,
                 });
-                let children = self
-                    .tree
-                    .get(semantic.node)
-                    .map(|r| r.children.clone())
-                    .unwrap_or_default();
+                let children = semantic.children.clone();
                 A11yNode {
                     text: self.text_accessibility(semantic.node),
                     semantic,

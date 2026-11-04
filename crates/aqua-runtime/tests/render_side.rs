@@ -194,6 +194,35 @@ fn bound_fill_animates_on_the_render_side_while_the_app_scene_is_untouched() {
 }
 
 #[test]
+fn wake_follows_the_tracks_through_start_cancel_and_settle() {
+    let mut pair = Pair::new();
+    let id = pair.app_scene.insert(quad(0.0, red()));
+    let track = pair.app.spawn(
+        None,
+        Some(Binding {
+            node: id,
+            property: Property::Fill,
+        }),
+        MotionValue::Color(red()),
+        MotionKind::Tween {
+            duration_secs: 1.0,
+            easing: Easing::Linear,
+        },
+        0.0,
+    );
+    pair.sync(0.0);
+    assert_eq!(pair.render.wake(), RenderWake::Idle);
+    pair.app
+        .set_target(track, MotionValue::Color(blue()), 0.0)
+        .unwrap();
+    assert_eq!(pair.sync(0.1).wake, RenderWake::NextFrame);
+    assert_eq!(pair.render.wake(), RenderWake::NextFrame);
+    pair.app.cancel(track);
+    assert_eq!(pair.sync(0.2).wake, RenderWake::Idle);
+    assert_eq!(pair.render.wake(), RenderWake::Idle);
+}
+
+#[test]
 fn app_updates_to_an_animating_node_keep_the_presented_override() {
     let mut pair = Pair::new();
     let id = pair.app_scene.insert(quad(0.0, red()));

@@ -269,6 +269,33 @@ pub fn place_overlay(
     }
 }
 
+pub fn place_overlay_uncontained(anchor: Rect, size: Size, placement: &Placement) -> PlacedOverlay {
+    let (mut x, mut y) = match placement.preferred {
+        Side::Below => (anchor.x, anchor.bottom() + placement.gap),
+        Side::Above => (anchor.x, anchor.y - size.h - placement.gap),
+        Side::After => (anchor.right() + placement.gap, anchor.y),
+        Side::Before => (anchor.x - size.w - placement.gap, anchor.y),
+    };
+    if placement.preferred.is_vertical() {
+        x = match placement.align {
+            Align::Start => anchor.x,
+            Align::Center => anchor.x + (anchor.w - size.w) * 0.5,
+            Align::End => anchor.right() - size.w,
+        };
+    } else {
+        y = match placement.align {
+            Align::Start => anchor.y,
+            Align::Center => anchor.y + (anchor.h - size.h) * 0.5,
+            Align::End => anchor.bottom() - size.h,
+        };
+    }
+    PlacedOverlay {
+        bounds: Rect::from_origin_size(Point::new(x, y), size),
+        side: placement.preferred,
+        flipped: false,
+    }
+}
+
 /// Clamp a cross-axis origin so `[pos, pos + len]` stays in
 /// `[lo + margin, hi - margin]` when it fits; otherwise pin to the margin edge.
 fn clamp_cross(pos: f32, len: f32, lo: f32, hi: f32, margin: f32) -> f32 {
@@ -438,6 +465,7 @@ struct OverlayRecord {
     bounds: Rect,
     size: Size,
     placement: Placement,
+    uncontained: bool,
     side_used: Side,
     autofocus: Option<NodeId>,
     saved_focus: Option<NodeId>,
@@ -485,6 +513,9 @@ impl OverlayService {
         let mut moved = Vec::new();
         for raw in self.order.clone() {
             if let Some(record) = self.arena.get_mut(raw) {
+                if record.uncontained {
+                    continue;
+                }
                 let clamped =
                     clamp_origin(record.bounds, viewport, record.placement.margin.max(0.0));
                 if clamped != record.bounds {
@@ -524,6 +555,7 @@ impl OverlayService {
             bounds: placed.bounds,
             size: request.size,
             placement: request.placement,
+            uncontained: false,
             side_used: placed.side,
             autofocus: request.autofocus,
             saved_focus,
@@ -619,10 +651,46 @@ impl OverlayService {
     /// `None` for unknown overlays.
     pub fn reposition(&mut self, id: OverlayId, anchor: Rect) -> Option<Rect> {
         let record = self.arena.get_mut(id.0)?;
-        let placed = place_overlay(self.viewport, anchor, record.size, &record.placement);
+        let placed = if record.uncontained {
+            place_overlay_uncontained(anchor, record.size, &record.placement)
+        } else {
+            place_overlay(self.viewport, anchor, record.size, &record.placement)
+        };
         record.bounds = placed.bounds;
         record.side_used = placed.side;
         Some(placed.bounds)
+    }
+
+    pub fn set_uncontained(&mut self, id: OverlayId, uncontained: bool) -> bool {
+        let Some(record) = self.arena.get_mut(id.0) else {
+            return false;
+        };
+        record.uncontained = uncontained;
+        true
+    }
+
+    pub fn set_placement(&mut self, id: OverlayId, placement: Placement) -> bool {
+        let Some(record) = self.arena.get_mut(id.0) else {
+            return false;
+        };
+        record.placement = placement;
+        true
+    }
+
+    pub fn set_size(&mut self, id: OverlayId, size: Size) -> bool {
+        let Some(record) = self.arena.get_mut(id.0) else {
+            return false;
+        };
+        record.size = size;
+        true
+    }
+
+    pub fn set_bounds(&mut self, id: OverlayId, bounds: Rect) -> bool {
+        let Some(record) = self.arena.get_mut(id.0) else {
+            return false;
+        };
+        record.bounds = bounds;
+        true
     }
 
     /// Whether this handle names an open overlay.

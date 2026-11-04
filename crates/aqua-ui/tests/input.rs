@@ -357,6 +357,111 @@ fn typed_drag_payload_is_accepted_only_by_compatible_drop_targets() {
 }
 
 #[test]
+fn external_files_keep_grouped_paths_and_cancel_without_focus_fallback() {
+    use aqua_ui::input::{route_external_file_drag, ExternalFileDragEvent, RoutedInput};
+    use std::path::PathBuf;
+
+    let (mut tree, _, child) = fixture();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    for kind in [
+        InputKind::DragEnter,
+        InputKind::DragOver,
+        InputKind::DragLeave,
+        InputKind::FilesDropped,
+    ] {
+        let events = events.clone();
+        tree.listen_input(
+            child,
+            kind,
+            EventPhase::Bubble,
+            Rc::new(move |event| {
+                match &event.input {
+                    RoutedInput::DragEnter { .. } => {
+                        events.borrow_mut().push(("enter", Vec::new()))
+                    }
+                    RoutedInput::DragOver { .. } => events.borrow_mut().push(("over", Vec::new())),
+                    RoutedInput::DragLeave { .. } => {
+                        events.borrow_mut().push(("leave", Vec::new()))
+                    }
+                    RoutedInput::FilesDropped { paths, .. } => {
+                        events.borrow_mut().push(("drop", paths.to_vec()))
+                    }
+                    _ => unreachable!(),
+                }
+                InputResponse::default()
+            }),
+        );
+    }
+    let paths = vec![PathBuf::from("one.png"), PathBuf::from("two.txt")];
+    let route = |tree: &mut UiTree, event| route_external_file_drag(tree, event, |_, _| true);
+    route(
+        &mut tree,
+        ExternalFileDragEvent::Enter {
+            paths: paths.clone(),
+            position: Point::new(20.0, 20.0),
+        },
+    );
+    route(
+        &mut tree,
+        ExternalFileDragEvent::Move {
+            position: Point::new(350.0, 350.0),
+        },
+    );
+    route(
+        &mut tree,
+        ExternalFileDragEvent::Submit {
+            position: Point::new(350.0, 350.0),
+        },
+    );
+    assert_eq!(
+        &*events.borrow(),
+        &[("enter", vec![]), ("over", vec![]), ("leave", vec![])]
+    );
+    events.borrow_mut().clear();
+    route(
+        &mut tree,
+        ExternalFileDragEvent::Enter {
+            paths: paths.clone(),
+            position: Point::new(20.0, 20.0),
+        },
+    );
+    route(
+        &mut tree,
+        ExternalFileDragEvent::Submit {
+            position: Point::new(20.0, 20.0),
+        },
+    );
+    assert_eq!(
+        &*events.borrow(),
+        &[
+            ("enter", vec![]),
+            ("over", vec![]),
+            ("drop", paths),
+            ("leave", vec![])
+        ]
+    );
+    events.borrow_mut().clear();
+    route(
+        &mut tree,
+        ExternalFileDragEvent::Enter {
+            paths: vec![PathBuf::from("x")],
+            position: Point::new(20.0, 20.0),
+        },
+    );
+    route(&mut tree, ExternalFileDragEvent::Exit);
+    route(
+        &mut tree,
+        ExternalFileDragEvent::Submit {
+            position: Point::new(20.0, 20.0),
+        },
+    );
+    assert_eq!(
+        &*events.borrow(),
+        &[("enter", vec![]), ("over", vec![]), ("leave", vec![])]
+    );
+}
+
+#[test]
 fn declarative_listener_refresh_keeps_direct_registrations_and_cancels_capture() {
     let (mut tree, _, child) = fixture();
     let cancelled = Rc::new(Cell::new(0));

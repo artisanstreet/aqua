@@ -128,3 +128,77 @@ fn shadow_styles_replace_and_clear_legacy_and_stack_forms_in_order() {
     assert!(paint.shadows.is_empty());
     assert!(paint.shadow.is_none());
 }
+
+#[test]
+fn source_background_preserves_float_gradient_and_overrides_legacy_fill() {
+    use aqua_core::{GpuiBackground, GpuiGradientColorSpace, GpuiGradientStop, GpuiHsla, Oklch};
+    use aqua_ui::style::Style;
+    let source = GpuiBackground::LinearGradient {
+        angle: 137.25,
+        color_space: GpuiGradientColorSpace::Oklab,
+        stops: [
+            GpuiGradientStop {
+                percentage: 0.125,
+                color: GpuiHsla {
+                    h: 0.123456,
+                    s: 0.654321,
+                    l: 0.234567,
+                    a: 0.876543,
+                },
+            },
+            GpuiGradientStop {
+                percentage: 0.875,
+                color: GpuiHsla {
+                    h: 0.876543,
+                    s: 0.345678,
+                    l: 0.765432,
+                    a: 0.345678,
+                },
+            },
+        ],
+    };
+    let mut style = Style::new().background(Oklch::WHITE);
+    style.merge(&Style::new().gpui_background(source));
+    let paint = style.resolve_paint();
+    assert_eq!(paint.gpui_background, Some(source));
+    assert_eq!(paint.fill, None);
+    style.merge(&Style::new().background(Oklch::BLACK));
+    let paint = style.resolve_paint();
+    assert_eq!(paint.gpui_background, None);
+    assert_eq!(paint.fill, Some(Oklch::BLACK));
+}
+
+#[test]
+fn source_shadow_stack_preserves_float_colors_and_obeys_style_replacement() {
+    use aqua_core::GpuiHsla;
+    use aqua_ui::style::GpuiShadowLayer;
+    let color = GpuiHsla {
+        h: 0.137,
+        s: 0.473,
+        l: 0.291,
+        a: 0.317,
+    };
+    let outer = GpuiShadowLayer {
+        dx: 1.0,
+        dy: 2.0,
+        blur: 6.0,
+        spread: -1.0,
+        inset: false,
+        color,
+    };
+    let inner = GpuiShadowLayer {
+        inset: true,
+        ..outer
+    };
+    let mut style = Style::new().gpui_shadows(vec![outer, inner]);
+    let paint = style.resolve_paint();
+    assert_eq!(paint.gpui_shadows, vec![outer, inner]);
+    style.merge(&Style::new().shadow_of(0.0, 1.0, 2.0, Oklch::BLACK));
+    let paint = style.resolve_paint();
+    assert!(paint.gpui_shadows.is_empty());
+    assert!(paint.shadow.is_some());
+    style.merge(&Style::new().gpui_shadows(vec![inner, outer]));
+    let paint = style.resolve_paint();
+    assert_eq!(paint.gpui_shadows, vec![inner, outer]);
+    assert!(paint.shadow.is_none());
+}

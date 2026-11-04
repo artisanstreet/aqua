@@ -34,6 +34,8 @@
 //! via [`UiTree::push_command`]), and event registration
 //! ([`UiTree::set_action_callback`], fired by event dispatch in `events.rs`).
 
+pub mod interaction;
+
 use aqua_text::document::SelectionBinding;
 use aqua_text::{StyledSpan, TextStyle};
 use std::cell::RefCell;
@@ -51,6 +53,8 @@ use taffy::{AvailableSpace, LayoutInput, TaffyTree};
 
 use crate::layout::TextMeasurer;
 use crate::style::{LayoutStyle, Paint};
+
+pub type PrepaintCallback = Box<dyn Fn(&UiTree, NodeId)>;
 
 /// Keyed-identity marker for reconciliation. Keys hash to `u64` with a fixed
 /// seed so equal keys match within and across runs.
@@ -75,11 +79,97 @@ pub enum TextBacking {
 }
 
 /// Text node content and editing state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextAppearance {
+    pub selection: Oklch,
+    pub caret: Oklch,
+    pub caret_width: f32,
+    pub ime_underline: Oklch,
+    pub ime_underline_width: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuiTextAppearance {
+    pub selection: aqua_core::GpuiHsla,
+    pub caret: aqua_core::GpuiHsla,
+    pub caret_width: f32,
+    pub ime_underline: aqua_core::GpuiHsla,
+    pub ime_underline_width: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextInlineGlyph {
+    pub byte: usize,
+    pub size: f32,
+    pub intrinsic: Option<(f32, f32)>,
+    pub source: aqua_core::vector::VectorSource,
+}
+
+pub(crate) fn valid_gpui_text_opacity(
+    text: &str,
+    ranges: &[aqua_core::scene::GpuiTextOpacityRange],
+) -> bool {
+    let mut previous_end = 0;
+    ranges.iter().all(|range| {
+        let valid = range.bytes.start >= previous_end
+            && range.bytes.start < range.bytes.end
+            && range.bytes.end <= text.len()
+            && text.is_char_boundary(range.bytes.start)
+            && text.is_char_boundary(range.bytes.end)
+            && range.opacity.is_finite()
+            && (0.0..=1.0).contains(&range.opacity);
+        previous_end = range.bytes.end;
+        valid
+    })
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextInlinePaint {
+    pub bytes: std::ops::Range<usize>,
+    pub content: TextInlinePaintContent,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TextInlinePaintContent {
+    Svg {
+        source: std::sync::Arc<str>,
+        tint: Option<aqua_core::GpuiHsla>,
+    },
+    FixedSvg {
+        source: std::sync::Arc<str>,
+        tint: Option<aqua_core::GpuiHsla>,
+        size: f32,
+        intrinsic: Option<(f32, f32)>,
+    },
+    Swatch {
+        fill: aqua_core::GpuiHsla,
+        edge: aqua_core::GpuiHsla,
+        centered: bool,
+    },
+}
+
+pub trait NativeTextModel {
+    fn paint_revision(&self) -> Option<u64>;
+    fn matches_text(&self, text: &str) -> bool;
+    fn selected_bytes(&self) -> Option<std::ops::Range<usize>>;
+    fn replace_utf16(&self, text: &str, selected: Option<std::ops::Range<usize>>);
+}
+
 pub struct TextContent {
     pub text_style: TextStyle,
     pub spans: Vec<StyledSpan>,
+    pub inline_glyphs: Vec<TextInlineGlyph>,
+    pub inline_paints: Vec<TextInlinePaint>,
+    pub gpui_text_opacity: std::sync::Arc<[aqua_core::scene::GpuiTextOpacityRange]>,
     pub selection_source: Option<SelectionBinding>,
     pub interaction_ranges: Vec<aqua_text::TextInteractionRange>,
+    pub selection_auto_scroll: bool,
+    pub text_appearance: Option<TextAppearance>,
+    pub gpui_text_appearance: Option<GpuiTextAppearance>,
+    pub external_text_input: bool,
+    pub native_text_model: Option<Rc<dyn NativeTextModel>>,
+    pub viewport_scroll_max: Option<(f32, f32)>,
+    pub follow_text_caret: bool,
     /// Content store.
     pub backing: TextBacking,
     /// Font size in logical px.
@@ -100,6 +190,10 @@ pub struct TextContent {
     /// static labels. Shown unmasked even in password fields (standard hint
     /// behavior); IME preedit takes precedence while composing.
     pub placeholder: String,
+    pub overflow: Option<aqua_text::overflow::OverflowMode>,
+    pub placeholder_color: Option<Oklch>,
+    pub gpui_placeholder_color: Option<aqua_core::GpuiHsla>,
+    pub gpui_source_placeholder_color: Option<aqua_core::GpuiTextColor>,
 }
 
 impl TextContent {
@@ -108,6 +202,23 @@ impl TextContent {
         let ratio = self.font_size / style.size_px.max(0.01);
         style.size_px = self.font_size;
         style.line_height_px *= ratio;
+        if self.is_placeholder() {
+            if let Some(color) = self.gpui_source_placeholder_color {
+                style.gpui_source_color = Some([
+                    color.hue_degrees,
+                    color.saturation,
+                    color.lightness,
+                    color.alpha,
+                ]);
+                style.gpui_color = None;
+            } else if let Some(color) = self.gpui_placeholder_color {
+                style.gpui_source_color = None;
+                style.gpui_color = Some([color.h, color.s, color.l, color.a]);
+            } else if self.placeholder_color.is_some() {
+                style.gpui_color = None;
+                style.gpui_source_color = None;
+            }
+        }
         style
     }
 
@@ -116,7 +227,7 @@ impl TextContent {
         let composing =
             matches!(&self.backing, TextBacking::Editable(editor) if editor.is_composing());
         if !self.password
-            && !composing
+            && (!composing || self.external_text_input)
             && !self.is_placeholder()
             && self.spans.iter().map(|span| span.text.len()).sum::<usize>() == source.len()
             && self
@@ -141,8 +252,18 @@ impl TextContent {
                 ..Default::default()
             },
             spans: Vec::new(),
+            inline_glyphs: Vec::new(),
+            inline_paints: Vec::new(),
+            gpui_text_opacity: Default::default(),
             selection_source: None,
             interaction_ranges: Vec::new(),
+            selection_auto_scroll: true,
+            text_appearance: None,
+            gpui_text_appearance: None,
+            external_text_input: false,
+            native_text_model: None,
+            viewport_scroll_max: None,
+            follow_text_caret: false,
             font_size: 14.0,
             color: Oklch::WHITE,
             selectable: false,
@@ -150,6 +271,10 @@ impl TextContent {
             wrap: false,
             password: false,
             placeholder: String::new(),
+            overflow: None,
+            placeholder_color: None,
+            gpui_placeholder_color: None,
+            gpui_source_placeholder_color: None,
         }
     }
 
@@ -170,8 +295,18 @@ impl TextContent {
                 ..Default::default()
             },
             spans: Vec::new(),
+            inline_glyphs: Vec::new(),
+            inline_paints: Vec::new(),
+            gpui_text_opacity: Default::default(),
             selection_source: None,
             interaction_ranges: Vec::new(),
+            selection_auto_scroll: true,
+            text_appearance: None,
+            gpui_text_appearance: None,
+            external_text_input: false,
+            native_text_model: None,
+            viewport_scroll_max: None,
+            follow_text_caret: false,
             font_size: 14.0,
             color: Oklch::WHITE,
             selectable: true,
@@ -179,6 +314,10 @@ impl TextContent {
             wrap: multiline,
             password: false,
             placeholder: String::new(),
+            overflow: None,
+            placeholder_color: None,
+            gpui_placeholder_color: None,
+            gpui_source_placeholder_color: None,
         }
     }
 
@@ -375,6 +514,45 @@ pub struct CanvasContent {
 /// Custom draw callback: committed logical bounds in, scene ops out.
 pub type CanvasPaintCallback = Box<dyn Fn(Rect) -> Vec<DisplayItem>>;
 
+pub type ContextCanvasPaintCallback = Box<dyn Fn(CanvasPaintContext<'_>) -> Vec<DisplayItem>>;
+
+enum CanvasPainter {
+    Legacy(CanvasPaintCallback),
+    Context(ContextCanvasPaintCallback),
+}
+
+struct RegisteredCanvasPainter {
+    callback: CanvasPainter,
+    token: Rc<()>,
+}
+
+struct DeferredCanvasAction {
+    node: NodeId,
+    painter: u64,
+    token: Rc<()>,
+    action: Box<dyn FnOnce()>,
+}
+
+pub struct CanvasPaintContext<'a> {
+    pub bounds: Rect,
+    pub clip: Rect,
+    node: NodeId,
+    painter: u64,
+    token: Rc<()>,
+    deferred: &'a RefCell<Vec<DeferredCanvasAction>>,
+}
+
+impl CanvasPaintContext<'_> {
+    pub fn defer(&self, action: impl FnOnce() + 'static) {
+        self.deferred.borrow_mut().push(DeferredCanvasAction {
+            node: self.node,
+            painter: self.painter,
+            token: self.token.clone(),
+            action: Box::new(action),
+        });
+    }
+}
+
 /// Programmable GPU content binding. `layer` names the external surface:
 /// image layers key to the [`ImageId`] slot index; viewport/custom layers
 /// use the media owner's namespace (see contract §4).
@@ -484,6 +662,7 @@ pub enum ActionKind {
     Custom(u64),
     /// Activation gesture (click/tap/Enter on an activatable node).
     Activate,
+    AccessibilityActivate,
     /// Editable text content changed (carries the new committed text).
     TextChanged,
     /// Keyboard focus entered or left the node.
@@ -492,10 +671,26 @@ pub enum ActionKind {
     Submit,
 }
 
-/// Event delivered to an action callback. Data only — no tree access, so
-/// callbacks cannot reenter the tree during dispatch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ActivationSource {
+    Pointer {
+        down: aqua_core::PointerEvent,
+        up: aqua_core::PointerEvent,
+        button: aqua_core::PointerButton,
+        modifiers: aqua_core::Modifiers,
+        click_count: Option<usize>,
+    },
+    Keyboard(aqua_core::KeyEvent),
+    Touch {
+        position: Point,
+        tap_count: usize,
+        long_press: bool,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct ActionEvent {
+    pub source: Option<ActivationSource>,
     /// Source node.
     pub node: NodeId,
     /// What happened.
@@ -515,6 +710,7 @@ pub type ActionCallback = Box<dyn Fn(ActionEvent)>;
 /// dropped (never panics, never resurrects).
 #[derive(Debug)]
 pub enum UiCommand {
+    Interaction(Box<interaction::InteractionCommand>),
     EditText {
         node: NodeId,
         revision: Option<u64>,
@@ -539,6 +735,18 @@ pub enum UiCommand {
     SetControlValue {
         node: NodeId,
         value: f64,
+    },
+    FollowTextCaret {
+        node: NodeId,
+    },
+    SetTextPresentation {
+        node: NodeId,
+        spans: Vec<StyledSpan>,
+        glyphs: Vec<TextInlineGlyph>,
+    },
+    SetTextInlinePaint {
+        node: NodeId,
+        paints: Vec<TextInlinePaint>,
     },
     /// Replace text content (editor state preserved).
     SetText {
@@ -602,6 +810,7 @@ pub enum UiCommand {
 #[derive(Debug, Default, Clone)]
 pub struct CommandSink {
     queue: Rc<RefCell<Vec<UiCommand>>>,
+    invalidation_counter: Rc<std::cell::Cell<u64>>,
 }
 
 impl CommandSink {
@@ -610,7 +819,12 @@ impl CommandSink {
     pub fn new() -> Self {
         Self {
             queue: Rc::new(RefCell::new(Vec::new())),
+            invalidation_counter: Rc::new(std::cell::Cell::new(0)),
         }
+    }
+
+    pub fn invalidation_counter(&self) -> Rc<std::cell::Cell<u64>> {
+        self.invalidation_counter.clone()
     }
 
     /// Enqueue a command. Never blocks, never reenters.
@@ -698,6 +912,10 @@ pub struct NodeRecord {
     /// Whether the node can take keyboard focus.
     pub focusable: bool,
     pub tab_index: i32,
+    pub(crate) keyboard_release_activation: bool,
+    pub description: Option<String>,
+    pub debug_selector: Option<String>,
+    pub(crate) hit_test_excluded: bool,
     /// Stable key for keyed reconciliation (`None` = positional).
     pub key: Option<KeyHash>,
     /// Accessibility metadata (explicit roles; see [`NodeSemantics`]).
@@ -766,6 +984,8 @@ pub struct FrameStats {
 /// - layout runs headless through Taffy;
 /// - scene emission produces renderer-neutral [`DisplayItem`]s.
 pub struct UiTree {
+    interaction: interaction::InteractionStore,
+    gpui_paint: bool,
     portal_roots: std::collections::HashSet<NodeId>,
     portal_order: Vec<NodeId>,
     pub(crate) control_router: crate::controls::ControlRouter,
@@ -773,6 +993,8 @@ pub struct UiTree {
     nodes: Arena<NodeRecord>,
     root: Option<NodeId>,
     taffy: TaffyTree<LeafCtx>,
+    gpui_layout_scale: Option<f32>,
+    layout_styles_dirty: bool,
     /// UI node (raw id) to Taffy node.
     tmap: HashMap<RawId, taffy::NodeId>,
     /// Committed absolute rects, refreshed by [`UiTree::compute_layout`].
@@ -781,11 +1003,15 @@ pub struct UiTree {
     content: HashMap<RawId, Size>,
     /// Currently focused node.
     focused: Option<NodeId>,
+    pub(crate) focus_generation: u64,
+    pub(crate) pending_keyboard_activation: Option<(NodeId, u64)>,
     /// Pending binding commands, drained before layout. Shared cloneably
     /// with reactive effects via [`UiTree::command_sink`].
     sink: CommandSink,
     /// Registered canvas painters by painter id.
-    painters: HashMap<u64, CanvasPaintCallback>,
+    painters: HashMap<u64, RegisteredCanvasPainter>,
+    deferred_canvas_actions: RefCell<Vec<DeferredCanvasAction>>,
+    prepaints: HashMap<RawId, PrepaintCallback>,
     /// Next canvas painter id.
     next_painter: u64,
     /// Action callbacks by (node, action kind).
@@ -795,6 +1021,7 @@ pub struct UiTree {
     /// Set on primary down, consumed on up/cancel. Cleared when the node is
     /// removed or the window loses focus, so a stale arm can never fire.
     press_captures: HashMap<u64, NodeId>,
+    pub(crate) press_sources: HashMap<u64, (aqua_core::PointerEvent, aqua_core::PointerButton)>,
     /// Bumped by every layout-invalidating mutation. `compute_layout` runs
     /// Taffy only when this differs from `committed_layout` or the viewport
     /// changed; genuine ancestor/sibling invalidation propagates through
@@ -818,10 +1045,57 @@ impl Default for UiTree {
 }
 
 impl UiTree {
+    pub(crate) fn measure_intrinsic_width(
+        spec: NodeSpec,
+        measurer: &dyn TextMeasurer,
+        scale: Option<f32>,
+    ) -> Result<f32, String> {
+        let mut tree = Self::new();
+        tree.set_gpui_layout_scale(scale);
+        let root = tree.mount_spec(spec);
+        tree.sync_layout_styles()?;
+        let troot = tree.tmap[&root.raw()];
+        tree.taffy
+            .compute_layout_with_measure(
+                troot,
+                taffy::geometry::Size {
+                    width: AvailableSpace::MaxContent,
+                    height: AvailableSpace::MaxContent,
+                },
+                |input: LayoutInput, _, ctx, style| {
+                    taffy::compute_leaf_layout(
+                        input,
+                        style,
+                        |_, _| 0.0,
+                        |known, available| match scale {
+                            Some(scale) => {
+                                measure_leaf_gpui(known, available, ctx, measurer, scale)
+                            }
+                            None => measure_leaf(known, available, ctx, measurer),
+                        },
+                    )
+                },
+            )
+            .map_err(|error| format!("taffy layout failed: {error:?}"))?;
+        let width = tree
+            .taffy
+            .layout(troot)
+            .map_err(|error| format!("taffy layout failed: {error:?}"))?
+            .size
+            .width;
+        Ok(width / scale.unwrap_or(1.0))
+    }
+
+    pub(crate) fn gpui_layout_scale(&self) -> Option<f32> {
+        self.gpui_layout_scale
+    }
+
     /// Create an empty tree.
     #[must_use]
     pub fn new() -> Self {
         Self {
+            interaction: interaction::InteractionStore::default(),
+            gpui_paint: false,
             portal_roots: std::collections::HashSet::new(),
             portal_order: Vec::new(),
             control_router: crate::controls::ControlRouter::default(),
@@ -829,22 +1103,62 @@ impl UiTree {
             nodes: Arena::new(),
             root: None,
             taffy: TaffyTree::new(),
+            gpui_layout_scale: None,
+            layout_styles_dirty: false,
             tmap: HashMap::new(),
             rects: HashMap::new(),
             content: HashMap::new(),
             focused: None,
+            focus_generation: 0,
+            pending_keyboard_activation: None,
             sink: CommandSink::new(),
             painters: HashMap::new(),
+            deferred_canvas_actions: RefCell::new(Vec::new()),
+            prepaints: HashMap::new(),
             next_painter: 1,
             actions: HashMap::new(),
             bound_actions: HashSet::new(),
             press_captures: HashMap::new(),
+            press_sources: HashMap::new(),
             layout_version: 0,
             committed_layout: 0,
             content_version: 0,
             last_viewport: None,
             last_stats: FrameStats::default(),
         }
+    }
+
+    pub fn set_gpui_paint(&mut self, enabled: bool) {
+        if self.gpui_paint != enabled {
+            self.gpui_paint = enabled;
+            self.content_version += 1;
+        }
+    }
+
+    pub fn set_gpui_layout_scale(&mut self, scale: Option<f32>) -> bool {
+        if scale.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+            return false;
+        }
+        if self.gpui_layout_scale == scale {
+            return false;
+        }
+        self.gpui_layout_scale = scale;
+        self.layout_styles_dirty = true;
+        if scale.is_some() {
+            self.taffy.disable_rounding();
+        } else {
+            self.taffy.enable_rounding();
+        }
+        for &node in self.tmap.values() {
+            let _ = self.taffy.mark_dirty(node);
+        }
+        self.bump_layout();
+        for (_, record) in self.nodes.iter_mut() {
+            record.dirty_layout = true;
+            record.dirty_paint = true;
+            record.paint_rev = self.content_version;
+        }
+        true
     }
 
     /// Layout version: bumped by every layout-invalidating mutation.
@@ -858,6 +1172,11 @@ impl UiTree {
     #[must_use]
     pub fn content_version(&self) -> u64 {
         self.content_version
+    }
+
+    pub fn invalidation_epoch(&self) -> u64 {
+        self.content_version
+            .wrapping_add(self.sink.invalidation_counter.get())
     }
 
     /// Statistics for the last layout + emit.
@@ -937,7 +1256,8 @@ impl UiTree {
             .map(|(contact, _)| *contact)
             .collect();
         for contact in blocked {
-            self.press_captures.remove(&contact);
+            self.press_sources.remove(&contact);
+            self.take_press(contact);
         }
     }
 
@@ -952,6 +1272,9 @@ impl UiTree {
             return true;
         }
         self.focused = id;
+        self.focus_generation = self.focus_generation.wrapping_add(1);
+        self.pending_keyboard_activation = None;
+        self.queue_interaction_focus(previous, id);
         for (node, focused) in [(previous, false), (id, true)] {
             if let Some(node) = node {
                 if self
@@ -961,6 +1284,7 @@ impl UiTree {
                     self.touch_paint(node);
                 }
                 self.fire_action(ActionEvent {
+                    source: None,
                     node,
                     kind: ActionKind::FocusChanged,
                     text: None,
@@ -1049,20 +1373,26 @@ impl UiTree {
                 }
                 _ => None,
             };
-            let expanded = match rec.control.as_deref() {
-                Some(crate::controls::Control::Select(control)) => Some(control.is_open()),
-                _ => None,
-            };
+            let expanded =
+                self.interaction_semantics(id)
+                    .expanded
+                    .or_else(|| match rec.control.as_deref() {
+                        Some(crate::controls::Control::Select(control)) => Some(control.is_open()),
+                        _ => None,
+                    });
             out.push(SemanticNode {
                 node: id,
                 role: rec.semantics.role,
                 label,
+                description: rec.description.clone(),
                 focused: self.focused == Some(id),
                 disabled: self.is_disabled(id),
                 selected: rec.semantics.selected,
+                checked: self.interaction_semantics(id).checked,
                 value_text,
                 numeric_range,
                 expanded,
+                level: self.interaction_semantics(id).level,
                 children: rec.children.clone(),
                 bounds,
                 collection: rec.semantics.collection,
@@ -1075,16 +1405,18 @@ impl UiTree {
     /// as buttons opt in; plain containers stay unfocused). Unknown nodes
     /// fail closed.
     pub fn set_focusable(&mut self, id: NodeId, focusable: bool) -> bool {
-        match self.nodes.get_mut(id.raw()) {
-            Some(rec) => {
-                rec.focusable = focusable;
-                if !focusable && self.focused == Some(id) {
-                    self.focused = rec.parent;
-                }
-                true
-            }
-            None => false,
+        let Some(rec) = self.nodes.get_mut(id.raw()) else {
+            return false;
+        };
+        rec.focusable = focusable;
+        let fallback = rec.parent;
+        if !focusable && self.focused == Some(id) {
+            self.focused = fallback;
+            self.focus_generation = self.focus_generation.wrapping_add(1);
+            self.pending_keyboard_activation = None;
+            self.queue_interaction_focus(Some(id), fallback);
         }
+        true
     }
 
     /// Register an action callback for `(node, kind)` (replaces any prior).
@@ -1166,17 +1498,29 @@ impl UiTree {
     /// Arm a press capture: `contact` will activate `node` if released
     /// inside its bounds. Replaces any previous arm for the contact.
     pub fn arm_press(&mut self, contact: u64, node: NodeId) {
-        self.press_captures.insert(contact, node);
+        if let Some(previous) = self.press_captures.insert(contact, node) {
+            self.queue_interaction_event(previous, interaction::InteractionEvent::Press(false));
+        }
+        self.queue_interaction_event(node, interaction::InteractionEvent::Press(true));
     }
 
     /// Consume and return the armed node for `contact`, if any.
     pub fn take_press(&mut self, contact: u64) -> Option<NodeId> {
-        self.press_captures.remove(&contact)
+        let node = self.press_captures.remove(&contact);
+        if let Some(node) = node {
+            self.queue_interaction_event(node, interaction::InteractionEvent::Press(false));
+        }
+        node
     }
 
     /// Clear all armed presses (window focus loss).
     pub fn clear_presses(&mut self) {
+        for node in self.press_captures.values().copied().collect::<Vec<_>>() {
+            self.queue_interaction_event(node, interaction::InteractionEvent::Press(false));
+        }
         self.press_captures.clear();
+        self.press_sources.clear();
+        self.pending_keyboard_activation = None;
     }
 
     /// Committed absolute rect from the last [`UiTree::compute_layout`].
@@ -1237,6 +1581,7 @@ impl UiTree {
             count += queue.len();
             for cmd in queue {
                 match cmd {
+                    UiCommand::Interaction(command) => self.apply_interaction_command(*command),
                     UiCommand::EditText {
                         node,
                         revision,
@@ -1270,6 +1615,34 @@ impl UiTree {
                     }
                     UiCommand::SetControlValue { node, value } => {
                         self.set_control_value(node, value);
+                    }
+                    UiCommand::FollowTextCaret { node } => {
+                        if let Some(record) = self.get_mut(node) {
+                            if let NodeKind::Text(text) = &mut record.kind {
+                                if text.external_text_input {
+                                    text.follow_text_caret = true;
+                                }
+                            }
+                        }
+                    }
+                    UiCommand::SetTextPresentation {
+                        node,
+                        spans,
+                        glyphs,
+                    } => {
+                        self.edit_text(node, |text| {
+                            if text.external_text_input {
+                                text.spans = spans;
+                                text.inline_glyphs = glyphs;
+                            }
+                        });
+                    }
+                    UiCommand::SetTextInlinePaint { node, paints } => {
+                        self.edit_text(node, |text| {
+                            if text.external_text_input {
+                                text.inline_paints = paints;
+                            }
+                        });
                     }
                     UiCommand::SetText { node, text } => {
                         self.set_text(node, text);
@@ -1355,6 +1728,21 @@ impl UiTree {
             }
         }
         Some(Transform2D::translate(origin.x, origin.y).then(world))
+    }
+
+    pub fn pre_transform_rect(&self, node: NodeId) -> Option<Rect> {
+        let mut rect = self.rect(node)?;
+        let mut current = node;
+        while !self.is_portal(current) {
+            let Some(parent) = self.get(current)?.parent else {
+                break;
+            };
+            if let NodeKind::Scroll(scroll) = &self.get(parent)?.kind {
+                rect = rect.translate(-scroll.offset.x, -scroll.offset.y);
+            }
+            current = parent;
+        }
+        Some(rect)
     }
 
     pub fn visual_rect(&self, node: NodeId) -> Option<Rect> {
@@ -1574,14 +1962,27 @@ impl UiTree {
                         if let NodeKind::Text(ref mut cur) = rec.kind {
                             cur.text_style = t.text_style;
                             cur.spans = t.spans;
+                            cur.inline_glyphs = t.inline_glyphs;
+                            cur.inline_paints = t.inline_paints;
+                            cur.gpui_text_opacity = t.gpui_text_opacity;
                             cur.selection_source = t.selection_source;
                             cur.interaction_ranges = t.interaction_ranges;
+                            cur.selection_auto_scroll = t.selection_auto_scroll;
+                            cur.text_appearance = t.text_appearance;
+                            cur.gpui_text_appearance = t.gpui_text_appearance;
+                            cur.external_text_input = t.external_text_input;
+                            cur.native_text_model = t.native_text_model;
+                            cur.viewport_scroll_max = t.viewport_scroll_max;
                             cur.font_size = t.font_size;
                             cur.color = t.color;
                             cur.selectable = t.selectable;
                             cur.wrap = t.wrap;
                             cur.password = t.password;
                             cur.placeholder = t.placeholder;
+                            cur.overflow = t.overflow;
+                            cur.placeholder_color = t.placeholder_color;
+                            cur.gpui_placeholder_color = t.gpui_placeholder_color;
+                            cur.gpui_source_placeholder_color = t.gpui_source_placeholder_color;
                         }
                         rec.dirty_paint = true;
                     }
@@ -1603,13 +2004,26 @@ impl UiTree {
                         if let NodeKind::Text(ref mut cur) = rec.kind {
                             cur.text_style = t.text_style;
                             cur.spans = t.spans;
+                            cur.inline_glyphs = t.inline_glyphs;
+                            cur.inline_paints = t.inline_paints;
+                            cur.gpui_text_opacity = t.gpui_text_opacity;
                             cur.selection_source = t.selection_source;
                             cur.interaction_ranges = t.interaction_ranges;
+                            cur.selection_auto_scroll = t.selection_auto_scroll;
+                            cur.text_appearance = t.text_appearance;
+                            cur.gpui_text_appearance = t.gpui_text_appearance;
+                            cur.external_text_input = t.external_text_input;
+                            cur.native_text_model = t.native_text_model;
+                            cur.viewport_scroll_max = t.viewport_scroll_max;
                             cur.font_size = t.font_size;
                             cur.color = t.color;
                             cur.selectable = t.selectable;
                             cur.wrap = t.wrap;
                             cur.placeholder = t.placeholder;
+                            cur.overflow = t.overflow;
+                            cur.placeholder_color = t.placeholder_color;
+                            cur.gpui_placeholder_color = t.gpui_placeholder_color;
+                            cur.gpui_source_placeholder_color = t.gpui_source_placeholder_color;
                         }
                     }
                     self.sync_text_leaf(id);
@@ -1720,6 +2134,10 @@ impl UiTree {
             paint_rev: self.content_version + 1,
             focusable,
             tab_index: 0,
+            keyboard_release_activation: false,
+            description: None,
+            debug_selector: None,
+            hit_test_excluded: false,
             key,
             semantics: NodeSemantics::default(),
         }));
@@ -1875,6 +2293,7 @@ impl UiTree {
             return false;
         };
         let focus_fallback = rec.parent;
+        let previous_focus = self.focused;
         if self.focused == Some(id) {
             self.focused = focus_fallback;
         }
@@ -1907,17 +2326,24 @@ impl UiTree {
             }
             self.portal_roots.remove(&n);
             self.portal_order.retain(|node| *node != n);
+            self.remove_interaction(n);
             self.control_router.remove_node(n);
             self.cancel_input_node(n);
             self.rects.remove(&n.raw());
             self.content.remove(&n.raw());
             self.actions.retain(|(raw, _), _| *raw != n.raw());
+            self.prepaints.remove(&n.raw());
             self.bound_actions.retain(|(raw, _)| *raw != n.raw());
             let _ = self.nodes.remove(n.raw());
         }
         // A removed node can never fire: drop arms targeting dead nodes.
         self.press_captures
             .retain(|_, n| self.nodes.contains(n.raw()));
+        if previous_focus != self.focused {
+            self.focus_generation = self.focus_generation.wrapping_add(1);
+            self.pending_keyboard_activation = None;
+        }
+        self.queue_interaction_focus(previous_focus, self.focused);
         self.gc_painters();
         true
     }
@@ -1960,7 +2386,20 @@ impl UiTree {
         if *target == paint {
             return false;
         }
+        let border = |paint: &Paint| {
+            paint.gpui_border.map(|border| border.widths).or_else(|| {
+                paint.border.map(|border| {
+                    paint
+                        .border_widths
+                        .unwrap_or_else(|| aqua_core::Insets::uniform(border.width))
+                })
+            })
+        };
+        let layout_changed = self.gpui_layout_scale.is_some() && border(target) != border(&paint);
         *target = paint;
+        if layout_changed {
+            self.mark_layout_dirty(id);
+        }
         self.touch_paint(id);
         true
     }
@@ -1968,6 +2407,18 @@ impl UiTree {
     /// Register (or replace) the painter for a canvas node. Returns the
     /// painter id. The callback runs at emission with the committed bounds.
     pub fn set_canvas_painter(&mut self, id: NodeId, paint: CanvasPaintCallback) -> Option<u64> {
+        self.set_registered_canvas_painter(id, CanvasPainter::Legacy(paint))
+    }
+
+    pub fn set_context_canvas_painter(
+        &mut self,
+        id: NodeId,
+        paint: ContextCanvasPaintCallback,
+    ) -> Option<u64> {
+        self.set_registered_canvas_painter(id, CanvasPainter::Context(paint))
+    }
+
+    fn set_registered_canvas_painter(&mut self, id: NodeId, paint: CanvasPainter) -> Option<u64> {
         let rec = self.nodes.get(id.raw())?;
         let NodeKind::Canvas(c) = rec.kind else {
             return None;
@@ -1977,7 +2428,13 @@ impl UiTree {
             self.next_painter += 1;
             p
         });
-        self.painters.insert(pid, paint);
+        self.painters.insert(
+            pid,
+            RegisteredCanvasPainter {
+                callback: paint,
+                token: Rc::new(()),
+            },
+        );
         if let Some(rec) = self.nodes.get_mut(id.raw()) {
             if let NodeKind::Canvas(ref mut c) = rec.kind {
                 c.painter = Some(pid);
@@ -1986,6 +2443,36 @@ impl UiTree {
         }
         self.touch_paint(id);
         Some(pid)
+    }
+
+    pub(crate) fn clear_canvas_painter(&mut self, id: NodeId) {
+        let painter = match self.nodes.get_mut(id.raw()) {
+            Some(record) => match &mut record.kind {
+                NodeKind::Canvas(canvas) => canvas.painter.take(),
+                _ => None,
+            },
+            None => None,
+        };
+        if let Some(painter) = painter {
+            self.painters.remove(&painter);
+            self.touch_paint(id);
+        }
+    }
+
+    pub fn set_canvas_prepaint(&mut self, id: NodeId, callback: PrepaintCallback) -> bool {
+        if !self
+            .get(id)
+            .is_some_and(|node| matches!(node.kind, NodeKind::Canvas(_)))
+        {
+            return false;
+        }
+        self.prepaints.insert(id.raw(), callback);
+        self.touch_paint(id);
+        true
+    }
+
+    pub fn clear_canvas_prepaint(&mut self, id: NodeId) {
+        self.prepaints.remove(&id.raw());
     }
 
     /// Mark a node (and its ancestors) layout-dirty. Bumps the layout and
@@ -2067,6 +2554,29 @@ impl UiTree {
             });
         }
         self.mark_layout_dirty(id);
+        self.touch_paint(id);
+        true
+    }
+
+    pub fn set_gpui_text_opacity(
+        &mut self,
+        id: NodeId,
+        ranges: std::sync::Arc<[aqua_core::scene::GpuiTextOpacityRange]>,
+    ) -> bool {
+        let Some(rec) = self.nodes.get_mut(id.raw()) else {
+            return false;
+        };
+        let NodeKind::Text(text) = &mut rec.kind else {
+            return false;
+        };
+        if !valid_gpui_text_opacity(text.text(), &ranges) {
+            return false;
+        }
+        if text.gpui_text_opacity == ranges {
+            return true;
+        }
+        text.gpui_text_opacity = ranges;
+        rec.dirty_paint = true;
         self.touch_paint(id);
         true
     }
@@ -2237,6 +2747,50 @@ impl UiTree {
         applied
     }
 
+    fn sync_layout_styles(&mut self) -> Result<(), String> {
+        if self.gpui_layout_scale.is_none() && !self.layout_styles_dirty {
+            return Ok(());
+        }
+        for (id, record) in self.nodes.iter() {
+            let Some(&node) = self.tmap.get(&id) else {
+                continue;
+            };
+            let style = match self.gpui_layout_scale {
+                Some(scale) => {
+                    let mut style = crate::layout::editor::to_taffy(&record.style, scale);
+                    let paint = match &record.kind {
+                        NodeKind::Box(content) => &content.paint,
+                        _ => &record.paint,
+                    };
+                    let widths = paint.gpui_border.map(|border| border.widths).or_else(|| {
+                        paint.border.map(|border| {
+                            paint
+                                .border_widths
+                                .unwrap_or_else(|| aqua_core::Insets::uniform(border.width))
+                        })
+                    });
+                    if let Some(widths) = widths {
+                        style.border = crate::layout::editor::border_to_taffy(widths, scale);
+                    }
+                    style
+                }
+                None => crate::style::to_taffy(&record.style),
+            };
+            if self
+                .taffy
+                .style(node)
+                .map_err(|error| format!("taffy style failed: {error:?}"))?
+                != &style
+            {
+                self.taffy
+                    .set_style(node, style)
+                    .map_err(|error| format!("taffy set_style failed: {error:?}"))?;
+            }
+        }
+        self.layout_styles_dirty = false;
+        Ok(())
+    }
+
     /// Compute layout for `viewport` logical size, draining queued binding
     /// commands first. Skips Taffy entirely when the viewport and layout
     /// version are unchanged (paint-only updates cost no layout work).
@@ -2273,13 +2827,16 @@ impl UiTree {
         };
         let drained = self.sink.len();
         self.drain_commands();
+        self.sync_layout_styles()?;
         let measured = std::cell::Cell::new(0usize);
+        let scale = self.gpui_layout_scale;
+        let device_scale = scale.unwrap_or(1.0);
         self.taffy
             .compute_layout_with_measure(
                 troot,
                 taffy::geometry::Size {
-                    width: AvailableSpace::Definite(viewport.w),
-                    height: AvailableSpace::Definite(viewport.h),
+                    width: AvailableSpace::Definite(viewport.w * device_scale),
+                    height: AvailableSpace::Definite(viewport.h * device_scale),
                 },
                 |input: LayoutInput, _node, ctx, style| {
                     measured.set(measured.get() + 1);
@@ -2287,8 +2844,15 @@ impl UiTree {
                         input,
                         style,
                         |_, _| 0.0,
-                        |known_dimensions, available_space| {
-                            measure_leaf(known_dimensions, available_space, ctx, measurer)
+                        |known_dimensions, available_space| match scale {
+                            Some(scale) => measure_leaf_gpui(
+                                known_dimensions,
+                                available_space,
+                                ctx,
+                                measurer,
+                                scale,
+                            ),
+                            None => measure_leaf(known_dimensions, available_space, ctx, measurer),
                         },
                     )
                 },
@@ -2308,10 +2872,17 @@ impl UiTree {
             };
             let x = ox + layout.location.x;
             let y = oy + layout.location.y;
-            let rect = Rect::from_origin_size(
-                Point::new(x, y),
-                Size::new(layout.size.width, layout.size.height),
-            );
+            let rect = match scale {
+                Some(scale) => crate::layout::editor::snap_absolute_bounds(
+                    Point::new(x, y),
+                    Size::new(layout.size.width, layout.size.height),
+                    scale,
+                ),
+                None => Rect::from_origin_size(
+                    Point::new(x, y),
+                    Size::new(layout.size.width, layout.size.height),
+                ),
+            };
             self.rects.insert(id.raw(), rect);
             let is_scroll = matches!(
                 self.nodes.get(id.raw()).map(|r| &r.kind),
@@ -2334,7 +2905,10 @@ impl UiTree {
                         }
                     }
                 }
-                self.content.insert(id.raw(), extent);
+                self.content.insert(
+                    id.raw(),
+                    Size::new(extent.w / device_scale, extent.h / device_scale),
+                );
             }
             if let Some(rec) = self.nodes.get(id.raw()) {
                 for &c in rec.children.iter().rev() {
@@ -2364,7 +2938,27 @@ impl UiTree {
     /// [`UiTree::content_version`] across frames and skip re-emission (and
     /// the renderer's no-op-write elision skips unchanged nodes) instead of
     /// rebuilding scene state per frame.
+    pub fn run_deferred_canvas_actions(&mut self) -> usize {
+        let actions = std::mem::take(&mut *self.deferred_canvas_actions.borrow_mut());
+        let mut delivered = 0;
+        for item in actions {
+            let live = self.get(item.node).is_some_and(|record| {
+                matches!(&record.kind, NodeKind::Canvas(canvas) if canvas.painter == Some(item.painter))
+            }) && self.painters.get(&item.painter).is_some_and(|painter| Rc::ptr_eq(&painter.token, &item.token));
+            if live {
+                (item.action)();
+                delivered += 1;
+            }
+        }
+        delivered
+    }
+
     pub fn emit_scene(&mut self) -> Vec<(NodeId, DisplayItem)> {
+        for node in self.traverse() {
+            if let Some(callback) = self.prepaints.get(&node.raw()) {
+                callback(self, node);
+            }
+        }
         let mut out = Vec::new();
         if let Some(root) = self.root {
             self.emit_node(root, Point::ZERO, None, Transform2D::IDENTITY, &mut out);
@@ -2411,6 +3005,9 @@ impl UiTree {
             .shadows
             .iter()
             .fold(rect, |bounds, shadow| bounds.union(shadow.bounds(rect)));
+        let footprint = paint.gpui_shadows.iter().fold(footprint, |bounds, shadow| {
+            bounds.union(shadow.bounds(rect))
+        });
         let footprint = if let Some(shadow) = paint.shadow {
             let pad = 3.0 * shadow.blur.max(0.0);
             footprint.union(Rect::from_edges(
@@ -2428,13 +3025,18 @@ impl UiTree {
         if clip.is_some_and(|clip| clip.intersect(visual_footprint).is_empty())
             && Some(id) != self.root
             && !paint.shadows.iter().any(|layer| !layer.inset)
+            && !paint.gpui_shadows.iter().any(|layer| !layer.inset)
             && paint.shadow.is_none()
+            && !matches!(&rec.kind, NodeKind::Canvas(_))
             && (paint.clip || matches!(&rec.kind, NodeKind::Scroll(_)) || rec.children.is_empty())
         {
             return;
         }
         if let Some(transform) = transform {
             out.push((id, DisplayItem::PushTransform(transform)));
+        }
+        if let Some(pulse) = paint.gpui_quad_pulse {
+            out.push((id, DisplayItem::PushGpuiQuadPulse(pulse)));
         }
         if let Some(radius) = paint.content_blur {
             out.push((
@@ -2447,6 +3049,12 @@ impl UiTree {
         }
         if let Some(map) = paint.text_color_map {
             out.push((id, DisplayItem::PushTextColorMap(map)));
+        }
+        if let Some(map) = paint.gpui_text_color_map {
+            out.push((id, DisplayItem::PushGpuiTextColorMap(map)));
+        }
+        if let Some(shimmer) = paint.gpui_text_shimmer {
+            out.push((id, DisplayItem::PushGpuiTextShimmer(shimmer)));
         }
         if let Some(opacity) = paint.opacity {
             out.push((id, DisplayItem::PushOpacity(opacity)));
@@ -2464,27 +3072,95 @@ impl UiTree {
                 },
             ));
         }
-        if paint.fill.is_some() || paint.border.is_some() || paint.shadow.is_some() {
+        for layer in paint.gpui_shadows.iter().filter(|layer| !layer.inset) {
             out.push((
                 id,
-                DisplayItem::Rect {
+                DisplayItem::GpuiShadow {
                     bounds: rect,
-                    radius: paint.corners.map_or(paint.radius, |r| r.top_left),
-                    fill: paint.fill.unwrap_or(Oklch::TRANSPARENT),
-                    border_width: if paint.shadows.is_empty() {
-                        paint.border.map_or(0.0, |x| x.width)
-                    } else {
-                        0.0
-                    },
-                    border_color: paint.border.map_or(Oklch::TRANSPARENT, |x| x.color),
-                    shadow: paint.shadow.map(|s| (s.dx, s.dy, s.blur, s.color)),
+                    corners,
+                    layer: *layer,
                 },
             ));
+        }
+        if let Some(background) = paint.gpui_background {
+            out.push((
+                id,
+                DisplayItem::GpuiBackground {
+                    bounds: rect,
+                    corners,
+                    background,
+                },
+            ));
+        }
+        let shaped = paint.gpui_background.is_some()
+            || paint.gpui_border.is_some()
+            || !paint.gpui_shadows.is_empty()
+            || self.gpui_paint
+            || corners.top_left != corners.top_right
+            || corners.top_left != corners.bottom_right
+            || corners.top_left != corners.bottom_left
+            || paint.border_widths.is_some()
+            || paint.border_dashed;
+        if shaped {
+            if let Some(shadow) = paint.shadow {
+                out.push((
+                    id,
+                    DisplayItem::Rect {
+                        bounds: rect,
+                        radius: corners.top_left,
+                        fill: Oklch::TRANSPARENT,
+                        border_width: 0.0,
+                        border_color: Oklch::TRANSPARENT,
+                        shadow: Some((shadow.dx, shadow.dy, shadow.blur, shadow.color)),
+                    },
+                ));
+            }
+            if let Some(fill) = paint.fill {
+                out.push((
+                    id,
+                    DisplayItem::Quad {
+                        bounds: rect,
+                        corners,
+                        fill,
+                        border_widths: aqua_core::Insets::uniform(0.0),
+                        border_color: Oklch::TRANSPARENT,
+                        dashed: false,
+                    },
+                ));
+            }
+        } else {
+            if paint.fill.is_some() || paint.border.is_some() || paint.shadow.is_some() {
+                out.push((
+                    id,
+                    DisplayItem::Rect {
+                        bounds: rect,
+                        radius: paint.corners.map_or(paint.radius, |r| r.top_left),
+                        fill: paint.fill.unwrap_or(Oklch::TRANSPARENT),
+                        border_width: if paint.shadows.is_empty() {
+                            paint.border.map_or(0.0, |x| x.width)
+                        } else {
+                            0.0
+                        },
+                        border_color: paint.border.map_or(Oklch::TRANSPARENT, |x| x.color),
+                        shadow: paint.shadow.map(|s| (s.dx, s.dy, s.blur, s.color)),
+                    },
+                ));
+            }
         }
         for layer in paint.shadows.iter().filter(|layer| layer.inset) {
             out.push((
                 id,
                 DisplayItem::Shadow {
+                    bounds: rect,
+                    corners,
+                    layer: *layer,
+                },
+            ));
+        }
+        for layer in paint.gpui_shadows.iter().filter(|layer| layer.inset) {
+            out.push((
+                id,
+                DisplayItem::GpuiShadow {
                     bounds: rect,
                     corners,
                     layer: *layer,
@@ -2500,15 +3176,102 @@ impl UiTree {
         if clips {
             out.push((
                 id,
-                DisplayItem::PushClip {
-                    bounds: rect,
-                    radius: paint.corners.map_or(paint.radius, |r| r.top_left),
+                if self.gpui_paint {
+                    let widths = paint
+                        .gpui_border
+                        .filter(|border| border.color.a > 0.0)
+                        .map(|border| border.widths)
+                        .or_else(|| {
+                            paint
+                                .border
+                                .filter(|border| border.color.alpha > 0.0)
+                                .map(|border| {
+                                    paint
+                                        .border_widths
+                                        .unwrap_or_else(|| aqua_core::Insets::uniform(border.width))
+                                })
+                        })
+                        .unwrap_or_default();
+                    DisplayItem::PushGpuiContentMask {
+                        bounds: Rect::from_edges(
+                            rect.x + widths.left,
+                            rect.y + widths.top,
+                            rect.right() - widths.right,
+                            rect.bottom() - widths.bottom,
+                        ),
+                    }
+                } else if shaped {
+                    DisplayItem::PushRoundedClip {
+                        bounds: rect,
+                        corners,
+                    }
+                } else {
+                    DisplayItem::PushClip {
+                        bounds: rect,
+                        radius: corners.top_left,
+                    }
                 },
             ));
         }
         match &rec.kind {
             NodeKind::Box(_) | NodeKind::Scroll(_) => {}
             NodeKind::Text(t) => {
+                let raw_color = if t.is_placeholder() {
+                    t.gpui_placeholder_color.or_else(|| {
+                        if t.placeholder_color.is_some()
+                            || t.gpui_source_placeholder_color.is_some()
+                        {
+                            None
+                        } else {
+                            t.text_style
+                                .gpui_color
+                                .map(|[h, s, l, a]| aqua_core::GpuiHsla { h, s, l, a })
+                        }
+                    })
+                } else {
+                    t.text_style
+                        .gpui_color
+                        .map(|[h, s, l, a]| aqua_core::GpuiHsla { h, s, l, a })
+                };
+                let source_color = if t.is_placeholder() {
+                    t.gpui_source_placeholder_color.or_else(|| {
+                        if t.placeholder_color.is_some() || t.gpui_placeholder_color.is_some() {
+                            None
+                        } else {
+                            t.text_style.gpui_source_color.map(
+                                |[hue_degrees, saturation, lightness, alpha]| {
+                                    aqua_core::GpuiTextColor {
+                                        hue_degrees,
+                                        saturation,
+                                        lightness,
+                                        alpha,
+                                    }
+                                },
+                            )
+                        }
+                    })
+                } else {
+                    t.text_style.gpui_source_color.map(
+                        |[hue_degrees, saturation, lightness, alpha]| aqua_core::GpuiTextColor {
+                            hue_degrees,
+                            saturation,
+                            lightness,
+                            alpha,
+                        },
+                    )
+                };
+                if let Some(color) = raw_color {
+                    out.push((id, DisplayItem::PushGpuiTextColor(color)));
+                }
+                if let Some(color) = source_color {
+                    out.push((id, DisplayItem::PushGpuiSourceTextColor(color)));
+                }
+                if !t.is_placeholder() && !t.gpui_text_opacity.is_empty() {
+                    out.push((
+                        id,
+                        DisplayItem::PushGpuiTextOpacity(t.gpui_text_opacity.clone()),
+                    ));
+                }
                 out.push((
                     id,
                     DisplayItem::Text {
@@ -2524,9 +3287,31 @@ impl UiTree {
                         opacity: 1.0,
                     },
                 ));
+                if !t.is_placeholder() && !t.gpui_text_opacity.is_empty() {
+                    out.push((id, DisplayItem::PopGpuiTextOpacity));
+                }
+                if source_color.is_some() {
+                    out.push((id, DisplayItem::PopGpuiSourceTextColor));
+                }
+                if raw_color.is_some() {
+                    out.push((id, DisplayItem::PopGpuiTextColor));
+                }
             }
             NodeKind::Media(m) => {
                 if let Some(image) = &m.image {
+                    let nonuniform = self.gpui_paint
+                        || corners.top_left != corners.top_right
+                        || corners.top_left != corners.bottom_right
+                        || corners.top_left != corners.bottom_left;
+                    if nonuniform {
+                        out.push((
+                            id,
+                            DisplayItem::PushRoundedClip {
+                                bounds: rect,
+                                corners,
+                            },
+                        ));
+                    }
                     out.push((
                         id,
                         DisplayItem::Image {
@@ -2536,14 +3321,63 @@ impl UiTree {
                             position: m.position,
                             source: m.source,
                             opacity: m.opacity,
-                            rounded_clip: paint.corners.map_or(paint.radius, |r| r.top_left),
+                            rounded_clip: if nonuniform { 0.0 } else { corners.top_left },
                         },
                     ));
+                    if nonuniform {
+                        out.push((id, DisplayItem::PopClip));
+                    }
                 }
             }
             NodeKind::Canvas(c) => {
-                if let Some(paint) = c.painter.and_then(|pid| self.painters.get(&pid)) {
-                    out.extend(paint(rect).into_iter().map(|op| (id, op)));
+                if let Some((pid, painter)) = c
+                    .painter
+                    .and_then(|pid| self.painters.get(&pid).map(|painter| (pid, painter)))
+                {
+                    let ops = match &painter.callback {
+                        CanvasPainter::Legacy(paint) => paint(rect),
+                        CanvasPainter::Context(paint) => {
+                            let corners = [
+                                rect.origin(),
+                                Point::new(rect.right(), rect.y),
+                                Point::new(rect.x, rect.bottom()),
+                                Point::new(rect.right(), rect.bottom()),
+                            ]
+                            .map(|point| world.apply(point));
+                            let min_x = corners
+                                .iter()
+                                .map(|point| point.x)
+                                .fold(f32::INFINITY, f32::min);
+                            let max_x = corners
+                                .iter()
+                                .map(|point| point.x)
+                                .fold(f32::NEG_INFINITY, f32::max);
+                            let min_y = corners
+                                .iter()
+                                .map(|point| point.y)
+                                .fold(f32::INFINITY, f32::min);
+                            let max_y = corners
+                                .iter()
+                                .map(|point| point.y)
+                                .fold(f32::NEG_INFINITY, f32::max);
+                            let bounds = Rect::from_edges(min_x, min_y, max_x, max_y);
+                            let viewport = Rect::from_origin_size(
+                                Point::ZERO,
+                                self.last_viewport.unwrap_or(Size::ZERO),
+                            );
+                            let clip =
+                                child_clip.map_or(viewport, |active| viewport.intersect(active));
+                            paint(CanvasPaintContext {
+                                bounds,
+                                clip,
+                                node: id,
+                                painter: pid,
+                                token: painter.token.clone(),
+                                deferred: &self.deferred_canvas_actions,
+                            })
+                        }
+                    };
+                    out.extend(ops.into_iter().map(|op| (id, op)));
                 }
             }
             NodeKind::Viewport3D(v) => {
@@ -2572,7 +3406,35 @@ impl UiTree {
         if clips {
             out.push((id, DisplayItem::PopClip));
         }
-        if !paint.shadows.is_empty() {
+        if shaped {
+            if let Some(border) = paint.gpui_border {
+                out.push((
+                    id,
+                    DisplayItem::GpuiBorder {
+                        bounds: rect,
+                        corners,
+                        widths: border.widths,
+                        color: border.color,
+                        dashed: border.dashed,
+                    },
+                ));
+            }
+            if let Some(border) = paint.border {
+                out.push((
+                    id,
+                    DisplayItem::Quad {
+                        bounds: rect,
+                        corners,
+                        fill: Oklch::TRANSPARENT,
+                        border_widths: paint
+                            .border_widths
+                            .unwrap_or_else(|| aqua_core::Insets::uniform(border.width)),
+                        border_color: border.color,
+                        dashed: paint.border_dashed,
+                    },
+                ));
+            }
+        } else if !paint.shadows.is_empty() {
             if let Some(border) = paint.border {
                 out.push((
                     id,
@@ -2591,13 +3453,24 @@ impl UiTree {
             if let Some(ring) = paint.focus_ring {
                 out.push((
                     id,
-                    DisplayItem::Rect {
-                        bounds: rect,
-                        radius: paint.radius,
-                        fill: Oklch::TRANSPARENT,
-                        border_width: ring.width,
-                        border_color: ring.color,
-                        shadow: None,
+                    if self.gpui_paint {
+                        DisplayItem::Quad {
+                            bounds: rect,
+                            corners,
+                            fill: Oklch::TRANSPARENT,
+                            border_widths: aqua_core::Insets::uniform(ring.width),
+                            border_color: ring.color,
+                            dashed: false,
+                        }
+                    } else {
+                        DisplayItem::Rect {
+                            bounds: rect,
+                            radius: paint.radius,
+                            fill: Oklch::TRANSPARENT,
+                            border_width: ring.width,
+                            border_color: ring.color,
+                            shadow: None,
+                        }
                     },
                 ));
             }
@@ -2608,8 +3481,17 @@ impl UiTree {
         if paint.text_color_map.is_some() {
             out.push((id, DisplayItem::PopTextColorMap));
         }
+        if paint.gpui_text_shimmer.is_some() {
+            out.push((id, DisplayItem::PopGpuiTextColorMap));
+        }
+        if paint.gpui_text_color_map.is_some() {
+            out.push((id, DisplayItem::PopGpuiTextColorMap));
+        }
         if paint.content_blur.is_some() {
             out.push((id, DisplayItem::PopContentBlur));
+        }
+        if paint.gpui_quad_pulse.is_some() {
+            out.push((id, DisplayItem::PopGpuiQuadPulse));
         }
         if transform.is_some() {
             out.push((id, DisplayItem::PopTransform));
@@ -2634,6 +3516,39 @@ impl UiTree {
             }
         }
         out
+    }
+}
+
+fn measure_leaf_gpui(
+    known_dimensions: taffy::geometry::Size<Option<f32>>,
+    available_space: taffy::geometry::Size<AvailableSpace>,
+    ctx: Option<&mut LeafCtx>,
+    measurer: &dyn TextMeasurer,
+    scale: f32,
+) -> taffy::geometry::Size<f32> {
+    let available = |value| match value {
+        AvailableSpace::Definite(value) => AvailableSpace::Definite(value / scale),
+        other => other,
+    };
+    let logical = measure_leaf(
+        taffy::geometry::Size {
+            width: known_dimensions.width.map(|value| value / scale),
+            height: known_dimensions.height.map(|value| value / scale),
+        },
+        taffy::geometry::Size {
+            width: available(available_space.width),
+            height: available(available_space.height),
+        },
+        ctx,
+        measurer,
+    );
+    let device = crate::layout::editor::snap_measured_size_to_device_pixels(
+        Size::new(logical.width, logical.height),
+        scale,
+    );
+    taffy::geometry::Size {
+        width: device.w,
+        height: device.h,
     }
 }
 
@@ -3182,6 +4097,7 @@ mod tests {
             }),
         );
         tree.fire_action(ActionEvent {
+            source: None,
             node: root,
             kind: ActionKind::Activate,
             text: None,

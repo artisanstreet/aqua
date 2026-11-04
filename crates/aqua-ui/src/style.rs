@@ -286,25 +286,40 @@ pub struct Shadow {
 }
 
 /// Paint properties shared by box-like nodes.
-pub use aqua_core::scene::ShadowLayer;
+pub use aqua_core::scene::{GpuiShadowLayer, ShadowLayer};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpuiBorder {
+    pub widths: Insets,
+    pub color: aqua_core::GpuiHsla,
+    pub dashed: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Paint {
+    pub gpui_quad_pulse: Option<aqua_core::scene::GpuiQuadPulse>,
     pub transform: Option<Transform2D>,
     pub content_blur: Option<f32>,
     pub text_color_map: Option<aqua_core::scene::TextColorMap>,
+    pub gpui_text_color_map: Option<aqua_core::scene::GpuiTextColorMap>,
+    pub gpui_text_shimmer: Option<aqua_core::scene::GpuiTextShimmer>,
     /// Background fill (`None` = transparent).
     pub fill: Option<Oklch>,
+    pub gpui_background: Option<aqua_core::GpuiBackground>,
     /// Uniform corner radius.
     pub radius: f32,
     /// Per-corner radii override (`None` = uniform `radius`).
     pub corners: Option<CornerRadii>,
     /// Border (`None` = no border).
     pub border: Option<Border>,
+    pub gpui_border: Option<GpuiBorder>,
+    pub border_widths: Option<Insets>,
+    pub border_dashed: bool,
     pub focus_ring: Option<Border>,
     /// Drop shadow (`None` = no shadow).
     pub shadow: Option<Shadow>,
     pub shadows: Vec<ShadowLayer>,
+    pub gpui_shadows: Vec<GpuiShadowLayer>,
     /// Clip children to this node's bounds (rounded by `radius`).
     pub clip: bool,
     /// Group opacity multiplier 0..=1 (`None` = opaque).
@@ -391,6 +406,7 @@ impl Default for Typography {
 /// grid-track setters clone into a `Vec` (documented, non-`const`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Style {
+    gpui_quad_pulse: Option<Option<aqua_core::scene::GpuiQuadPulse>>,
     width: Option<Length>,
     height: Option<Length>,
     min_width: Option<Length>,
@@ -413,20 +429,29 @@ pub struct Style {
     grid_rows: Option<Option<Vec<Length>>>,
     absolute: Option<Option<Absolute>>,
     fill: Option<Option<Oklch>>,
+    gpui_background: Option<Option<aqua_core::GpuiBackground>>,
     radius: Option<f32>,
     corners: Option<Option<CornerRadii>>,
     border: Option<Option<Border>>,
+    gpui_border: Option<Option<GpuiBorder>>,
+    border_widths: Option<Option<Insets>>,
+    border_dashed: Option<bool>,
     focus_ring: Option<Option<Border>>,
     shadow: Option<Option<Shadow>>,
     shadows: Option<Vec<ShadowLayer>>,
+    gpui_shadows: Option<Vec<GpuiShadowLayer>>,
     clip: Option<bool>,
     opacity: Option<Option<f32>>,
     transform: Option<Option<Transform2D>>,
     content_blur: Option<Option<f32>>,
     text_color_map: Option<Option<aqua_core::scene::TextColorMap>>,
+    gpui_text_color_map: Option<Option<aqua_core::scene::GpuiTextColorMap>>,
+    gpui_text_shimmer: Option<Option<aqua_core::scene::GpuiTextShimmer>>,
     font_size: Option<f32>,
     text_style: Option<TextStyle>,
     text_color: Option<Oklch>,
+    gpui_text_color: Option<Option<aqua_core::GpuiHsla>>,
+    gpui_source_text_color: Option<Option<aqua_core::GpuiTextColor>>,
     text_wrap: Option<bool>,
 }
 
@@ -435,6 +460,7 @@ impl Style {
     #[must_use]
     pub const fn new() -> Self {
         Self {
+            gpui_quad_pulse: None,
             width: None,
             height: None,
             min_width: None,
@@ -457,20 +483,29 @@ impl Style {
             grid_rows: None,
             absolute: None,
             fill: None,
+            gpui_background: None,
             radius: None,
             corners: None,
             border: None,
+            gpui_border: None,
+            border_widths: None,
+            border_dashed: None,
             focus_ring: None,
             shadow: None,
             shadows: None,
+            gpui_shadows: None,
             clip: None,
             opacity: None,
             transform: None,
             content_blur: None,
             text_color_map: None,
+            gpui_text_color_map: None,
+            gpui_text_shimmer: None,
             font_size: None,
             text_style: None,
             text_color: None,
+            gpui_text_color: None,
+            gpui_source_text_color: None,
             text_wrap: None,
         }
     }
@@ -478,7 +513,8 @@ impl Style {
     /// Whether no field is set (apply is a no-op).
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.width.is_none()
+        self.gpui_quad_pulse.is_none()
+            && self.width.is_none()
             && self.height.is_none()
             && self.min_width.is_none()
             && self.min_height.is_none()
@@ -500,20 +536,29 @@ impl Style {
             && self.grid_rows.is_none()
             && self.absolute.is_none()
             && self.fill.is_none()
+            && self.gpui_background.is_none()
             && self.radius.is_none()
             && self.corners.is_none()
             && self.border.is_none()
+            && self.gpui_border.is_none()
+            && self.border_widths.is_none()
+            && self.border_dashed.is_none()
             && self.focus_ring.is_none()
             && self.shadow.is_none()
             && self.shadows.is_none()
+            && self.gpui_shadows.is_none()
             && self.clip.is_none()
             && self.opacity.is_none()
             && self.transform.is_none()
             && self.content_blur.is_none()
             && self.text_color_map.is_none()
+            && self.gpui_text_color_map.is_none()
+            && self.gpui_text_shimmer.is_none()
             && self.text_style.is_none()
             && self.font_size.is_none()
             && self.text_color.is_none()
+            && self.gpui_text_color.is_none()
+            && self.gpui_source_text_color.is_none()
             && self.text_wrap.is_none()
     }
 
@@ -794,13 +839,27 @@ impl Style {
     /// Background fill.
     #[must_use]
     pub const fn background(mut self, color: Oklch) -> Self {
+        self.gpui_background = Some(None);
         self.fill = Some(Some(color));
+        self
+    }
+
+    #[must_use]
+    pub const fn gpui_background(mut self, background: aqua_core::GpuiBackground) -> Self {
+        self.fill = Some(None);
+        self.gpui_background = Some(Some(background));
+        self
+    }
+
+    pub const fn gpui_quad_pulse(mut self, pulse: aqua_core::scene::GpuiQuadPulse) -> Self {
+        self.gpui_quad_pulse = Some(Some(pulse));
         self
     }
 
     /// Clear the background (explicit none: transparent).
     #[must_use]
     pub const fn clear_background(mut self) -> Self {
+        self.gpui_background = Some(None);
         self.fill = Some(None);
         self
     }
@@ -830,6 +889,8 @@ impl Style {
     /// Uniform border.
     #[must_use]
     pub const fn border(mut self, border: Border) -> Self {
+        self.gpui_border = Some(None);
+        self.border_widths = Some(None);
         self.border = Some(Some(border));
         self
     }
@@ -847,13 +908,47 @@ impl Style {
     }
 
     pub const fn border_of(mut self, width: f32, color: Oklch) -> Self {
+        self.gpui_border = Some(None);
+        self.border_widths = Some(None);
         self.border = Some(Some(Border { width, color }));
+        self
+    }
+
+    #[must_use]
+    pub const fn gpui_border(
+        mut self,
+        widths: Insets,
+        color: aqua_core::GpuiHsla,
+        dashed: bool,
+    ) -> Self {
+        self.border = Some(None);
+        self.gpui_border = Some(Some(GpuiBorder {
+            widths,
+            color,
+            dashed,
+        }));
+        self
+    }
+
+    #[must_use]
+    pub const fn border_edges(mut self, widths: Insets, color: Oklch) -> Self {
+        self.gpui_border = Some(None);
+        self.border_widths = Some(Some(widths));
+        self.border = Some(Some(Border { width: 0.0, color }));
+        self
+    }
+
+    #[must_use]
+    pub const fn border_dashed(mut self, dashed: bool) -> Self {
+        self.border_dashed = Some(dashed);
         self
     }
 
     /// Clear the border (explicit none).
     #[must_use]
     pub const fn clear_border(mut self) -> Self {
+        self.gpui_border = Some(None);
+        self.border_widths = Some(None);
         self.border = Some(None);
         self
     }
@@ -881,6 +976,15 @@ impl Style {
     pub fn shadows(mut self, shadows: Vec<ShadowLayer>) -> Self {
         self.shadow = None;
         self.shadows = Some(shadows);
+        self.gpui_shadows = None;
+        self
+    }
+
+    #[must_use]
+    pub fn gpui_shadows(mut self, shadows: Vec<GpuiShadowLayer>) -> Self {
+        self.shadow = None;
+        self.shadows = None;
+        self.gpui_shadows = Some(shadows);
         self
     }
 
@@ -909,11 +1013,30 @@ impl Style {
     }
 
     pub const fn text_color_map(mut self, map: aqua_core::scene::TextColorMap) -> Self {
+        self.gpui_text_shimmer = Some(None);
+        self.gpui_text_color_map = Some(None);
         self.text_color_map = Some(Some(map));
         self
     }
 
+    #[must_use]
+    pub const fn gpui_text_color_map(mut self, map: aqua_core::scene::GpuiTextColorMap) -> Self {
+        self.gpui_text_shimmer = Some(None);
+        self.text_color_map = Some(None);
+        self.gpui_text_color_map = Some(Some(map));
+        self
+    }
+
+    pub const fn gpui_text_shimmer(mut self, shimmer: aqua_core::scene::GpuiTextShimmer) -> Self {
+        self.text_color_map = Some(None);
+        self.gpui_text_color_map = Some(None);
+        self.gpui_text_shimmer = Some(Some(shimmer));
+        self
+    }
+
     pub const fn clear_text_color_map(mut self) -> Self {
+        self.gpui_text_shimmer = Some(None);
+        self.gpui_text_color_map = Some(None);
         self.text_color_map = Some(None);
         self
     }
@@ -955,7 +1078,29 @@ impl Style {
     #[must_use]
     pub const fn text_color(mut self, color: Oklch) -> Self {
         self.text_color = Some(color);
+        self.gpui_text_color = Some(None);
+        self.gpui_source_text_color = Some(None);
         self
+    }
+
+    pub const fn gpui_text_color(mut self, color: aqua_core::GpuiHsla) -> Self {
+        self.gpui_text_color = Some(Some(color));
+        self.gpui_source_text_color = Some(None);
+        self
+    }
+
+    pub const fn gpui_source_text_color(mut self, color: aqua_core::GpuiTextColor) -> Self {
+        self.gpui_text_color = Some(None);
+        self.gpui_source_text_color = Some(Some(color));
+        self
+    }
+
+    pub const fn gpui_source_text_color_opt(&self) -> Option<Option<aqua_core::GpuiTextColor>> {
+        self.gpui_source_text_color
+    }
+
+    pub const fn gpui_text_color_opt(&self) -> Option<Option<aqua_core::GpuiHsla>> {
+        self.gpui_text_color
     }
 
     /// Static-label wrapping.
@@ -969,6 +1114,18 @@ impl Style {
     #[must_use]
     pub fn text_style(mut self, style: TextStyle) -> Self {
         self.font_size = Some(style.size_px);
+        if let Some([hue_degrees, saturation, lightness, alpha]) = style.gpui_source_color {
+            self.gpui_text_color = Some(None);
+            self.gpui_source_text_color = Some(Some(aqua_core::GpuiTextColor {
+                hue_degrees,
+                saturation,
+                lightness,
+                alpha,
+            }));
+        } else if let Some([h, s, l, a]) = style.gpui_color {
+            self.gpui_text_color = Some(Some(aqua_core::GpuiHsla { h, s, l, a }));
+            self.gpui_source_text_color = Some(None);
+        }
         self.text_style = Some(style);
         self
     }
@@ -1005,6 +1162,7 @@ impl Style {
                 }
             };
         }
+        take!(gpui_quad_pulse);
         take!(width);
         take!(height);
         take!(min_width);
@@ -1027,25 +1185,39 @@ impl Style {
         take!(grid_rows);
         take!(absolute);
         take!(fill);
+        take!(gpui_background);
         take!(radius);
         take!(corners);
         take!(border);
+        take!(gpui_border);
+        take!(border_widths);
+        take!(border_dashed);
         take!(focus_ring);
         if other.shadow.is_some() {
             self.shadow = other.shadow;
             self.shadows = None;
+            self.gpui_shadows = None;
         } else if let Some(shadows) = &other.shadows {
             self.shadow = None;
             self.shadows = Some(shadows.clone());
+            self.gpui_shadows = None;
+        } else if let Some(shadows) = &other.gpui_shadows {
+            self.shadow = None;
+            self.shadows = None;
+            self.gpui_shadows = Some(shadows.clone());
         }
         take!(clip);
         take!(opacity);
         take!(transform);
         take!(content_blur);
         take!(text_color_map);
+        take!(gpui_text_color_map);
+        take!(gpui_text_shimmer);
         take!(font_size);
         take!(text_style);
         take!(text_color);
+        take!(gpui_text_color);
+        take!(gpui_source_text_color);
         take!(text_wrap);
     }
 
@@ -1136,8 +1308,14 @@ impl Style {
         if let Some(v) = self.absolute {
             layout.absolute = v;
         }
+        if let Some(v) = self.gpui_quad_pulse {
+            paint.gpui_quad_pulse = v;
+        }
         if let Some(v) = self.fill {
             paint.fill = v;
+        }
+        if let Some(v) = self.gpui_background {
+            paint.gpui_background = v;
         }
         if let Some(v) = self.radius {
             paint.radius = v;
@@ -1151,12 +1329,27 @@ impl Style {
         if let Some(v) = self.border {
             paint.border = v;
         }
+        if let Some(v) = self.gpui_border {
+            paint.gpui_border = v;
+        }
+        if let Some(v) = self.border_widths {
+            paint.border_widths = v;
+        }
+        if let Some(v) = self.border_dashed {
+            paint.border_dashed = v;
+        }
         if let Some(v) = self.shadow {
             paint.shadow = v;
             paint.shadows.clear();
+            paint.gpui_shadows.clear();
         } else if let Some(v) = &self.shadows {
             paint.shadow = None;
             paint.shadows = v.clone();
+            paint.gpui_shadows.clear();
+        } else if let Some(v) = &self.gpui_shadows {
+            paint.shadow = None;
+            paint.shadows.clear();
+            paint.gpui_shadows = v.clone();
         }
         if let Some(v) = self.clip {
             paint.clip = v;
@@ -1169,6 +1362,12 @@ impl Style {
         }
         if let Some(v) = self.text_color_map {
             paint.text_color_map = v;
+        }
+        if let Some(v) = self.gpui_text_color_map {
+            paint.gpui_text_color_map = v;
+        }
+        if let Some(v) = self.gpui_text_shimmer {
+            paint.gpui_text_shimmer = v;
         }
         if let Some(v) = self.opacity {
             paint.opacity = v;
@@ -1196,11 +1395,19 @@ impl Style {
     /// Resolve typography against `Typography::default()`.
     #[must_use]
     pub fn resolve_typography(&self) -> Typography {
+        let mut text_style = self
+            .text_style
+            .clone()
+            .unwrap_or_else(|| Typography::default().text_style);
+        if let Some(color) = self.gpui_text_color {
+            text_style.gpui_color = color.map(|c| [c.h, c.s, c.l, c.a]);
+        }
+        if let Some(color) = self.gpui_source_text_color {
+            text_style.gpui_source_color =
+                color.map(|c| [c.hue_degrees, c.saturation, c.lightness, c.alpha]);
+        }
         Typography {
-            text_style: self
-                .text_style
-                .clone()
-                .unwrap_or_else(|| Typography::default().text_style),
+            text_style,
             font_size: self.font_size.unwrap_or(14.0),
             color: self.text_color.unwrap_or(Oklch::WHITE),
             wrap: self.text_wrap.unwrap_or(false),

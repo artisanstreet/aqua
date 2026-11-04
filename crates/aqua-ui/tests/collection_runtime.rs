@@ -165,6 +165,271 @@ fn text_node(tree: &UiTree, content: &str) -> Option<NodeId> {
     )
 }
 
+#[test]
+fn width_probe_measures_offscreen_row_and_updates_scroll_extent() {
+    let mut source = TSource::plain(1000);
+    let widest = "wide".repeat(80);
+    source.items[999].label = widest.clone();
+    let source = Rc::new(source);
+    let mut descriptor = desc_of(&source, true);
+    descriptor.width_probe = Some(999);
+    let mut tree = UiTree::new();
+    let runtime = Runtime::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    view.set_content(&mut tree, vec![Element::collection(descriptor)])
+        .unwrap();
+    drive(&mut view, &mut tree, 200.0, 160.0);
+    let root = view.root().unwrap();
+    assert!(tree.content_size(root).unwrap().w > 2000.0);
+    assert!(text_node(&tree, &widest).is_none());
+    assert!(source.row_calls.get() < 50);
+    assert!(tree.scroll_to(root, Point::new(800.0, 0.0)));
+    assert!(tree.scroll_offset(root).unwrap().x > 0.0);
+
+    struct DoubleWidth;
+    impl aqua_ui::layout::TextMeasurer for DoubleWidth {
+        fn measure_text(
+            &self,
+            text: &str,
+            font_size: f32,
+            max_width: Option<f32>,
+            multiline: bool,
+        ) -> Size {
+            let size = aqua_ui::layout::TextMeasurer::measure_text(
+                &NaiveMeasurer,
+                text,
+                font_size,
+                max_width,
+                multiline,
+            );
+            Size::new(size.w * 2.0, size.h)
+        }
+    }
+    let width = tree.content_size(root).unwrap().w;
+    view.compute_layout(&mut tree, Size::new(200.0, 160.0), &DoubleWidth)
+        .unwrap();
+    assert!(tree.content_size(root).unwrap().w > width * 1.5);
+
+    let replacement = Rc::new(TSource::plain(1000));
+    let mut descriptor = desc_of(&replacement, true);
+    descriptor.width_probe = Some(999);
+    view.set_content(&mut tree, vec![Element::collection(descriptor)])
+        .unwrap();
+    drive(&mut view, &mut tree, 200.0, 160.0);
+    assert!(tree.content_size(root).unwrap().w < 2000.0);
+}
+
+#[test]
+fn prepared_rows_fail_before_registration_and_remain_bounded_on_retry() {
+    use aqua_text::document::{SelectionDocumentId, SelectionSource, SelectionSourceId};
+    use aqua_ui::collection::{List, PreparedCollectionRow};
+    use std::sync::Arc;
+
+    let failing = Rc::new(Cell::new(true));
+    let calls = Rc::new(Cell::new(0));
+    let factory_failure = Rc::clone(&failing);
+    let factory_calls = Rc::clone(&calls);
+    let descriptor = List::new()
+        .items(0..1000usize)
+        .key(|index| *index)
+        .try_row(move |index| {
+            factory_calls.set(factory_calls.get() + 1);
+            if *index == 1 && factory_failure.get() {
+                return Err(CollectionError::Validation("unsupported row".into()));
+            }
+            Ok(PreparedCollectionRow {
+                element: ui::Text::builder().arg(format!("row-{index}")).build(),
+                selection_sources: vec![(
+                    SelectionDocumentId(3),
+                    SelectionSource {
+                        id: SelectionSourceId(*index as u64),
+                        order: vec![*index as u64],
+                        text: Arc::from(format!("complete body {index}")),
+                        separator: Arc::from("\n"),
+                        copies: Vec::new(),
+                    },
+                )],
+            })
+        })
+        .virtualize()
+        .descriptor();
+    let mut tree = UiTree::new();
+    let runtime = Runtime::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    view.set_content(&mut tree, vec![Element::collection(descriptor)])
+        .unwrap();
+    let registrations = Rc::new(Cell::new(0));
+    let registered = Rc::clone(&registrations);
+    let mut register = move |sources: Vec<(SelectionDocumentId, SelectionSource)>| {
+        registered.set(registered.get() + sources.len());
+        Ok(())
+    };
+    assert!(view
+        .compute_layout_with_row_sources(
+            &mut tree,
+            Size::new(200.0, 160.0),
+            &NaiveMeasurer,
+            &mut register
+        )
+        .is_err());
+    assert_eq!(registrations.get(), 0);
+    assert!(row_texts(&tree).is_empty());
+    failing.set(false);
+    view.compute_layout_with_row_sources(
+        &mut tree,
+        Size::new(200.0, 160.0),
+        &NaiveMeasurer,
+        &mut register,
+    )
+    .unwrap();
+    assert!(registrations.get() > 1);
+    assert!(calls.get() < 50);
+    let prior = registrations.get();
+    view.compute_layout_with_row_sources(
+        &mut tree,
+        Size::new(200.0, 160.0),
+        &NaiveMeasurer,
+        &mut register,
+    )
+    .unwrap();
+    assert_eq!(registrations.get(), prior);
+    let root = view.root().unwrap();
+    assert!(tree.scroll_to(root, Point::new(0.0, 8000.0)));
+    view.compute_layout_with_row_sources(
+        &mut tree,
+        Size::new(200.0, 160.0),
+        &NaiveMeasurer,
+        &mut register,
+    )
+    .unwrap();
+    assert!(registrations.get() > prior);
+    assert!(calls.get() < 100);
+    let before_refresh = registrations.get();
+    let replacement = List::new()
+        .items(0..1000usize)
+        .key(|index| *index)
+        .try_row(|index| {
+            Ok(PreparedCollectionRow {
+                element: ui::Text::builder().arg(format!("new-{index}")).build(),
+                selection_sources: vec![(
+                    SelectionDocumentId(3),
+                    SelectionSource {
+                        id: SelectionSourceId(*index as u64),
+                        order: vec![*index as u64],
+                        text: Arc::from(format!("new complete body {index}")),
+                        separator: Arc::from("\n"),
+                        copies: Vec::new(),
+                    },
+                )],
+            })
+        })
+        .virtualize()
+        .descriptor();
+    view.set_content(&mut tree, vec![Element::collection(replacement)])
+        .unwrap();
+    view.compute_layout_with_row_sources(
+        &mut tree,
+        Size::new(200.0, 160.0),
+        &NaiveMeasurer,
+        &mut register,
+    )
+    .unwrap();
+    assert!(registrations.get() > before_refresh);
+}
+
+#[test]
+fn fallible_list_width_probe_uses_only_inert_factory() {
+    use aqua_ui::collection::{List, PreparedCollectionRow};
+
+    let probed = Rc::new(Cell::new(0));
+    let prepared_probe = Rc::new(Cell::new(false));
+    let probe_calls = Rc::clone(&probed);
+    let prepared = Rc::clone(&prepared_probe);
+    let descriptor = List::new()
+        .items(0..1000usize)
+        .key(|index| *index)
+        .row(move |index| {
+            if *index == 999 {
+                probe_calls.set(probe_calls.get() + 1);
+            }
+            ui::Text::builder().arg("wide".repeat(80)).build()
+        })
+        .try_row(move |index| {
+            if *index == 999 {
+                prepared.set(true);
+            }
+            Ok(PreparedCollectionRow {
+                element: ui::Text::builder().arg(format!("row-{index}")).build(),
+                selection_sources: Vec::new(),
+            })
+        })
+        .width_probe(999)
+        .virtualize()
+        .descriptor();
+    let mut tree = UiTree::new();
+    let runtime = Runtime::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    view.set_content(&mut tree, vec![Element::collection(descriptor)])
+        .unwrap();
+    drive(&mut view, &mut tree, 200.0, 160.0);
+    assert!(probed.get() > 0);
+    assert!(!prepared_probe.get());
+    assert!(tree.content_size(view.root().unwrap()).unwrap().w > 2000.0);
+}
+
+#[test]
+fn width_sensitive_rows_use_committed_inner_width_on_first_frame_and_resize() {
+    use aqua_core::Insets;
+    use aqua_ui::collection::{BatchedCollectionRow, List};
+    use aqua_ui::style::{Length, Style};
+    use std::cell::RefCell;
+
+    let measured = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&measured);
+    let descriptor = List::new()
+        .items(0..1000usize)
+        .key(|index| *index)
+        .try_batched_row_with_layout(move |index, layout| {
+            seen.borrow_mut().push((*index, layout.content_width));
+            Ok(BatchedCollectionRow {
+                element: ui::Text::builder().arg(format!("row-{index}")).build(),
+                batches: Vec::new(),
+            })
+        })
+        .style(
+            Style::new()
+                .width(Length::Pct(50.0))
+                .height(Length::Px(160.0))
+                .padding_insets(Insets {
+                    left: 20.0,
+                    right: 30.0,
+                    top: 0.0,
+                    bottom: 0.0,
+                }),
+        )
+        .virtualize()
+        .descriptor();
+    let mut tree = UiTree::new();
+    let runtime = Runtime::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    view.set_content(&mut tree, vec![Element::collection(descriptor)])
+        .unwrap();
+    assert!(measured.borrow().is_empty());
+    drive(&mut view, &mut tree, 1000.0, 400.0);
+    let initial = measured.borrow().clone();
+    assert!(!initial.is_empty());
+    assert!(initial.len() < 50);
+    assert!(initial.iter().all(|(_, width)| *width == 450.0));
+    drive(&mut view, &mut tree, 1000.0, 400.0);
+    assert_eq!(measured.borrow().len(), initial.len());
+    drive(&mut view, &mut tree, 800.0, 400.0);
+    let next = measured.borrow();
+    let resized = &next[initial.len()..];
+    assert!(!resized.is_empty());
+    assert!(resized.len() < 50);
+    assert!(resized.iter().all(|(_, width)| *width == 350.0));
+}
+
 /// Static texts under `id` (descendant walk): roles sit on row wrapper
 /// nodes, readable text on their children.
 fn descendant_texts(tree: &UiTree, id: NodeId) -> Vec<String> {
@@ -1018,6 +1283,7 @@ fn reorder_preserves_focus_and_edits() {
     assert!(tree.set_focusable(target, true));
     assert!(tree.set_focused(Some(target)));
     tree.fire_action(ActionEvent {
+        source: None,
         node: target,
         kind: ActionKind::TextChanged,
         text: Some("item-5!".to_string()),
@@ -1131,4 +1397,252 @@ fn table_horizontal_scroll_moves_header_and_body_together() {
         "shared plan holds while scrolled"
     );
     assert_header_visible_at(&tree, "Name", "name-0");
+}
+
+#[test]
+fn pixel_overscan_and_viewport_reports_follow_measured_geometry() {
+    use aqua_ui::collection_runtime::CollectionState;
+    use std::cell::RefCell;
+    let source = Rc::new(TSource::plain(100));
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let capture = Rc::clone(&reports);
+    let mut descriptor = desc_of(&source, true);
+    descriptor.overscan_pixels = Some(50.0);
+    descriptor.on_viewport = Some(Rc::new(move |report| capture.borrow_mut().push(report)));
+    let mut state = CollectionState::new(descriptor).unwrap();
+    state.set_viewport(400.0, 64.0);
+    state.set_scroll(0.0, 320.0);
+    let window = state.desired_window();
+    assert_eq!((window.start, window.end), (8, 14));
+    state.set_mounted(window);
+    let report = *reports.borrow().last().unwrap();
+    assert_eq!((report.visible.start, report.visible.end), (10, 13));
+    assert_eq!(report.distance_from_start, 320.0);
+    assert_eq!(report.distance_from_end, 2816.0);
+    state.set_scroll(0.0, 321.0);
+    assert_eq!(reports.borrow().last().unwrap().scroll_y, 321.0);
+    assert!(state.note_measured(8, 64.0, 0.0, 0.0));
+    assert_eq!(state.scroll().1, 353.0);
+}
+
+#[test]
+fn initial_row_heights_and_reveal_use_cumulative_geometry() {
+    use aqua_ui::collection_runtime::CollectionState;
+    let source = Rc::new(TSource::plain(100));
+    let mut descriptor = desc_of(&source, true);
+    descriptor.initial_height = Some(Rc::new(|index| if index == 0 { 100.0 } else { 20.0 }));
+    let mut state = CollectionState::new(descriptor).unwrap();
+    state.set_viewport(400.0, 60.0);
+    assert_eq!(state.offset_of(10), 280.0);
+    assert!(state.reveal_index(10));
+    assert_eq!(state.scroll().1, 240.0);
+    assert!(state.note_measured(0, 120.0, 0.0, 0.0));
+    assert_eq!(state.scroll().1, 260.0);
+    assert!(!state.reveal_index(100));
+}
+
+#[test]
+fn aligned_reveal_uses_fixed_and_uniform_geometry_and_waits_for_measurement() {
+    use aqua_ui::collection_runtime::{CollectionRevealAlignment, CollectionState};
+    let source = Rc::new(TSource::plain(100));
+    let mut descriptor = desc_of(&source, true);
+    descriptor.fixed_row_height = true;
+    let mut fixed = CollectionState::new(descriptor).unwrap();
+    assert!(!fixed.reveal_index_aligned(5, CollectionRevealAlignment::Start));
+    fixed.set_viewport(200.0, 96.0);
+    assert!(fixed.reveal_index_aligned(10, CollectionRevealAlignment::Start));
+    assert_eq!(fixed.scroll().1, 320.0);
+    assert!(fixed.reveal_index_aligned(11, CollectionRevealAlignment::Nearest));
+    assert_eq!(fixed.scroll().1, 320.0);
+    assert!(fixed.reveal_index_aligned(11, CollectionRevealAlignment::Start));
+    assert_eq!(fixed.scroll().1, 352.0);
+    assert!(fixed.reveal_index_aligned(15, CollectionRevealAlignment::End));
+    assert_eq!(fixed.scroll().1, 416.0);
+    assert!(fixed.reveal_index_aligned(99, CollectionRevealAlignment::Start));
+    assert_eq!(fixed.scroll().1, 3104.0);
+    assert!(!fixed.reveal_index_aligned(100, CollectionRevealAlignment::Start));
+
+    let mut descriptor = desc_of(&source, true);
+    descriptor.measured_uniform_rows = true;
+    let mut uniform = CollectionState::new(descriptor).unwrap();
+    uniform.set_viewport(200.0, 96.0);
+    assert_eq!(
+        uniform.reveal_target_at(10, CollectionRevealAlignment::Start, 0.0),
+        None
+    );
+    assert!(!uniform.reveal_index_aligned(10, CollectionRevealAlignment::Start));
+    assert!(uniform.note_measured(0, 24.0, 0.0, 0.0));
+    assert_eq!(
+        uniform.reveal_target_at(10, CollectionRevealAlignment::Start, 0.0),
+        Some(240.0)
+    );
+    assert_eq!(uniform.scroll().1, 0.0);
+    assert!(uniform.reveal_index_aligned(10, CollectionRevealAlignment::Start));
+    assert_eq!(uniform.scroll().1, 240.0);
+    assert!(uniform.reveal_index_aligned(99, CollectionRevealAlignment::Start));
+    assert_eq!(uniform.scroll().1, 2304.0);
+}
+
+#[test]
+fn aligned_view_reveal_waits_for_a_committed_viewport() {
+    use aqua_ui::collection_runtime::CollectionRevealAlignment;
+    let source = Rc::new(TSource::plain(100));
+    let mut descriptor = desc_of(&source, true);
+    descriptor.fixed_row_height = true;
+    let mut tree = UiTree::new();
+    let runtime = Runtime::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    view.set_content(&mut tree, vec![Element::collection(descriptor)])
+        .unwrap();
+    let root = view.root().unwrap();
+    assert!(!view.reveal_collection_index_aligned(
+        &mut tree,
+        root,
+        10,
+        CollectionRevealAlignment::Start
+    ));
+    assert!(view
+        .collection_index_target_aligned(&tree, root, 10, CollectionRevealAlignment::Start)
+        .is_none());
+    drive(&mut view, &mut tree, 200.0, 160.0);
+    let original = tree.scroll_offset(root).unwrap();
+    assert_eq!(tree.content_size(root).unwrap().h, 3200.0);
+    assert_eq!(
+        view.collection_index_target_aligned(&tree, root, 10, CollectionRevealAlignment::Start)
+            .unwrap()
+            .y,
+        320.0
+    );
+    assert_eq!(tree.scroll_offset(root).unwrap(), original);
+    assert_eq!(
+        view.collection_index_target_aligned(&tree, root, 99, CollectionRevealAlignment::Start)
+            .unwrap()
+            .y,
+        3040.0
+    );
+    assert!(tree.scroll_to(root, Point::new(0.0, 3040.0)));
+    assert_eq!(tree.scroll_offset(root).unwrap().y, 3040.0);
+    assert!(tree.scroll_to(root, Point::new(0.0, 320.0)));
+    assert_eq!(
+        view.collection_index_target_aligned(&tree, root, 11, CollectionRevealAlignment::Nearest)
+            .unwrap()
+            .y,
+        320.0
+    );
+    assert_eq!(tree.scroll_offset(root).unwrap().y, 320.0);
+    assert!(tree.scroll_to(root, Point::new(0.0, 0.0)));
+    assert!(view.reveal_collection_index_aligned(
+        &mut tree,
+        root,
+        10,
+        CollectionRevealAlignment::Start
+    ));
+    assert_eq!(tree.scroll_offset(root).unwrap().y, 320.0);
+}
+
+#[test]
+fn stable_indexed_collection_does_not_allocate_or_scan_all_rows() {
+    use aqua_ui::collection_runtime::CollectionState;
+    struct Huge {
+        keys: Cell<usize>,
+    }
+    impl CollectionSource for Huge {
+        fn len(&self) -> usize {
+            1_000_000
+        }
+        fn stable_indexed(&self) -> bool {
+            true
+        }
+        fn key(&self, index: usize) -> Key {
+            self.keys.set(self.keys.get() + 1);
+            Key::Usize(index)
+        }
+        fn layout(&self, available_width: f32) -> CollectionLayout {
+            CollectionLayout {
+                content_width: available_width,
+                column_widths: Vec::new(),
+            }
+        }
+        fn row(&self, _: usize, _: &CollectionLayout) -> Element {
+            ui::Box::builder().build()
+        }
+        fn header(&self, _: &CollectionLayout) -> Option<Element> {
+            None
+        }
+        fn role(&self) -> CollectionRole {
+            CollectionRole::List
+        }
+        fn validate(&self) -> Result<(), CollectionError> {
+            Ok(())
+        }
+    }
+    let source = Rc::new(Huge { keys: Cell::new(0) });
+    let descriptor = CollectionDescriptor::new(source.clone(), Vec::new(), true, 32.0, 4);
+    let mut state = CollectionState::new(descriptor.clone()).unwrap();
+    assert_eq!(source.keys.get(), 0);
+    state.set_viewport(400.0, 128.0);
+    assert!(state.reveal_index(500_000));
+    let window = state.desired_window();
+    assert!(window.contains(500_000));
+    state.set_mounted(window);
+    assert!(source.keys.get() < 100);
+    assert!(state.note_measured(window.start, 40.0, 0.0, 0.0));
+    state.refresh(descriptor).unwrap();
+    assert!(state.desired_window().contains(500_000));
+    assert!(source.keys.get() < 200);
+}
+
+#[test]
+fn fixed_height_policy_ignores_row_measurements() {
+    use aqua_ui::collection_runtime::CollectionState;
+    let source = Rc::new(TSource::plain(50));
+    let mut descriptor = desc_of(&source, true);
+    descriptor.fixed_row_height = true;
+    let mut state = CollectionState::new(descriptor).unwrap();
+    state.set_viewport(400.0, 96.0);
+    state.set_scroll(0.0, 320.0);
+    assert!(!state.note_measured(0, 100.0, 0.0, 0.0));
+    assert_eq!(state.offset_of(10), 320.0);
+    assert_eq!(state.scroll().1, 320.0);
+}
+
+#[test]
+fn uniform_rows_use_first_row_measurement_and_keep_the_scroll_anchor() {
+    use aqua_ui::collection_runtime::CollectionState;
+    let source = Rc::new(TSource::plain(100));
+    let mut descriptor = desc_of(&source, true);
+    descriptor.measured_uniform_rows = true;
+    let mut state = CollectionState::new(descriptor).unwrap();
+    state.set_viewport(400.0, 96.0);
+    state.set_scroll(0.0, 325.0);
+    let runs = state.mounted_runs(state.desired_window());
+    assert_eq!(runs[0].start, 0);
+    assert_eq!(runs[0].end, 1);
+    assert!(!state.note_measured(10, 80.0, 0.0, 0.0));
+    assert!(state.note_measured(0, 40.0, 0.0, 0.0));
+    assert_eq!(state.offset_of(10), 400.0);
+    assert_eq!(state.scroll().1, 405.0);
+    assert!(!state.note_measured(1, 90.0, 0.0, 0.0));
+    state.set_viewport(500.0, 96.0);
+    assert!(state.note_measured(0, 20.0, 0.0, 0.0));
+    assert_eq!(state.offset_of(10), 200.0);
+    assert_eq!(state.scroll().1, 205.0);
+}
+
+#[test]
+fn viewport_callback_waits_for_a_real_viewport() {
+    use aqua_ui::collection_runtime::CollectionState;
+    use std::cell::RefCell;
+    let source = Rc::new(TSource::plain(100));
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let capture = Rc::clone(&reports);
+    let mut descriptor = desc_of(&source, true);
+    descriptor.on_viewport = Some(Rc::new(move |report| capture.borrow_mut().push(report)));
+    let mut state = CollectionState::new(descriptor).unwrap();
+    state.set_viewport(0.0, 0.0);
+    state.set_scroll(0.0, 0.0);
+    state.set_mounted(state.desired_window());
+    assert!(reports.borrow().is_empty());
+    state.set_viewport(400.0, 96.0);
+    assert!(!reports.borrow().is_empty());
 }

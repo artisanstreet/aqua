@@ -10,7 +10,7 @@ use crate::style::{Absolute, Length};
 use crate::tree::{NodeSpec, UiTree};
 use aqua_core::id::RawId;
 use aqua_core::{InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Point, Rect, Size};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 #[derive(Debug)]
@@ -52,9 +52,11 @@ impl<'a> FocusControl for TreeFocus<'a> {
 pub struct OverlayHost {
     closed: Vec<ClosedOverlay>,
     pointer_anchors: HashMap<RawId, Point>,
+    pointer_tooltips: HashSet<RawId>,
     service: OverlayService,
     motion: MotionController,
     mounts: HashMap<RawId, NodeId>,
+    measured: HashSet<RawId>,
     saved_focus: HashMap<RawId, Option<NodeId>>,
     viewport: Rect,
 }
@@ -67,7 +69,9 @@ impl OverlayHost {
             motion: MotionController::new(ReducedMotion::Full),
             closed: Vec::new(),
             pointer_anchors: HashMap::new(),
+            pointer_tooltips: HashSet::new(),
             mounts: HashMap::new(),
+            measured: HashSet::new(),
             saved_focus: HashMap::new(),
             viewport,
         }
@@ -124,6 +128,26 @@ impl OverlayHost {
         request: PopupRequest,
         at: Option<Point>,
     ) -> Result<OverlayId, HostError> {
+        self.open_popup_at_with_measurer(tree, request, at, None)
+    }
+
+    pub fn open_popup_measured(
+        &mut self,
+        tree: &mut UiTree,
+        request: PopupRequest,
+        at: Option<Point>,
+        measurer: &dyn crate::layout::TextMeasurer,
+    ) -> Result<OverlayId, HostError> {
+        self.open_popup_at_with_measurer(tree, request, at, Some(measurer))
+    }
+
+    fn open_popup_at_with_measurer(
+        &mut self,
+        tree: &mut UiTree,
+        request: PopupRequest,
+        at: Option<Point>,
+        measurer: Option<&dyn crate::layout::TextMeasurer>,
+    ) -> Result<OverlayId, HostError> {
         let root = tree.root().ok_or(HostError::NoRoot)?;
         if tree.get(request.owner).is_none() {
             return Err(HostError::UnknownOwner);
@@ -132,8 +156,11 @@ impl OverlayHost {
         let anchor = at.map_or(owner_anchor, |point| {
             Rect::from_origin_size(point, Size::ZERO)
         });
-        let (w, h) = fixed_size(&request.content).ok_or(HostError::ContentSizeNotFixed)?;
-        let size = Size::new(w, h);
+        let size = fixed_size(&request.content).map(|(w, h)| Size::new(w, h));
+        let measured = size.is_none();
+        if size.is_none() && measurer.is_none() {
+            return Err(HostError::ContentSizeNotFixed);
+        }
 
         let mut provisional = request.content;
         provisional.style.absolute = Some(Absolute {
@@ -143,6 +170,27 @@ impl OverlayHost {
             bottom: None,
         });
         let popup_root = mount_detached(tree, Some(root), provisional);
+
+        let size = match (size, measurer) {
+            (Some(size), _) => size,
+            (None, Some(measurer)) => {
+                if tree.compute_layout(self.viewport.size(), measurer).is_err() {
+                    tree.remove(popup_root);
+                    return Err(HostError::ContentSizeNotFixed);
+                }
+                match tree.rect(popup_root) {
+                    Some(bounds) if bounds.w > 0.0 && bounds.h > 0.0 => bounds.size(),
+                    _ => {
+                        tree.remove(popup_root);
+                        return Err(HostError::ContentSizeNotFixed);
+                    }
+                }
+            }
+            (None, None) => {
+                tree.remove(popup_root);
+                return Err(HostError::ContentSizeNotFixed);
+            }
+        };
 
         let service_request = OverlayRequest {
             owner: request.owner,
@@ -194,6 +242,9 @@ impl OverlayHost {
         }
         tree.mark_portal(popup_root);
         self.mounts.insert(id.raw(), popup_root);
+        if measured {
+            self.measured.insert(id.raw());
+        }
         if let Some(point) = at {
             self.pointer_anchors.insert(id.raw(), point);
         }
@@ -243,6 +294,8 @@ impl OverlayHost {
         }
         self.mounts
             .retain(|raw, _| self.service.is_open(OverlayId::from_raw(*raw)));
+        self.measured
+            .retain(|raw| self.service.is_open(OverlayId::from_raw(*raw)));
         closed
     }
 
@@ -253,7 +306,48 @@ impl OverlayHost {
             .get(&overlay.raw())
             .map(|point| Rect::from_origin_size(*point, Size::ZERO))
             .or_else(|| visible_rect(tree, owner))?;
-        let bounds = self.service.reposition(overlay, anchor)?;
+        if self.measured.contains(&overlay.raw()) {
+            if let Some(size) = self
+                .mounts
+                .get(&overlay.raw())
+                .and_then(|root| tree.rect(*root))
+                .map(|bounds| bounds.size())
+            {
+                self.service.set_size(overlay, size);
+            }
+        }
+        let bounds = if self.pointer_tooltips.contains(&overlay.raw()) {
+            let size = self
+                .mounts
+                .get(&overlay.raw())
+                .and_then(|root| tree.rect(*root))
+                .map(|bounds| bounds.size())
+                .unwrap_or(self.service.bounds(overlay)?.size());
+            let pointer = self.pointer_anchors.get(&overlay.raw()).copied()?;
+            let mut x = pointer.x + 1.0;
+            let mut y = pointer.y + 1.0;
+            if x + size.w > self.viewport.right() {
+                let flipped = pointer.x - size.w - 1.0;
+                x = if flipped >= 0.0 {
+                    flipped
+                } else {
+                    (x - (x + size.w) - self.viewport.right()).max(0.0)
+                };
+            }
+            if y + size.h > self.viewport.bottom() {
+                let flipped = pointer.y - size.h - 1.0;
+                y = if flipped >= 0.0 {
+                    flipped
+                } else {
+                    (y - (y + size.h) - self.viewport.bottom()).max(0.0)
+                };
+            }
+            let bounds = Rect::from_origin_size(Point::new(x, y), size);
+            self.service.set_bounds(overlay, bounds);
+            bounds
+        } else {
+            self.service.reposition(overlay, anchor)?
+        };
         if let Some(root) = self.mounts.get(&overlay.raw()).copied() {
             if let Some(rec) = tree.get(root) {
                 let mut style = rec.style.clone();
@@ -263,10 +357,56 @@ impl OverlayHost {
                     right: None,
                     bottom: None,
                 });
+                tree.set_interaction_base_absolute(root, style.absolute);
                 tree.set_style(root, style);
             }
         }
         Some(bounds)
+    }
+
+    pub fn set_popup_uncontained(
+        &mut self,
+        tree: &mut UiTree,
+        overlay: OverlayId,
+        uncontained: bool,
+    ) -> Option<Rect> {
+        if !self.service.set_uncontained(overlay, uncontained) {
+            return None;
+        }
+        self.reanchor_popup(tree, overlay)
+    }
+
+    pub fn set_popup_placement(
+        &mut self,
+        tree: &mut UiTree,
+        overlay: OverlayId,
+        placement: crate::overlay::Placement,
+    ) -> Option<Rect> {
+        if !self.service.set_placement(overlay, placement) {
+            return None;
+        }
+        self.reanchor_popup(tree, overlay)
+    }
+
+    pub fn set_popup_pointer_anchor(
+        &mut self,
+        tree: &mut UiTree,
+        overlay: OverlayId,
+        point: Point,
+    ) -> Option<Rect> {
+        self.service.owner_of(overlay)?;
+        if !self.pointer_anchors.contains_key(&overlay.raw()) {
+            return None;
+        }
+        tree.drain_commands();
+        *self.pointer_anchors.get_mut(&overlay.raw())? = point;
+        self.reanchor_popup(tree, overlay)
+    }
+
+    pub fn set_pointer_tooltip(&mut self, tree: &mut UiTree, overlay: OverlayId) -> Option<Rect> {
+        self.pointer_tooltips.insert(overlay.raw());
+        self.service.set_uncontained(overlay, true);
+        self.reanchor_popup(tree, overlay)
     }
 
     pub fn reanchor_all(&mut self, tree: &mut UiTree) -> Vec<OverlayId> {
@@ -547,6 +687,8 @@ impl OverlayHost {
         self.closed.extend_from_slice(closed);
         for entry in closed {
             self.pointer_anchors.remove(&entry.id.raw());
+            self.pointer_tooltips.remove(&entry.id.raw());
+            self.measured.remove(&entry.id.raw());
         }
         let mut ancestor = tree.focused();
         let mut removed_focus = false;

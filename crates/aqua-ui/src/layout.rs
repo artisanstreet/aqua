@@ -195,3 +195,80 @@ mod tests {
         assert!((s.w - 4.0 * 0.6 * 10.0).abs() < 1e-4, "{s:?}");
     }
 }
+
+pub mod editor;
+
+#[derive(Clone)]
+pub struct ProfiledCosmicMeasurer {
+    pub fonts: SharedFonts,
+    pub scale: f32,
+    pub gpui_line_height: bool,
+    pub gpui_wrap: bool,
+}
+
+impl ProfiledCosmicMeasurer {
+    fn logical_size(&self, (width, height): (f32, f32)) -> Size {
+        let scale = self.scale.max(0.01);
+        let width = width / scale;
+        Size::new(
+            if self.gpui_wrap { width.ceil() } else { width },
+            height / scale,
+        )
+    }
+}
+
+impl TextMeasurer for ProfiledCosmicMeasurer {
+    fn measure_text(
+        &self,
+        text: &str,
+        font_size: f32,
+        max_width: Option<f32>,
+        multiline: bool,
+    ) -> Size {
+        let style = TextStyle {
+            size_px: font_size,
+            line_height_px: font_size * 1.2,
+            ..TextStyle::default()
+        };
+        let mut layout = TextLayout::new();
+        layout.set_gpui_line_height(self.gpui_line_height);
+        layout.set_gpui_wrap(self.gpui_wrap);
+        layout.set_text(text, &style);
+        layout.set_line_mode(LineMode::Multi);
+        layout.set_max_width(if multiline { max_width } else { None });
+        layout.set_scale(self.scale);
+        let laid = layout.layout(&mut self.fonts.lock());
+        self.logical_size(laid.size)
+    }
+
+    fn measure_styled(
+        &self,
+        text: &str,
+        style: &TextStyle,
+        spans: &[StyledSpan],
+        max_width: Option<f32>,
+        multiline: bool,
+    ) -> Size {
+        let mut layout = TextLayout::new();
+        layout.set_gpui_line_height(self.gpui_line_height);
+        layout.set_gpui_wrap(self.gpui_wrap);
+        match spans.is_empty() {
+            true => layout.set_text(text, style),
+            false => layout.set_spans(spans.to_vec()),
+        }
+        layout.set_line_mode(if multiline {
+            LineMode::Multi
+        } else {
+            LineMode::Single
+        });
+        layout.set_wrap(if multiline {
+            WrapMode::Word
+        } else {
+            WrapMode::None
+        });
+        layout.set_max_width(if multiline { max_width } else { None });
+        layout.set_scale(self.scale);
+        let laid = layout.layout(&mut self.fonts.lock());
+        self.logical_size(laid.size)
+    }
+}

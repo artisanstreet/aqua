@@ -21,7 +21,8 @@ use aqua_core::{CollectionSemantics, NodeId, Point, RawId, Role, Size};
 use aqua_reactive::{ReadSignal, Scope, WriteSignal};
 
 use crate::collection_runtime::{
-    spacer_spec, CollectionDescriptor, CollectionLayout, CollectionRole, CollectionState,
+    spacer_spec, CollectionDescriptor, CollectionLayout, CollectionRevealAlignment, CollectionRole,
+    CollectionRowRegistration, CollectionRowSources, CollectionState,
 };
 use crate::element::{
     lower_specs, lower_specs_in, splice_top_level, Element, ElementBinding, LowerError, TypoChain,
@@ -163,6 +164,10 @@ struct CollectionMount {
     /// Adoption settles within the mounting frame's bounded passes — never
     /// deferred, so idle apps still paint correct first-frame columns.
     built_plan: CollectionLayout,
+    probe_width: f32,
+    probe_changed: bool,
+    spacers_stale: bool,
+    width_node: Option<NodeId>,
     /// Mirrored pin (the state holds the authoritative one; the mirror
     /// detects focus changes without a state getter).
     pin: Option<u64>,
@@ -171,6 +176,7 @@ struct CollectionMount {
     /// actual clamped offset. Ordinary frames never write — the tree offset
     /// is authoritative input there.
     scroll_restore_pending: bool,
+    last_tree_scroll: Option<f32>,
 }
 
 /// Retained table header: the bar element plus its mounted nodes
@@ -183,6 +189,7 @@ struct RetainedHeader {
 /// Child slots of one body realization, in paint order.
 enum BodyTag {
     Spacer,
+    Width,
     Row(usize),
 }
 
@@ -194,13 +201,280 @@ fn same_desc(prev: &CollectionDescriptor, next: &CollectionDescriptor) -> bool {
         && prev.virtualized == next.virtualized
         && prev.estimated_row_height.to_bits() == next.estimated_row_height.to_bits()
         && prev.overscan == next.overscan
+        && prev.overscan_pixels == next.overscan_pixels
+        && prev.fixed_row_height == next.fixed_row_height
+        && prev.measured_uniform_rows == next.measured_uniform_rows
+        && prev.width_probe == next.width_probe
+        && match (&prev.on_viewport, &next.on_viewport) {
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+        && match (&prev.initial_height, &next.initial_height) {
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
         && prev.styles == next.styles
 }
 
 impl View {
+    pub fn observe_collection_scrolls(&mut self, tree: &UiTree) {
+        for mount in self.collections.values_mut() {
+            if !matches!(
+                mount.state.follow_state(),
+                crate::collection_runtime::FollowState::Tail { .. }
+            ) {
+                continue;
+            }
+            let body = match mount.state.descriptor().source.role() {
+                CollectionRole::List => Some(mount.container),
+                CollectionRole::Table => tree
+                    .get(mount.container)
+                    .and_then(|record| record.children.get(1))
+                    .copied(),
+            };
+            let Some(offset) = body.and_then(|body| tree.scroll_offset(body)) else {
+                continue;
+            };
+            if mount
+                .last_tree_scroll
+                .is_some_and(|previous| previous != offset.y)
+            {
+                mount.state.set_scroll(offset.x, offset.y);
+            }
+            mount.last_tree_scroll = Some(offset.y);
+        }
+    }
+
+    pub fn scroll_collection_to(
+        &mut self,
+        tree: &mut UiTree,
+        container: NodeId,
+        offset: Point,
+    ) -> bool {
+        let Some(mount) = self.collections.get_mut(&container.raw()) else {
+            return false;
+        };
+        let body = match mount.state.descriptor().source.role() {
+            CollectionRole::List => Some(container),
+            CollectionRole::Table => tree
+                .get(container)
+                .and_then(|record| record.children.get(1))
+                .copied(),
+        };
+        let Some(body) = body else {
+            return false;
+        };
+        if tree.get(body).is_none() || !offset.x.is_finite() || !offset.y.is_finite() {
+            return false;
+        }
+        tree.scroll_to(body, offset);
+        let Some(actual) = tree.scroll_offset(body) else {
+            return false;
+        };
+        mount.state.scroll_to(actual.x, actual.y);
+        mount.last_tree_scroll = Some(actual.y);
+        true
+    }
+
+    pub fn collection_follow_state(
+        &self,
+        container: NodeId,
+    ) -> Option<crate::collection_runtime::FollowState> {
+        Some(self.collections.get(&container.raw())?.state.follow_state())
+    }
+
+    pub fn set_collection_follow_mode(
+        &mut self,
+        tree: &mut UiTree,
+        container: NodeId,
+        mode: crate::collection_runtime::FollowMode,
+    ) -> bool {
+        let Some(mount) = self.collections.get_mut(&container.raw()) else {
+            return false;
+        };
+        if tree.get(container).is_none() {
+            return false;
+        }
+        mount.state.set_follow_mode(mode);
+        mount.scroll_restore_pending = false;
+        tree.mark_layout_dirty(container);
+        true
+    }
+
+    pub fn pause_collection_following_tail(
+        &mut self,
+        tree: &mut UiTree,
+        container: NodeId,
+    ) -> bool {
+        let Some(mount) = self.collections.get_mut(&container.raw()) else {
+            return false;
+        };
+        if tree.get(container).is_none() {
+            return false;
+        }
+        mount.state.pause_following_tail();
+        tree.mark_layout_dirty(container);
+        true
+    }
+
+    pub fn update_collection_item_height(
+        &mut self,
+        tree: &mut UiTree,
+        collection_key: impl Into<crate::element::Key>,
+        index: usize,
+        height: f32,
+    ) -> bool {
+        let key = crate::tree::hash_key(collection_key.into());
+        let Some(mount) = self.collections.values_mut().find(|mount| {
+            tree.get(mount.container)
+                .is_some_and(|record| record.key == Some(key))
+        }) else {
+            return false;
+        };
+        let changed = mount.state.note_measured(index, height, 0.0, 0.0);
+        mount.scroll_restore_pending |= changed;
+        if changed {
+            mount.spacers_stale = true;
+            tree.mark_layout_dirty(mount.container);
+        }
+        changed
+    }
+
+    pub fn reveal_collection_item(
+        &mut self,
+        tree: &mut UiTree,
+        collection_key: impl Into<crate::element::Key>,
+        index: usize,
+    ) -> bool {
+        self.reveal_collection_item_aligned(
+            tree,
+            collection_key,
+            index,
+            CollectionRevealAlignment::Nearest,
+        )
+    }
+
+    pub fn reveal_collection_item_aligned(
+        &mut self,
+        tree: &mut UiTree,
+        collection_key: impl Into<crate::element::Key>,
+        index: usize,
+        alignment: CollectionRevealAlignment,
+    ) -> bool {
+        let nodes = self.collection_nodes_for_key(tree, &collection_key.into());
+        let [container] = nodes.as_slice() else {
+            return false;
+        };
+        let container = *container;
+        self.reveal_collection_index_aligned(tree, container, index, alignment)
+    }
+
+    pub fn collection_nodes_for_key(
+        &self,
+        tree: &UiTree,
+        key: &crate::element::Key,
+    ) -> Vec<NodeId> {
+        let key = crate::tree::hash_key(key.clone());
+        self.collections
+            .values()
+            .filter_map(|mount| {
+                tree.get(mount.container)
+                    .filter(|record| record.key == Some(key))
+                    .map(|_| mount.container)
+            })
+            .collect()
+    }
+
+    pub fn collection_item_target_aligned(
+        &self,
+        tree: &UiTree,
+        collection_key: impl Into<crate::element::Key>,
+        index: usize,
+        alignment: CollectionRevealAlignment,
+    ) -> Option<Point> {
+        let nodes = self.collection_nodes_for_key(tree, &collection_key.into());
+        let [container] = nodes.as_slice() else {
+            return None;
+        };
+        self.collection_index_target_aligned(tree, *container, index, alignment)
+    }
+
+    pub fn collection_index_target_aligned(
+        &self,
+        tree: &UiTree,
+        container: NodeId,
+        index: usize,
+        alignment: CollectionRevealAlignment,
+    ) -> Option<Point> {
+        let mount = self.collections.get(&container.raw())?;
+        let body = match mount.state.descriptor().source.role() {
+            CollectionRole::List => container,
+            CollectionRole::Table => *tree.get(container)?.children.get(1)?,
+        };
+        let rect = tree.rect(body)?;
+        if !rect.h.is_finite() || rect.h <= 0.0 {
+            return None;
+        }
+        let content = tree.content_size(body)?;
+        let scroll = tree.scroll_offset(body)?;
+        let y = mount.state.reveal_target_at(index, alignment, scroll.y)?;
+        Some(Point::new(scroll.x, y.min((content.h - rect.h).max(0.0))))
+    }
+
+    pub fn reveal_collection_index(
+        &mut self,
+        tree: &mut UiTree,
+        container: NodeId,
+        index: usize,
+    ) -> bool {
+        self.reveal_collection_index_aligned(
+            tree,
+            container,
+            index,
+            CollectionRevealAlignment::Nearest,
+        )
+    }
+
+    pub fn reveal_collection_index_aligned(
+        &mut self,
+        tree: &mut UiTree,
+        container: NodeId,
+        index: usize,
+        alignment: CollectionRevealAlignment,
+    ) -> bool {
+        let Some(mount) = self.collections.get_mut(&container.raw()) else {
+            return false;
+        };
+        let body = match mount.state.descriptor().source.role() {
+            CollectionRole::List => container,
+            CollectionRole::Table => match tree
+                .get(container)
+                .and_then(|record| record.children.get(1))
+                .copied()
+            {
+                Some(body) => body,
+                None => return false,
+            },
+        };
+        if !tree
+            .rect(body)
+            .is_some_and(|rect| rect.h.is_finite() && rect.h > 0.0)
+            || tree.content_size(body).is_none()
+            || !mount.state.reveal_index_aligned(index, alignment)
+        {
+            return false;
+        }
+        let (x, y) = mount.state.scroll();
+        tree.scroll_to(body, Point::new(x, y));
+        true
+    }
+
     /// Create a view driven by `scope`, pushing updates into `sink`
     /// (usually `tree.command_sink()`).
     pub fn new(scope: Scope, sink: CommandSink) -> Self {
+        scope.set_invalidation_counter(sink.invalidation_counter());
         Self {
             scope,
             sink,
@@ -313,7 +587,10 @@ impl View {
                 // as the root's children. Never both: the refreshed root
                 // spec must not be synced as a child of itself.
                 if self.content.len() == 1 {
-                    match self.content[0].refresh_mounted(tree, r, &TypoChain::default())? {
+                    let same_key = tree.get(r).is_some_and(|record| record.key == specs[0].key);
+                    let refreshed = same_key
+                        && self.content[0].refresh_mounted(tree, r, &TypoChain::default())?;
+                    match refreshed {
                         true => synced = true, // children already synced inside
                         false => {
                             // Kind changed: replace the whole root.
@@ -444,10 +721,77 @@ impl View {
         viewport: Size,
         measurer: &dyn TextMeasurer,
     ) -> Result<(), String> {
+        self.compute_layout_with_row_sources(tree, viewport, measurer, &mut |sources| {
+            if sources.is_empty() {
+                Ok(())
+            } else {
+                Err("collection row sources require a registry".into())
+            }
+        })
+    }
+
+    pub fn compute_layout_with_row_sources(
+        &mut self,
+        tree: &mut UiTree,
+        viewport: Size,
+        measurer: &dyn TextMeasurer,
+        register: &mut dyn FnMut(CollectionRowSources) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.compute_layout_with_row_registration(tree, viewport, measurer, &mut |registration| {
+            if !registration.batches.is_empty() {
+                return Err("collection row batches require a batch registry".into());
+            }
+            register(registration.sources)
+        })
+    }
+
+    pub fn compute_layout_with_row_registration(
+        &mut self,
+        tree: &mut UiTree,
+        viewport: Size,
+        measurer: &dyn TextMeasurer,
+        register: &mut dyn FnMut(CollectionRowRegistration) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if self
+            .collections
+            .values()
+            .any(|mount| mount.state.descriptor().source.width_sensitive())
+        {
+            tree.compute_layout(viewport, measurer)?;
+        }
+        for mount in self.collections.values_mut() {
+            let width = if let Some(index) = mount.state.descriptor().width_probe {
+                let row = mount
+                    .state
+                    .descriptor()
+                    .source
+                    .probe_row(index, &mount.built_plan)
+                    .map_err(|error| error.to_string())?;
+                let mut specs =
+                    lower_specs_in(&row, &mount.typo).map_err(|error| error.to_string())?;
+                if specs.len() != 1 {
+                    return Err("collection width probe must lower to one root".into());
+                }
+                UiTree::measure_intrinsic_width(
+                    specs.remove(0),
+                    measurer,
+                    tree.gpui_layout_scale(),
+                )?
+            } else {
+                0.0
+            };
+            if !width.is_finite() || width < 0.0 {
+                return Err("collection width probe returned an invalid width".into());
+            }
+            if mount.probe_width != width {
+                mount.probe_width = width;
+                mount.probe_changed = true;
+            }
+        }
         let raws: Vec<RawId> = self.collections.keys().copied().collect();
         let mut structure_changed = false;
         for raw in raws {
-            structure_changed |= self.realize_one(tree, viewport, raw)?;
+            structure_changed |= self.realize_one(tree, viewport, raw, register)?;
         }
         if structure_changed {
             self.prune_dead(tree);
@@ -455,11 +799,14 @@ impl View {
         tree.compute_layout(viewport, measurer)?;
         for _ in 0..COLLECTION_SETTLE_PASSES {
             let measured = self.measure_all(tree);
+            for mount in self.collections.values_mut() {
+                mount.state.settle_following();
+            }
             self.write_back_all(tree)?;
             let raws: Vec<RawId> = self.collections.keys().copied().collect();
             let mut moved = false;
             for raw in raws {
-                moved |= self.realize_one(tree, viewport, raw)?;
+                moved |= self.realize_one(tree, viewport, raw, register)?;
             }
             if moved {
                 self.prune_dead(tree);
@@ -538,6 +885,9 @@ impl View {
             if sx != tx || sy != ty {
                 tree.scroll_to(body, Point::new(sx, sy));
             }
+            if let Some(mount) = self.collections.get_mut(&raw) {
+                mount.last_tree_scroll = tree.scroll_offset(body).map(|point| point.y);
+            }
         }
         Ok(())
     }
@@ -552,6 +902,7 @@ impl View {
         tree: &mut UiTree,
         viewport: Size,
         raw: RawId,
+        register: &mut dyn FnMut(CollectionRowRegistration) -> Result<(), String>,
     ) -> Result<bool, String> {
         // Liveness first: a container removed out-of-band drops its mount
         // (its scopes die in the prune pass).
@@ -605,6 +956,40 @@ impl View {
         // every refresh render, then settle here exactly once. Table
         // containers keep their own gap (header/clip rhythm is separate).
         ensure_stack_gap_zero(tree, body);
+        let width_sensitive = self
+            .collections
+            .get(&raw)
+            .is_some_and(|mount| mount.state.descriptor().source.width_sensitive());
+        let committed_width = if width_sensitive {
+            let node = self
+                .collections
+                .get(&raw)
+                .and_then(|mount| mount.width_node)
+                .filter(|node| tree.get(*node).is_some());
+            let Some(node) = node else {
+                let height = self
+                    .collections
+                    .get(&raw)
+                    .map_or(0.0, |mount| mount.state.total_height());
+                let mut spacer = spacer_spec(height);
+                spacer.style.width = Length::Pct(100.0);
+                let nodes = tree.sync_children(body, vec![spacer]);
+                if let Some(mount) = self.collections.get_mut(&raw) {
+                    mount.width_node = nodes.first().copied();
+                    mount.rows.clear();
+                }
+                return Ok(true);
+            };
+            let Some(rect) = tree.rect(node) else {
+                return Ok(false);
+            };
+            if !rect.w.is_finite() || rect.w <= 0.0 {
+                return Ok(false);
+            }
+            Some(rect.w)
+        } else {
+            None
+        };
         // Pin from keyboard focus: the focused node walks up to a direct
         // body child; its key pins that row in isolation. Focus anywhere
         // else clears the pin.
@@ -623,10 +1008,10 @@ impl View {
             .map(|m| m.state.total_height())
             .unwrap_or(0.0);
         let rect = tree.rect(body);
-        let vw = match rect {
+        let vw = committed_width.unwrap_or(match rect {
             Some(r) if r.w.is_finite() && r.w > 0.0 && r.w <= viewport.w => r.w,
             _ => viewport.w,
-        };
+        });
         let vh = match rect {
             Some(r) if r.h.is_finite() && r.h > 0.0 && r.h < viewport.h && r.h < total => r.h,
             _ => viewport.h,
@@ -659,6 +1044,9 @@ impl View {
                 m.pin = pin;
                 m.state.set_pinned_key(pin);
             }
+            if m.scroll_restore_pending && m.state.is_following_tail() {
+                m.scroll_restore_pending = false;
+            }
             if m.scroll_restore_pending {
                 m.scroll_restore_pending = false;
                 let (sx, sy) = m.state.scroll();
@@ -672,14 +1060,24 @@ impl View {
             }
             if let Some((sx, sy)) = tree.scroll_offset(body).map(|p| (p.x, p.y)) {
                 let (cx, cy) = m.state.scroll();
-                if sx != cx || sy != cy {
+                let tail_mode = matches!(
+                    m.state.follow_state(),
+                    crate::collection_runtime::FollowState::Tail { .. }
+                );
+                if (sx != cx || sy != cy)
+                    && (!tail_mode || m.last_tree_scroll.is_none_or(|previous| previous != sy))
+                {
                     m.state.set_scroll(sx, sy);
                 }
+                m.last_tree_scroll = Some(sy);
             }
             m.state.set_viewport(vw, vh);
+            m.state.settle_following();
             if vw > 0.0 {
                 let p = m.state.descriptor().source.layout(vw);
-                if p.column_widths != m.built_plan.column_widths {
+                if p.column_widths != m.built_plan.column_widths
+                    || (width_sensitive && p.content_width != m.built_plan.content_width)
+                {
                     PlanAction::Adopt(p)
                 } else {
                     // Tracks identical: refresh the stored plan (content
@@ -717,36 +1115,31 @@ impl View {
         for r in &runs {
             desired.extend(r.start..r.end);
         }
+        if source.stable_indexed() {
+            let mut keys = HashSet::with_capacity(desired.len());
+            for &index in &desired {
+                if !keys.insert(crate::tree::hash_key(source.key(index))) {
+                    return Err(
+                        crate::collection_runtime::CollectionError::DuplicateKey.to_string()
+                    );
+                }
+            }
+        }
         let resident: HashSet<usize> = match self.collections.get(&raw) {
             Some(m) => m.rows.keys().copied().collect(),
             None => return Ok(false),
         };
-        if let Some(m) = self.collections.get_mut(&raw) {
-            for g in resident.difference(&desired).copied().collect::<Vec<_>>() {
-                m.rows.remove(&g);
-            }
-            // Residents whose nodes died out-of-band remount fresh below
-            // (factories + binds) instead of lingering silently stale: a
-            // shallow spec over a dead node would mount orphaned content
-            // with no subscriptions.
-            let dead: Vec<usize> = m
-                .rows
-                .iter()
-                .filter_map(|(idx, ret)| match ret.node {
-                    Some(n) if tree.get(n).is_some() => None,
-                    _ => Some(*idx),
-                })
-                .collect();
-            for d in dead {
-                m.rows.remove(&d);
-            }
-        }
         // Recompute the fresh set after the sweep above: evicted and dead
         // residents rebuild through factories exactly once.
         let mut fresh_idx: Vec<usize> = match self.collections.get(&raw) {
             Some(m) => desired
-                .difference(&m.rows.keys().copied().collect())
+                .iter()
                 .copied()
+                .filter(|index| {
+                    !m.rows
+                        .get(index)
+                        .is_some_and(|row| row.node.is_some_and(|node| tree.get(node).is_some()))
+                })
                 .collect(),
             None => return Ok(false),
         };
@@ -758,8 +1151,14 @@ impl View {
         // Fresh descriptors: one factory call per new resident, retained for
         // binding and pure spec rebuilds. Never rebuilt on scroll/relayout.
         let mut fresh_rows: Vec<(usize, Element)> = Vec::with_capacity(fresh_idx.len());
+        let mut registration = CollectionRowRegistration::default();
         for idx in fresh_idx {
-            let row_el = source.row(idx, &built_plan).with_key(source.key(idx));
+            let (prepared, batches) = source
+                .prepare_row_with_batches(idx, &built_plan)
+                .map_err(|error| error.to_string())?;
+            registration.sources.extend(prepared.selection_sources);
+            registration.batches.extend(batches);
+            let row_el = prepared.element.with_key(source.key(idx));
             fresh_rows.push((idx, row_el));
         }
         let mut fresh_header: Option<Element> = None;
@@ -794,8 +1193,20 @@ impl View {
                 dropped = true;
             }
         }
-        let structural =
-            hosts_created || !fresh_rows.is_empty() || dropped || fresh_header.is_some();
+        let probe_changed = self
+            .collections
+            .get_mut(&raw)
+            .is_some_and(|m| std::mem::take(&mut m.probe_changed));
+        let spacers_stale = self
+            .collections
+            .get_mut(&raw)
+            .is_some_and(|m| std::mem::take(&mut m.spacers_stale));
+        let structural = hosts_created
+            || !fresh_rows.is_empty()
+            || dropped
+            || fresh_header.is_some()
+            || probe_changed
+            || spacers_stale;
         // Header joint horizontal scroll: the header row lives outside the
         // vertical body viewport (in the clip sibling), so the body's scroll
         // offset is mirrored onto it as a negative leading margin
@@ -859,7 +1270,7 @@ impl View {
                     }
                 }
                 for idx in run.start..run.end {
-                    let rs = if let Some(el) = fresh_by_idx.get(&idx) {
+                    let mut rs = if let Some(el) = fresh_by_idx.get(&idx) {
                         // Fresh descriptors lower fully (bind + mount below).
                         let rs = lower_specs_in(el, &typo).map_err(|e| e.to_string())?;
                         debug_assert_eq!(rs.len(), 1);
@@ -919,6 +1330,13 @@ impl View {
                     } else {
                         continue;
                     };
+                    if m.state.descriptor().fixed_row_height {
+                        for spec in &mut rs {
+                            spec.style.height =
+                                Length::Px(m.state.descriptor().estimated_row_height);
+                            spec.style.flex_shrink = 0.0;
+                        }
+                    }
                     child_specs.extend(rs);
                 }
                 prev_end = run.end;
@@ -930,6 +1348,22 @@ impl View {
                     tags.push(BodyTag::Spacer);
                 }
             }
+            if m.probe_width > 0.0 {
+                let mut spacer = spacer_spec(0.0);
+                spacer.style.width = Length::Px(m.probe_width);
+                spacer.style.align_self = Some(taffy::style::AlignSelf::FLEX_START);
+                child_specs.push(spacer);
+                tags.push(BodyTag::Spacer);
+            }
+            if width_sensitive {
+                let mut spacer = spacer_spec(0.0);
+                spacer.style.width = Length::Pct(100.0);
+                child_specs.push(spacer);
+                tags.push(BodyTag::Width);
+            }
+        }
+        if !registration.sources.is_empty() || !registration.batches.is_empty() {
+            register(registration)?;
         }
         let ids = tree.sync_children(body, child_specs);
         // Gap values for the fixup below (copied out before the split).
@@ -950,6 +1384,12 @@ impl View {
         for tag in tags {
             match tag {
                 BodyTag::Spacer => {
+                    cursor += 1;
+                }
+                BodyTag::Width => {
+                    if let Some(mount) = collections.get_mut(&raw) {
+                        mount.width_node = ids.get(cursor).copied();
+                    }
                     cursor += 1;
                 }
                 BodyTag::Row(idx) => {
@@ -1357,8 +1797,18 @@ fn bind_new(
 ) -> Result<(), MountError> {
     // Effective chain at this position, exactly as normative lowering
     // composes it (parent chain plus this element's explicit overrides).
-    let own = inherited.child(&el.typo_chain());
+    let local_typography = el.typo_chain();
+    let own = inherited.child(&local_typography);
     if el.is_collection() {
+        tree.queue_interaction_binding(id);
+        sink.interaction(
+            crate::tree::interaction::InteractionCommand::TypographyColor {
+                node: id,
+                own: local_typography.explicit_color(),
+                own_gpui: local_typography.explicit_gpui_color(),
+                own_source: local_typography.explicit_gpui_source_color(),
+            },
+        );
         return bind_collection(collections, tree, id, el, &own);
     }
     let bindings = std::mem::take(el.bindings_mut());
@@ -1373,10 +1823,17 @@ fn bind_new(
         .collect();
     tree.retain_bound_actions(id, &actions);
     let keys = effect_keys(&bindings);
-    let same = bound
-        .get(&id.raw())
-        .map(|s| s.effects == keys)
-        .unwrap_or(false);
+    let has_interaction_signal = bindings.iter().any(|binding| {
+        matches!(
+            binding,
+            ElementBinding::InteractionBool { .. } | ElementBinding::InteractionValue(_)
+        )
+    });
+    let same = !has_interaction_signal
+        && bound
+            .get(&id.raw())
+            .map(|s| s.effects == keys)
+            .unwrap_or(false);
     if same {
         // Sources unchanged: effects already live; re-apply only the
         // idempotent non-effect bindings (fresh callbacks from the new
@@ -1399,6 +1856,14 @@ fn bind_new(
             },
         );
     }
+    sink.interaction(
+        crate::tree::interaction::InteractionCommand::TypographyColor {
+            node: id,
+            own: local_typography.explicit_color(),
+            own_gpui: local_typography.explicit_gpui_color(),
+            own_source: local_typography.explicit_gpui_source_color(),
+        },
+    );
     // Explicit author semantics (`Element::role` /
     // `Element::collection_semantics`): overlay the provided fields onto
     // the mounted node, preserving everything else. Nodes without explicit
@@ -1459,7 +1924,7 @@ fn bind_collection(
     // overrides, if any).
     let typo = inherited.child(&el.typo_chain());
     match collections.get_mut(&id.raw()) {
-        Some(mount) if same_desc(&mount.last_desc, &desc) => Ok(()),
+        Some(mount) if same_desc(&mount.last_desc, &desc) && mount.typo == typo => Ok(()),
         Some(mount) => {
             // Ingest the live scroll FIRST: the anchor restore below must
             // capture where the eye actually is, not a stale snapshot.
@@ -1485,6 +1950,7 @@ fn bind_collection(
             mount.last_desc = desc;
             mount.rows.clear();
             mount.header = None;
+            mount.width_node = None;
             mount.typo = typo;
             // The refresh restored the scroll from the reading anchor: the
             // next realization writes it tree-ward, then re-reads actual.
@@ -1505,8 +1971,13 @@ fn bind_collection(
                     header: None,
                     rows: HashMap::new(),
                     built_plan,
+                    probe_width: 0.0,
+                    probe_changed: false,
+                    spacers_stale: false,
+                    width_node: None,
                     pin: None,
                     scroll_restore_pending: false,
+                    last_tree_scroll: None,
                 },
             );
             Ok(())
@@ -1518,7 +1989,10 @@ fn bind_collection(
 fn is_effect(binding: &ElementBinding) -> bool {
     matches!(
         binding,
-        ElementBinding::SubscribeText(_) | ElementBinding::SubscribeEdit { .. }
+        ElementBinding::SubscribeText(_)
+            | ElementBinding::SubscribeEdit { .. }
+            | ElementBinding::InteractionBool { .. }
+            | ElementBinding::InteractionValue(_)
     )
 }
 
@@ -1533,19 +2007,33 @@ fn effect_keys(bindings: &[ElementBinding]) -> Vec<aqua_reactive::NodeId> {
                 keys.push(read.node_id());
                 keys.push(write.node_id());
             }
+            ElementBinding::InteractionBool { source, .. } => keys.push(source.node_id()),
+            ElementBinding::InteractionValue(source) => keys.push(source.node_id()),
             ElementBinding::Popup { .. }
             | ElementBinding::ContextMenu(_)
             | ElementBinding::Tooltip(_)
             | ElementBinding::Disabled(_)
             | ElementBinding::Focusability(_)
+            | ElementBinding::KeyboardReleaseActivation
             | ElementBinding::TabIndex(_)
             | ElementBinding::Label(_)
+            | ElementBinding::Description(_)
+            | ElementBinding::DebugSelector(_)
+            | ElementBinding::ExcludeHitTest
+            | ElementBinding::Selected(_)
+            | ElementBinding::Checked(_)
+            | ElementBinding::Expanded(_)
+            | ElementBinding::Level(_)
+            | ElementBinding::InteractionStyle { .. }
+            | ElementBinding::ValueText(_)
             | ElementBinding::OnInput { .. }
             | ElementBinding::Cursor(_)
             | ElementBinding::Shortcut(_)
             | ElementBinding::OnAction { .. }
             | ElementBinding::Focusable
-            | ElementBinding::Painter(_) => {}
+            | ElementBinding::Painter(_)
+            | ElementBinding::ContextPainter(_)
+            | ElementBinding::Prepaint(_) => {}
         }
     }
     keys
@@ -1560,6 +2048,15 @@ fn apply_bindings(
     bindings: Vec<ElementBinding>,
 ) {
     tree.clear_input_bindings(id);
+    tree.clear_canvas_prepaint(id);
+    tree.clear_canvas_painter(id);
+    if let Some(record) = tree.get_mut(id) {
+        record.description = None;
+        record.debug_selector = None;
+        record.hit_test_excluded = false;
+        record.keyboard_release_activation = false;
+    }
+    tree.queue_interaction_binding(id);
     for binding in bindings {
         match binding {
             ElementBinding::Popup { options, content } => {
@@ -1638,6 +2135,11 @@ fn apply_bindings(
                     record.focusable = focusable;
                 }
             }
+            ElementBinding::KeyboardReleaseActivation => {
+                if let Some(record) = tree.get_mut(id) {
+                    record.keyboard_release_activation = true;
+                }
+            }
             ElementBinding::TabIndex(tab_index) => {
                 if let Some(record) = tree.get_mut(id) {
                     record.tab_index = tab_index;
@@ -1648,6 +2150,67 @@ fn apply_bindings(
                 if let Some(record) = tree.get_mut(id) {
                     record.semantics.label = label;
                 }
+            }
+
+            ElementBinding::Description(description) => {
+                if let Some(record) = tree.get_mut(id) {
+                    record.description = Some(description);
+                }
+            }
+            ElementBinding::DebugSelector(selector) => {
+                if let Some(record) = tree.get_mut(id) {
+                    record.debug_selector = Some(selector);
+                }
+            }
+            ElementBinding::ExcludeHitTest => {
+                if let Some(record) = tree.get_mut(id) {
+                    record.hit_test_excluded = true;
+                }
+            }
+            ElementBinding::InteractionStyle { kind, style } => {
+                sink.interaction(crate::tree::interaction::InteractionCommand::Style {
+                    node: id,
+                    kind,
+                    style,
+                });
+            }
+            ElementBinding::Level(value) => {
+                sink.interaction(crate::tree::interaction::InteractionCommand::Semantics {
+                    node: id,
+                    value: crate::tree::interaction::InteractionSemantic::Level(Some(value)),
+                })
+            }
+            ElementBinding::Expanded(value) => {
+                sink.interaction(crate::tree::interaction::InteractionCommand::Semantics {
+                    node: id,
+                    value: crate::tree::interaction::InteractionSemantic::Expanded(Some(value)),
+                })
+            }
+            ElementBinding::Checked(value) => {
+                sink.interaction(crate::tree::interaction::InteractionCommand::Semantics {
+                    node: id,
+                    value: crate::tree::interaction::InteractionSemantic::Checked(Some(value)),
+                })
+            }
+            ElementBinding::InteractionBool { property, source } => {
+                crate::element::interaction::bind_interaction_bool(
+                    scope, sink, id, property, source,
+                )
+            }
+            ElementBinding::InteractionValue(source) => {
+                crate::element::interaction::bind_interaction_value(scope, sink, id, source)
+            }
+            ElementBinding::Selected(selected) => {
+                sink.interaction(crate::tree::interaction::InteractionCommand::Semantics {
+                    node: id,
+                    value: crate::tree::interaction::InteractionSemantic::Selected(selected),
+                })
+            }
+            ElementBinding::ValueText(value) => {
+                sink.interaction(crate::tree::interaction::InteractionCommand::Semantics {
+                    node: id,
+                    value: crate::tree::interaction::InteractionSemantic::Value(value),
+                })
             }
 
             ElementBinding::OnInput {
@@ -1694,6 +2257,12 @@ fn apply_bindings(
             }
             ElementBinding::Painter(painter) => {
                 tree.set_canvas_painter(id, painter);
+            }
+            ElementBinding::ContextPainter(painter) => {
+                tree.set_context_canvas_painter(id, painter);
+            }
+            ElementBinding::Prepaint(callback) => {
+                tree.set_canvas_prepaint(id, callback);
             }
         }
     }
@@ -1864,6 +2433,7 @@ mod tests {
             .unwrap();
         layout(&mut tree);
         tree.fire_action(crate::tree::ActionEvent {
+            source: None,
             node: ids[0],
             kind: crate::tree::ActionKind::Activate,
             text: None,
@@ -1891,6 +2461,7 @@ mod tests {
         assert_eq!(text_of(&tree, ids[0]), "draft");
         // Host-side edit event (as dispatched by events.rs) writes back.
         tree.fire_action(crate::tree::ActionEvent {
+            source: None,
             node: ids[0],
             kind: crate::tree::ActionKind::TextChanged,
             text: Some("draft!".to_string()),

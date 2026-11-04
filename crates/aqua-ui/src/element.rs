@@ -1,3 +1,5 @@
+pub(crate) mod interaction;
+
 use std::hash::Hash;
 
 use aqua_core::{CollectionSemantics, DisplayItem, NodeId, Oklch, Point, Rect, Role, ViewportId};
@@ -13,8 +15,8 @@ use crate::input::{EventPhase, InputCallback, InputKind, InputResponse, RoutedEv
 use crate::style::{Axis, LayoutStyle, Length, Paint, Style, Typography};
 use crate::tree::{
     hash_key, ActionCallback, ActionEvent, ActionKind, BoxContent, CanvasContent,
-    CanvasPaintCallback, MediaContent, NodeKind, NodeSpec, ScrollContent, TextBacking, TextContent,
-    UiTree, ViewportContent,
+    CanvasPaintCallback, MediaContent, NodeKind, NodeSpec, ScrollContent, TextAppearance,
+    TextBacking, TextContent, TextInlineGlyph, UiTree, ViewportContent,
 };
 use aqua_text::document::{SelectionBinding, SelectionDocumentId, SourceSlice};
 use aqua_text::{LineMode, Selection};
@@ -175,6 +177,8 @@ pub struct TypoChain {
     text_style: Option<TextStyle>,
     font_size: Option<f32>,
     color: Option<Oklch>,
+    gpui_color: Option<Option<aqua_core::GpuiHsla>>,
+    gpui_source_color: Option<Option<aqua_core::GpuiTextColor>>,
     wrap: Option<bool>,
 }
 
@@ -185,6 +189,8 @@ impl TypoChain {
             text_style: own.text_style.clone().or_else(|| self.text_style.clone()),
             font_size: own.font_size.or(self.font_size),
             color: own.color.or(self.color),
+            gpui_color: own.gpui_color.or(self.gpui_color),
+            gpui_source_color: own.gpui_source_color.or(self.gpui_source_color),
             wrap: own.wrap.or(self.wrap),
         }
     }
@@ -192,8 +198,16 @@ impl TypoChain {
     /// Resolve against the tree defaults (14px / WHITE / no wrap).
     fn resolve(&self) -> Typography {
         let base = Typography::default();
+        let mut text_style = self.text_style.clone().unwrap_or(base.text_style);
+        if let Some(color) = self.gpui_color {
+            text_style.gpui_color = color.map(|c| [c.h, c.s, c.l, c.a]);
+        }
+        if let Some(color) = self.gpui_source_color {
+            text_style.gpui_source_color =
+                color.map(|c| [c.hue_degrees, c.saturation, c.lightness, c.alpha]);
+        }
         Typography {
-            text_style: self.text_style.clone().unwrap_or(base.text_style),
+            text_style,
             font_size: self.font_size.unwrap_or(base.font_size),
             color: self.color.unwrap_or(base.color),
             wrap: self.wrap.unwrap_or(base.wrap),
@@ -255,6 +269,20 @@ impl StyleArg for Style {
             // are rejected loudly at lowering (see `LowerError`).
             self.apply_to(layout, paint);
             if let Some(style) = self.text_style_opt() {
+                if let Some([h, s, l, a]) = style.gpui_color {
+                    typo.gpui_color = Some(Some(aqua_core::GpuiHsla { h, s, l, a }));
+                }
+                if let Some([hue_degrees, saturation, lightness, alpha]) = style.gpui_source_color {
+                    typo.gpui_source_color = Some(Some(aqua_core::GpuiTextColor {
+                        hue_degrees,
+                        saturation,
+                        lightness,
+                        alpha,
+                    }));
+                    typo.gpui_color = Some(None);
+                } else if style.gpui_color.is_some() {
+                    typo.gpui_source_color = Some(None);
+                }
                 typo.text_style = Some(style.clone());
             }
             if let Some(v) = self.font_size_opt() {
@@ -262,6 +290,12 @@ impl StyleArg for Style {
             }
             if let Some(v) = self.text_color_opt() {
                 typo.color = Some(v);
+            }
+            if let Some(v) = self.gpui_text_color_opt() {
+                typo.gpui_color = Some(v);
+            }
+            if let Some(v) = self.gpui_source_text_color_opt() {
+                typo.gpui_source_color = Some(v);
             }
             if let Some(v) = self.text_wrap_opt() {
                 typo.wrap = Some(v);
@@ -400,8 +434,26 @@ pub enum ElementBinding {
     Tooltip(crate::popup::Tooltip),
     Disabled(bool),
     Focusability(bool),
+    KeyboardReleaseActivation,
     TabIndex(i32),
     Label(String),
+    Description(String),
+    DebugSelector(String),
+    ExcludeHitTest,
+    Selected(bool),
+    Checked(bool),
+    Expanded(bool),
+    Level(usize),
+    InteractionStyle {
+        kind: crate::tree::interaction::InteractionStyleKind,
+        style: std::boxed::Box<Style>,
+    },
+    InteractionBool {
+        property: crate::tree::interaction::InteractionBoolProperty,
+        source: ReadSignal<bool>,
+    },
+    InteractionValue(ReadSignal<String>),
+    ValueText(Option<String>),
     OnInput {
         kind: InputKind,
         phase: EventPhase,
@@ -430,6 +482,8 @@ pub enum ElementBinding {
     Focusable,
     /// Register a canvas painter callback.
     Painter(CanvasPaintCallback),
+    ContextPainter(crate::tree::ContextCanvasPaintCallback),
+    Prepaint(crate::tree::PrepaintCallback),
 }
 
 /// Shared layout sugar implemented once per builder (each builder holds its
@@ -607,8 +661,18 @@ pub struct Text {
     typo: TypoChain,
     initial: String,
     spans: Vec<StyledSpan>,
+    inline_glyphs: Vec<TextInlineGlyph>,
+    inline_paints: Vec<crate::tree::TextInlinePaint>,
+    gpui_text_opacity: std::sync::Arc<[aqua_core::scene::GpuiTextOpacityRange]>,
     selection_source: Option<SelectionBinding>,
     interaction_ranges: Vec<aqua_text::TextInteractionRange>,
+    selection_auto_scroll: bool,
+    text_appearance: Option<TextAppearance>,
+    gpui_text_appearance: Option<crate::tree::GpuiTextAppearance>,
+    external_text_input: bool,
+    native_text_model: Option<std::rc::Rc<dyn crate::tree::NativeTextModel>>,
+    viewport_scroll_max: Option<(f32, f32)>,
+    initial_external_selection: Option<(Selection, Option<std::ops::Range<usize>>)>,
     font_size: f32,
     color: Oklch,
     editable: bool,
@@ -617,6 +681,10 @@ pub struct Text {
     selectable: bool,
     password: bool,
     placeholder: String,
+    overflow: Option<aqua_text::overflow::OverflowMode>,
+    placeholder_color: Option<Oklch>,
+    gpui_placeholder_color: Option<aqua_core::GpuiHsla>,
+    gpui_source_placeholder_color: Option<aqua_core::GpuiTextColor>,
     pending: Vec<ElementBinding>,
     children: Vec<Element>,
 }
@@ -629,8 +697,18 @@ impl Default for Text {
             typo: TypoChain::default(),
             initial: String::new(),
             spans: Vec::new(),
+            inline_glyphs: Vec::new(),
+            inline_paints: Vec::new(),
+            gpui_text_opacity: Default::default(),
             selection_source: None,
             interaction_ranges: Vec::new(),
+            selection_auto_scroll: true,
+            text_appearance: None,
+            gpui_text_appearance: None,
+            external_text_input: false,
+            native_text_model: None,
+            viewport_scroll_max: None,
+            initial_external_selection: None,
             font_size: 14.0,
             color: Oklch::WHITE,
             editable: false,
@@ -639,6 +717,10 @@ impl Default for Text {
             selectable: false,
             password: false,
             placeholder: String::new(),
+            overflow: None,
+            placeholder_color: None,
+            gpui_placeholder_color: None,
+            gpui_source_placeholder_color: None,
             pending: Vec::new(),
             children: Vec::new(),
         }
@@ -700,7 +782,63 @@ impl Text {
     pub fn text_style(mut self, style: TextStyle) -> Self {
         self.font_size = style.size_px;
         self.typo.font_size = Some(style.size_px);
+        if let Some([h, s, l, a]) = style.gpui_color {
+            self.typo.gpui_color = Some(Some(aqua_core::GpuiHsla { h, s, l, a }));
+        }
+        if let Some([hue_degrees, saturation, lightness, alpha]) = style.gpui_source_color {
+            self.typo.gpui_source_color = Some(Some(aqua_core::GpuiTextColor {
+                hue_degrees,
+                saturation,
+                lightness,
+                alpha,
+            }));
+            self.typo.gpui_color = Some(None);
+        } else if style.gpui_color.is_some() {
+            self.typo.gpui_source_color = Some(None);
+        }
         self.typo.text_style = Some(style);
+        self
+    }
+
+    pub fn initial_external_selection(
+        mut self,
+        selection: Selection,
+        marked: Option<std::ops::Range<usize>>,
+    ) -> Self {
+        self.initial_external_selection = Some((selection, marked));
+        self
+    }
+
+    pub fn viewport_scroll_max(mut self, share: f32, minimum: f32) -> Self {
+        self.viewport_scroll_max = Some((share, minimum));
+        self
+    }
+
+    pub fn external_text_input(mut self, enabled: bool) -> Self {
+        self.external_text_input = enabled;
+        self
+    }
+
+    pub fn native_text_model(
+        mut self,
+        model: std::rc::Rc<dyn crate::tree::NativeTextModel>,
+    ) -> Self {
+        self.native_text_model = Some(model);
+        self
+    }
+
+    pub fn text_appearance(mut self, appearance: TextAppearance) -> Self {
+        self.text_appearance = Some(appearance);
+        self
+    }
+
+    pub fn gpui_text_appearance(mut self, appearance: crate::tree::GpuiTextAppearance) -> Self {
+        self.gpui_text_appearance = Some(appearance);
+        self
+    }
+
+    pub fn selection_auto_scroll(mut self, enabled: bool) -> Self {
+        self.selection_auto_scroll = enabled;
         self
     }
 
@@ -731,6 +869,24 @@ impl Text {
         self
     }
 
+    pub fn inline_glyphs(mut self, glyphs: Vec<TextInlineGlyph>) -> Self {
+        self.inline_glyphs = glyphs;
+        self
+    }
+
+    pub fn inline_paints(mut self, paints: Vec<crate::tree::TextInlinePaint>) -> Self {
+        self.inline_paints = paints;
+        self
+    }
+
+    pub fn gpui_text_opacity(
+        mut self,
+        ranges: Vec<aqua_core::scene::GpuiTextOpacityRange>,
+    ) -> Self {
+        self.gpui_text_opacity = ranges.into();
+        self
+    }
+
     pub fn spans(mut self, spans: Vec<StyledSpan>) -> Self {
         self.initial = spans.iter().map(|span| span.text.as_str()).collect();
         self.selectable |= spans.iter().any(|span| span.interaction.is_some());
@@ -750,6 +906,20 @@ impl Text {
     pub fn color(mut self, color: Oklch) -> Self {
         self.color = color;
         self.typo.color = Some(color);
+        self.typo.gpui_color = Some(None);
+        self.typo.gpui_source_color = Some(None);
+        self
+    }
+
+    pub fn gpui_color(mut self, color: aqua_core::GpuiHsla) -> Self {
+        self.typo.gpui_color = Some(Some(color));
+        self.typo.gpui_source_color = Some(None);
+        self
+    }
+
+    pub fn gpui_source_color(mut self, color: aqua_core::GpuiTextColor) -> Self {
+        self.typo.gpui_color = Some(None);
+        self.typo.gpui_source_color = Some(Some(color));
         self
     }
 
@@ -788,6 +958,36 @@ impl Text {
     /// Placeholder shown while an editable node is empty (display only —
     /// committed text is unaffected). Ignored for static labels, matching
     /// [`TextContent`](crate::tree::TextContent) semantics.
+    pub fn placeholder_color(mut self, color: Oklch) -> Self {
+        self.placeholder_color = Some(color);
+        self.gpui_placeholder_color = None;
+        self.gpui_source_placeholder_color = None;
+        self
+    }
+
+    pub fn overflow(mut self, mode: aqua_text::overflow::OverflowMode) -> Self {
+        self.overflow = Some(mode);
+        self.style.min_width = Length::Px(0.0);
+        self.style.flex_shrink = 1.0;
+        self.wrap = false;
+        self.typo.wrap = Some(false);
+        self
+    }
+
+    pub fn gpui_placeholder_color(mut self, color: aqua_core::GpuiHsla) -> Self {
+        self.placeholder_color = None;
+        self.gpui_placeholder_color = Some(color);
+        self.gpui_source_placeholder_color = None;
+        self
+    }
+
+    pub fn gpui_source_placeholder_color(mut self, color: aqua_core::GpuiTextColor) -> Self {
+        self.placeholder_color = None;
+        self.gpui_placeholder_color = None;
+        self.gpui_source_placeholder_color = Some(color);
+        self
+    }
+
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self
@@ -836,7 +1036,7 @@ impl Text {
         let children = std::mem::take(&mut self.children);
         let bindings = std::mem::take(&mut self.pending);
         Element {
-            kind: ElementKind::Text(self),
+            kind: ElementKind::Text(std::boxed::Box::new(self)),
             key: None,
             role: None,
             collection_semantics: None,
@@ -1018,6 +1218,8 @@ pub struct Canvas {
     paint: Paint,
     typo: TypoChain,
     painter: Option<CanvasPaintCallback>,
+    context_painter: Option<crate::tree::ContextCanvasPaintCallback>,
+    prepaint: Option<crate::tree::PrepaintCallback>,
     children: Vec<Element>,
 }
 
@@ -1029,6 +1231,8 @@ impl Canvas {
             paint: Paint::default(),
             typo: TypoChain::default(),
             painter: None,
+            context_painter: None,
+            prepaint: None,
             children: Vec::new(),
         }
     }
@@ -1042,13 +1246,32 @@ impl Canvas {
 
     /// Positional painter: `Canvas(|bounds| vec![...])`.
     pub fn arg(mut self, painter: impl Fn(Rect) -> Vec<DisplayItem> + 'static) -> Self {
+        self.context_painter = None;
         self.painter = Some(std::boxed::Box::new(painter));
         self
     }
 
     /// Register the painter (`None` at the tree = reserve layout, emit nothing).
     pub fn on_paint(mut self, painter: impl Fn(Rect) -> Vec<DisplayItem> + 'static) -> Self {
+        self.context_painter = None;
         self.painter = Some(std::boxed::Box::new(painter));
+        self
+    }
+
+    pub fn on_paint_context(
+        mut self,
+        painter: impl Fn(crate::tree::CanvasPaintContext<'_>) -> Vec<DisplayItem> + 'static,
+    ) -> Self {
+        self.painter = None;
+        self.context_painter = Some(std::boxed::Box::new(painter));
+        self
+    }
+
+    pub fn on_prepaint(
+        mut self,
+        callback: impl Fn(&crate::tree::UiTree, aqua_core::NodeId) + 'static,
+    ) -> Self {
+        self.prepaint = Some(std::boxed::Box::new(callback));
         self
     }
 
@@ -1078,6 +1301,12 @@ impl Canvas {
         let mut bindings = Vec::new();
         if let Some(painter) = self.painter.take() {
             bindings.push(ElementBinding::Painter(painter));
+        }
+        if let Some(painter) = self.context_painter.take() {
+            bindings.push(ElementBinding::ContextPainter(painter));
+        }
+        if let Some(prepaint) = self.prepaint.take() {
+            bindings.push(ElementBinding::Prepaint(prepaint));
         }
         Element {
             kind: ElementKind::Canvas(self),
@@ -1957,6 +2186,17 @@ impl Element {
             .push(ElementBinding::Tooltip(crate::popup::Tooltip {
                 delay,
                 content: std::rc::Rc::new(content),
+                pointer_anchored: false,
+            }));
+        self
+    }
+
+    pub fn pointer_tooltip(mut self, content: impl Fn() -> Element + 'static) -> Self {
+        self.bindings
+            .push(ElementBinding::Tooltip(crate::popup::Tooltip {
+                delay: 0.5,
+                content: std::rc::Rc::new(content),
+                pointer_anchored: true,
             }));
         self
     }
@@ -1981,6 +2221,52 @@ impl Element {
         self
     }
 
+    pub fn aria_description(mut self, description: impl Into<String>) -> Self {
+        self.bindings
+            .push(ElementBinding::Description(description.into()));
+        self
+    }
+
+    pub fn debug_selector(mut self, selector: impl Into<String>) -> Self {
+        self.bindings
+            .push(ElementBinding::DebugSelector(selector.into()));
+        self
+    }
+
+    pub fn exclude_from_hit_testing(mut self) -> Self {
+        self.bindings.push(ElementBinding::ExcludeHitTest);
+        self
+    }
+
+    pub fn aria_level(mut self, level: usize) -> Self {
+        self.bindings.push(ElementBinding::Level(level));
+        self
+    }
+
+    pub fn on_accessibility_activate(mut self, handler: impl Fn() + 'static) -> Self {
+        self.bindings.push(ElementBinding::OnAction {
+            kind: ActionKind::AccessibilityActivate,
+            callback: std::boxed::Box::new(move |_| handler()),
+        });
+        self
+    }
+
+    pub fn aria_selected(mut self, selected: bool) -> Self {
+        self.bindings.push(ElementBinding::Selected(selected));
+        self
+    }
+
+    pub fn aria_checked(mut self, checked: bool) -> Self {
+        self.bindings.push(ElementBinding::Checked(checked));
+        self
+    }
+
+    pub fn aria_value(mut self, value: impl Into<String>) -> Self {
+        self.bindings
+            .push(ElementBinding::ValueText(Some(value.into())));
+        self
+    }
+
     pub fn on_input(
         mut self,
         kind: InputKind,
@@ -1993,6 +2279,52 @@ impl Element {
             callback: std::rc::Rc::new(handler),
         });
         self
+    }
+
+    pub fn on_hover_change(mut self, handler: impl Fn(bool) + 'static) -> Self {
+        let handler = std::rc::Rc::new(handler);
+        let enter = std::rc::Rc::clone(&handler);
+        self.bindings.push(ElementBinding::OnInput {
+            kind: InputKind::PointerEnter,
+            phase: EventPhase::Bubble,
+            callback: std::rc::Rc::new(move |_| {
+                enter(true);
+                InputResponse::default()
+            }),
+        });
+        self.bindings.push(ElementBinding::OnInput {
+            kind: InputKind::PointerLeave,
+            phase: EventPhase::Bubble,
+            callback: std::rc::Rc::new(move |_| {
+                handler(false);
+                InputResponse::default()
+            }),
+        });
+        self
+    }
+
+    pub fn on_focus_change(mut self, handler: impl Fn(bool) + 'static) -> Self {
+        self.bindings.push(ElementBinding::OnAction {
+            kind: ActionKind::FocusChanged,
+            callback: std::boxed::Box::new(move |event| {
+                if let Some(focused) = event.focused {
+                    handler(focused);
+                }
+            }),
+        });
+        self
+    }
+
+    pub fn hover_signal(self, signal: WriteSignal<bool>) -> Self {
+        self.on_hover_change(move |hovered| {
+            let _ = signal.try_set(hovered);
+        })
+    }
+
+    pub fn focus_signal(self, signal: WriteSignal<bool>) -> Self {
+        self.on_focus_change(move |focused| {
+            let _ = signal.try_set(focused);
+        })
     }
 
     pub fn cursor(mut self, cursor: aqua_core::CursorIcon) -> Self {
@@ -2114,7 +2446,7 @@ impl Element {
     fn apply_arg(&mut self, style: &dyn StyleArg) {
         match &mut self.kind {
             ElementKind::Box(b) => style.apply(b),
-            ElementKind::Text(t) => style.apply(t),
+            ElementKind::Text(t) => style.apply(t.as_mut()),
             ElementKind::Media(m) => style.apply(m),
             ElementKind::Scroll(s) => style.apply(s),
             ElementKind::Canvas(c) => style.apply(c),
@@ -2158,6 +2490,22 @@ impl Element {
                 let mut typo = TypoChain::default();
                 for style in &d.styles {
                     if let Some(value) = style.text_style_opt() {
+                        if let Some([h, s, l, a]) = value.gpui_color {
+                            typo.gpui_color = Some(Some(aqua_core::GpuiHsla { h, s, l, a }));
+                        }
+                        if let Some([hue_degrees, saturation, lightness, alpha]) =
+                            value.gpui_source_color
+                        {
+                            typo.gpui_source_color = Some(Some(aqua_core::GpuiTextColor {
+                                hue_degrees,
+                                saturation,
+                                lightness,
+                                alpha,
+                            }));
+                            typo.gpui_color = Some(None);
+                        } else if value.gpui_color.is_some() {
+                            typo.gpui_source_color = Some(None);
+                        }
                         typo.text_style = Some(value.clone());
                     }
                     if let Some(v) = style.font_size_opt() {
@@ -2165,6 +2513,12 @@ impl Element {
                     }
                     if let Some(v) = style.text_color_opt() {
                         typo.color = Some(v);
+                    }
+                    if let Some(v) = style.gpui_text_color_opt() {
+                        typo.gpui_color = Some(v);
+                    }
+                    if let Some(v) = style.gpui_source_text_color_opt() {
+                        typo.gpui_source_color = Some(v);
                     }
                     if let Some(v) = style.text_wrap_opt() {
                         typo.wrap = Some(v);
@@ -2352,6 +2706,22 @@ impl Element {
         };
         if self.lowered_discriminant() != Self::tree_discriminant(&rec.kind) {
             return Ok(false);
+        }
+        if let ElementKind::Text(t) = &self.kind {
+            let uncontrolled = t.editable
+                && !self.bindings.iter().any(|b| {
+                    matches!(
+                        b,
+                        ElementBinding::SubscribeText(_) | ElementBinding::SubscribeEdit { .. }
+                    )
+                });
+            let text = match &rec.kind {
+                NodeKind::Text(current) if uncontrolled && current.is_editable() => current.text(),
+                _ => &t.initial,
+            };
+            if !crate::tree::valid_gpui_text_opacity(text, &t.gpui_text_opacity) {
+                return Err(LowerError::InvalidTextOpacity);
+            }
         }
         // Clone the committed style up front: later arms refresh through
         // `&mut tree`, so the shared `rec` borrow must end here (NLL).
@@ -2547,14 +2917,27 @@ impl Element {
             if let NodeKind::Text(ref mut tc) = rec.kind {
                 tc.text_style = eff.text_style.clone();
                 tc.spans = t.spans.clone();
+                tc.inline_glyphs = t.inline_glyphs.clone();
+                tc.inline_paints = t.inline_paints.clone();
+                tc.gpui_text_opacity = t.gpui_text_opacity.clone();
                 tc.selection_source = t.selection_source.clone();
                 tc.interaction_ranges = t.interaction_ranges.clone();
+                tc.selection_auto_scroll = t.selection_auto_scroll;
+                tc.text_appearance = t.text_appearance;
+                tc.gpui_text_appearance = t.gpui_text_appearance;
+                tc.external_text_input = t.external_text_input;
+                tc.native_text_model = t.native_text_model.clone();
+                tc.viewport_scroll_max = t.viewport_scroll_max;
                 tc.font_size = eff.font_size;
                 tc.color = eff.color;
                 tc.selectable = t.selectable;
                 tc.wrap = eff.wrap || t.multiline;
                 tc.password = t.password;
                 tc.placeholder = t.placeholder.clone();
+                tc.overflow = t.overflow;
+                tc.placeholder_color = t.placeholder_color;
+                tc.gpui_placeholder_color = t.gpui_placeholder_color;
+                tc.gpui_source_placeholder_color = t.gpui_source_placeholder_color;
             }
         }
         // `set_text` no-ops on equality and preserves editor state; in-flight
@@ -2614,7 +2997,7 @@ impl std::fmt::Debug for Element {
 /// Retained content of an [`Element`] (the builder structs double as props).
 enum ElementKind {
     Box(Box),
-    Text(Text),
+    Text(std::boxed::Box<Text>),
     Media(Media),
     Scroll(Scroll),
     Canvas(Canvas),
@@ -2675,6 +3058,7 @@ pub enum LowerError {
     InvalidTransform,
     InvalidContentBlur,
     InvalidTextColorMap,
+    InvalidTextOpacity,
     InvalidMediaSource,
     InvalidFocusRing,
     /// A keyed fragment flattened to other than exactly one child.
@@ -2713,6 +3097,7 @@ impl std::fmt::Display for LowerError {
                 f,
                 "text color map requires finite ordered bounds and strength in 0..=1"
             ),
+            LowerError::InvalidTextOpacity => write!(f, "text opacity ranges require ordered nonoverlapping UTF-8 byte boundaries and finite opacity in 0..=1"),
             LowerError::InvalidContentBlur => {
                 write!(f, "content blur requires a finite nonnegative radius")
             }
@@ -2799,14 +3184,6 @@ fn check_paint(paint: &Paint) -> Result<(), LowerError> {
         return Err(LowerError::InvalidContentBlur);
     }
 
-    if let Some(c) = paint.corners {
-        if !(c.top_left == c.top_right
-            && c.top_left == c.bottom_right
-            && c.top_left == c.bottom_left)
-        {
-            return Err(LowerError::NonUniformCorners);
-        }
-    }
     Ok(())
 }
 
@@ -2919,6 +3296,9 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
             spec
         }
         ElementKind::Text(t) => {
+            if !crate::tree::valid_gpui_text_opacity(&t.initial, &t.gpui_text_opacity) {
+                return Err(LowerError::InvalidTextOpacity);
+            }
             let eff = inherited.child(&t.typo).resolve();
             NodeSpec::new(NodeKind::Text(text_content(t, &eff)), t.style.clone())
         }
@@ -3089,14 +3469,34 @@ fn text_content(t: &Text, eff: &Typography) -> TextContent {
     };
     tc.text_style = eff.text_style.clone();
     tc.spans = t.spans.clone();
+    tc.inline_glyphs = t.inline_glyphs.clone();
+    tc.inline_paints = t.inline_paints.clone();
+    tc.gpui_text_opacity = t.gpui_text_opacity.clone();
     tc.selection_source = t.selection_source.clone();
     tc.interaction_ranges = t.interaction_ranges.clone();
+    tc.selection_auto_scroll = t.selection_auto_scroll;
+    tc.text_appearance = t.text_appearance;
+    tc.gpui_text_appearance = t.gpui_text_appearance;
+    tc.external_text_input = t.external_text_input;
+    tc.native_text_model = t.native_text_model.clone();
+    tc.viewport_scroll_max = t.viewport_scroll_max;
     tc.font_size = eff.font_size;
     tc.color = eff.color;
     tc.selectable = t.selectable;
     tc.wrap = eff.wrap || t.multiline;
     tc.password = t.password;
     tc.placeholder = t.placeholder.clone();
+    tc.overflow = t.overflow;
+    tc.placeholder_color = t.placeholder_color;
+    tc.gpui_placeholder_color = t.gpui_placeholder_color;
+    tc.gpui_source_placeholder_color = t.gpui_source_placeholder_color;
+    if t.external_text_input {
+        if let (Some((selection, marked)), TextBacking::Editable(editor)) =
+            (&t.initial_external_selection, &mut tc.backing)
+        {
+            editor.set_external_projection(&t.initial, *selection, marked.clone());
+        }
+    }
     tc
 }
 
@@ -3406,63 +3806,6 @@ mod tests {
         let paint = box_paint_of(&specs[0]);
         assert_eq!(paint.fill, None);
         assert_eq!(paint.opacity, None);
-    }
-
-    #[test]
-    fn uniform_corners_accepted_nonuniform_rejected_at_mount() {
-        use aqua_core::CornerRadii;
-        // All-equal corners are representable (emitter uses top_left).
-        let el = Box::builder()
-            .styles([Style::new().corners(CornerRadii::uniform(4.0))])
-            .build();
-        assert!(lower_specs(&el).is_ok());
-        // Unequal radii have no scene seam: loud error, never a silent
-        // fallback — for boxes and text alike.
-        let bad = Style::new().corners(CornerRadii {
-            top_left: 1.0,
-            top_right: 2.0,
-            bottom_right: 3.0,
-            bottom_left: 4.0,
-        });
-        let el = Box::builder().styles([bad.clone()]).build();
-        assert!(matches!(
-            lower_specs(&el),
-            Err(LowerError::NonUniformCorners)
-        ));
-        let el = Text::builder().arg("x").styles([bad]).build();
-        assert!(matches!(
-            lower_specs(&el),
-            Err(LowerError::NonUniformCorners)
-        ));
-    }
-
-    #[test]
-    fn refresh_rejects_nonuniform_corners() {
-        use crate::tree::UiTree;
-        use aqua_core::CornerRadii;
-        let mut tree = UiTree::new();
-        let id = tree.mount_spec(lower_specs(&Box::builder().build()).unwrap().pop().unwrap());
-        // Uniform corners refresh fine.
-        let ok = Box::builder()
-            .styles([Style::new().corners(CornerRadii::uniform(2.0))])
-            .build();
-        assert!(ok
-            .refresh_mounted(&mut tree, id, &TypoChain::default())
-            .unwrap());
-        // Unequal radii fail loudly on refresh too (set_paint applies
-        // directly, so lowering-time validation is repeated here).
-        let bad = Box::builder()
-            .styles([Style::new().corners(CornerRadii {
-                top_left: 1.0,
-                top_right: 2.0,
-                bottom_right: 1.0,
-                bottom_left: 1.0,
-            })])
-            .build();
-        assert!(matches!(
-            bad.refresh_mounted(&mut tree, id, &TypoChain::default()),
-            Err(LowerError::NonUniformCorners)
-        ));
     }
 
     #[test]

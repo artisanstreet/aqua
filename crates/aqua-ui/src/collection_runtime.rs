@@ -33,7 +33,7 @@
 //!   editing row pinning (mounted in isolation, never the whole gap), and
 //!   per-row scope disposal all live here with the [`View`] driver.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::rc::Rc;
 
@@ -53,6 +53,103 @@ pub struct CollectionLayout {
     /// Per-column widths in logical px (empty for lists).
     pub column_widths: Vec<f32>,
 }
+
+pub type CollectionRowSources = Vec<(
+    aqua_text::document::SelectionDocumentId,
+    aqua_text::document::SelectionSource,
+)>;
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct SelectionBatchOwner(u64);
+
+impl SelectionBatchOwner {
+    pub fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self(
+            NEXT.fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |value| value.checked_add(1),
+            )
+            .expect("selection batch owner identities exhausted"),
+        )
+    }
+}
+
+impl Default for SelectionBatchOwner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct SelectionSourceBatch {
+    id: u64,
+    document: aqua_text::document::SelectionDocumentId,
+    owner: SelectionBatchOwner,
+    revision: u64,
+    sources: std::sync::Arc<[aqua_text::document::SelectionSource]>,
+}
+
+impl SelectionSourceBatch {
+    pub fn new(
+        document: aqua_text::document::SelectionDocumentId,
+        owner: SelectionBatchOwner,
+        revision: u64,
+        sources: std::sync::Arc<[aqua_text::document::SelectionSource]>,
+    ) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self {
+            id: NEXT
+                .fetch_update(
+                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                    |value| value.checked_add(1),
+                )
+                .expect("selection batch identities exhausted"),
+            document,
+            owner,
+            revision,
+            sources,
+        }
+    }
+
+    pub fn identity(&self) -> u64 {
+        self.id
+    }
+    pub fn document(&self) -> aqua_text::document::SelectionDocumentId {
+        self.document
+    }
+    pub fn owner(&self) -> SelectionBatchOwner {
+        self.owner
+    }
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub fn sources(&self) -> &[aqua_text::document::SelectionSource] {
+        &self.sources
+    }
+}
+
+#[derive(Default)]
+pub struct CollectionRowRegistration {
+    pub sources: CollectionRowSources,
+    pub batches: Vec<std::sync::Arc<SelectionSourceBatch>>,
+}
+
+pub struct PreparedCollectionRow {
+    pub element: Element,
+    pub selection_sources: CollectionRowSources,
+}
+
+pub struct BatchedCollectionRow {
+    pub element: Element,
+    pub batches: Vec<std::sync::Arc<SelectionSourceBatch>>,
+}
+
+pub type CollectionPreparedWithBatches = (
+    PreparedCollectionRow,
+    Vec<std::sync::Arc<SelectionSourceBatch>>,
+);
 
 /// Whether a source describes a list or a table. Decides container/row/cell
 /// semantics and whether a header row exists.
@@ -112,6 +209,12 @@ impl std::error::Error for CollectionError {}
 pub trait CollectionSource {
     /// Row count in this snapshot.
     fn len(&self) -> usize;
+    fn stable_indexed(&self) -> bool {
+        false
+    }
+    fn width_sensitive(&self) -> bool {
+        false
+    }
     /// Whether this snapshot contains no rows.
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -124,6 +227,30 @@ pub trait CollectionSource {
     /// sources must NOT set it; the runtime overwrites with
     /// [`CollectionSource::key`] so reuse keys and anchor keys agree).
     fn row(&self, index: usize, layout: &CollectionLayout) -> Element;
+    fn prepare_row(
+        &self,
+        index: usize,
+        layout: &CollectionLayout,
+    ) -> Result<PreparedCollectionRow, CollectionError> {
+        Ok(PreparedCollectionRow {
+            element: self.row(index, layout),
+            selection_sources: Vec::new(),
+        })
+    }
+    fn prepare_row_with_batches(
+        &self,
+        index: usize,
+        layout: &CollectionLayout,
+    ) -> Result<CollectionPreparedWithBatches, CollectionError> {
+        Ok((self.prepare_row(index, layout)?, Vec::new()))
+    }
+    fn probe_row(
+        &self,
+        index: usize,
+        layout: &CollectionLayout,
+    ) -> Result<Element, CollectionError> {
+        Ok(self.row(index, layout))
+    }
     /// Header element under `layout` (tables; `None` for lists).
     fn header(&self, layout: &CollectionLayout) -> Option<Element>;
     /// List or table.
@@ -138,6 +265,41 @@ pub trait CollectionSource {
 /// `collection.rs` builders produce these; `Element::collection` carries them
 /// into the retained tree. Defaults: `estimated_row_height` 32 logical px,
 /// `overscan` 4 rows per side, non-virtualized OFF unless `.virtualize()`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FollowMode {
+    #[default]
+    Normal,
+    Tail,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FollowState {
+    #[default]
+    Normal,
+    Tail {
+        is_following: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CollectionViewport {
+    pub visible: RowRange,
+    pub mounted: RowRange,
+    pub scroll_y: f32,
+    pub viewport_height: f32,
+    pub distance_from_start: f32,
+    pub distance_from_end: f32,
+    pub follow_state: FollowState,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CollectionRevealAlignment {
+    #[default]
+    Nearest,
+    Start,
+    End,
+}
+
 pub struct CollectionDescriptor {
     /// Immutable snapshot source.
     pub source: Rc<dyn CollectionSource>,
@@ -149,6 +311,12 @@ pub struct CollectionDescriptor {
     pub estimated_row_height: f32,
     /// Mounted rows kept beyond the visible edges, per side.
     pub overscan: usize,
+    pub overscan_pixels: Option<f32>,
+    pub on_viewport: Option<Rc<dyn Fn(CollectionViewport)>>,
+    pub initial_height: Option<Rc<dyn Fn(usize) -> f32>>,
+    pub fixed_row_height: bool,
+    pub measured_uniform_rows: bool,
+    pub width_probe: Option<usize>,
 }
 
 impl CollectionDescriptor {
@@ -169,6 +337,12 @@ impl CollectionDescriptor {
             virtualized,
             estimated_row_height,
             overscan,
+            overscan_pixels: None,
+            on_viewport: None,
+            initial_height: None,
+            fixed_row_height: false,
+            measured_uniform_rows: false,
+            width_probe: None,
         }
     }
 }
@@ -181,6 +355,12 @@ impl Clone for CollectionDescriptor {
             virtualized: self.virtualized,
             estimated_row_height: self.estimated_row_height,
             overscan: self.overscan,
+            overscan_pixels: self.overscan_pixels,
+            on_viewport: self.on_viewport.clone(),
+            initial_height: self.initial_height.clone(),
+            fixed_row_height: self.fixed_row_height,
+            measured_uniform_rows: self.measured_uniform_rows,
+            width_probe: self.width_probe,
         }
     }
 }
@@ -204,6 +384,9 @@ impl fmt::Debug for CollectionDescriptor {
 /// mounted)`. A duplicate anywhere is a hard error, never a silent merge.
 pub fn validate_snapshot(source: &dyn CollectionSource) -> Result<(), CollectionError> {
     source.validate()?;
+    if source.stable_indexed() {
+        return Ok(());
+    }
     let len = source.len();
     if len == 0 {
         return Ok(());
@@ -225,11 +408,32 @@ pub fn validate_snapshot(source: &dyn CollectionSource) -> Result<(), Collection
 /// positive size so prefix sums stay exact). Sources validate their own
 /// factories/keys/tracks through [`CollectionSource::validate`].
 pub fn validate_descriptor(desc: &CollectionDescriptor) -> Result<(), CollectionError> {
+    if desc
+        .width_probe
+        .is_some_and(|index| index >= desc.source.len())
+    {
+        return Err(CollectionError::Validation(
+            "width probe index is out of bounds".into(),
+        ));
+    }
+    if desc.measured_uniform_rows && (desc.fixed_row_height || desc.initial_height.is_some()) {
+        return Err(CollectionError::Validation(
+            "measured uniform rows cannot use fixed or per-row initial heights".into(),
+        ));
+    }
     if !(desc.estimated_row_height.is_finite() && desc.estimated_row_height > 0.0) {
         return Err(CollectionError::InvalidSize(format!(
             "estimated_row_height must be finite and positive, got {}",
             desc.estimated_row_height
         )));
+    }
+    if desc
+        .overscan_pixels
+        .is_some_and(|value| !value.is_finite() || value < 0.0)
+    {
+        return Err(CollectionError::InvalidSize(
+            "overscan_pixels must be finite and non-negative".into(),
+        ));
     }
     Ok(())
 }
@@ -367,6 +571,36 @@ pub fn spacer_spec(height: f32) -> NodeSpec {
 /// the viewport + scroll inputs, the reading anchor, and the focused/editing
 /// pin. The [`View`](crate::binding::View) driver feeds it committed rects
 /// and scroll offsets; it answers which indices to mount.
+struct SparseGeometry {
+    baseline: f32,
+    measurements: BTreeMap<usize, f32>,
+}
+
+impl SparseGeometry {
+    fn prefix(&self, index: usize, gap: f32) -> f64 {
+        (index as f64) * f64::from(self.baseline + gap)
+            + self
+                .measurements
+                .range(..index)
+                .map(|(_, height)| f64::from(*height - self.baseline))
+                .sum::<f64>()
+    }
+
+    fn index_at(&self, offset: f64, len: usize, gap: f32) -> usize {
+        let mut low = 0usize;
+        let mut high = len;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            if self.prefix(mid + 1, gap) <= offset {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        low
+    }
+}
+
 pub struct CollectionState {
     desc: CollectionDescriptor,
     /// Authoritative per-row content heights (estimates until measured).
@@ -379,6 +613,7 @@ pub struct CollectionState {
     /// Indexed prefix sums over row *strides*
     /// (`height + margin_top + margin_bottom + gap`).
     sums: PrefixSums,
+    sparse: Option<SparseGeometry>,
     /// Last committed viewport width (drives the column plan).
     viewport_w: f32,
     /// Last committed viewport height (drives the vertical window).
@@ -387,6 +622,7 @@ pub struct CollectionState {
     scroll_x: f32,
     /// Current scroll offsets (body vertical).
     scroll_y: f32,
+    follow_state: FollowState,
     /// Row the viewport is anchored to: (key hash, offset within row).
     anchor: Option<(u64, f32)>,
     /// Pinned row key hash (focused/editing row stays mounted in isolation).
@@ -399,6 +635,8 @@ pub struct CollectionState {
     plan: CollectionLayout,
     /// Rows whose measured heights changed since the last settle pass.
     dirty_heights: bool,
+    reported_viewport: Option<CollectionViewport>,
+    uniform_measured: bool,
 }
 
 impl CollectionState {
@@ -409,8 +647,31 @@ impl CollectionState {
         let len = desc.source.len();
         let est = desc.estimated_row_height;
         let gap = body_gap(&desc);
-        let heights = vec![est; len];
-        let margins = vec![(0.0f32, 0.0f32); len];
+        let sparse = desc.source.stable_indexed();
+        if sparse && (!desc.virtualized || desc.initial_height.is_some()) {
+            return Err(CollectionError::Validation(
+                "stable indexed collections require virtualization and a uniform initial height"
+                    .into(),
+            ));
+        }
+        let heights = if sparse {
+            Vec::new()
+        } else if let Some(initial_height) = &desc.initial_height {
+            let mut heights = Vec::with_capacity(len);
+            for index in 0..len {
+                let height = initial_height(index);
+                if !height.is_finite() || height < 0.0 {
+                    return Err(CollectionError::InvalidSize(format!(
+                        "invalid initial height at row {index}"
+                    )));
+                }
+                heights.push(height);
+            }
+            heights
+        } else {
+            vec![est; len]
+        };
+        let margins = vec![(0.0f32, 0.0f32); heights.len()];
         let sums = Self::build_sums(&heights, &margins, gap);
         let mut st = Self {
             plan: desc.source.layout(INITIAL_AVAILABLE_WIDTH),
@@ -419,15 +680,22 @@ impl CollectionState {
             margins,
             gap,
             sums,
+            sparse: sparse.then(|| SparseGeometry {
+                baseline: est,
+                measurements: BTreeMap::new(),
+            }),
             viewport_w: 0.0,
             viewport_h: 0.0,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            follow_state: FollowState::Normal,
             anchor: None,
             pinned: None,
             index_by_key: HashMap::new(),
             mounted: RowRange::empty(0),
             dirty_heights: false,
+            reported_viewport: None,
+            uniform_measured: false,
         };
         st.rebuild_index();
         Ok(st)
@@ -457,6 +725,42 @@ impl CollectionState {
         validate_descriptor(&desc)?;
         validate_snapshot(desc.source.as_ref())?;
         let new_len = desc.source.len();
+        if self.sparse.is_some() && desc.source.stable_indexed() {
+            if !desc.virtualized
+                || desc.initial_height.is_some()
+                || desc.estimated_row_height != self.desc.estimated_row_height
+            {
+                return Err(CollectionError::Validation(
+                    "stable indexed collection geometry changed".into(),
+                ));
+            }
+            let anchor_index = self
+                .index_at(self.scroll_y as f64)
+                .min(self.len().saturating_sub(1));
+            let offset = self.scroll_y - self.offset_of(anchor_index);
+            if let Some(sparse) = &mut self.sparse {
+                if desc.fixed_row_height {
+                    sparse.baseline = desc.estimated_row_height;
+                    sparse.measurements.clear();
+                } else {
+                    sparse.measurements.retain(|index, _| *index < new_len);
+                }
+            }
+            self.desc = desc;
+            self.uniform_measured = false;
+            self.reported_viewport = None;
+            self.gap = body_gap(&self.desc);
+            self.scroll_y = (self.offset_of(anchor_index.min(new_len.saturating_sub(1))) + offset)
+                .clamp(0.0, (self.total_height() - self.viewport_h).max(0.0));
+            self.rebuild_index();
+            self.dirty_heights = true;
+            return Ok(());
+        }
+        if self.sparse.is_some() || desc.source.stable_indexed() {
+            return Err(CollectionError::Validation(
+                "cannot change collection indexing mode during refresh".into(),
+            ));
+        }
         // Capture the anchor against the OLD sums before swapping.
         let anchor_key = self.anchor_key_at_scroll();
         // Preserve every measured height AND margin by key across the
@@ -474,7 +778,13 @@ impl CollectionState {
         let mut margins = Vec::with_capacity(new_len);
         for i in 0..new_len {
             let k = crate::tree::hash_key(desc.source.key(i));
-            let (h, m) = old_by_key.get(&k).copied().unwrap_or((est, (0.0, 0.0)));
+            let initial = desc.initial_height.as_ref().map_or(est, |height| height(i));
+            if !initial.is_finite() || initial < 0.0 {
+                return Err(CollectionError::InvalidSize(format!(
+                    "invalid initial height at row {i}"
+                )));
+            }
+            let (h, m) = old_by_key.get(&k).copied().unwrap_or((initial, (0.0, 0.0)));
             heights.push(h);
             margins.push(m);
         }
@@ -483,6 +793,8 @@ impl CollectionState {
         self.heights = heights;
         self.margins = margins;
         self.desc = desc;
+        self.uniform_measured = false;
+        self.reported_viewport = None;
         self.rebuild_index();
         // Re-resolve the anchor: same key + within-row offset, new index.
         if let Some((k, off)) = anchor_key {
@@ -515,7 +827,26 @@ impl CollectionState {
     }
 
     fn rebuild_index(&mut self) {
+        let pinned = self.pinned.and_then(|key| {
+            self.index_by_key
+                .get(&key)
+                .copied()
+                .map(|index| (key, index))
+        });
         self.index_by_key.clear();
+        if self.sparse.is_some() {
+            if let Some((key, index)) = pinned.filter(|(_, index)| *index < self.desc.source.len())
+            {
+                if self.key_at(index) == Some(key) {
+                    self.index_by_key.insert(key, index);
+                }
+            }
+            for i in self.mounted.start..self.mounted.end.min(self.desc.source.len()) {
+                self.index_by_key
+                    .insert(crate::tree::hash_key(self.desc.source.key(i)), i);
+            }
+            return;
+        }
         let len = self.desc.source.len();
         // Full O(n) index on every structural refresh: steady-state scrolls
         // are pure O(log n) lookups afterwards. No truncation.
@@ -546,8 +877,12 @@ impl CollectionState {
     /// true when the plan is new (rows must rebuild, heights re-measured).
     pub fn set_viewport(&mut self, w: f32, h: f32) -> bool {
         let width_changed = (w - self.viewport_w).abs() > f32::EPSILON;
+        if width_changed && self.viewport_w > 0.0 && self.desc.measured_uniform_rows {
+            self.uniform_measured = false;
+        }
         self.viewport_w = w;
         self.viewport_h = h;
+        self.report_viewport();
         if width_changed && w > 0.0 {
             self.plan = self.desc.source.layout(w);
             self.dirty_heights = true;
@@ -561,18 +896,139 @@ impl CollectionState {
     /// the retained `Scroll` node's offset; this just caches it).
     /// Non-finite inputs are ignored (window math sanitizes anyway, but the
     /// anchor accounting must never latch onto NaN).
+    pub fn follow_state(&self) -> FollowState {
+        self.follow_state
+    }
+
+    pub fn is_following_tail(&self) -> bool {
+        matches!(self.follow_state, FollowState::Tail { is_following: true })
+    }
+
+    pub fn set_follow_mode(&mut self, mode: FollowMode) {
+        self.follow_state = match mode {
+            FollowMode::Normal => FollowState::Normal,
+            FollowMode::Tail => FollowState::Tail { is_following: true },
+        };
+        self.report_viewport();
+    }
+
+    pub fn pause_following_tail(&mut self) {
+        if self.is_following_tail() {
+            self.follow_state = FollowState::Tail {
+                is_following: false,
+            };
+            self.report_viewport();
+        }
+    }
+
+    pub fn settle_following(&mut self) -> bool {
+        if !self.viewport_h.is_finite() || self.viewport_h <= 0.0 {
+            return false;
+        }
+        let bottom = (self.total_height() - self.viewport_h).max(0.0);
+        let mut changed = false;
+        match self.follow_state {
+            FollowState::Normal => {}
+            FollowState::Tail { is_following: true } => {
+                if self.scroll_y != bottom {
+                    self.scroll_y = bottom;
+                    changed = true;
+                }
+            }
+            FollowState::Tail {
+                is_following: false,
+            } if self.scroll_y >= bottom - 1.0 => {
+                self.follow_state = FollowState::Tail { is_following: true };
+                changed = true;
+            }
+            FollowState::Tail {
+                is_following: false,
+            } => {}
+        }
+        if changed {
+            self.report_viewport();
+        }
+        changed
+    }
+
+    pub fn scroll_to(&mut self, x: f32, y: f32) {
+        if y.is_finite()
+            && y < (self.total_height() - self.viewport_h).max(0.0)
+            && self.is_following_tail()
+        {
+            self.follow_state = FollowState::Tail {
+                is_following: false,
+            };
+        }
+        self.set_scroll(x, y);
+    }
+
     pub fn set_scroll(&mut self, x: f32, y: f32) {
         if x.is_finite() {
             self.scroll_x = x;
         }
         if y.is_finite() {
+            if y != self.scroll_y
+                && y < (self.total_height() - self.viewport_h).max(0.0)
+                && self.is_following_tail()
+            {
+                self.follow_state = FollowState::Tail {
+                    is_following: false,
+                };
+            }
             self.scroll_y = y;
         }
+        self.report_viewport();
     }
 
     /// Current body scroll.
     pub fn scroll(&self) -> (f32, f32) {
         (self.scroll_x, self.scroll_y)
+    }
+
+    pub fn reveal_index(&mut self, index: usize) -> bool {
+        self.reveal_index_aligned(index, CollectionRevealAlignment::Nearest)
+    }
+
+    pub fn reveal_index_aligned(
+        &mut self,
+        index: usize,
+        alignment: CollectionRevealAlignment,
+    ) -> bool {
+        let Some(target) = self.reveal_target_at(index, alignment, self.scroll_y) else {
+            return false;
+        };
+        self.set_scroll(self.scroll_x, target);
+        true
+    }
+
+    pub fn reveal_target_at(
+        &self,
+        index: usize,
+        alignment: CollectionRevealAlignment,
+        scroll_y: f32,
+    ) -> Option<f32> {
+        if index >= self.len()
+            || !self.viewport_h.is_finite()
+            || self.viewport_h <= 0.0
+            || (self.desc.measured_uniform_rows && !self.uniform_measured)
+            || !scroll_y.is_finite()
+        {
+            return None;
+        }
+        let top = self.offset_of(index);
+        let bottom = self.offset_of(index + 1) - self.gap;
+        let height = self.viewport_h.max(0.0);
+        let target = match alignment {
+            CollectionRevealAlignment::Start => top,
+            CollectionRevealAlignment::End => bottom - height,
+            CollectionRevealAlignment::Nearest if top < scroll_y => top,
+            CollectionRevealAlignment::Nearest if bottom > scroll_y + height => {
+                (bottom - height).min(top)
+            }
+            CollectionRevealAlignment::Nearest => scroll_y,
+        };
+        Some(target.clamp(0.0, (self.total_height() - height).max(0.0)))
     }
 
     /// Pin a row key (focused/editing row). `None` clears the pin.
@@ -603,7 +1059,10 @@ impl CollectionState {
     /// [`CollectionState::refresh`], applied continuously during settle —
     /// covers measured-height changes above the anchor, not just refreshes).
     pub fn note_measured(&mut self, index: usize, h: f32, mt: f32, mb: f32) -> bool {
-        if index >= self.heights.len() || !h.is_finite() || h < 0.0 {
+        if self.desc.fixed_row_height {
+            return false;
+        }
+        if index >= self.len() || !h.is_finite() || h < 0.0 {
             return false;
         }
         let mt = if mt.is_finite() { mt } else { 0.0 };
@@ -612,6 +1071,59 @@ impl CollectionState {
         if !new_stride.is_finite() || new_stride < 0.0 {
             // Would break Fenwick monotonicity: keep the old geometry.
             return false;
+        }
+        if self.desc.measured_uniform_rows {
+            if self.uniform_measured || index != 0 {
+                return false;
+            }
+            self.uniform_measured = true;
+            let anchor = self
+                .index_at(f64::from(self.scroll_y))
+                .min(self.len().saturating_sub(1));
+            let offset = self.scroll_y - self.offset_of(anchor);
+            let height = h + mt + mb;
+            if let Some(sparse) = &mut self.sparse {
+                if sparse.baseline == height {
+                    return false;
+                }
+                sparse.baseline = height;
+                sparse.measurements.clear();
+            } else {
+                if self.heights.iter().all(|old| *old == height)
+                    && self.margins.iter().all(|margin| *margin == (0.0, 0.0))
+                {
+                    return false;
+                }
+                self.heights.fill(height);
+                self.margins.fill((0.0, 0.0));
+                self.sums = Self::build_sums(&self.heights, &self.margins, self.gap);
+            }
+            self.scroll_y = (self.offset_of(anchor) + offset)
+                .clamp(0.0, (self.total_height() - self.viewport_h).max(0.0));
+            self.dirty_heights = true;
+            return true;
+        }
+        let row_top = self.offset_of(index);
+        if let Some(sparse) = self.sparse.as_mut() {
+            let old = sparse
+                .measurements
+                .get(&index)
+                .copied()
+                .unwrap_or(sparse.baseline);
+            let new = h + mt + mb;
+            if old == new {
+                return false;
+            }
+            if new == sparse.baseline {
+                sparse.measurements.remove(&index);
+            } else {
+                sparse.measurements.insert(index, new);
+            }
+            if row_top + old + self.gap <= self.scroll_y {
+                self.scroll_y = (self.scroll_y + new - old).max(0.0);
+            }
+            self.dirty_heights = true;
+            return true;
         }
         let old_stride =
             self.heights[index] + self.margins[index].0 + self.margins[index].1 + self.gap;
@@ -644,13 +1156,27 @@ impl CollectionState {
     /// Total content stride from indexed sums (includes trailing gap per
     /// row; the laid-out extent is `total - gap` for non-empty lists).
     pub fn total_height(&self) -> f32 {
-        self.sums.total() as f32
+        self.sparse.as_ref().map_or_else(
+            || self.sums.total() as f32,
+            |sparse| sparse.prefix(self.len(), self.gap) as f32,
+        )
+    }
+
+    fn index_at(&self, offset: f64) -> usize {
+        self.sparse.as_ref().map_or_else(
+            || self.sums.index_at(offset),
+            |sparse| sparse.index_at(offset, self.len(), self.gap),
+        )
     }
 
     /// Stride offset of row `index` (its laid-out top minus its own top
     /// margin — Taffy adds the margin from the row's own style).
     pub fn offset_of(&self, index: usize) -> f32 {
-        self.sums.prefix(index.min(self.heights.len())) as f32
+        let index = index.min(self.len());
+        self.sparse.as_ref().map_or_else(
+            || self.sums.prefix(index) as f32,
+            |sparse| sparse.prefix(index, self.gap) as f32,
+        )
     }
 
     /// Authored inter-row gap folded into every stride.
@@ -666,13 +1192,12 @@ impl CollectionState {
     /// accounting.
     pub fn span_height(&self, start: usize, end: usize) -> f32 {
         let (s, e) = (start.min(end), end.max(start));
-        let len = self.heights.len();
+        let len = self.len();
         if s >= e || s >= len {
             return 0.0;
         }
         let e = e.min(len);
-        let sum = self.sums.prefix(e) - self.sums.prefix(s);
-        (sum as f32 - self.gap).max(0.0)
+        (self.offset_of(e) - self.offset_of(s) - self.gap).max(0.0)
     }
 
     /// Re-resolve the authored gap from fresh descriptor styles (style-only
@@ -704,6 +1229,43 @@ impl CollectionState {
         if !self.desc.virtualized {
             return RowRange { start: 0, end: len };
         }
+        if let Some(pixels) = self.desc.overscan_pixels {
+            if self.viewport_h.is_finite() && self.viewport_h > 0.0 {
+                let maximum = (self.total_height() - self.viewport_h).max(0.0);
+                let y = self.scroll_y.clamp(0.0, maximum);
+                let first = self.index_at(f64::from((y - pixels).max(0.0))).min(len - 1);
+                let end = self
+                    .index_at(f64::from(y) + f64::from(self.viewport_h) + f64::from(pixels))
+                    .saturating_add(1)
+                    .min(len);
+                return RowRange {
+                    start: first,
+                    end: end.max(first + 1),
+                };
+            }
+        }
+        if self.sparse.is_some() {
+            if self.viewport_h <= 0.0 {
+                return RowRange {
+                    start: 0,
+                    end: (self.desc.overscan.saturating_mul(2).saturating_add(1)).min(len),
+                };
+            }
+            let y = self
+                .scroll_y
+                .clamp(0.0, (self.total_height() - self.viewport_h).max(0.0));
+            let first = self.index_at(f64::from(y)).min(len - 1);
+            let last = self
+                .index_at(f64::from(y) + f64::from(self.viewport_h))
+                .min(len - 1);
+            return RowRange {
+                start: first.saturating_sub(self.desc.overscan),
+                end: last
+                    .saturating_add(1)
+                    .saturating_add(self.desc.overscan)
+                    .min(len),
+            };
+        }
         window_for_viewport(
             &self.sums,
             len,
@@ -719,9 +1281,16 @@ impl CollectionState {
     /// the tree.
     pub fn mounted_runs(&self, window: RowRange) -> Vec<RowRange> {
         let mut runs = vec![window];
+        if self.desc.measured_uniform_rows
+            && !self.uniform_measured
+            && !self.is_empty()
+            && !window.contains(0)
+        {
+            runs.push(RowRange { start: 0, end: 1 });
+        }
         if let Some(p) = self.pinned {
             if let Some(idx) = self.index_of(p) {
-                if !window.contains(idx) {
+                if !runs.iter().any(|range| range.contains(idx)) {
                     runs.push(RowRange {
                         start: idx,
                         end: idx + 1,
@@ -736,6 +1305,46 @@ impl CollectionState {
     /// Realize `window` as the mounted set (records it for `mounted()`).
     pub fn set_mounted(&mut self, window: RowRange) {
         self.mounted = window;
+        if self.sparse.is_some() {
+            self.rebuild_index();
+        }
+        self.report_viewport();
+    }
+
+    fn report_viewport(&mut self) {
+        if !self.viewport_h.is_finite() || self.viewport_h <= 0.0 {
+            return;
+        }
+        let window = self.mounted;
+        let total = self.total_height();
+        let height = self.viewport_h.max(0.0);
+        let scroll_y = self.scroll_y.clamp(0.0, (total - height).max(0.0));
+        let report = CollectionViewport {
+            visible: if self.sparse.is_some() && !self.is_empty() {
+                let first = self.index_at(f64::from(scroll_y)).min(self.len() - 1);
+                let last = self
+                    .index_at(f64::from(scroll_y + height))
+                    .min(self.len() - 1);
+                RowRange {
+                    start: first,
+                    end: last + 1,
+                }
+            } else {
+                window_for_viewport(&self.sums, self.len(), scroll_y, height, 0)
+            },
+            mounted: window,
+            scroll_y,
+            viewport_height: height,
+            distance_from_start: scroll_y,
+            distance_from_end: (total - height - scroll_y).max(0.0),
+            follow_state: self.follow_state,
+        };
+        if self.reported_viewport != Some(report) {
+            self.reported_viewport = Some(report);
+            if let Some(callback) = &self.desc.on_viewport {
+                callback(report);
+            }
+        }
     }
 
     /// Key hash of the row under the current scroll top (anchor capture).
@@ -744,8 +1353,8 @@ impl CollectionState {
         if len == 0 {
             return None;
         }
-        let idx = self.sums.index_at(self.scroll_y as f64).min(len - 1);
-        let top = self.sums.prefix(idx) as f32;
+        let idx = self.index_at(self.scroll_y as f64).min(len - 1);
+        let top = self.offset_of(idx);
         Some((
             crate::tree::hash_key(self.desc.source.key(idx)),
             (self.scroll_y - top).max(0.0),

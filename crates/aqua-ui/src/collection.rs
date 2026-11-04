@@ -92,7 +92,9 @@
 //! which owns `NodeSemantics.collection` propagation.
 
 pub use crate::collection_runtime::{
-    CollectionDescriptor, CollectionError, CollectionLayout, CollectionRole, CollectionSource,
+    BatchedCollectionRow, CollectionDescriptor, CollectionError, CollectionLayout,
+    CollectionRevealAlignment, CollectionRole, CollectionSource, CollectionViewport, FollowMode,
+    FollowState, PreparedCollectionRow, SelectionBatchOwner, SelectionSourceBatch,
 };
 
 use std::cell::RefCell;
@@ -106,6 +108,11 @@ use crate::element::{self, Element, Key, NumberArg, Text};
 use crate::style::{Axis, Length, Style};
 
 type ElementFactory<T> = Box<dyn Fn(&T) -> Element>;
+type PreparedFactory<T> =
+    Box<dyn Fn(&T) -> Result<crate::collection_runtime::PreparedCollectionRow, CollectionError>>;
+type BatchedFactory<T> = Box<dyn Fn(&T) -> Result<BatchedCollectionRow, CollectionError>>;
+type WidthBatchedFactory<T> =
+    Box<dyn Fn(&T, &CollectionLayout) -> Result<BatchedCollectionRow, CollectionError>>;
 type KeyFactory<T> = Box<dyn Fn(&T) -> Key>;
 
 // ---------------------------------------------------------------------------
@@ -658,10 +665,18 @@ pub struct List<T> {
     items: Vec<T>,
     key_fn: Option<KeyFactory<T>>,
     row_fn: Option<ElementFactory<T>>,
+    prepared_row_fn: Option<PreparedFactory<T>>,
+    batched_row_fn: Option<BatchedFactory<T>>,
+    width_batched_row_fn: Option<WidthBatchedFactory<T>>,
     styles: Vec<Style>,
     virtualized: bool,
     estimated_row_height: Length,
     overscan: usize,
+    overscan_pixels: Option<f32>,
+    on_viewport: Option<Rc<dyn Fn(CollectionViewport)>>,
+    initial_height: Option<Rc<dyn Fn(usize) -> f32>>,
+    measured_uniform_rows: bool,
+    width_probe: Option<usize>,
 }
 
 impl<T> List<T> {
@@ -671,10 +686,18 @@ impl<T> List<T> {
             items: Vec::new(),
             key_fn: None,
             row_fn: None,
+            prepared_row_fn: None,
+            batched_row_fn: None,
+            width_batched_row_fn: None,
             styles: Vec::new(),
             virtualized: false,
             estimated_row_height: Length::Px(32.0),
             overscan: 4,
+            overscan_pixels: None,
+            on_viewport: None,
+            initial_height: None,
+            measured_uniform_rows: false,
+            width_probe: None,
         }
     }
 
@@ -700,6 +723,37 @@ impl<T> List<T> {
     /// the source applies `Role::ListItem`.
     pub fn row(mut self, f: impl Fn(&T) -> Element + 'static) -> Self {
         self.row_fn = Some(Box::new(f));
+        self
+    }
+
+    pub fn try_row(
+        mut self,
+        f: impl Fn(&T) -> Result<crate::collection_runtime::PreparedCollectionRow, CollectionError>
+            + 'static,
+    ) -> Self {
+        self.prepared_row_fn = Some(Box::new(f));
+        self.batched_row_fn = None;
+        self.width_batched_row_fn = None;
+        self
+    }
+
+    pub fn try_batched_row(
+        mut self,
+        f: impl Fn(&T) -> Result<BatchedCollectionRow, CollectionError> + 'static,
+    ) -> Self {
+        self.batched_row_fn = Some(Box::new(f));
+        self.prepared_row_fn = None;
+        self.width_batched_row_fn = None;
+        self
+    }
+
+    pub fn try_batched_row_with_layout(
+        mut self,
+        f: impl Fn(&T, &CollectionLayout) -> Result<BatchedCollectionRow, CollectionError> + 'static,
+    ) -> Self {
+        self.width_batched_row_fn = Some(Box::new(f));
+        self.prepared_row_fn = None;
+        self.batched_row_fn = None;
         self
     }
 
@@ -737,6 +791,31 @@ impl<T> List<T> {
         self
     }
 
+    pub fn overscan_pixels(mut self, pixels: f32) -> Self {
+        self.overscan_pixels = Some(pixels);
+        self
+    }
+
+    pub fn on_viewport(mut self, callback: impl Fn(CollectionViewport) + 'static) -> Self {
+        self.on_viewport = Some(Rc::new(callback));
+        self
+    }
+
+    pub fn measured_uniform_rows(mut self) -> Self {
+        self.measured_uniform_rows = true;
+        self
+    }
+
+    pub fn width_probe(mut self, index: usize) -> Self {
+        self.width_probe = Some(index);
+        self
+    }
+
+    pub fn initial_height(mut self, height: impl Fn(usize) -> f32 + 'static) -> Self {
+        self.initial_height = Some(Rc::new(height));
+        self
+    }
+
     /// Whether `.virtualize()` was selected.
     #[must_use]
     pub fn is_virtualized(&self) -> bool {
@@ -760,7 +839,11 @@ impl<T> List<T> {
     /// `validate_snapshot`) at mount/layout.
     pub fn validate(&self) -> Result<(), CollectionError> {
         collect_keys(&self.items, self.key_fn.as_deref())?;
-        if self.row_fn.is_none() {
+        if self.row_fn.is_none()
+            && self.prepared_row_fn.is_none()
+            && self.batched_row_fn.is_none()
+            && self.width_batched_row_fn.is_none()
+        {
             return Err(CollectionError::MissingRowFactory);
         }
         check_row_height(self.estimated_row_height)?;
@@ -785,15 +868,24 @@ impl<T> List<T> {
             items: self.items,
             key_fn: self.key_fn,
             row_fn: self.row_fn,
+            prepared_row_fn: self.prepared_row_fn,
+            batched_row_fn: self.batched_row_fn,
+            width_batched_row_fn: self.width_batched_row_fn,
             estimated_row_height: self.estimated_row_height,
         });
-        CollectionDescriptor::new(
+        let mut descriptor = CollectionDescriptor::new(
             source,
             self.styles,
             self.virtualized,
             height_f32(self.estimated_row_height),
             self.overscan,
-        )
+        );
+        descriptor.overscan_pixels = self.overscan_pixels;
+        descriptor.on_viewport = self.on_viewport;
+        descriptor.initial_height = self.initial_height;
+        descriptor.measured_uniform_rows = self.measured_uniform_rows;
+        descriptor.width_probe = self.width_probe;
+        descriptor
     }
 }
 
@@ -808,12 +900,19 @@ pub struct ListSource<T> {
     items: Vec<T>,
     key_fn: Option<KeyFactory<T>>,
     row_fn: Option<ElementFactory<T>>,
+    prepared_row_fn: Option<PreparedFactory<T>>,
+    batched_row_fn: Option<BatchedFactory<T>>,
+    width_batched_row_fn: Option<WidthBatchedFactory<T>>,
     estimated_row_height: Length,
 }
 
 impl<T> CollectionSource for ListSource<T> {
     fn len(&self) -> usize {
         self.items.len()
+    }
+
+    fn width_sensitive(&self) -> bool {
+        self.width_batched_row_fn.is_some()
     }
 
     fn key(&self, index: usize) -> Key {
@@ -856,6 +955,74 @@ impl<T> CollectionSource for ListSource<T> {
         element::Box::new().child(body).build().role(Role::ListItem)
     }
 
+    fn prepare_row(
+        &self,
+        index: usize,
+        layout: &CollectionLayout,
+    ) -> Result<crate::collection_runtime::PreparedCollectionRow, CollectionError> {
+        if let Some(factory) = &self.prepared_row_fn {
+            let mut row = factory(&self.items[index])?;
+            row.element = element::Box::new()
+                .child(row.element)
+                .build()
+                .role(Role::ListItem);
+            Ok(row)
+        } else {
+            Ok(crate::collection_runtime::PreparedCollectionRow {
+                element: self.row(index, layout),
+                selection_sources: Vec::new(),
+            })
+        }
+    }
+
+    fn probe_row(
+        &self,
+        index: usize,
+        layout: &CollectionLayout,
+    ) -> Result<Element, CollectionError> {
+        if self.row_fn.is_none() {
+            return Err(CollectionError::Validation(
+                "a fallible list with a width probe requires an inert row factory".into(),
+            ));
+        }
+        Ok(self.row(index, layout))
+    }
+
+    fn prepare_row_with_batches(
+        &self,
+        index: usize,
+        layout: &CollectionLayout,
+    ) -> Result<crate::collection_runtime::CollectionPreparedWithBatches, CollectionError> {
+        if let Some(factory) = &self.width_batched_row_fn {
+            let row = factory(&self.items[index], layout)?;
+            return Ok((
+                PreparedCollectionRow {
+                    element: element::Box::new()
+                        .child(row.element)
+                        .build()
+                        .role(Role::ListItem),
+                    selection_sources: Vec::new(),
+                },
+                row.batches,
+            ));
+        }
+        if let Some(factory) = &self.batched_row_fn {
+            let row = factory(&self.items[index])?;
+            Ok((
+                PreparedCollectionRow {
+                    element: element::Box::new()
+                        .child(row.element)
+                        .build()
+                        .role(Role::ListItem),
+                    selection_sources: Vec::new(),
+                },
+                row.batches,
+            ))
+        } else {
+            Ok((self.prepare_row(index, layout)?, Vec::new()))
+        }
+    }
+
     fn header(&self, _layout: &CollectionLayout) -> Option<Element> {
         None
     }
@@ -866,7 +1033,11 @@ impl<T> CollectionSource for ListSource<T> {
 
     fn validate(&self) -> Result<(), CollectionError> {
         collect_keys(&self.items, self.key_fn.as_deref())?;
-        if self.row_fn.is_none() {
+        if self.row_fn.is_none()
+            && self.prepared_row_fn.is_none()
+            && self.batched_row_fn.is_none()
+            && self.width_batched_row_fn.is_none()
+        {
             return Err(CollectionError::MissingRowFactory);
         }
         check_row_height(self.estimated_row_height)?;
@@ -901,6 +1072,10 @@ pub struct Table<T> {
     virtualized: bool,
     estimated_row_height: Length,
     overscan: usize,
+    overscan_pixels: Option<f32>,
+    on_viewport: Option<Rc<dyn Fn(CollectionViewport)>>,
+    initial_height: Option<Rc<dyn Fn(usize) -> f32>>,
+    measured_uniform_rows: bool,
 }
 
 impl<T> Table<T> {
@@ -917,6 +1092,10 @@ impl<T> Table<T> {
             virtualized: false,
             estimated_row_height: Length::Px(32.0),
             overscan: 4,
+            overscan_pixels: None,
+            on_viewport: None,
+            initial_height: None,
+            measured_uniform_rows: false,
         }
     }
 
@@ -999,6 +1178,26 @@ impl<T> Table<T> {
         self
     }
 
+    pub fn overscan_pixels(mut self, pixels: f32) -> Self {
+        self.overscan_pixels = Some(pixels);
+        self
+    }
+
+    pub fn on_viewport(mut self, callback: impl Fn(CollectionViewport) + 'static) -> Self {
+        self.on_viewport = Some(Rc::new(callback));
+        self
+    }
+
+    pub fn measured_uniform_rows(mut self) -> Self {
+        self.measured_uniform_rows = true;
+        self
+    }
+
+    pub fn initial_height(mut self, height: impl Fn(usize) -> f32 + 'static) -> Self {
+        self.initial_height = Some(Rc::new(height));
+        self
+    }
+
     /// Whether `.virtualize()` was selected.
     #[must_use]
     pub fn is_virtualized(&self) -> bool {
@@ -1076,13 +1275,18 @@ impl<T> Table<T> {
             estimated_row_height: self.estimated_row_height,
             plan_cache: RefCell::new(None),
         });
-        CollectionDescriptor::new(
+        let mut descriptor = CollectionDescriptor::new(
             source,
             self.styles,
             self.virtualized,
             height_f32(self.estimated_row_height),
             self.overscan,
-        )
+        );
+        descriptor.overscan_pixels = self.overscan_pixels;
+        descriptor.on_viewport = self.on_viewport;
+        descriptor.initial_height = self.initial_height;
+        descriptor.measured_uniform_rows = self.measured_uniform_rows;
+        descriptor
     }
 
     fn track_specs(&self) -> Vec<(ColumnWidth, Option<f32>, Option<f32>)> {

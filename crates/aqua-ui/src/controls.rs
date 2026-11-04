@@ -231,6 +231,7 @@ pub enum ControlRequest {
 #[derive(Clone, Copy)]
 struct Capture {
     node: NodeId,
+    down: aqua_core::PointerEvent,
     origin: Point,
     value: f64,
 }
@@ -670,6 +671,7 @@ pub fn dispatch(tree: &mut UiTree, event: &InputEvent) -> bool {
             tree.set_focused(Some(node));
             let capture = Capture {
                 node,
+                down: *pointer,
                 origin: pointer.position,
                 value,
             };
@@ -718,6 +720,8 @@ pub fn dispatch(tree: &mut UiTree, event: &InputEvent) -> bool {
             }
             seek(tree, capture.node, pointer.position, capture);
             if matches!(tree.control(capture.node), Some(Control::Select(_)))
+                && (pointer.kind != aqua_core::PointerKind::Touch
+                    || tree.interaction_tap_count(pointer.contact).is_some())
                 && hit_test(tree, pointer.position).and_then(|hit| pointer_owner(tree, hit))
                     == Some(capture.node)
             {
@@ -731,6 +735,23 @@ pub fn dispatch(tree: &mut UiTree, event: &InputEvent) -> bool {
                     },
                 );
                 tree.fire_action(ActionEvent {
+                    source: if pointer.kind == aqua_core::PointerKind::Touch {
+                        tree.interaction_tap_count(pointer.contact)
+                            .map(|tap_count| crate::tree::ActivationSource::Touch {
+                                position: pointer.position,
+                                tap_count,
+                                long_press: false,
+                            })
+                    } else {
+                        Some(crate::tree::ActivationSource::Pointer {
+                            down: capture.down,
+                            up: *pointer,
+                            button: PointerButton::Primary,
+                            modifiers: tree.input.modifiers(),
+                            click_count: tree
+                                .interaction_click_count(pointer, PointerButton::Primary),
+                        })
+                    },
                     node: capture.node,
                     kind: ActionKind::Activate,
                     text: None,

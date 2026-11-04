@@ -54,6 +54,11 @@ pub enum TextEdit {
         text: String,
     },
     SetSelection(aqua_text::Selection),
+    SetExternalProjection {
+        text: String,
+        selection: aqua_text::Selection,
+        marked: Option<std::ops::Range<usize>>,
+    },
     Undo,
     Redo,
 }
@@ -91,7 +96,16 @@ impl UiTree {
         let Some(snapshot) = self.editor_snapshot(node) else {
             return false;
         };
-        if snapshot.composing || revision.is_some_and(|revision| revision != snapshot.revision) {
+        let external_projection = matches!(&edit, TextEdit::SetExternalProjection { .. });
+        let allowed_external = self.get(node).is_some_and(|record| {
+            matches!(
+                &record.kind, crate::tree::NodeKind::Text(text) if text.external_text_input
+            )
+        });
+        if (external_projection != allowed_external)
+            || (snapshot.composing && !external_projection)
+            || revision.is_some_and(|revision| revision != snapshot.revision)
+        {
             return false;
         }
         let changed = self
@@ -113,6 +127,13 @@ impl UiTree {
                         editor.set_selection(selection);
                         return true;
                     }
+                    TextEdit::SetExternalProjection {
+                        text,
+                        selection,
+                        marked,
+                    } => {
+                        return editor.set_external_projection(&text, selection, marked);
+                    }
                     TextEdit::Undo => {
                         editor.undo();
                     }
@@ -124,8 +145,9 @@ impl UiTree {
             })
             .unwrap_or(false);
         if let Some(after) = self.editor_snapshot(node) {
-            if after.revision != snapshot.revision {
+            if !external_projection && after.revision != snapshot.revision {
                 self.fire_action(ActionEvent {
+                    source: None,
                     node,
                     kind: ActionKind::TextChanged,
                     text: Some(after.text),
@@ -153,8 +175,12 @@ pub enum InputKind {
     Focus,
     Modifiers,
     TextRangeActivated,
+    TextPointer,
+    TextContext,
+    TextVertical,
     FilesDropped,
     ClipboardPaste,
+    ClipboardCut,
     DragEnter,
     DragOver,
     DragLeave,
@@ -209,12 +235,34 @@ pub enum DragRequest {
     Cancel,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextPointerPhase {
+    Down { click_count: usize, shift: bool },
+    Drag,
+    Up,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum RoutedInput {
     ClipboardPaste(ClipboardPaste),
+    ClipboardCut,
+    TextVertical {
+        up: bool,
+        extend: bool,
+        target: usize,
+    },
     Native(InputEvent),
     PointerEnter(PointerEvent),
     PointerLeave(PointerEvent),
+    TextPointer {
+        pointer: PointerEvent,
+        byte: usize,
+        phase: TextPointerPhase,
+    },
+    TextContext {
+        pointer: PointerEvent,
+        byte: usize,
+    },
     TextRangeActivated {
         id: u64,
         range: std::ops::Range<usize>,
@@ -251,9 +299,13 @@ impl RoutedInput {
     pub fn kind(&self) -> InputKind {
         match self {
             Self::ClipboardPaste(_) => InputKind::ClipboardPaste,
+            Self::ClipboardCut => InputKind::ClipboardCut,
+            Self::TextVertical { .. } => InputKind::TextVertical,
             Self::PointerEnter(_) => InputKind::PointerEnter,
             Self::PointerLeave(_) => InputKind::PointerLeave,
             Self::TextRangeActivated { .. } => InputKind::TextRangeActivated,
+            Self::TextPointer { .. } => InputKind::TextPointer,
+            Self::TextContext { .. } => InputKind::TextContext,
             Self::FilesDropped { .. } => InputKind::FilesDropped,
             Self::DragEnter { .. } => InputKind::DragEnter,
             Self::DragOver { .. } => InputKind::DragOver,
@@ -285,7 +337,9 @@ impl RoutedInput {
             )
             | Self::PointerEnter(pointer)
             | Self::PointerLeave(pointer)
-            | Self::TextRangeActivated { pointer, .. } => Some(*pointer),
+            | Self::TextRangeActivated { pointer, .. }
+            | Self::TextContext { pointer, .. }
+            | Self::TextPointer { pointer, .. } => Some(*pointer),
             Self::DragEnter { pointer, .. }
             | Self::DragOver { pointer, .. }
             | Self::DragLeave { pointer, .. }
@@ -313,6 +367,7 @@ pub struct RoutedEvent {
     pub phase: EventPhase,
     pub input: RoutedInput,
     pub modifiers: Modifiers,
+    pub click_count: Option<usize>,
     pub bounds: Rect,
     pub local_position: Option<Point>,
     pub editor: Option<EditorSnapshot>,
@@ -389,12 +444,43 @@ enum BoundInput {
     Shortcut(Key, Modifiers),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct DragSnapshot {
+    pub source: NodeId,
+    pub payload: DragPayload,
+    pub pointer: PointerEvent,
+    pub cursor_offset: Point,
+}
+
 struct DragSession {
     source: NodeId,
     payload: DragPayload,
     pointer: PointerEvent,
+    cursor_offset: Point,
     target: Option<NodeId>,
     accepted: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExternalFileDragEvent {
+    Enter {
+        paths: Vec<std::path::PathBuf>,
+        position: Point,
+    },
+    Move {
+        position: Point,
+    },
+    Submit {
+        position: Point,
+    },
+    Exit,
+}
+
+struct ExternalFileDragSession {
+    paths: std::sync::Arc<[std::path::PathBuf]>,
+    payload: DragPayload,
+    pointer: PointerEvent,
+    target: Option<NodeId>,
 }
 
 #[derive(Default)]
@@ -408,9 +494,14 @@ pub(crate) struct InputRouter {
     bound: HashMap<NodeId, Vec<BoundInput>>,
     last_pointer: Option<PointerEvent>,
     drag: Option<DragSession>,
+    external_file_drag: Option<ExternalFileDragSession>,
 }
 
 impl InputRouter {
+    pub(crate) fn modifiers(&self) -> Modifiers {
+        self.modifiers
+    }
+
     pub(crate) fn remove_node(&mut self, node: NodeId) {
         self.listeners.retain(|(id, _, _), _| *id != node);
         self.captures.retain(|_, id| *id != node);
@@ -634,6 +725,16 @@ impl UiTree {
         self.input.last_pointer.map(|pointer| pointer.position)
     }
 
+    pub fn drag_snapshot(&self) -> Option<DragSnapshot> {
+        let drag = self.input.drag.as_ref()?;
+        Some(DragSnapshot {
+            source: drag.source,
+            payload: drag.payload.clone(),
+            pointer: drag.pointer,
+            cursor_offset: drag.cursor_offset,
+        })
+    }
+
     pub fn pointer_capture(&self, contact: u64) -> Option<NodeId> {
         self.input
             .captures
@@ -698,13 +799,14 @@ fn event_path(tree: &UiTree, mut node: NodeId) -> Vec<NodeId> {
 }
 
 pub fn dispatch_action(tree: &UiTree, target: NodeId, kind: ActionKind) -> bool {
-    dispatch_action_allowed(tree, target, kind, &|_, _| true)
+    dispatch_action_allowed(tree, target, kind, None, &|_, _| true)
 }
 
 fn dispatch_action_allowed(
     tree: &UiTree,
     target: NodeId,
     kind: ActionKind,
+    source: Option<crate::tree::ActivationSource>,
     allowed: &dyn Fn(&UiTree, NodeId) -> bool,
 ) -> bool {
     for node in event_path(tree, target) {
@@ -713,6 +815,7 @@ fn dispatch_action_allowed(
         }
         if tree.has_action(node, kind) {
             tree.fire_action(ActionEvent {
+                source,
                 node,
                 kind,
                 text: None,
@@ -772,6 +875,12 @@ fn route(
                 current_target: node,
                 phase,
                 modifiers: tree.input.modifiers,
+                click_count: match &input {
+                    RoutedInput::Native(InputEvent::PointerDown(pointer, button)) => {
+                        tree.interaction_click_count(pointer, *button)
+                    }
+                    _ => None,
+                },
                 bounds,
                 local_position: input
                     .position()
@@ -790,10 +899,18 @@ fn route(
                 DragRequest::Start(payload) => {
                     if let Some(pointer) = input.pointer() {
                         finish_drag(tree, false);
+                        tree.queue_interaction_event(
+                            node,
+                            crate::tree::interaction::InteractionEvent::Dragging(true),
+                        );
                         tree.input.drag = Some(DragSession {
                             source: node,
                             payload,
                             pointer,
+                            cursor_offset: Point::new(
+                                pointer.position.x - bounds.x,
+                                pointer.position.y - bounds.y,
+                            ),
                             target: None,
                             accepted: false,
                         });
@@ -807,7 +924,15 @@ fn route(
                     CaptureRequest::None => {}
                     CaptureRequest::Capture => {
                         let previous = tree.input.captures.insert(pointer.contact, node);
+                        tree.queue_interaction_event(
+                            node,
+                            crate::tree::interaction::InteractionEvent::Capture(true),
+                        );
                         if let Some(previous) = previous.filter(|previous| *previous != node) {
+                            tree.queue_interaction_event(
+                                previous,
+                                crate::tree::interaction::InteractionEvent::Capture(false),
+                            );
                             route(
                                 tree,
                                 previous,
@@ -821,6 +946,10 @@ fn route(
                     CaptureRequest::Release => {
                         if tree.input.captures.get(&pointer.contact) == Some(&node) {
                             tree.input.captures.remove(&pointer.contact);
+                            tree.queue_interaction_event(
+                                node,
+                                crate::tree::interaction::InteractionEvent::Capture(false),
+                            );
                         }
                     }
                 }
@@ -866,6 +995,10 @@ fn finish_drag(tree: &mut UiTree, accepted: bool) {
         );
     }
     let contact = drag.pointer.contact;
+    tree.queue_interaction_event(
+        drag.source,
+        crate::tree::interaction::InteractionEvent::Dragging(false),
+    );
     route(
         tree,
         drag.source,
@@ -972,6 +1105,66 @@ pub fn cancel_blocked(tree: &mut UiTree, allowed: impl Fn(&UiTree, NodeId) -> bo
     tree.input.hovered.retain(|node| !blocked.contains(node));
 }
 
+pub fn route_text_vertical(
+    tree: &mut UiTree,
+    node: NodeId,
+    up: bool,
+    extend: bool,
+    target: usize,
+    allowed: impl Fn(&UiTree, NodeId) -> bool,
+) -> RoutedOutcome {
+    if tree.is_disabled(node) || !allowed(tree, node) {
+        return RoutedOutcome::default();
+    }
+    route(
+        tree,
+        node,
+        RoutedInput::TextVertical { up, extend, target },
+        &allowed,
+    )
+}
+
+pub fn route_text_pointer(
+    tree: &mut UiTree,
+    node: NodeId,
+    pointer: PointerEvent,
+    byte: usize,
+    phase: TextPointerPhase,
+    allowed: impl Fn(&UiTree, NodeId) -> bool,
+) -> RoutedOutcome {
+    if tree.is_disabled(node) || !allowed(tree, node) {
+        return RoutedOutcome::default();
+    }
+    route(
+        tree,
+        node,
+        RoutedInput::TextPointer {
+            pointer,
+            byte,
+            phase,
+        },
+        &allowed,
+    )
+}
+
+pub fn route_text_context(
+    tree: &mut UiTree,
+    node: NodeId,
+    pointer: PointerEvent,
+    byte: usize,
+    allowed: impl Fn(&UiTree, NodeId) -> bool,
+) -> RoutedOutcome {
+    if tree.is_disabled(node) || !allowed(tree, node) {
+        return RoutedOutcome::default();
+    }
+    route(
+        tree,
+        node,
+        RoutedInput::TextContext { pointer, byte },
+        &allowed,
+    )
+}
+
 pub fn route_text_range(
     tree: &mut UiTree,
     node: NodeId,
@@ -989,6 +1182,17 @@ pub fn route_text_range(
         RoutedInput::TextRangeActivated { id, range, pointer },
         &allowed,
     )
+}
+
+pub fn route_clipboard_cut(
+    tree: &mut UiTree,
+    node: NodeId,
+    allowed: impl Fn(&UiTree, NodeId) -> bool,
+) -> RoutedOutcome {
+    if tree.is_disabled(node) || !allowed(tree, node) {
+        return RoutedOutcome::default();
+    }
+    route(tree, node, RoutedInput::ClipboardCut, &allowed)
 }
 
 pub fn route_clipboard(
@@ -1035,19 +1239,159 @@ pub fn route_files(
     )
 }
 
+pub fn route_external_file_drag(
+    tree: &mut UiTree,
+    event: ExternalFileDragEvent,
+    allowed: impl Fn(&UiTree, NodeId) -> bool,
+) -> RoutedOutcome {
+    let pointer_at = |position| PointerEvent {
+        contact: 0,
+        kind: aqua_core::PointerKind::Mouse,
+        position,
+        buttons: 1,
+    };
+    let mut session = match &event {
+        ExternalFileDragEvent::Enter { paths, position } => {
+            if tree.input.drag.is_some() {
+                return RoutedOutcome::default();
+            }
+            let paths: std::sync::Arc<[std::path::PathBuf]> = paths.clone().into();
+            tree.input
+                .external_file_drag
+                .take()
+                .unwrap_or_else(|| ExternalFileDragSession {
+                    payload: DragPayload::new(paths.clone()),
+                    paths,
+                    pointer: pointer_at(*position),
+                    target: None,
+                })
+        }
+        _ => match tree.input.external_file_drag.take() {
+            Some(session) => session,
+            None => return RoutedOutcome::default(),
+        },
+    };
+    let position = match &event {
+        ExternalFileDragEvent::Enter { position, .. }
+        | ExternalFileDragEvent::Move { position }
+        | ExternalFileDragEvent::Submit { position } => Some(*position),
+        ExternalFileDragEvent::Exit => None,
+    };
+    if let Some(position) = position {
+        session.pointer = pointer_at(position);
+        if !matches!(event, ExternalFileDragEvent::Submit { .. }) {
+            route_input(tree, &InputEvent::PointerMove(session.pointer), &allowed);
+        }
+    }
+    let target = position
+        .and_then(|position| hit_test(tree, position))
+        .filter(|node| !tree.is_disabled(*node) && allowed(tree, *node));
+    if target != session.target {
+        if let Some(previous) = session.target {
+            route(
+                tree,
+                previous,
+                RoutedInput::DragLeave {
+                    payload: session.payload.clone(),
+                    pointer: session.pointer,
+                },
+                &|_, _| true,
+            );
+        }
+        if let Some(next) =
+            target.filter(|_| !matches!(event, ExternalFileDragEvent::Submit { .. }))
+        {
+            route(
+                tree,
+                next,
+                RoutedInput::DragEnter {
+                    payload: session.payload.clone(),
+                    pointer: session.pointer,
+                },
+                &allowed,
+            );
+        }
+        session.target = target;
+    }
+    match event {
+        ExternalFileDragEvent::Enter { .. } | ExternalFileDragEvent::Move { .. } => {
+            let result = target
+                .map(|node| {
+                    route(
+                        tree,
+                        node,
+                        RoutedInput::DragOver {
+                            payload: session.payload.clone(),
+                            pointer: session.pointer,
+                        },
+                        &allowed,
+                    )
+                })
+                .unwrap_or_default();
+            tree.input.external_file_drag = Some(session);
+            result
+        }
+        ExternalFileDragEvent::Submit { position } => {
+            let mut result = target
+                .map(|node| {
+                    route(
+                        tree,
+                        node,
+                        RoutedInput::FilesDropped {
+                            paths: session.paths.clone(),
+                            at: Some(position),
+                        },
+                        &allowed,
+                    )
+                })
+                .unwrap_or_default();
+            if !result.handled && !result.default_prevented {
+                let mut pointer = session.pointer;
+                pointer.buttons = 0;
+                result = route_input(
+                    tree,
+                    &InputEvent::PointerUp(pointer, aqua_core::PointerButton::Primary),
+                    &allowed,
+                );
+            }
+            if let Some(node) = target {
+                route(
+                    tree,
+                    node,
+                    RoutedInput::DragLeave {
+                        payload: session.payload,
+                        pointer: session.pointer,
+                    },
+                    &|_, _| true,
+                );
+            }
+            result
+        }
+        ExternalFileDragEvent::Exit => RoutedOutcome::default(),
+    }
+}
+
 pub fn route_input(
     tree: &mut UiTree,
     event: &InputEvent,
     allowed: impl Fn(&UiTree, NodeId) -> bool,
 ) -> RoutedOutcome {
+    tree.observe_interaction_click(event);
+    tree.queue_interaction_input(event);
     if matches!(event, InputEvent::Focused(false)) {
         tree.input.modifiers = Modifiers::NONE;
         tree.clear_presses();
         crate::controls::cancel_blocked(tree, |_, _| false);
         for node in tree.traverse() {
-            let composing = tree
-                .editor_snapshot(node)
-                .is_some_and(|editor| editor.composing);
+            let external = tree.get(node).is_some_and(|record| {
+                matches!(
+                    &record.kind, crate::tree::NodeKind::Text(text) if text.external_text_input
+                )
+            });
+            let composing = !external
+                && tree
+                    .editor_snapshot(node)
+                    .is_some_and(|editor| editor.composing);
             if composing {
                 tree.edit_editor(node, |editor| {
                     editor.cancel_composition();
@@ -1059,6 +1403,14 @@ pub fn route_input(
         event,
         InputEvent::KeyDown(_) | InputEvent::KeyUp(_) | InputEvent::TextInput { .. }
     ) && crate::events::text_is_composing(tree)
+        && !tree
+            .focused()
+            .and_then(|node| tree.get(node))
+            .is_some_and(|record| {
+                matches!(
+                    &record.kind, crate::tree::NodeKind::Text(text) if text.external_text_input
+                )
+            })
     {
         return RoutedOutcome {
             handled: true,
@@ -1083,6 +1435,10 @@ pub fn route_input(
             &|_, _| true,
         );
         tree.input.captures.remove(&contact);
+        tree.queue_interaction_event(
+            node,
+            crate::tree::interaction::InteractionEvent::Capture(false),
+        );
     }
     if matches!(event, InputEvent::Focused(false)) {
         let captures: Vec<_> = tree
@@ -1092,6 +1448,10 @@ pub fn route_input(
             .map(|(contact, node)| (*contact, *node))
             .collect();
         for (contact, node) in captures {
+            tree.queue_interaction_event(
+                node,
+                crate::tree::interaction::InteractionEvent::Capture(false),
+            );
             route(
                 tree,
                 node,
@@ -1102,6 +1462,10 @@ pub fn route_input(
         tree.input.captures.clear();
         if let Some(pointer) = tree.input.last_pointer {
             for node in std::mem::take(&mut tree.input.hovered) {
+                tree.queue_interaction_event(
+                    node,
+                    crate::tree::interaction::InteractionEvent::Hover(false),
+                );
                 route(tree, node, RoutedInput::PointerLeave(pointer), &|_, _| true);
             }
         }
@@ -1124,11 +1488,19 @@ pub fn route_input(
             .unwrap_or_default();
         let previous = std::mem::replace(&mut tree.input.hovered, hovered.clone());
         for node in previous.iter().filter(|node| !hovered.contains(node)) {
+            tree.queue_interaction_event(
+                *node,
+                crate::tree::interaction::InteractionEvent::Hover(false),
+            );
             route(tree, *node, RoutedInput::PointerLeave(*pointer), &|_, _| {
                 true
             });
         }
         for node in hovered.iter().rev().filter(|node| !previous.contains(node)) {
+            tree.queue_interaction_event(
+                *node,
+                crate::tree::interaction::InteractionEvent::Hover(true),
+            );
             route(tree, *node, RoutedInput::PointerEnter(*pointer), &allowed);
         }
     }
@@ -1240,7 +1612,13 @@ pub fn route_input(
                                 .map(|binding| (node, binding))
                         });
                     if let Some((node, shortcut)) = shortcut {
-                        if dispatch_action_allowed(tree, node, shortcut.action, &allowed) {
+                        if dispatch_action_allowed(
+                            tree,
+                            node,
+                            shortcut.action,
+                            Some(crate::tree::ActivationSource::Keyboard(*key)),
+                            &allowed,
+                        ) {
                             outcome.handled = true;
                             outcome.default_prevented = true;
                         }
@@ -1252,7 +1630,12 @@ pub fn route_input(
     match event {
         InputEvent::PointerUp(_, _) | InputEvent::PointerCancel { .. } => {
             if let Some(contact) = contact {
-                tree.input.captures.remove(&contact);
+                if let Some(node) = tree.input.captures.remove(&contact) {
+                    tree.queue_interaction_event(
+                        node,
+                        crate::tree::interaction::InteractionEvent::Capture(false),
+                    );
+                }
             }
         }
         InputEvent::Focused(false) => {

@@ -7,6 +7,9 @@ use aqua_core::{
 #[must_use]
 pub fn hit_test(tree: &UiTree, at: Point) -> Option<NodeId> {
     for &portal in tree.portal_roots_in_paint_order().iter().rev() {
+        if hit_test_excluded(tree, portal) {
+            continue;
+        }
         if let Some(hit) = hit_node(tree, portal, at, None) {
             return Some(hit);
         }
@@ -15,9 +18,27 @@ pub fn hit_test(tree: &UiTree, at: Point) -> Option<NodeId> {
     hit_node(tree, root, at, None)
 }
 
+fn hit_test_excluded(tree: &UiTree, mut node: NodeId) -> bool {
+    loop {
+        let Some(record) = tree.get(node) else {
+            return true;
+        };
+        if record.hit_test_excluded {
+            return true;
+        }
+        match record.parent {
+            Some(parent) => node = parent,
+            None => return false,
+        }
+    }
+}
+
 fn hit_node(tree: &UiTree, id: NodeId, at: Point, clip: Option<Rect>) -> Option<NodeId> {
     let rect = tree.visual_rect(id)?;
     let rec = tree.get(id)?;
+    if rec.hit_test_excluded {
+        return None;
+    }
     let clip = if tree.is_portal(id) { None } else { clip };
     let clips = matches!(&rec.kind, NodeKind::Box(b) if b.paint.clip)
         || matches!(rec.kind, NodeKind::Scroll(_));
@@ -111,6 +132,17 @@ pub fn dispatch_scroll(tree: &mut UiTree, at: Point, delta: ScrollDelta) -> bool
             if tree.scroll_to(id, Point::new(cur.x + delta.x, cur.y + delta.y)) {
                 return true;
             }
+            let contains_prompt = tree.get(id).is_some_and(|record| record.children.iter().any(|child| {
+                tree.get(*child).is_some_and(|child| matches!(&child.kind, NodeKind::Text(text) if text.viewport_scroll_max.is_some()))
+            }));
+            if contains_prompt
+                && tree
+                    .content_size(id)
+                    .zip(tree.rect(id))
+                    .is_some_and(|(content, bounds)| content.h > bounds.h)
+            {
+                return true;
+            }
         }
         if tree.is_portal(id) {
             break;
@@ -147,6 +179,7 @@ pub fn dispatch_text_input(tree: &mut UiTree, text: &str) -> bool {
                 _ => None,
             });
             tree.fire_action(ActionEvent {
+                source: None,
                 node: id,
                 kind: ActionKind::TextChanged,
                 text: committed,
@@ -211,6 +244,7 @@ pub fn dispatch_ime(tree: &mut UiTree, event: &ImeEvent) -> bool {
                     _ => None,
                 });
                 tree.fire_action(ActionEvent {
+                    source: None,
                     node: id,
                     kind: ActionKind::TextChanged,
                     text: committed,
@@ -240,6 +274,19 @@ pub fn text_is_composing(tree: &UiTree) -> bool {
 }
 
 pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
+    tree.pending_keyboard_activation = None;
+    if !matches!(event.key, Key::Named(NamedKey::Tab))
+        && tree
+            .focused()
+            .and_then(|node| tree.get(node))
+            .is_some_and(|record| {
+                matches!(
+                    &record.kind, NodeKind::Text(text) if text.external_text_input
+                )
+            })
+    {
+        return false;
+    }
     if text_is_composing(tree) {
         return true;
     }
@@ -267,6 +314,18 @@ pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
                 .map(|r| matches!(r.kind, NodeKind::Text(ref t) if t.is_editable()))
                 .unwrap_or(false);
             if !is_editable {
+                if tree
+                    .get(id)
+                    .is_some_and(|record| record.keyboard_release_activation)
+                {
+                    let activation =
+                        matches!(event.key, Key::Named(NamedKey::Enter) | Key::Char(' '))
+                            && event.modifiers.is_empty()
+                            && tree.has_action(id, ActionKind::Activate);
+                    tree.pending_keyboard_activation =
+                        activation.then_some((id, tree.focus_generation));
+                    return activation;
+                }
                 if tree.is_disabled(id) {
                     return false;
                 }
@@ -274,6 +333,7 @@ pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
                     && !event.repeat
                 {
                     tree.fire_action(ActionEvent {
+                        source: Some(crate::tree::ActivationSource::Keyboard(*event)),
                         node: id,
                         kind: ActionKind::Activate,
                         text: None,
@@ -292,6 +352,7 @@ pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
                         NodeKind::Text(t) if matches!(&t.backing, crate::tree::TextBacking::Editable(e) if e.is_composing())));
                     if single && !event.repeat && !composing {
                         tree.fire_action(ActionEvent {
+                            source: None,
                             node: id,
                             kind: ActionKind::Submit,
                             text: None,
@@ -406,6 +467,7 @@ pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
                     _ => None,
                 });
                 tree.fire_action(ActionEvent {
+                    source: None,
                     node: id,
                     kind: ActionKind::TextChanged,
                     text: committed,
@@ -479,6 +541,7 @@ pub fn dispatch_default(tree: &mut UiTree, event: &InputEvent) -> bool {
             {
                 tree.set_focused(Some(hit));
             }
+            tree.press_sources.insert(pe.contact, (*pe, *btn));
             tree.arm_press(pe.contact, target);
             true
         }
@@ -486,6 +549,7 @@ pub fn dispatch_default(tree: &mut UiTree, event: &InputEvent) -> bool {
             if *btn != PointerButton::Primary {
                 return false;
             }
+            let source = tree.press_sources.remove(&pe.contact);
             let Some(armed) = tree.take_press(pe.contact) else {
                 return false;
             };
@@ -495,8 +559,28 @@ pub fn dispatch_default(tree: &mut UiTree, event: &InputEvent) -> bool {
             if tree.is_disabled(armed) {
                 return true;
             }
-            if rect.contains(pe.position) {
+            let source = if pe.kind == aqua_core::PointerKind::Touch {
+                tree.interaction_tap_count(pe.contact).map(|tap_count| {
+                    crate::tree::ActivationSource::Touch {
+                        position: pe.position,
+                        tap_count,
+                        long_press: false,
+                    }
+                })
+            } else {
+                source.map(|(down, button)| crate::tree::ActivationSource::Pointer {
+                    down,
+                    up: *pe,
+                    button,
+                    modifiers: tree.input.modifiers(),
+                    click_count: tree.interaction_click_count(pe, button),
+                })
+            };
+            if rect.contains(pe.position)
+                && (pe.kind != aqua_core::PointerKind::Touch || source.is_some())
+            {
                 tree.fire_action(ActionEvent {
+                    source,
                     node: armed,
                     kind: ActionKind::Activate,
                     text: None,
@@ -507,6 +591,7 @@ pub fn dispatch_default(tree: &mut UiTree, event: &InputEvent) -> bool {
         }
         InputEvent::PointerMove(_) => false,
         InputEvent::PointerCancel { contact } => {
+            tree.press_sources.remove(contact);
             tree.take_press(*contact);
             true
         }
@@ -516,6 +601,29 @@ pub fn dispatch_default(tree: &mut UiTree, event: &InputEvent) -> bool {
         }
         InputEvent::Scroll { at, delta } => dispatch_scroll(tree, *at, *delta),
         InputEvent::KeyDown(k) => dispatch_key(tree, k),
+        InputEvent::KeyUp(key) => {
+            let pending = tree.pending_keyboard_activation.take();
+            let Some((node, generation)) = pending else {
+                return false;
+            };
+            if tree.focused() != Some(node)
+                || tree.focus_generation != generation
+                || tree.is_disabled(node)
+                || !key.modifiers.is_empty()
+                || !matches!(key.key, Key::Named(NamedKey::Enter) | Key::Char(' '))
+                || !tree.has_action(node, ActionKind::Activate)
+            {
+                return false;
+            }
+            tree.fire_action(ActionEvent {
+                source: Some(crate::tree::ActivationSource::Keyboard(*key)),
+                node,
+                kind: ActionKind::Activate,
+                text: None,
+                focused: None,
+            });
+            true
+        }
         InputEvent::TextInput { text } => dispatch_text_input(tree, text),
         InputEvent::Ime(ime) => dispatch_ime(tree, ime),
         _ => false,

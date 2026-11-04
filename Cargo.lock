@@ -185,7 +185,9 @@ dependencies = [
  "aqua-media",
  "aqua-protocol",
  "aqua-text",
+ "png",
  "windows",
+ "windows-numerics",
 ]
 
 [[package]]
@@ -235,6 +237,7 @@ dependencies = [
  "aqua-protocol",
  "arboard",
  "dunce",
+ "percent-encoding",
  "raw-window-handle",
  "rfd",
  "roxmltree",

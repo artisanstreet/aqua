@@ -61,23 +61,48 @@ pub enum SlugLookup {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct SlugKey {
-    font_id: FontId,
-    weight: u16,
-    stretch: FontStretch,
-    synthetic_italic: bool,
-    glyph_id: u16,
+pub struct SlugKey {
+    pub font_id: FontId,
+    pub weight: u16,
+    pub stretch: FontStretch,
+    pub synthetic_italic: bool,
+    pub glyph_id: u16,
 }
 
-#[derive(Default)]
+pub const SLUG_CACHE_BUDGET_BYTES: usize = 4 * 1024 * 1024;
+
+fn lookup_bytes(lookup: &SlugLookup) -> usize {
+    match lookup {
+        SlugLookup::Outline(glyph) => glyph.heap_bytes() + std::mem::size_of::<SlugGlyph>(),
+        _ => 0,
+    }
+}
+
 pub struct SlugCache {
     glyphs: HashMap<SlugKey, SlugLookup>,
     revision: u64,
+    bytes: usize,
+    budget: usize,
+}
+
+impl Default for SlugCache {
+    fn default() -> Self {
+        Self::with_budget(SLUG_CACHE_BUDGET_BYTES)
+    }
 }
 
 impl SlugCache {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_budget(budget: usize) -> Self {
+        Self {
+            glyphs: HashMap::new(),
+            revision: 0,
+            bytes: 0,
+            budget,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -89,22 +114,17 @@ impl SlugCache {
     }
 
     pub fn heap_bytes(&self) -> usize {
-        self.glyphs
-            .values()
-            .map(|lookup| match lookup {
-                SlugLookup::Outline(glyph) => glyph.heap_bytes(),
-                _ => 0,
-            })
-            .sum()
+        self.bytes
     }
 
     pub fn clear(&mut self) {
-        self.glyphs.clear();
+        self.glyphs = HashMap::new();
+        self.bytes = 0;
     }
 
     pub fn lookup(&mut self, fonts: &mut FontManager, key: &RasterKey) -> SlugLookup {
         if self.revision != fonts.font_revision() {
-            self.glyphs.clear();
+            self.clear();
             self.revision = fonts.font_revision();
         }
         let slug_key = SlugKey {
@@ -118,6 +138,11 @@ impl SlugCache {
             return found.clone();
         }
         let built = build(fonts, key);
+        let added = lookup_bytes(&built);
+        if self.bytes + added > self.budget {
+            self.clear();
+        }
+        self.bytes += added;
         self.glyphs.insert(slug_key, built.clone());
         built
     }
@@ -187,19 +212,50 @@ pub enum StoreLookup {
     Unsupported,
 }
 
-#[derive(Default)]
-pub struct SlugStore {
-    entries: HashMap<SlugKey, StoreLookup>,
-    texels: Vec<[f32; 4]>,
-    rows: u32,
-    synced: usize,
-    created: bool,
-    revision: u64,
+pub const STORE_BUDGET_BYTES: u64 = 4 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug)]
+struct StoreEntry {
+    lookup: StoreLookup,
+    last_used: u64,
+    block: Option<(u32, u32)>,
 }
 
-impl SlugStore {
-    pub fn new() -> Self {
-        Self::default()
+pub struct SlugStore<K = SlugKey> {
+    entries: HashMap<K, StoreEntry>,
+    texels: Vec<[f32; 4]>,
+    free: Vec<(u32, u32)>,
+    rows: u32,
+    dirty: Option<(usize, usize)>,
+    created: bool,
+    revision: u64,
+    epoch: u64,
+    budget_texels: usize,
+    evictions: u64,
+    overruns: u64,
+}
+
+impl<K: Copy + Eq + std::hash::Hash> Default for SlugStore<K> {
+    fn default() -> Self {
+        Self::with_budget(STORE_BUDGET_BYTES)
+    }
+}
+
+impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
+    pub fn with_budget(bytes: u64) -> Self {
+        Self {
+            entries: HashMap::new(),
+            texels: Vec::new(),
+            free: Vec::new(),
+            rows: 0,
+            dirty: None,
+            created: false,
+            revision: 0,
+            epoch: 0,
+            budget_texels: (bytes / 16) as usize,
+            evictions: 0,
+            overruns: 0,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -214,16 +270,218 @@ impl SlugStore {
         self.texels.len()
     }
 
+    pub fn live_texels(&self) -> usize {
+        let freed: usize = self.free.iter().map(|(_, len)| *len as usize).sum();
+        self.texels.len() - freed
+    }
+
     pub fn resident_bytes(&self) -> u64 {
         self.rows as u64 * ROW_TEXELS as u64 * 16
+    }
+
+    pub fn evictions(&self) -> u64 {
+        self.evictions
+    }
+
+    pub fn overruns(&self) -> u64 {
+        self.overruns
     }
 
     pub fn reset(&mut self) {
         self.entries.clear();
         self.texels.clear();
-        self.synced = 0;
+        self.free.clear();
+        self.dirty = None;
         self.created = false;
         self.revision = 0;
+    }
+
+    fn release(&mut self, start: u32, len: u32) {
+        let at = self.free.partition_point(|(from, _)| *from < start);
+        self.free.insert(at, (start, len));
+        let merged = self.free.iter().fold(
+            Vec::<(u32, u32)>::with_capacity(self.free.len()),
+            |mut acc, &(from, size)| {
+                match acc.last_mut() {
+                    Some(last) if last.0 + last.1 == from => last.1 += size,
+                    _ => acc.push((from, size)),
+                }
+                acc
+            },
+        );
+        self.free = merged;
+        if let Some(&(from, size)) = self.free.last() {
+            if (from + size) as usize == self.texels.len() {
+                self.free.pop();
+                self.texels.truncate(from as usize);
+                self.dirty = self
+                    .dirty
+                    .map(|(low, high)| (low.min(from as usize), high.min(from as usize)))
+                    .filter(|(low, high)| low < high);
+            }
+        }
+    }
+
+    fn take_free(&mut self, len: u32) -> Option<u32> {
+        let at = self.free.iter().position(|(_, size)| *size >= len)?;
+        let (start, size) = self.free[at];
+        match size == len {
+            true => {
+                self.free.remove(at);
+            }
+            false => self.free[at] = (start + len, size - len),
+        }
+        Some(start)
+    }
+
+    fn allocate(&mut self, len: u32) -> u32 {
+        if let Some(start) = self.take_free(len) {
+            return start;
+        }
+        if self.texels.len() + len as usize <= self.budget_texels {
+            return self.texels.len() as u32;
+        }
+        let mut candidates: Vec<(u64, u32, K)> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.block.is_some() && entry.last_used < self.epoch)
+            .map(|(key, entry)| (entry.last_used, entry.block.map_or(0, |b| b.0), *key))
+            .collect();
+        candidates.sort_unstable_by_key(|(used, start, _)| (*used, *start));
+        for (_, _, key) in candidates {
+            if let Some(entry) = self.entries.remove(&key) {
+                if let Some((start, size)) = entry.block {
+                    self.evictions += 1;
+                    self.release(start, size);
+                }
+            }
+            if let Some(start) = self.take_free(len) {
+                return start;
+            }
+            if self.texels.len() + len as usize <= self.budget_texels {
+                return self.texels.len() as u32;
+            }
+        }
+        self.overruns += 1;
+        self.texels.len() as u32
+    }
+
+    fn mark_dirty(&mut self, from: usize, to: usize) {
+        self.dirty = Some(match self.dirty {
+            Some((low, high)) => (low.min(from), high.max(to)),
+            None => (from, to),
+        });
+    }
+
+    pub fn insert(&mut self, key: K, glyph: &SlugGlyph) -> StoreLookup {
+        let len = pack_glyph(glyph, 0).len() as u32;
+        let base = self.allocate(len);
+        let packed = pack_glyph(glyph, base);
+        let end = base as usize + packed.len();
+        if self.texels.len() < end {
+            self.texels.resize(end, [0.0; 4]);
+        }
+        self.texels[base as usize..end].copy_from_slice(&packed);
+        self.mark_dirty(base as usize, end);
+        let entry = StoreEntry {
+            lookup: StoreLookup::Stored(StoredGlyph {
+                index: base,
+                em_bounds: glyph.bounds,
+            }),
+            last_used: self.epoch,
+            block: Some((base, len)),
+        };
+        self.entries.insert(key, entry);
+        entry.lookup
+    }
+
+    pub fn insert_empty(&mut self, key: K, lookup: StoreLookup) -> StoreLookup {
+        self.entries.insert(
+            key,
+            StoreEntry {
+                lookup,
+                last_used: self.epoch,
+                block: None,
+            },
+        );
+        lookup
+    }
+
+    pub fn touch(&mut self, key: &K) -> Option<StoreLookup> {
+        let epoch = self.epoch;
+        self.entries.get_mut(key).map(|entry| {
+            entry.last_used = epoch;
+            entry.lookup
+        })
+    }
+
+    pub fn uploads(&mut self) -> UploadBatch {
+        self.epoch += 1;
+        if self.texels.is_empty() && !self.created {
+            return UploadBatch::default();
+        }
+        let needed_rows = self.texels.len().div_ceil(ROW_TEXELS) as u32;
+        let wanted_rows = needed_rows.max(MIN_STORE_ROWS).next_power_of_two();
+        let shrink = self.created && wanted_rows * 4 <= self.rows;
+        let recreate = !self.created || needed_rows > self.rows || shrink;
+        let mut textures = Vec::new();
+        let rows_range = match recreate {
+            true => {
+                if self.created {
+                    textures.push(TextureUpload {
+                        handle: STORE_HANDLE,
+                        op: TextureOp::Release,
+                    });
+                }
+                self.rows = wanted_rows;
+                self.created = true;
+                textures.push(TextureUpload {
+                    handle: STORE_HANDLE,
+                    op: TextureOp::Create {
+                        extent: Extent::new(STORE_WIDTH, self.rows),
+                        format: TextureFormat::Rgba32Float,
+                    },
+                });
+                (needed_rows > 0).then_some((0, needed_rows))
+            }
+            false => self.dirty.map(|(low, high)| {
+                (
+                    (low / ROW_TEXELS) as u32,
+                    high.div_ceil(ROW_TEXELS) as u32,
+                )
+            }),
+        };
+        if let Some((first_row, last_row)) = rows_range {
+            let rows = last_row - first_row;
+            let from = first_row as usize * ROW_TEXELS;
+            let to = (last_row as usize * ROW_TEXELS).min(self.texels.len());
+            let mut data = Vec::with_capacity(rows as usize * ROW_TEXELS * 16);
+            for texel in &self.texels[from..to] {
+                texel
+                    .iter()
+                    .for_each(|value| data.extend_from_slice(&value.to_le_bytes()));
+            }
+            data.resize(rows as usize * ROW_TEXELS * 16, 0);
+            textures.push(TextureUpload {
+                handle: STORE_HANDLE,
+                op: TextureOp::Write {
+                    region: TextureRegion {
+                        x: 0,
+                        y: first_row,
+                        extent: Extent::new(STORE_WIDTH, rows),
+                    },
+                    data,
+                },
+            });
+        }
+        self.dirty = None;
+        UploadBatch { textures }
+    }
+}
+
+impl SlugStore<SlugKey> {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn lookup(
@@ -243,76 +501,13 @@ impl SlugStore {
             synthetic_italic: key.synthetic_italic,
             glyph_id: key.glyph_id,
         };
-        if let Some(found) = self.entries.get(&slug_key) {
-            return *found;
+        if let Some(found) = self.touch(&slug_key) {
+            return found;
         }
-        let stored = match cache.lookup(fonts, key) {
-            SlugLookup::Outline(glyph) => {
-                let base = self.texels.len() as u32;
-                self.texels.extend(pack_glyph(&glyph, base));
-                StoreLookup::Stored(StoredGlyph {
-                    index: base,
-                    em_bounds: glyph.bounds,
-                })
-            }
-            SlugLookup::Blank => StoreLookup::Blank,
-            SlugLookup::Unsupported => StoreLookup::Unsupported,
-        };
-        self.entries.insert(slug_key, stored);
-        stored
-    }
-
-    pub fn uploads(&mut self) -> UploadBatch {
-        if self.texels.is_empty() && !self.created {
-            return UploadBatch::default();
+        match cache.lookup(fonts, key) {
+            SlugLookup::Outline(glyph) => self.insert(slug_key, &glyph),
+            SlugLookup::Blank => self.insert_empty(slug_key, StoreLookup::Blank),
+            SlugLookup::Unsupported => self.insert_empty(slug_key, StoreLookup::Unsupported),
         }
-        let needed_rows = self.texels.len().div_ceil(ROW_TEXELS) as u32;
-        let recreate = !self.created || needed_rows > self.rows || self.synced > self.texels.len();
-        let mut textures = Vec::new();
-        let first_row = match recreate {
-            true => {
-                if self.created {
-                    textures.push(TextureUpload {
-                        handle: STORE_HANDLE,
-                        op: TextureOp::Release,
-                    });
-                }
-                self.rows = needed_rows.max(MIN_STORE_ROWS).next_power_of_two();
-                self.created = true;
-                textures.push(TextureUpload {
-                    handle: STORE_HANDLE,
-                    op: TextureOp::Create {
-                        extent: Extent::new(STORE_WIDTH, self.rows),
-                        format: TextureFormat::Rgba32Float,
-                    },
-                });
-                0
-            }
-            false => (self.synced / ROW_TEXELS) as u32,
-        };
-        let from = first_row as usize * ROW_TEXELS;
-        if self.texels.len() > from && (recreate || self.texels.len() > self.synced) {
-            let rows = needed_rows - first_row;
-            let mut data = Vec::with_capacity(rows as usize * ROW_TEXELS * 16);
-            for texel in &self.texels[from..] {
-                texel
-                    .iter()
-                    .for_each(|value| data.extend_from_slice(&value.to_le_bytes()));
-            }
-            data.resize(rows as usize * ROW_TEXELS * 16, 0);
-            textures.push(TextureUpload {
-                handle: STORE_HANDLE,
-                op: TextureOp::Write {
-                    region: TextureRegion {
-                        x: 0,
-                        y: first_row,
-                        extent: Extent::new(STORE_WIDTH, rows),
-                    },
-                    data,
-                },
-            });
-        }
-        self.synced = self.texels.len();
-        UploadBatch { textures }
     }
 }

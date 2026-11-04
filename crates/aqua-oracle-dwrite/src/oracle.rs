@@ -3,6 +3,7 @@ use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 
 use windows::core::{IUnknown, Interface};
+use windows_numerics::Vector2;
 use windows::Win32::Foundation::{COLORREF, RECT};
 use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Gdi::{
@@ -395,6 +396,187 @@ impl Oracle {
                 height: size.1,
                 pixels,
             })
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ColorCanvas {
+    pub width: u32,
+    pub height: u32,
+    pub premultiplied_rgba: Vec<u8>,
+}
+
+impl Oracle {
+    pub fn has_color_layers(&mut self, font: FontSource<'_>, glyph: u16) -> Result<bool, OracleError> {
+        let face = self.face(font)?;
+        unsafe {
+            let mut run = DWRITE_GLYPH_RUN {
+                fontFace: ManuallyDrop::new(Some(face)),
+                fontEmSize: 16.0,
+                glyphCount: 1,
+                glyphIndices: &glyph,
+                glyphAdvances: &16.0,
+                ..Default::default()
+            };
+            let translated = self.factory.TranslateColorGlyphRun(
+                Vector2 { X: 0.0, Y: 0.0 },
+                &run,
+                None,
+                DWRITE_GLYPH_IMAGE_FORMATS_COLR,
+                DWRITE_MEASURING_MODE_NATURAL,
+                None,
+                0,
+            );
+            ManuallyDrop::drop(&mut run.fontFace);
+            Ok(translated.is_ok())
+        }
+    }
+
+    pub fn color_layers(
+        &mut self,
+        spec: GlyphRunSpec<'_>,
+        origin: (f32, f32),
+        size: (u32, u32),
+        foreground: [f32; 3],
+    ) -> Result<ColorCanvas, OracleError> {
+        let face = self.face(spec.font)?;
+        let mut accum = vec![[0.0f32; 4]; (size.0 * size.1) as usize];
+        unsafe {
+            let mut run = DWRITE_GLYPH_RUN {
+                fontFace: ManuallyDrop::new(Some(face)),
+                fontEmSize: spec.size_px,
+                glyphCount: spec.glyphs.len() as u32,
+                glyphIndices: spec.glyphs.as_ptr(),
+                glyphAdvances: spec.advances.as_ptr(),
+                ..Default::default()
+            };
+            let translated = self.factory.TranslateColorGlyphRun(
+                Vector2 {
+                    X: origin.0,
+                    Y: origin.1,
+                },
+                &run,
+                None,
+                DWRITE_GLYPH_IMAGE_FORMATS_COLR,
+                DWRITE_MEASURING_MODE_NATURAL,
+                None,
+                0,
+            );
+            ManuallyDrop::drop(&mut run.fontFace);
+            let layers = translated.map_err(failure)?;
+            while layers.MoveNext().map_err(failure)?.as_bool() {
+                let layer = &*layers.GetCurrentRun().map_err(failure)?;
+                let color = match layer.Base.paletteIndex {
+                    0xFFFF => [foreground[0], foreground[1], foreground[2], 1.0],
+                    _ => [
+                        layer.Base.runColor.r,
+                        layer.Base.runColor.g,
+                        layer.Base.runColor.b,
+                        layer.Base.runColor.a,
+                    ],
+                };
+                let analysis = self
+                    .factory
+                    .CreateGlyphRunAnalysis(
+                        &layer.Base.glyphRun,
+                        None,
+                        DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC,
+                        DWRITE_MEASURING_MODE_NATURAL,
+                        DWRITE_GRID_FIT_MODE_DISABLED,
+                        DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
+                        layer.Base.baselineOriginX,
+                        layer.Base.baselineOriginY,
+                    )
+                    .map_err(failure)?;
+                let bounds = analysis
+                    .GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1)
+                    .map_err(failure)?;
+                let width = (bounds.right - bounds.left).max(0) as usize;
+                let height = (bounds.bottom - bounds.top).max(0) as usize;
+                if width == 0 || height == 0 {
+                    continue;
+                }
+                let mut data = vec![0u8; width * height];
+                analysis
+                    .CreateAlphaTexture(DWRITE_TEXTURE_ALIASED_1x1, &bounds, &mut data)
+                    .map_err(failure)?;
+                for row in 0..height {
+                    for column in 0..width {
+                        let x = bounds.left + column as i32;
+                        let y = bounds.top + row as i32;
+                        if x < 0 || y < 0 || x as u32 >= size.0 || y as u32 >= size.1 {
+                            continue;
+                        }
+                        let alpha = f32::from(data[row * width + column]) / 255.0 * color[3];
+                        let target = &mut accum[(y as u32 * size.0 + x as u32) as usize];
+                        let keep = 1.0 - alpha;
+                        for channel in 0..3 {
+                            target[channel] = color[channel] * alpha + target[channel] * keep;
+                        }
+                        target[3] = alpha + target[3] * keep;
+                    }
+                }
+            }
+        }
+        let premultiplied_rgba = accum
+            .iter()
+            .flat_map(|texel| texel.map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8))
+            .collect();
+        Ok(ColorCanvas {
+            width: size.0,
+            height: size.1,
+            premultiplied_rgba,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StrikeImage {
+    pub formats: u32,
+    pub pixels_per_em: u32,
+    pub size: (u32, u32),
+    pub left_origin: (f32, f32),
+    pub data: Vec<u8>,
+}
+
+impl Oracle {
+    pub fn strike_image(
+        &mut self,
+        font: FontSource<'_>,
+        glyph: u16,
+        pixels_per_em: u32,
+        format: u32,
+    ) -> Result<Option<StrikeImage>, OracleError> {
+        let face = self.face(font)?.cast::<IDWriteFontFace4>().map_err(failure)?;
+        unsafe {
+            let formats = face
+                .GetGlyphImageFormats(glyph, 1, 2048)
+                .map_err(failure)?;
+            let wanted = DWRITE_GLYPH_IMAGE_FORMATS(format as i32);
+            if formats.0 as u32 & format == 0 {
+                return Ok(Some(StrikeImage {
+                    formats: formats.0 as u32,
+                    pixels_per_em: 0,
+                    size: (0, 0),
+                    left_origin: (0.0, 0.0),
+                    data: Vec::new(),
+                }));
+            }
+            let mut data = DWRITE_GLYPH_IMAGE_DATA::default();
+            let mut context = std::ptr::null_mut::<c_void>();
+            face.GetGlyphImageData(glyph, pixels_per_em, wanted, &mut data, &mut context)
+                .map_err(failure)?;
+            let bytes = std::slice::from_raw_parts(data.imageData.cast::<u8>(), data.imageDataSize as usize).to_vec();
+            let image = StrikeImage {
+                formats: formats.0 as u32,
+                pixels_per_em: data.pixelsPerEm,
+                size: (data.pixelSize.width, data.pixelSize.height),
+                left_origin: (data.horizontalLeftOrigin.x as f32, data.horizontalLeftOrigin.y as f32),
+                data: bytes,
+            };
+            face.ReleaseGlyphImageData(context);
+            Ok(Some(image))
         }
     }
 }

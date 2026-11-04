@@ -344,6 +344,14 @@ impl Residency {
         self.generation += 1;
     }
 
+    pub fn page_layouts(&self) -> (Vec<crate::atlas::PageSummary>, Vec<crate::atlas::PageSummary>) {
+        (self.masks.page_layout(), self.colors.page_layout())
+    }
+
+    pub fn page_keys(&self) -> (Vec<Vec<MaskKey>>, Vec<Vec<ColorKey>>) {
+        (self.masks.page_keys(), self.colors.page_keys())
+    }
+
     pub fn stats(&self) -> ResidencyStats {
         ResidencyStats {
             masks: self.masks.stats(),

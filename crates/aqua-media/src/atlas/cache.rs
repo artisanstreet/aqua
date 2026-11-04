@@ -4,6 +4,9 @@ use std::hash::Hash;
 use super::shelf::ShelfPacker;
 use super::types::*;
 
+const MASK_SHARED_EDGE_CAP: u32 = 1024;
+const COLOR_SHARED_EDGE_CAP: u32 = 512;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AtlasConfig {
     pub format: PageFormat,
@@ -20,19 +23,28 @@ impl AtlasConfig {
             base_edge: 256,
             max_edge: 4096,
             max_shared_pages: 8,
-            budget_bytes: 16 * 1024 * 1024,
+            budget_bytes: 8 * 1024 * 1024,
         }
     }
 
     pub fn images() -> Self {
         Self {
             format: PageFormat::Color8,
-            base_edge: 512,
+            base_edge: 256,
             max_edge: 4096,
             max_shared_pages: 8,
-            budget_bytes: 96 * 1024 * 1024,
+            budget_bytes: 24 * 1024 * 1024,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PageSummary {
+    pub width: u32,
+    pub height: u32,
+    pub shared: bool,
+    pub live: u32,
+    pub idle_frames: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -117,6 +129,28 @@ impl<K: Clone + Eq + Hash> Atlas<K> {
 
     pub fn resident_bytes(&self) -> u64 {
         self.stats.resident_bytes
+    }
+
+    pub fn page_layout(&self) -> Vec<PageSummary> {
+        self.pages
+            .iter()
+            .flatten()
+            .map(|page| PageSummary {
+                width: page.width,
+                height: page.height,
+                shared: page.kind == PageKind::Shared,
+                live: page.live,
+                idle_frames: self.frame.saturating_sub(page.last_used),
+            })
+            .collect()
+    }
+
+    pub fn page_keys(&self) -> Vec<Vec<K>> {
+        self.pages
+            .iter()
+            .flatten()
+            .map(|page| page.keys.clone())
+            .collect()
     }
 
     pub fn frame(&self) -> u64 {
@@ -357,9 +391,8 @@ impl<K: Clone + Eq + Hash> Atlas<K> {
     }
 
     fn allocate(&mut self, width: u32, height: u32) -> (PageId, u32, u32) {
-        let dedicated = width.saturating_mul(2)
-            > self.config.max_edge.min(self.config.base_edge * 4)
-            || height.saturating_mul(2) > self.config.max_edge.min(self.config.base_edge * 4);
+        let limit = self.shared_edge_limit().min(self.config.base_edge * 4);
+        let dedicated = width.saturating_mul(2) > limit || height.saturating_mul(2) > limit;
         match dedicated {
             true => self.allocate_dedicated(width, height),
             false => self.allocate_shared(width, height),
@@ -407,7 +440,14 @@ impl<K: Clone + Eq + Hash> Atlas<K> {
 
     fn next_shared_edge(&self) -> u32 {
         let growth = (self.shared_pages() as u32).min(2);
-        (self.config.base_edge << growth).min(self.config.max_edge)
+        (self.config.base_edge << growth).min(self.shared_edge_limit())
+    }
+
+    fn shared_edge_limit(&self) -> u32 {
+        self.config.max_edge.min(match self.config.format {
+            PageFormat::Mask8 => MASK_SHARED_EDGE_CAP,
+            PageFormat::Color8 => COLOR_SHARED_EDGE_CAP,
+        })
     }
 
     fn fit_existing(&mut self, width: u32, height: u32) -> Option<(PageId, u32, u32)> {

@@ -137,7 +137,7 @@ impl GlyphResolver {
                     )),
                     GlyphSlot::Color(Slot::Resident(resident)) => {
                         let bounds = Rect {
-                            x: (pen[0] + resident.bearing[0]) as f32,
+                            x: (placement.color_x() + resident.bearing[0]) as f32,
                             y: (pen[1] - resident.bearing[1]) as f32,
                             w: resident.width as f32,
                             h: resident.height as f32,

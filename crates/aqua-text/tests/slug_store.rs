@@ -82,6 +82,27 @@ mod fonts {
     }
 
     #[test]
+    fn outline_cache_stays_within_its_budget() {
+        let mut fonts = FontManager::new();
+        let all = keys(
+            "The quick brown fox jumps over the lazy dog 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            32.0,
+        );
+        let mut unbounded = SlugCache::new();
+        all.iter().for_each(|key| {
+            unbounded.lookup(&mut fonts, key);
+        });
+        let budget = unbounded.heap_bytes() / 4;
+        let mut bounded = SlugCache::with_budget(budget);
+        all.iter().for_each(|key| {
+            bounded.lookup(&mut fonts, key);
+            assert!(bounded.heap_bytes() <= budget);
+        });
+        assert!(bounded.len() < unbounded.len());
+        assert!(!bounded.is_empty());
+    }
+
+    #[test]
     fn uploads_create_once_then_append_rows_and_recreate_on_growth() {
         let mut fonts = FontManager::new();
         let mut cache = SlugCache::new();
@@ -118,5 +139,112 @@ mod fonts {
         let grown = store.uploads();
         assert!(!grown.textures.is_empty());
         assert_ne!(STORE_HANDLE, TextureHandle(0));
+    }
+}
+
+mod eviction {
+    use super::*;
+    use aqua_graph::slug::STORE_WIDTH;
+    use aqua_text::slug::StoreLookup;
+    use aqua_protocol::TextureOp;
+
+    fn stored(lookup: StoreLookup) -> u32 {
+        match lookup {
+            StoreLookup::Stored(glyph) => glyph.index,
+            other => panic!("expected stored glyph, got {other:?}"),
+        }
+    }
+
+    fn glyph_len() -> usize {
+        let glyph = SlugGlyph::from_path(&rounded_blob()).expect("outline");
+        pack_glyph(&glyph, 0).len()
+    }
+
+    #[test]
+    fn least_recently_used_glyphs_make_room_and_current_frame_glyphs_stay() {
+        let glyph = SlugGlyph::from_path(&rounded_blob()).expect("outline");
+        let len = glyph_len();
+        let mut store: SlugStore<u32> = SlugStore::with_budget((len * 3 * 16) as u64);
+        let first = stored(store.insert(0, &glyph));
+        let second = stored(store.insert(1, &glyph));
+        let third = stored(store.insert(2, &glyph));
+        assert_eq!([first, second, third], [0, len as u32, 2 * len as u32]);
+        store.uploads();
+        store.touch(&0);
+        store.touch(&2);
+        let fourth = stored(store.insert(3, &glyph));
+        assert_eq!(fourth, len as u32);
+        assert_eq!(store.touch(&1), None);
+        assert!(store.touch(&0).is_some() && store.touch(&2).is_some());
+        assert_eq!(store.evictions(), 1);
+        assert_eq!(store.overruns(), 0);
+        assert_eq!(store.live_texels(), 3 * len);
+    }
+
+    #[test]
+    fn a_full_frame_of_live_glyphs_grows_past_the_budget_and_counts_it() {
+        let glyph = SlugGlyph::from_path(&rounded_blob()).expect("outline");
+        let len = glyph_len();
+        let mut store: SlugStore<u32> = SlugStore::with_budget((len * 2 * 16) as u64);
+        (0..4).for_each(|key| {
+            store.insert(key, &glyph);
+        });
+        assert_eq!(store.evictions(), 0);
+        assert_eq!(store.overruns(), 2);
+        assert_eq!(store.len(), 4);
+        store.uploads();
+        store.insert(9, &glyph);
+        assert_eq!(store.evictions(), 1);
+    }
+
+    #[test]
+    fn reused_blocks_upload_only_their_rows_and_evicted_glyphs_read_back_exactly() {
+        let glyph = SlugGlyph::from_path(&rounded_blob()).expect("outline");
+        let len = glyph_len();
+        let per_row = STORE_WIDTH as usize / len;
+        let count = per_row * 3;
+        let mut store: SlugStore<u32> = SlugStore::with_budget((count * len * 16) as u64);
+        (0..count as u32).for_each(|key| {
+            store.insert(key, &glyph);
+        });
+        let first = store.uploads();
+        assert!(first
+            .textures
+            .iter()
+            .any(|upload| matches!(upload.op, TextureOp::Create { .. })));
+        store.uploads();
+        (1..count as u32).for_each(|key| {
+            store.touch(&key);
+        });
+        let replaced = stored(store.insert(10_000, &glyph));
+        assert_eq!(replaced, 0);
+        let batch = store.uploads();
+        assert_eq!(batch.textures.len(), 1);
+        match &batch.textures[0].op {
+            TextureOp::Write { region, .. } => {
+                assert_eq!(region.y, 0);
+                assert_eq!(region.extent.height, 1);
+            }
+            other => panic!("expected a row write, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shrinking_far_below_the_texture_recreates_it_smaller() {
+        let glyph = SlugGlyph::from_path(&rounded_blob()).expect("outline");
+        let len = glyph_len();
+        let count = STORE_WIDTH as usize * 40 / len;
+        let mut store: SlugStore<u32> = SlugStore::with_budget(u64::MAX / 2);
+        (0..count as u32).for_each(|key| {
+            store.insert(key, &glyph);
+        });
+        store.uploads();
+        let big = store.resident_bytes();
+        let mut small: SlugStore<u32> = SlugStore::with_budget((len * 2 * 16) as u64);
+        (0..8).for_each(|key| {
+            small.insert(key, &glyph);
+            small.uploads();
+        });
+        assert!(small.resident_bytes() < big);
     }
 }

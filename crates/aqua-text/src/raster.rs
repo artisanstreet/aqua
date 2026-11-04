@@ -113,6 +113,12 @@ pub fn place_glyph(
     }
 }
 
+impl GlyphPlacement {
+    pub fn color_x(&self) -> i32 {
+        self.x + i32::from(self.key.subpixel >= SUBPIXEL_STEPS / 2)
+    }
+}
+
 struct CommandPen {
     commands: Vec<Command>,
 }

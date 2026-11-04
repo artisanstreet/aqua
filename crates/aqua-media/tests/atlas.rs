@@ -384,3 +384,52 @@ fn streaming_drops_bands_for_pages_released_before_they_were_sent() {
     assert!(after.uploads.is_empty());
     assert!(streamer.is_idle());
 }
+
+#[test]
+fn editor_sized_color_atlas_keeps_shared_pages_small_and_large_items_exact() {
+    let mut atlas: Atlas<ImageKey> = Atlas::new(AtlasConfig::images());
+    let wide = ImageKey {
+        asset: 1,
+        frame: 0,
+        width: 1016,
+        height: 251,
+    };
+    let slot = placement(
+        atlas
+            .insert(wide, 1016, 251, [0, 0], vec![0; 1016 * 251 * 4])
+            .unwrap(),
+    );
+    assert_eq!((slot.page_width, slot.page_height), (1016, 251));
+    for asset in 10..80u64 {
+        let key = ImageKey {
+            asset,
+            frame: 0,
+            width: 400,
+            height: 300,
+        };
+        atlas
+            .insert(key, 400, 300, [0, 0], vec![0; 400 * 300 * 4])
+            .unwrap();
+    }
+    let shared: Vec<_> = atlas
+        .page_layout()
+        .into_iter()
+        .filter(|page| page.shared)
+        .collect();
+    assert!(shared.iter().all(|page| page.width <= 512));
+}
+
+#[test]
+fn small_icons_open_a_small_first_page() {
+    let mut atlas: Atlas<ImageKey> = Atlas::new(AtlasConfig::images());
+    for asset in 0..20u64 {
+        let key = ImageKey {
+            asset,
+            frame: 0,
+            width: 22,
+            height: 22,
+        };
+        atlas.insert(key, 22, 22, [0, 0], vec![0; 22 * 22 * 4]).unwrap();
+    }
+    assert_eq!(atlas.resident_bytes(), 256 * 256 * 4);
+}

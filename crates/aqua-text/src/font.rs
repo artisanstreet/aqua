@@ -336,6 +336,22 @@ impl FontEntry {
     }
 }
 
+const CANDIDATE_CACHE_LIMIT: usize = 512;
+const COVERAGE_CACHE_LIMIT: usize = 16_384;
+const SCAN_CACHE_LIMIT: usize = 8_192;
+
+pub(crate) fn insert_bounded<K: std::hash::Hash + Eq, V>(
+    map: &mut HashMap<K, V>,
+    limit: usize,
+    key: K,
+    value: V,
+) {
+    if map.len() >= limit && !map.contains_key(&key) {
+        map.clear();
+    }
+    map.insert(key, value);
+}
+
 type CandidateKey = (Vec<FontFamily>, u16, FontStretch, FontSlant);
 
 pub struct FontManager {
@@ -652,7 +668,7 @@ impl FontManager {
             return found.clone();
         }
         let candidates = self.build_fallback_candidates(style);
-        self.candidate_cache.insert(key, candidates.clone());
+        insert_bounded(&mut self.candidate_cache, CANDIDATE_CACHE_LIMIT, key, candidates.clone());
         candidates
     }
 
@@ -747,7 +763,7 @@ impl FontManager {
                     .is_some()
             })
         });
-        self.face_coverage.insert((id, character), covered);
+        insert_bounded(&mut self.face_coverage, COVERAGE_CACHE_LIMIT, (id, character), covered);
         covered
     }
 
@@ -772,7 +788,7 @@ impl FontManager {
             .into_iter()
             .map(|(id, ..)| id)
             .find(|id| self.face_covers(*id, character));
-        self.scan_cache.insert(character, found);
+        insert_bounded(&mut self.scan_cache, SCAN_CACHE_LIMIT, character, found);
         found.and_then(|id| self.entry(id, style))
     }
 
@@ -944,6 +960,16 @@ pub fn select_cluster(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_insert_never_exceeds_the_limit_and_keeps_the_newest() {
+        let mut map = HashMap::new();
+        (0..100u32).for_each(|n| insert_bounded(&mut map, 8, n, n));
+        assert!(map.len() <= 8);
+        assert_eq!(map.get(&99), Some(&99));
+        insert_bounded(&mut map, 8, 99, 7);
+        assert_eq!(map.get(&99), Some(&7));
+    }
 
     #[test]
     fn empty_manager_has_no_faces() {

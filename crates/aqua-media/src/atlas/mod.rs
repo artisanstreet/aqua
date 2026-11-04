@@ -5,7 +5,7 @@ mod shelf;
 mod stream;
 mod types;
 
-pub use cache::{Atlas, AtlasConfig, AtlasStats};
+pub use cache::{Atlas, AtlasConfig, AtlasStats, PageSummary};
 pub use glyph::{
     subpixel_bin, ColorGlyphBitmap, GlyphBitmap, GlyphKey, GlyphRaster, GlyphRasterizer,
     GlyphSource, SUBPIXEL_BINS,

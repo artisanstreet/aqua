@@ -7,8 +7,10 @@ license = "BSD-3-Clause"
 publish = false
 
 [target.'cfg(windows)'.dependencies]
+windows-numerics = "0.3"
 windows = { version = "0.62.2", features = [
   "Win32_Foundation",
+  "Win32_Graphics_Direct2D_Common",
   "Win32_Graphics_DirectWrite",
   "Win32_Graphics_Gdi",
   "Win32_System_ProcessStatus",
@@ -23,3 +25,4 @@ aqua-graph = { path = "../aqua-graph" }
 aqua-protocol = { path = "../aqua-protocol" }
 aqua-gpu-d3d12 = { path = "../aqua-gpu-d3d12" }
 aqua-gpu-ref = { path = "../aqua-gpu-ref" }
+png = "0.18"

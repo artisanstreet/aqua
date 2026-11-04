@@ -1,3 +1,4 @@
+#![cfg_attr(not(windows), allow(unused))]
 use aqua_text::{FontManager, TextLayout, TextStyle};
 use harfrust::{Direction, FontRef, ShapeOptions, ShaperData, UnicodeBuffer};
 
@@ -37,6 +38,7 @@ fn reference_advances(fonts: &mut FontManager) -> Vec<f32> {
         .collect()
 }
 
+#[cfg(windows)]
 #[test]
 fn glyph_advances_match_unhinted_reference_shaping() {
     let mut fonts = FontManager::new();

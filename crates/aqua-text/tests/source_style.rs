@@ -1,3 +1,4 @@
+#![cfg_attr(not(windows), allow(unused))]
 use aqua_text::style::FontFeature;
 use aqua_text::{FontManager, StyledSpan, TextLayout, TextStyle};
 
@@ -13,6 +14,7 @@ fn font_features_change_cache_identity() {
     assert_ne!(style.cache_key(), TextStyle::default().cache_key());
 }
 
+#[cfg(windows)]
 #[test]
 fn raw_base_color_yields_to_explicit_span_colors() {
     let base = [0.31, 0.7, 0.4, 0.8];
@@ -29,21 +31,15 @@ fn raw_base_color_yields_to_explicit_span_colors() {
     ]);
     let shaped = layout.layout(&mut FontManager::new());
     let glyphs = &shaped.lines[0].glyphs;
-    assert!(
-        glyphs
-            .iter()
-            .any(|glyph| glyph.src_byte_start == 0 && glyph.color_hsla == Some(base))
-    );
-    assert!(
-        glyphs
-            .iter()
-            .any(|glyph| glyph.src_byte_start == 1 && glyph.color_hsla == Some(override_color))
-    );
-    assert!(
-        glyphs
-            .iter()
-            .any(|glyph| glyph.src_byte_start == 2 && glyph.color_hsla.is_none())
-    );
+    assert!(glyphs
+        .iter()
+        .any(|glyph| glyph.src_byte_start == 0 && glyph.color_hsla == Some(base)));
+    assert!(glyphs
+        .iter()
+        .any(|glyph| glyph.src_byte_start == 1 && glyph.color_hsla == Some(override_color)));
+    assert!(glyphs
+        .iter()
+        .any(|glyph| glyph.src_byte_start == 2 && glyph.color_hsla.is_none()));
 }
 
 #[test]

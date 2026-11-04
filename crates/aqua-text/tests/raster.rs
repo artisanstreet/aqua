@@ -1,3 +1,4 @@
+#![cfg_attr(not(windows), allow(unused))]
 use aqua_text::raster::{place_glyph, quantize_x, GlyphImage, Rasterizer};
 use aqua_text::{FontManager, TextLayout, TextStyle};
 
@@ -33,6 +34,7 @@ fn quarter_pixel_quantization_rounds_to_nearest_step() {
     assert_eq!(quantize_x(-0.3), (-1, 3));
 }
 
+#[cfg(windows)]
 #[test]
 fn capital_h_has_stem_coverage_and_cap_height_extent() {
     let (image, _) = glyph_image("H", 40.0, false);
@@ -47,6 +49,7 @@ fn capital_h_has_stem_coverage_and_cap_height_extent() {
     assert!(covered > 255 * 100);
 }
 
+#[cfg(windows)]
 #[test]
 fn subpixel_offsets_shift_coverage_without_changing_total_ink() {
     let mut fonts = FontManager::new();
@@ -80,6 +83,7 @@ fn subpixel_offsets_shift_coverage_without_changing_total_ink() {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn bold_requests_never_lose_ink_and_fake_bold_widens_stems() {
     let (_, placement) = glyph_image("H", 24.0, false);

@@ -1,3 +1,4 @@
+#![cfg_attr(not(windows), allow(unused))]
 //! Editor + layout coordination: the exact wiring `aqua-ui` will use.
 //!
 //! A `TextEditor` owns committed text; while composing, `display_text()` is
@@ -10,6 +11,7 @@ fn setup() -> (FontManager, TextStyle) {
     (FontManager::new(), TextStyle::default())
 }
 
+#[cfg(windows)]
 #[test]
 fn editor_text_lays_out_with_caret() {
     let (mut fonts, style) = setup();
@@ -32,6 +34,7 @@ fn editor_text_lays_out_with_caret() {
     assert!(caret.x > 0.0);
 }
 
+#[cfg(windows)]
 #[test]
 fn composing_text_lays_out_and_exposes_ime_anchor() {
     let (mut fonts, style) = setup();

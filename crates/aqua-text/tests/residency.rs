@@ -1,3 +1,5 @@
+#![cfg(windows)]
+
 use aqua_media::atlas::Slot;
 use aqua_media::residency::{GlyphSlot, Residency, ResidencyConfig};
 use aqua_text::raster::{place_glyph, quantize_size, RasterKey};

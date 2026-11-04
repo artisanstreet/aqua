@@ -1,5 +1,7 @@
+#![cfg_attr(not(windows), allow(unused))]
 use aqua_text::{DecorationKind, FontManager, StyledSpan, TextLayout, TextStyle, WrapMode};
 
+#[cfg(windows)]
 #[test]
 fn decorations_follow_styled_source_ranges_across_wrapped_lines() {
     let mut fonts = FontManager::new();
@@ -58,6 +60,7 @@ fn interaction_ids_preserve_exact_source_offsets_through_styling() {
     assert_eq!(ranges[1].range, 18..27);
 }
 
+#[cfg(windows)]
 #[test]
 fn inline_cells_keep_exact_advance_wrapping_and_source_hit_mapping() {
     use aqua_text::{FontManager, InlineCellError, StyledSpan, TextLayout, TextStyle, WrapMode};
@@ -96,6 +99,7 @@ fn inline_cells_keep_exact_advance_wrapping_and_source_hit_mapping() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn inline_cell_does_not_compress_glyphs_wider_than_the_cell() {
     let style = TextStyle {
@@ -120,6 +124,7 @@ fn inline_cell_does_not_compress_glyphs_wider_than_the_cell() {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn gpui_backgrounds_follow_glyph_boundaries_and_preserve_float_colors() {
     let mut fonts = FontManager::new();

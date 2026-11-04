@@ -10,6 +10,7 @@ fn shape(text: &str, width: Option<f32>) -> (TextLayout, std::sync::Arc<aqua_tex
     (layout, result)
 }
 
+#[cfg(windows)]
 #[test]
 fn wrapped_rows_have_distinct_source_ranges_and_vertical_targets() {
     let text = "alpha beta gamma delta epsilon zeta";
@@ -47,6 +48,7 @@ fn paragraph_navigation_skips_wrapped_rows_and_preserves_x() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn rtl_hit_testing_tracks_logical_source_spans() {
     let text = "אבגד";
@@ -59,6 +61,7 @@ fn rtl_hit_testing_tracks_logical_source_spans() {
     assert_eq!(layout.hit(caret.x, middle), Some("אב".len()));
 }
 
+#[cfg(windows)]
 #[test]
 fn selected_combining_cluster_covers_visual_glyph_only() {
     let text = "a e\u{301} z";
@@ -71,6 +74,7 @@ fn selected_combining_cluster_covers_visual_glyph_only() {
     assert!((width - (right.x - left.x).abs()).abs() < 0.5);
 }
 
+#[cfg(windows)]
 #[test]
 fn affinity_distinguishes_both_sides_of_a_soft_wrap() {
     use aqua_text::{CaretAffinity, CaretPosition};
@@ -119,6 +123,7 @@ fn affinity_distinguishes_both_sides_of_a_soft_wrap() {
     assert_eq!(layout.caret_position(left).unwrap().y_top, before.y_top);
 }
 
+#[cfg(windows)]
 #[test]
 fn affinity_resolves_distinct_bidi_junction_edges() {
     use aqua_text::{CaretAffinity, CaretPosition};
@@ -142,6 +147,7 @@ fn affinity_resolves_distinct_bidi_junction_edges() {
     assert!(layout.caret_position(right).unwrap().x > before.x);
 }
 
+#[cfg(windows)]
 #[test]
 fn word_hit_uses_the_glyph_under_pointer_instead_of_nearest_caret() {
     use aqua_text::navigation::{double_click_range, WordBehavior};

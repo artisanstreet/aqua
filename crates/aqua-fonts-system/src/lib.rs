@@ -127,7 +127,10 @@ pub fn system_font_directories() -> Vec<PathBuf> {
             .join("Windows")
             .join("Fonts")
     });
-    windows.into_iter().chain(user).collect()
+    let configured = std::env::var_os("AQUA_FONT_DIRS")
+        .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .unwrap_or_default();
+    windows.into_iter().chain(user).chain(configured).collect()
 }
 
 fn is_font_file(path: &Path) -> bool {

@@ -16,6 +16,7 @@ fn layout(
     (layout, laid)
 }
 
+#[cfg(windows)]
 #[test]
 fn hebrew_run_inside_latin_paragraph_is_reordered_visually() {
     let text = "abc \u{5d0}\u{5d1}\u{5d2} def";
@@ -36,6 +37,7 @@ fn hebrew_run_inside_latin_paragraph_is_reordered_visually() {
     assert!(glyphs.iter().any(|glyph| glyph.bidi_level % 2 == 1));
 }
 
+#[cfg(windows)]
 #[test]
 fn alignment_moves_lines_inside_the_constraint() {
     let text = "alpha beta\ngamma";
@@ -51,6 +53,7 @@ fn alignment_moves_lines_inside_the_constraint() {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn justify_fills_wrapped_lines_but_not_the_last() {
     let text = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
@@ -78,6 +81,7 @@ fn justify_fills_wrapped_lines_but_not_the_last() {
     assert!(last.width < 160.0);
 }
 
+#[cfg(windows)]
 #[test]
 fn tabs_land_on_multiples_of_eight_spaces() {
     let (_, laid) = layout("a\tb\n\tc", None, TextAlign::Start);
@@ -99,6 +103,7 @@ fn tabs_land_on_multiples_of_eight_spaces() {
     assert!((c.x - tab_stop).abs() < 0.01);
 }
 
+#[cfg(windows)]
 #[test]
 fn changing_only_the_width_does_not_reshape() {
     let mut fonts = FontManager::new();

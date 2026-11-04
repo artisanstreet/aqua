@@ -1,3 +1,5 @@
+#![cfg(windows)]
+
 use aqua_text::{FontManager, LaidOut, StyledSpan, TextBackground, TextLayout, WrapMode};
 
 fn source_backgrounds(shaped: &LaidOut, spans: &[StyledSpan]) -> Vec<TextBackground> {

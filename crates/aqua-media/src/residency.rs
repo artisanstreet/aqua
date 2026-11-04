@@ -180,27 +180,40 @@ impl Residency {
         if let Some(slot) = self.masks.get(&MaskKey::Glyph(key)) {
             return Ok(GlyphSlot::Mask(slot));
         }
-        if let Some(slot) = self.colors.get(&ColorKey::Glyph(key)) {
+        let snapped = GlyphKey { subpixel: 0, ..key };
+        if let Some(slot) = self
+            .colors
+            .get(&ColorKey::Glyph(key))
+            .or_else(|| self.colors.get(&ColorKey::Glyph(snapped)))
+        {
             return Ok(GlyphSlot::Color(slot));
         }
-        match source.rasterize(&key) {
+        let raster = match source.rasterize(&key) {
+            Some(GlyphRaster::Color(_)) if key.subpixel != 0 => {
+                source.rasterize(&snapped).map(|raster| (snapped, raster))
+            }
+            other => other.map(|raster| (key, raster)),
+        };
+        match raster {
             None => Ok(GlyphSlot::Mask(
                 self.masks.insert_blank(MaskKey::Glyph(key), [0, 0]),
             )),
-            Some(GlyphRaster::Mask(bitmap)) => Ok(GlyphSlot::Mask(self.masks.insert(
+            Some((_, GlyphRaster::Mask(bitmap))) => Ok(GlyphSlot::Mask(self.masks.insert(
                 MaskKey::Glyph(key),
                 bitmap.width,
                 bitmap.height,
                 [bitmap.left, bitmap.top],
                 bitmap.coverage,
             )?)),
-            Some(GlyphRaster::Color(bitmap)) => Ok(GlyphSlot::Color(self.colors.insert(
-                ColorKey::Glyph(key),
-                bitmap.width,
-                bitmap.height,
-                [bitmap.left, bitmap.top],
-                bitmap.premultiplied_rgba,
-            )?)),
+            Some((stored, GlyphRaster::Color(bitmap))) => {
+                Ok(GlyphSlot::Color(self.colors.insert(
+                    ColorKey::Glyph(stored),
+                    bitmap.width,
+                    bitmap.height,
+                    [bitmap.left, bitmap.top],
+                    bitmap.premultiplied_rgba,
+                )?))
+            }
         }
     }
 

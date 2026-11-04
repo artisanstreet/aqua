@@ -13,7 +13,9 @@ zeno = "0.3"
 png = "0.18"
 aqua-media = { path = "../aqua-media" }
 aqua-graph = { path = "../aqua-graph" }
+aqua-protocol = { path = "../aqua-protocol" }
 aqua-core = { path = "../aqua-core" }
+roxmltree = "0.21"
 unicode-bidi = "0.3"
 unicode-script = "0.5"
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }

@@ -281,3 +281,23 @@ fn clearing_forgets_color_glyphs_and_drops_everything_still_streaming() {
     assert_eq!(updates.uploads.len(), 1);
     assert!(updates.released.is_empty());
 }
+
+#[test]
+fn color_glyphs_share_one_entry_across_subpixel_bins() {
+    let mut residency = Residency::new(ResidencyConfig::default());
+    residency.begin_frame();
+    let mut source = any_source;
+    let bins = (0..4u8)
+        .map(|subpixel| {
+            let key = GlyphKey {
+                subpixel,
+                ..variant_key(7, 1)
+            };
+            residency.glyph_any(key, &mut source).unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert!(bins.iter().all(|slot| *slot == bins[0]));
+    let updates = residency.finish_frame();
+    assert_eq!(updates.uploads.len(), 1);
+    assert_eq!(residency.stats().colors.entries, 1);
+}

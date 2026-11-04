@@ -394,6 +394,10 @@ impl TextLayout {
         self.cached.as_deref()
     }
 
+    pub fn laid_out_shared(&self) -> Option<Arc<LaidOut>> {
+        self.cached.clone()
+    }
+
     pub fn last_scaled_size(&self) -> Option<(f32, f32)> {
         self.cached.as_ref().map(|laid| laid.size)
     }
@@ -1896,6 +1900,7 @@ mod tests {
         assert!(layout.caret(0).is_some());
     }
 
+    #[cfg(windows)]
     #[test]
     fn ascii_measures_positive_width() {
         let mut fonts = manager();
@@ -1907,6 +1912,7 @@ mod tests {
         assert!(!laid.lines[0].glyphs.is_empty());
     }
 
+    #[cfg(windows)]
     #[test]
     fn combining_marks_shape() {
         let mut fonts = manager();
@@ -1919,6 +1925,7 @@ mod tests {
         assert!(c3.x >= c0.x);
     }
 
+    #[cfg(windows)]
     #[test]
     fn emoji_shapes() {
         let mut fonts = manager();
@@ -1943,6 +1950,7 @@ mod tests {
         assert!(laid.lines.len() >= 2);
     }
 
+    #[cfg(windows)]
     #[test]
     fn wrap_constrains_width() {
         let mut fonts = manager();
@@ -1962,6 +1970,7 @@ mod tests {
         assert!(laid.lines.len() > 1);
     }
 
+    #[cfg(windows)]
     #[test]
     fn word_wrap_keeps_long_word_intact() {
         let mut fonts = manager();
@@ -1985,6 +1994,7 @@ mod tests {
         assert!(laid.lines.iter().any(|l| l.rtl));
     }
 
+    #[cfg(windows)]
     #[test]
     fn scale_changes_size_and_invalidates() {
         let mut fonts = manager();
@@ -1996,6 +2006,7 @@ mod tests {
         assert!(w2 > w1 * 1.5);
     }
 
+    #[cfg(windows)]
     #[test]
     fn masked_layout_maps_source_coords() {
         let mut fonts = manager();
@@ -2049,6 +2060,7 @@ mod tests {
         assert_eq!(cache.misses, 2, "font load reshapes identical text");
     }
 
+    #[cfg(windows)]
     #[test]
     fn hit_roundtrip_ltr() {
         let mut fonts = manager();

@@ -1,0 +1,2 @@
+[env]
+AQUA_FONT_DIRS = "/usr/share/fonts/truetype/dejavu:/usr/share/fonts/truetype/ubuntu:/usr/share/fonts/truetype/noto:/usr/share/fonts/truetype/droid"

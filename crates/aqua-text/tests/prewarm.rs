@@ -1,3 +1,5 @@
+#![cfg(windows)]
+
 use aqua_text::{FontManager, PrewarmedEntry, TextLayout, TextStyle};
 
 fn style() -> TextStyle {

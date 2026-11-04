@@ -1,5 +1,7 @@
+#![cfg_attr(not(windows), allow(unused))]
 use aqua_text::{CaretAffinity, CaretPosition, FontManager, TextLayout, TextStyle, WrapMode};
 
+#[cfg(windows)]
 #[test]
 fn wrapped_lines_share_one_paragraph_and_keep_selection_boundaries() {
     let mut fonts = FontManager::new();

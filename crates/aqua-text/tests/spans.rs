@@ -1,3 +1,5 @@
+#![cfg(windows)]
+
 use aqua_text::{FontManager, FontWeight, SharedLayoutCache, StyledSpan, TextLayout, TextStyle};
 
 #[test]

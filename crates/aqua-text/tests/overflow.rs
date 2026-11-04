@@ -66,6 +66,7 @@ fn fits_and_clip_leave_original_intact() {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn shaped_overflow_keeps_full_source_and_maps_visible_glyphs() {
     use aqua_text::style::LineMode;

@@ -17,6 +17,7 @@ mod shape;
 pub mod slug;
 pub mod strike;
 pub mod style;
+pub mod svg;
 
 pub use aqua_graph::tone;
 pub use editor::TextEditor;

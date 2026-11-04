@@ -1,6 +1,5 @@
-
 use aqua_core::Size;
-use aqua_text::{LineMode, SharedFonts, StyledSpan, TextLayout, TextStyle, WrapMode, measure_text};
+use aqua_text::{measure_text, LineMode, SharedFonts, StyledSpan, TextLayout, TextStyle, WrapMode};
 
 pub trait TextMeasurer {
     fn measure_text(
@@ -166,13 +165,34 @@ mod tests {
     }
 }
 
-
 #[derive(Clone)]
 pub struct ProfiledCosmicMeasurer {
     pub fonts: SharedFonts,
     pub scale: f32,
     pub gpui_line_height: bool,
     pub gpui_wrap: bool,
+}
+
+const MEASURE_CACHE_LIMIT: usize = 16_384;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct MeasureKey(u64, u64);
+
+thread_local! {
+    static MEASURE_CACHE: std::cell::RefCell<std::collections::HashMap<MeasureKey, Size>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn hash_style(hasher: &mut impl std::hash::Hasher, style: &TextStyle) {
+    use std::hash::Hash;
+    style.families.hash(hasher);
+    hasher.write_u32(style.size_px.to_bits());
+    hasher.write_u32(style.line_height_px.to_bits());
+    style.weight.hash(hasher);
+    style.slant.hash(hasher);
+    style.stretch.hash(hasher);
+    hasher.write_u32(style.letter_spacing_em.map_or(u32::MAX, f32::to_bits));
+    style.font_features.hash(hasher);
 }
 
 impl ProfiledCosmicMeasurer {
@@ -183,6 +203,55 @@ impl ProfiledCosmicMeasurer {
             if self.gpui_wrap { width.ceil() } else { width },
             height / scale,
         )
+    }
+
+    fn key(
+        &self,
+        text: &str,
+        style: &TextStyle,
+        spans: &[StyledSpan],
+        max_width: Option<f32>,
+        multiline: bool,
+    ) -> MeasureKey {
+        use std::hash::{Hash, Hasher};
+        let revision = self.fonts.lock().font_revision();
+        let mut halves = [0u64; 2];
+        for (seed, half) in halves.iter_mut().enumerate() {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            hasher.write_u8(seed as u8);
+            hasher.write_u64(revision);
+            hasher.write_u32(self.scale.to_bits());
+            hasher.write_u8(u8::from(self.gpui_line_height));
+            hasher.write_u8(u8::from(self.gpui_wrap));
+            hasher.write_u8(u8::from(multiline));
+            hasher.write_u32(max_width.map_or(u32::MAX, f32::to_bits));
+            hasher.write_usize(text.len());
+            hasher.write(text.as_bytes());
+            hash_style(&mut hasher, style);
+            hasher.write_usize(spans.len());
+            for span in spans {
+                span.text.hash(&mut hasher);
+                hash_style(&mut hasher, &span.style);
+                hasher.write_u32(span.inline_cell_width().map_or(u32::MAX, f32::to_bits));
+            }
+            *half = hasher.finish();
+        }
+        MeasureKey(halves[0], halves[1])
+    }
+
+    fn cached(&self, key: MeasureKey, measure: impl FnOnce() -> Size) -> Size {
+        if let Some(size) = MEASURE_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
+            return size;
+        }
+        let size = measure();
+        MEASURE_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.len() >= MEASURE_CACHE_LIMIT {
+                cache.clear();
+            }
+            cache.insert(key, size);
+        });
+        size
     }
 }
 
@@ -199,15 +268,24 @@ impl TextMeasurer for ProfiledCosmicMeasurer {
             line_height_px: font_size * 1.2,
             ..TextStyle::default()
         };
-        let mut layout = TextLayout::new();
-        layout.set_gpui_line_height(self.gpui_line_height);
-        layout.set_gpui_wrap(self.gpui_wrap);
-        layout.set_text(text, &style);
-        layout.set_line_mode(LineMode::Multi);
-        layout.set_max_width(if multiline { max_width } else { None });
-        layout.set_scale(self.scale);
-        let laid = layout.layout(&mut self.fonts.lock());
-        self.logical_size(laid.size)
+        let key = self.key(
+            text,
+            &style,
+            &[],
+            if multiline { max_width } else { None },
+            true,
+        );
+        self.cached(key, || {
+            let mut layout = TextLayout::new();
+            layout.set_gpui_line_height(self.gpui_line_height);
+            layout.set_gpui_wrap(self.gpui_wrap);
+            layout.set_text(text, &style);
+            layout.set_line_mode(LineMode::Multi);
+            layout.set_max_width(if multiline { max_width } else { None });
+            layout.set_scale(self.scale);
+            let laid = layout.layout(&mut self.fonts.lock());
+            self.logical_size(laid.size)
+        })
     }
 
     fn measure_styled(
@@ -218,26 +296,29 @@ impl TextMeasurer for ProfiledCosmicMeasurer {
         max_width: Option<f32>,
         multiline: bool,
     ) -> Size {
-        let mut layout = TextLayout::new();
-        layout.set_gpui_line_height(self.gpui_line_height);
-        layout.set_gpui_wrap(self.gpui_wrap);
-        match spans.is_empty() {
-            true => layout.set_text(text, style),
-            false => layout.set_spans(spans.to_vec()),
-        }
-        layout.set_line_mode(if multiline {
-            LineMode::Multi
-        } else {
-            LineMode::Single
-        });
-        layout.set_wrap(if multiline {
-            WrapMode::Word
-        } else {
-            WrapMode::None
-        });
-        layout.set_max_width(if multiline { max_width } else { None });
-        layout.set_scale(self.scale);
-        let laid = layout.layout(&mut self.fonts.lock());
-        self.logical_size(laid.size)
+        let key = self.key(text, style, spans, max_width, multiline);
+        self.cached(key, || {
+            let mut layout = TextLayout::new();
+            layout.set_gpui_line_height(self.gpui_line_height);
+            layout.set_gpui_wrap(self.gpui_wrap);
+            match spans.is_empty() {
+                true => layout.set_text(text, style),
+                false => layout.set_spans(spans.to_vec()),
+            }
+            layout.set_line_mode(if multiline {
+                LineMode::Multi
+            } else {
+                LineMode::Single
+            });
+            layout.set_wrap(if multiline {
+                WrapMode::Word
+            } else {
+                WrapMode::None
+            });
+            layout.set_max_width(if multiline { max_width } else { None });
+            layout.set_scale(self.scale);
+            let laid = layout.layout(&mut self.fonts.lock());
+            self.logical_size(laid.size)
+        })
     }
 }

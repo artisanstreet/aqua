@@ -83,6 +83,7 @@ pub fn glyph_instance(
         color,
         clip,
         opacity,
+        backdrop: None,
     }
 }
 
@@ -102,6 +103,7 @@ pub fn image_instance(
         clip,
         clip_radius: 0.0,
         blend: aqua_graph::Blend::Over,
+        linear: aqua_graph::Linear2::IDENTITY,
     }
 }
 

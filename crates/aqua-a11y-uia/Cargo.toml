@@ -1,0 +1,29 @@
+[package]
+name = "aqua-a11y-uia"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Aqua UI Automation provider: AccessKit's Windows adapter fed from the runtime's accessibility snapshots"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-protocol = { path = "../aqua-protocol" }
+accesskit = "0.25"
+
+[target.'cfg(windows)'.dependencies]
+accesskit_windows = "0.35"
+windows = { version = "0.62.2", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.62.2", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Variant",
+  "Win32_UI_Accessibility",
+  "Win32_UI_WindowsAndMessaging",
+] }

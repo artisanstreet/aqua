@@ -1,0 +1,68 @@
+use crate::event::{Chrome, Handler, ShellEvent, WindowKind};
+use aqua_core::{CursorIcon, Modifiers};
+use aqua_platform::chrome::DragRects;
+use aqua_protocol::{CaptionControl, DragRegions, Instant, WindowId};
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, VecDeque};
+
+pub(crate) enum Queued {
+    Window(WindowId, ShellEvent),
+    Waitable(usize),
+    Wake,
+}
+
+pub(crate) struct WindowState {
+    pub id: WindowId,
+    pub scale: f64,
+    pub chrome: Chrome,
+    pub kind: WindowKind,
+    pub min_logical: Option<(f64, f64)>,
+    pub modifiers: Modifiers,
+    pub resizable: bool,
+    pub minimizable: bool,
+    pub regions: DragRegions,
+    pub rects: DragRects,
+    pub cursor: CursorIcon,
+    pub redraw_pending: bool,
+    pub tracking_client: bool,
+    pub tracking_nc: bool,
+    pub hover: Option<CaptionControl>,
+    pub buttons_down: u8,
+    pub raw_mouse: bool,
+    pub minimized: bool,
+    pub text: crate::input::Utf16Assembler,
+}
+
+#[derive(Default)]
+pub(crate) struct Shell {
+    pub windows: HashMap<isize, WindowState>,
+    pub queue: VecDeque<Queued>,
+    pub wake_at: Option<Instant>,
+    pub waitables: Vec<isize>,
+    pub in_modal: bool,
+}
+
+pub(crate) static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+thread_local! {
+    pub(crate) static SHELL: RefCell<Shell> = RefCell::new(Shell::default());
+    pub(crate) static HANDLER: Cell<Option<*mut dyn Handler>> = const { Cell::new(None) };
+    pub(crate) static IN_HANDLER: Cell<bool> = const { Cell::new(false) };
+}
+
+pub(crate) fn with<R>(f: impl FnOnce(&mut Shell) -> R) -> R {
+    SHELL.with(|s| f(&mut s.borrow_mut()))
+}
+
+pub(crate) fn window<R>(hwnd: isize, f: impl FnOnce(&mut WindowState) -> R) -> Option<R> {
+    with(|s| s.windows.get_mut(&hwnd).map(f))
+}
+
+pub(crate) fn emit(hwnd: isize, event: ShellEvent) {
+    with(|s| {
+        if let Some(w) = s.windows.get(&hwnd) {
+            let id = w.id;
+            s.queue.push_back(Queued::Window(id, event));
+        }
+    });
+}

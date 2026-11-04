@@ -15,11 +15,23 @@ aqua-reactive = { path = "../aqua-reactive" }
 aqua-render = { path = "../aqua-render" }
 aqua-text = { path = "../aqua-text" }
 aqua-ui = { path = "../aqua-ui" }
+aqua-graph = { path = "../aqua-graph" }
+aqua-media = { path = "../aqua-media" }
+aqua-motion = { path = "../aqua-motion" }
+aqua-scene = { path = "../aqua-scene" }
+aqua-transport = { path = "../aqua-transport" }
+aqua-ime-tsf = { path = "../aqua-ime-tsf" }
+aqua-gpu-ref = { path = "../aqua-gpu-ref" }
+
+[target.'cfg(windows)'.dependencies]
+aqua-shell-win32 = { path = "../aqua-shell-win32" }
+aqua-gpu-d3d12 = { path = "../aqua-gpu-d3d12" }
+aqua-a11y-uia = { path = "../aqua-a11y-uia" }
+
+[dev-dependencies]
 winit = { workspace = true }
 wgpu = { workspace = true }
 pollster = "0.4"
-
-[dev-dependencies]
 accesskit = "0.25"
 taffy = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }

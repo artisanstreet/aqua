@@ -1,130 +1,89 @@
 use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant as WallInstant};
 
 use aqua_core::InputEvent as CoreInputEvent;
-use aqua_core::{Modifiers as CoreModifiers, PointerKind};
-
-#[cfg(windows)]
-use aqua_platform::a11y_winit::A11yAdapter;
+use aqua_core::Modifiers as CoreModifiers;
+use aqua_graph::Extent;
 use aqua_platform::chrome::DragRegions;
-use aqua_platform::events::{
-    FileDrop, ime_is_composing, pointer_contact, to_core_point, translate_file_event,
-    translate_ime_core, translate_key_event, translate_modifiers, translate_mouse_button_core,
-    window_event_frame_reason,
-};
-use aqua_platform::host::{
-    control_flow_for_next_wakeup, surface_signal, translate_window_event, window_attributes,
-};
 use aqua_platform::{
+    prefs::{prefers_opaque_frame, query_preferences, OsPreferences},
+    services::{app_clipboard, Clipboard, ClipboardBackend},
     AquaWindowId, FrameReason, ObservedWindowState, WindowEvent, WindowOptions, WindowRequest,
-    a11y::{A11yActionRequest, A11yNode},
-    prefs::{OsPreferences, prefers_opaque_frame, query_preferences},
-    services::{Clipboard, ClipboardBackend, app_clipboard},
 };
-use aqua_protocol::Instant;
+use aqua_protocol::{
+    A11yActionRequest, A11yNode, AccessTreeUpdate, DialogOutcome, DialogSpec, GpuEvent, ImeCommand,
+    ImeEvent, Instant, MotionCommand, MotionEvent, RenderCommand, RenderEvent, RequestId,
+    RuntimeInput, RuntimeOutput, ShellCommand, ShellEvent, WindowOp,
+};
 use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
-use aqua_render::{Renderer, Scene, SurfaceFacade};
 use aqua_runtime::Scheduler;
+use aqua_scene::Scene;
 
 use crate::config::AquaConfig;
+use crate::inbox::{AquaUserEvent, Inbox};
+use crate::native_window::NativeWindow;
+use crate::render::host::Clock;
+use crate::render::link::{ExternalUpdate, InitFactory, RenderLink};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AquaUserEvent {
-    ReactiveWake(AquaWindowId),
-    Messages(AquaWindowId),
-    WindowRequests,
-    ReplayBadges,
-    A11yActions(AquaWindowId),
-    GpuComplete(AquaWindowId, u64),
-    ExternalFileDrag(AquaWindowId),
-}
+pub use aqua_ui::input::ExternalFileDragEvent as ExternalFileDrag;
 
-#[cfg(windows)]
-struct WakeNativeImeClient {
-    inner: std::rc::Rc<dyn aqua_platform::ime_windows::NativeImeClient>,
-    proxy: Option<winit::event_loop::EventLoopProxy<AquaUserEvent>>,
-    window: AquaWindowId,
-}
-
-#[cfg(windows)]
-impl aqua_platform::ime_windows::NativeImeClient for WakeNativeImeClient {
-    fn selected_bounds(&self) -> Option<aqua_platform::services::ImeCursorArea> {
-        self.inner.selected_bounds()
+pub trait AccessSink {
+    fn needs_snapshot(&self) -> bool;
+    fn connected(&self) -> bool {
+        self.needs_snapshot()
     }
+    fn apply(&mut self, update: &AccessTreeUpdate);
+    fn drain_actions(&mut self) -> Vec<A11yActionRequest>;
+}
 
-    fn replace(&self, text: &str, selected: Option<std::ops::Range<usize>>) {
-        self.inner.replace(text, selected);
-        if let Some(proxy) = &self.proxy {
-            let _ = proxy.send_event(AquaUserEvent::Messages(self.window));
+pub trait ImeSink {
+    fn command(&mut self, command: ImeCommand);
+    fn drain(&mut self, out: &mut Vec<ImeEvent>);
+}
+
+impl<B: aqua_protocol::ImeBackend> ImeSink for B {
+    fn command(&mut self, command: ImeCommand) {
+        if let Err(error) = aqua_protocol::ImeBackend::command(self, command) {
+            eprintln!("aqua: ime: {error}");
         }
     }
-}
 
-enum ExternalUpdate {
-    Register(u64, wgpu::TextureView, u32, u32),
-    RegisterGpuiImage(u64, u64, usize, Arc<[u8]>),
-    ReleaseGpuiImage(u64),
-    Remove(u64),
+    fn drain(&mut self, out: &mut Vec<ImeEvent>) {
+        aqua_protocol::ImeBackend::drain(self, out);
+    }
 }
 
 pub struct ExternalFrame<'a> {
     pub window: &'a ObservedWindowState,
     pub now: Instant,
-    pub device: &'a wgpu::Device,
-    pub queue: &'a wgpu::Queue,
-    pub color_format: wgpu::TextureFormat,
     pub width: u32,
     pub height: u32,
     pub scale: f32,
-    pub gpui_meshes_supported: bool,
     register: &'a mut dyn FnMut(ExternalUpdate),
 }
 
 impl ExternalFrame<'_> {
-    pub fn register_gpui_image(&mut self, layer: u64, asset: u64, frame: usize, rgba: Arc<[u8]>) {
-        (self.register)(ExternalUpdate::RegisterGpuiImage(layer, asset, frame, rgba));
+    pub fn register_image(&mut self, layer: u64, width: u32, height: u32, rgba: Arc<[u8]>) {
+        (self.register)(ExternalUpdate::Image {
+            layer,
+            width,
+            height,
+            rgba,
+        });
     }
 
-    pub fn release_gpui_image(&mut self, asset: u64) {
-        (self.register)(ExternalUpdate::ReleaseGpuiImage(asset));
-    }
     pub fn unregister_external(&mut self, layer: u64) {
-        (self.register)(ExternalUpdate::Remove(layer));
-    }
-
-    pub fn register_external(&mut self, layer: u64, view: wgpu::TextureView, w: u32, h: u32) {
-        (self.register)(ExternalUpdate::Register(layer, view, w, h))
-    }
-}
-
-fn apply_external_updates(renderer: &mut Renderer, updates: Vec<ExternalUpdate>) {
-    for update in updates {
-        match update {
-            ExternalUpdate::Register(layer, view, width, height) => {
-                renderer.register_external(layer, view, width, height)
-            }
-            ExternalUpdate::RegisterGpuiImage(layer, asset, frame, rgba) => {
-                renderer.register_gpui_image(layer, asset, frame, rgba);
-            }
-            ExternalUpdate::ReleaseGpuiImage(asset) => {
-                renderer.release_gpui_image(asset);
-            }
-            ExternalUpdate::Remove(layer) => {
-                renderer.unregister_external(layer);
-            }
-        }
+        (self.register)(ExternalUpdate::Release { layer });
     }
 }
 
 pub fn run_headless_externals<A: Application>(
     app: &mut A,
-    renderer: &mut Renderer,
     window: &ObservedWindowState,
     now: Instant,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-) {
+) -> Vec<ExternalUpdate> {
     let scale = window.scale_factor as f32;
     let width = ((window.inner_size.width as f32) * scale).round().max(1.0) as u32;
     let height = ((window.inner_size.height as f32) * scale).round().max(1.0) as u32;
@@ -133,99 +92,49 @@ pub fn run_headless_externals<A: Application>(
     let mut frame = ExternalFrame {
         window,
         now,
-        device,
-        queue,
-        color_format: renderer.format(),
         width,
         height,
         scale,
-        gpui_meshes_supported: renderer.supports_gpui_meshes(),
         register: &mut register,
     };
     app.externals(&mut frame);
-    apply_external_updates(renderer, updates);
+    updates
 }
 
-struct WindowRecord {
-    observed: ObservedWindowState,
-    last_invalidating_input: Option<Instant>,
-    winit_id: Option<winit::window::WindowId>,
-    transparent: bool,
-    vsync: bool,
-    snapshot_started: Option<Instant>,
-    snapshot_pending: bool,
-    badge: Option<aqua_platform::badge::TaskbarBadge>,
-    chrome: Option<aqua_platform::chrome::WindowsChrome>,
-    #[cfg(windows)]
-    native_file_drag: Option<aqua_platform::file_drag_windows::NativeFileDrag>,
-    window: Option<Arc<winit::window::Window>>,
-    chrome_overlay: bool,
-    last_regions: Option<(DragRegions, f64)>,
-    pressed_caption: Option<aqua_platform::chrome::CaptionControl>,
-    gpu: Option<GpuWindow>,
-    cursor: Option<(f64, f64)>,
-    buttons: u8,
-    modifiers: CoreModifiers,
-    ime_active: bool,
-    #[cfg(windows)]
-    native_ime: Option<aqua_platform::ime_windows::NativeImeWindow>,
-    #[cfg(windows)]
-    native_file_events:
-        std::rc::Rc<std::cell::RefCell<VecDeque<aqua_platform::events::ExternalFileDrag>>>,
-    #[cfg(windows)]
-    a11y: Option<A11yAdapter>,
+pub(crate) struct WindowRecord {
+    pub(crate) observed: ObservedWindowState,
+    pub(crate) last_invalidating_input: Option<Instant>,
+    pub(crate) vsync: bool,
+    pub(crate) last_regions: Option<(DragRegions, f64)>,
+    pub(crate) cursor: Option<(f64, f64)>,
+    pub(crate) buttons: u8,
+    pub(crate) modifiers: CoreModifiers,
+    pub(crate) native: Option<Rc<dyn NativeWindow>>,
+    pub(crate) link: Option<RenderLink>,
+    pub(crate) access: Option<Box<dyn AccessSink>>,
+    pub(crate) ime: Option<Box<dyn ImeSink>>,
+    pub(crate) presented: u64,
+    pub(crate) access_connected: bool,
 }
 
-struct GpuWindow {
-    surface: SurfaceFacade,
-    renderer: Renderer,
-    ledger: GpuLedger,
-    text_raster_mode: aqua_core::scene::TextRasterMode,
-}
-
-#[derive(Debug, Default)]
-struct GpuLedger {
-    submitted: u64,
-    completed: u64,
-    presented: u64,
-    unreleased: u32,
-}
-
-impl GpuLedger {
-    fn complete(&mut self, sequence: u64) -> Option<u32> {
-        if sequence <= self.completed || sequence > self.submitted {
-            return None;
+impl WindowRecord {
+    fn new(observed: ObservedWindowState, vsync: bool) -> Self {
+        Self {
+            observed,
+            last_invalidating_input: None,
+            vsync,
+            last_regions: None,
+            cursor: None,
+            buttons: 0,
+            modifiers: CoreModifiers::NONE,
+            native: None,
+            link: None,
+            access: None,
+            ime: None,
+            presented: 0,
+            access_connected: false,
         }
-        let released = (sequence - self.completed).min(u64::from(self.unreleased)) as u32;
-        self.completed = sequence;
-        self.unreleased -= released;
-        Some(released)
     }
-}
-
-fn complete_gpu_event(ledger: Option<&mut GpuLedger>, sequence: u64) -> Option<u32> {
-    ledger.and_then(|ledger| ledger.complete(sequence))
-}
-
-#[derive(Clone, Debug)]
-pub struct CaptureMetadata {
-    pub adapter: wgpu::AdapterInfo,
-    pub surface_format: wgpu::TextureFormat,
-    pub surface_alpha_mode: wgpu::CompositeAlphaMode,
-    pub present_mode: wgpu::PresentMode,
-    pub text_raster_mode: aqua_core::scene::TextRasterMode,
-    pub client_width: u32,
-    pub client_height: u32,
-    pub scale_factor: f64,
-    pub submitted_sequence: u64,
-    pub completed_sequence: u64,
-}
-
-struct SharedGpu {
-    instance: wgpu::Instance,
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
 }
 
 pub struct AppCtx<'a> {
@@ -233,70 +142,36 @@ pub struct AppCtx<'a> {
     now: Instant,
     scheduler: &'a mut Scheduler,
     quit_requested: &'a mut bool,
-    proxy: Option<winit::event_loop::EventLoopProxy<AquaUserEvent>>,
+    inbox: Inbox,
     flushers: &'a mut HashMap<AquaWindowId, Box<dyn FnMut() -> FlushReport>>,
     windows: &'a HashMap<AquaWindowId, WindowRecord>,
-    shared_gpu: Option<&'a SharedGpu>,
     clipboard: &'a mut Box<dyn Clipboard>,
     window_requests: &'a mut VecDeque<WindowRequest>,
+    dialogs: &'a mut VecDeque<(AquaWindowId, RequestId, DialogSpec)>,
+    next_request: &'a mut u64,
 }
 
 impl AppCtx<'_> {
-    pub fn capture_metadata(&self, id: AquaWindowId) -> Option<CaptureMetadata> {
-        let record = self.windows.get(&id)?;
-        let window = record.window.as_ref()?;
-        let gpu = record.gpu.as_ref()?;
-        let size = window.inner_size();
-        Some(CaptureMetadata {
-            adapter: self.shared_gpu?.adapter.get_info(),
-            surface_format: gpu.surface.format(),
-            surface_alpha_mode: gpu.surface.alpha_mode(),
-            present_mode: gpu.surface.present_mode(),
-            text_raster_mode: gpu.text_raster_mode,
-            client_width: size.width,
-            client_height: size.height,
-            scale_factor: window.scale_factor(),
-            submitted_sequence: gpu.ledger.submitted,
-            completed_sequence: gpu.ledger.completed,
-        })
-    }
-
     pub fn window_state(&self, id: AquaWindowId) -> Option<&ObservedWindowState> {
         self.windows.get(&id).map(|record| &record.observed)
     }
 
-    pub fn dialog(
-        &self,
-        id: AquaWindowId,
-        request: aqua_platform::dialogs::DialogRequest,
-    ) -> Result<
-        impl std::future::Future<
-            Output = Result<Vec<std::path::PathBuf>, aqua_platform::dialogs::DialogError>,
-        > + Send
-        + 'static,
-        aqua_platform::window::WindowError,
-    > {
-        use aqua_platform::window::WindowError;
-        let window = self
-            .windows
-            .get(&id)
-            .ok_or(WindowError::UnknownWindow(id))?
-            .window
-            .clone()
-            .ok_or(WindowError::Unsupported("dialog requires a native window"))?;
-        Ok(async move { request.execute_async_for(window.as_ref()).await })
+    pub fn dialog(&mut self, id: AquaWindowId, spec: DialogSpec) -> RequestId {
+        let request = RequestId(*self.next_request);
+        *self.next_request += 1;
+        self.dialogs.push_back((id, request, spec));
+        self.inbox.post(AquaUserEvent::WindowRequests);
+        request
     }
 
     pub fn display(&self, id: AquaWindowId) -> Option<aqua_platform::monitor::DisplayInfo> {
-        aqua_platform::monitor::current(self.windows.get(&id)?.window.as_ref()?)
+        self.windows.get(&id)?.native.as_ref()?.display()
     }
 
     pub fn bind_mailbox<T>(&self, window: AquaWindowId, mailbox: &crate::mailbox::Mailbox<T>) {
-        let proxy = self.proxy.clone();
+        let inbox = self.inbox.clone();
         mailbox.set_waker(Arc::new(move || {
-            if let Some(proxy) = &proxy {
-                let _ = proxy.send_event(AquaUserEvent::Messages(window));
-            }
+            inbox.post(AquaUserEvent::Messages(window));
         }));
     }
 
@@ -317,9 +192,7 @@ impl AppCtx<'_> {
             _ => {}
         }
         self.window_requests.push_back(request);
-        if let Some(proxy) = &self.proxy {
-            let _ = proxy.send_event(AquaUserEvent::WindowRequests);
-        }
+        self.inbox.post(AquaUserEvent::WindowRequests);
         Ok(())
     }
 
@@ -353,11 +226,9 @@ impl AppCtx<'_> {
         let flusher = rt.clone();
         self.flushers
             .insert(window, Box::new(move || flusher.flush()));
-        let proxy = self.proxy.clone();
+        let inbox = self.inbox.clone();
         rt.set_wake_callback(move || {
-            if let Some(p) = &proxy {
-                let _ = p.send_event(AquaUserEvent::ReactiveWake(window));
-            }
+            inbox.post(AquaUserEvent::ReactiveWake(window));
         });
     }
 
@@ -367,17 +238,14 @@ impl AppCtx<'_> {
 }
 
 pub trait Application {
-    fn native_external_file_drag(&self, _options: &WindowOptions) -> bool {
-        false
-    }
-
     fn on_external_file_drag(
         &mut self,
         _ctx: &mut AppCtx,
         _id: AquaWindowId,
-        _event: &aqua_platform::events::ExternalFileDrag,
+        _event: &ExternalFileDrag,
     ) {
     }
+
     fn input_invalidation_epoch(&self, _id: AquaWindowId) -> u64 {
         0
     }
@@ -405,8 +273,29 @@ pub trait Application {
 
     fn on_frame_completed(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _sequence: u64) {}
 
-    fn cursor(&self) -> aqua_core::CursorIcon {
-        aqua_core::CursorIcon::Default
+    fn on_dialog(
+        &mut self,
+        _ctx: &mut AppCtx,
+        _id: AquaWindowId,
+        _request: RequestId,
+        _outcome: DialogOutcome,
+    ) {
+    }
+
+    fn on_motion_event(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _event: &MotionEvent) {}
+
+    fn step_input(&mut self, _id: AquaWindowId, _input: RuntimeInput) {}
+
+    fn take_output(&mut self, _id: AquaWindowId) -> RuntimeOutput {
+        RuntimeOutput::default()
+    }
+
+    fn motion_commands(&mut self, _id: AquaWindowId) -> Vec<MotionCommand> {
+        Vec::new()
+    }
+
+    fn cursor(&self) -> Option<aqua_core::CursorIcon> {
+        None
     }
 
     fn on_window_event(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &WindowEvent);
@@ -446,15 +335,6 @@ pub trait Application {
     fn a11y_nodes(&self) -> Option<(aqua_core::NodeId, aqua_core::NodeId, Vec<A11yNode>)> {
         None
     }
-    fn ime_cursor_area(&self) -> Option<aqua_core::Rect> {
-        None
-    }
-    #[cfg(windows)]
-    fn native_ime_client(
-        &self,
-    ) -> Option<std::rc::Rc<dyn aqua_platform::ime_windows::NativeImeClient>> {
-        None
-    }
     fn chrome_regions(&self, _window: &ObservedWindowState) -> Option<DragRegions> {
         None
     }
@@ -474,6 +354,38 @@ pub trait Application {
     note = "low-level callback trait renamed to `Application`; root `App` is now the builder"
 )]
 pub use self::Application as App;
+
+fn options_from_spec(spec: &aqua_protocol::WindowSpec) -> WindowOptions {
+    use aqua_protocol::{TitlebarMode, WindowMaterial as SpecMaterial};
+    let _ = SpecMaterial::Solid;
+    WindowOptions {
+        title: spec.title.clone(),
+        inner_size: aqua_platform::LogicalSize::new(f64::from(spec.size.w), f64::from(spec.size.h)),
+        min_size: spec
+            .min_size
+            .map(|size| aqua_platform::LogicalSize::new(f64::from(size.w), f64::from(size.h))),
+        resizable: spec.resizable,
+        titlebar: match spec.titlebar {
+            TitlebarMode::Native => aqua_platform::window::Titlebar::Native,
+            TitlebarMode::Overlay => aqua_platform::window::Titlebar::Overlay,
+            TitlebarMode::Hidden => aqua_platform::window::Titlebar::Hidden,
+        },
+        ..WindowOptions::default()
+    }
+}
+
+pub fn frame_reason(event: &WindowEvent) -> Option<FrameReason> {
+    match event {
+        WindowEvent::RedrawRequested(_) => Some(FrameReason::EXPLICIT),
+        WindowEvent::Resized(..) | WindowEvent::ScaleChanged(..) => Some(FrameReason::RESIZE),
+        WindowEvent::Focused(..) => Some(FrameReason::INPUT),
+        WindowEvent::ThemeChanged(..) => Some(FrameReason::MATERIAL),
+        WindowEvent::Occluded(_, false) => Some(FrameReason::EXPOSE),
+        WindowEvent::Occluded(_, true)
+        | WindowEvent::CloseRequested(_)
+        | WindowEvent::Destroyed(_) => None,
+    }
+}
 
 #[derive(Debug)]
 enum ChromePlan {
@@ -503,32 +415,6 @@ fn chrome_plan(
             None => Some(ChromePlan::Clear),
         },
     }
-}
-
-pub struct Aqua {
-    config: AquaConfig,
-    scheduler: Scheduler,
-    windows: HashMap<AquaWindowId, WindowRecord>,
-    winit_map: HashMap<winit::window::WindowId, AquaWindowId>,
-    next_id: u64,
-    shared_gpu: Option<SharedGpu>,
-    quit_requested: bool,
-    render_errors: u64,
-    proxy: Option<winit::event_loop::EventLoopProxy<AquaUserEvent>>,
-    flushers: HashMap<AquaWindowId, Box<dyn FnMut() -> FlushReport>>,
-    completion_tx: Option<std::sync::mpsc::Sender<(AquaWindowId, u64)>>,
-    fonts: aqua_text::SharedFonts,
-    runs: aqua_text::SharedRuns,
-    prefs: OsPreferences,
-    clipboard: Box<dyn Clipboard>,
-    window_requests: VecDeque<WindowRequest>,
-    clipboard_backend: ClipboardBackend,
-    smoke_frames: Option<u64>,
-    frames_presented: u64,
-    frame_stats: Option<FrameStats>,
-    smoke_deadline: Option<WallInstant>,
-    epoch: WallInstant,
-    wakeups: u64,
 }
 
 struct FrameStats {
@@ -604,6 +490,33 @@ impl FrameStats {
     }
 }
 
+pub struct Aqua {
+    pub(crate) config: AquaConfig,
+    pub(crate) scheduler: Scheduler,
+    pub(crate) windows: HashMap<AquaWindowId, WindowRecord>,
+    next_id: u64,
+    pub(crate) quit_requested: bool,
+    pub(crate) render_errors: u64,
+    pub(crate) inbox: Inbox,
+    pub(crate) flushers: HashMap<AquaWindowId, Box<dyn FnMut() -> FlushReport>>,
+    fonts: aqua_text::SharedFonts,
+    runs: aqua_text::SharedRuns,
+    pub(crate) prefs: OsPreferences,
+    clipboard: Box<dyn Clipboard>,
+    pub(crate) window_requests: VecDeque<WindowRequest>,
+    pub(crate) dialogs: VecDeque<(AquaWindowId, RequestId, DialogSpec)>,
+    next_request: u64,
+    clipboard_backend: ClipboardBackend,
+    smoke_frames: Option<u64>,
+    pub(crate) frames_presented: u64,
+    frame_stats: Option<FrameStats>,
+    pub(crate) smoke_deadline: Option<WallInstant>,
+    epoch: WallInstant,
+    pub(crate) wakeups: u64,
+    native_loop: bool,
+    last_host_report: Option<WallInstant>,
+}
+
 impl Aqua {
     pub fn new(config: AquaConfig) -> Result<Self, String> {
         Self::new_with_preferences(config, query_preferences())
@@ -652,26 +565,27 @@ impl Aqua {
             config,
             scheduler,
             windows: HashMap::new(),
-            winit_map: HashMap::new(),
             next_id: 1,
-            shared_gpu: None,
             quit_requested: false,
             render_errors: 0,
-            proxy: None,
+            inbox: Inbox::default(),
             flushers: HashMap::new(),
-            completion_tx: None,
             fonts: aqua_text::SharedFonts::new(),
             runs: aqua_text::SharedRuns::new(),
             prefs,
             clipboard,
             clipboard_backend,
             window_requests: VecDeque::new(),
+            dialogs: VecDeque::new(),
+            next_request: 1,
             smoke_deadline,
             epoch: WallInstant::now(),
             wakeups: 0,
             smoke_frames,
             frames_presented: 0,
             frame_stats: FrameStats::from_environment(),
+            native_loop: false,
+            last_host_report: None,
         })
     }
 
@@ -687,18 +601,43 @@ impl Aqua {
         self.windows.len()
     }
 
-    pub fn has_chrome(&self, id: AquaWindowId) -> bool {
-        self.windows
-            .get(&id)
-            .is_some_and(|r| r.chrome.is_some() && r.chrome_overlay)
-    }
-
     pub fn clock(&self) -> Instant {
         Instant::from_nanos(u64::try_from(self.epoch.elapsed().as_nanos()).unwrap_or(u64::MAX))
     }
 
-    fn wall(&self, at: Instant) -> WallInstant {
+    pub fn shared_clock(&self) -> Clock {
+        let epoch = self.epoch;
+        Arc::new(move || {
+            Instant::from_nanos(u64::try_from(epoch.elapsed().as_nanos()).unwrap_or(u64::MAX))
+        })
+    }
+
+    pub(crate) fn align_clock(&mut self, shell_now: Instant) {
+        self.epoch = WallInstant::now()
+            .checked_sub(shell_now.since_origin())
+            .unwrap_or_else(WallInstant::now);
+    }
+
+    pub(crate) fn mark_native_loop(&mut self) {
+        self.native_loop = true;
+    }
+
+    pub fn wall(&self, at: Instant) -> WallInstant {
         self.epoch + at.since_origin()
+    }
+
+    pub fn inbox(&self) -> Inbox {
+        self.inbox.clone()
+    }
+
+    pub fn config(&self) -> &AquaConfig {
+        &self.config
+    }
+
+    pub fn has_native_window(&self, id: AquaWindowId) -> bool {
+        self.windows
+            .get(&id)
+            .is_some_and(|record| record.native.is_some())
     }
 
     fn bind_app_reactive(&mut self, app: &impl Application, id: AquaWindowId) {
@@ -710,16 +649,140 @@ impl Aqua {
         }
     }
 
+    pub fn flush_output(&mut self, app: &mut impl Application, id: AquaWindowId) {
+        let mut rounds = 0;
+        let mut output = app.take_output(id);
+        loop {
+            let feedback = self.apply_output(app, id, output);
+            rounds += 1;
+            match feedback.is_empty() || rounds > 8 {
+                true => break,
+                false => {
+                    feedback
+                        .into_iter()
+                        .for_each(|input| app.step_input(id, input));
+                    output = app.take_output(id);
+                }
+            }
+        }
+    }
+
+    fn apply_output(
+        &mut self,
+        app: &mut impl Application,
+        id: AquaWindowId,
+        output: RuntimeOutput,
+    ) -> Vec<RuntimeInput> {
+        let mut feedback = Vec::new();
+        for command in output.shell {
+            match command {
+                ShellCommand::CreateWindow { spec, .. } => {
+                    self.window_requests
+                        .push_back(WindowRequest::Create(options_from_spec(&spec)));
+                    self.inbox.post(AquaUserEvent::WindowRequests);
+                }
+                ShellCommand::CloseWindow(_) => {
+                    self.window_requests.push_back(WindowRequest::Close(id));
+                    self.inbox.post(AquaUserEvent::WindowRequests);
+                }
+                ShellCommand::SetTitle { title, .. } => {
+                    self.window_requests
+                        .push_back(WindowRequest::SetTitle(id, title));
+                    self.inbox.post(AquaUserEvent::WindowRequests);
+                }
+                ShellCommand::SetCursor { icon, .. } => {
+                    if let Some(native) = self.windows.get(&id).and_then(|r| r.native.as_ref()) {
+                        native.set_cursor(icon);
+                    }
+                }
+                ShellCommand::SetDragRegions { regions, .. } => {
+                    if let Some(native) = self.windows.get(&id).and_then(|r| r.native.as_ref()) {
+                        native.set_drag_regions(&regions);
+                    }
+                }
+                ShellCommand::SetMaterial { .. } | ShellCommand::SetScheme { .. } => {}
+                ShellCommand::Operate { op, .. } => {
+                    let request = match op {
+                        WindowOp::Minimize => WindowRequest::SetMinimized(id, true),
+                        WindowOp::Maximize => WindowRequest::SetMaximized(id, true),
+                        WindowOp::Restore => WindowRequest::SetMaximized(id, false),
+                        WindowOp::Show => WindowRequest::SetVisible(id, true),
+                        WindowOp::Hide => WindowRequest::SetVisible(id, false),
+                        WindowOp::Focus => WindowRequest::Activate(id),
+                    };
+                    self.window_requests.push_back(request);
+                    self.inbox.post(AquaUserEvent::WindowRequests);
+                }
+                ShellCommand::RequestFrame { reason, .. } => {
+                    self.scheduler.request_frame(id, reason);
+                }
+                ShellCommand::ClipboardWrite { text } => {
+                    if let Err(error) = self.clipboard.set_text(text) {
+                        eprintln!("aqua: clipboard write failed: {error}");
+                    }
+                }
+                ShellCommand::ClipboardRead { request } => {
+                    let text = match self.clipboard.get_text() {
+                        Ok(text) => text,
+                        Err(error) => {
+                            eprintln!("aqua: clipboard read failed: {error}");
+                            None
+                        }
+                    };
+                    feedback.push(RuntimeInput::Shell(ShellEvent::Clipboard { request, text }));
+                }
+                ShellCommand::Dialog { request, spec } => {
+                    self.dialogs.push_back((id, request, spec));
+                    self.inbox.post(AquaUserEvent::WindowRequests);
+                }
+                ShellCommand::Quit => self.quit_requested = true,
+            }
+        }
+        if let Some(record) = self.windows.get_mut(&id) {
+            if let Some(sink) = record.ime.as_mut() {
+                output
+                    .ime
+                    .into_iter()
+                    .for_each(|command| sink.command(command));
+            }
+            if let (Some(sink), Some(update)) = (record.access.as_mut(), output.access.as_ref()) {
+                sink.apply(update);
+            }
+            if let Some(link) = record.link.as_mut() {
+                link.push_commands(output.render);
+            }
+        }
+        if let Some(at) = output.wake_at {
+            self.scheduler.request_animation_deadline(id, at);
+        }
+        let _ = app;
+        feedback
+    }
+
     pub fn dispatch_start(&mut self, app: &mut impl Application, id: AquaWindowId) {
         if self.windows.contains_key(&id) {
+            self.bind_app_reactive(&*app, id);
             self.with_ctx(|ctx| app.on_start(ctx, id));
+            self.flush_output(app, id);
         }
     }
 
     pub fn dispatch_wake(&mut self, app: &mut impl Application, id: AquaWindowId) {
         if self.windows.contains_key(&id) {
             self.with_ctx(|ctx| app.on_wake(ctx, id));
+            self.flush_output(app, id);
         }
+    }
+
+    pub fn dispatch_dialog(
+        &mut self,
+        app: &mut impl Application,
+        id: AquaWindowId,
+        request: RequestId,
+        outcome: DialogOutcome,
+    ) {
+        self.with_ctx(|ctx| app.on_dialog(ctx, id, request, outcome));
+        self.flush_output(app, id);
     }
 
     pub fn dispatch_frame_completed(
@@ -733,12 +796,13 @@ impl Aqua {
         }
     }
 
-    pub fn dispatch_window_requests(&mut self, app: &mut impl Application) {
+    pub fn dispatch_window_requests(&mut self, app: &mut impl Application) -> Vec<WindowOptions> {
         let requests: Vec<_> = self.window_requests.drain(..).collect();
+        let mut creates = Vec::new();
         for request in requests {
             if let WindowRequest::Create(options) = &request {
-                if self.proxy.is_some() {
-                    self.window_requests.push_back(request);
+                if self.native_loop {
+                    creates.push(options.clone());
                     continue;
                 }
                 let id = self.alloc_id();
@@ -759,9 +823,10 @@ impl Aqua {
                 app.on_window_request_error(&request, &error);
             }
         }
+        creates
     }
 
-    fn apply_window_request(
+    pub(crate) fn apply_window_request(
         &mut self,
         app: &mut impl Application,
         request: &WindowRequest,
@@ -769,7 +834,7 @@ impl Aqua {
         use aqua_platform::window::WindowError;
         let id = match request {
             WindowRequest::Create(_) => {
-                return Err(WindowError::Unsupported("requires active event loop"));
+                return Err(WindowError::Unsupported("requires the native loop"));
             }
             WindowRequest::SetTitle(id, _)
             | WindowRequest::SetInnerSize(id, _)
@@ -789,106 +854,35 @@ impl Aqua {
             | WindowRequest::BeginGpuiSourceSnapshotTransition(id, _)
             | WindowRequest::SetTextRasterMode(id, _) => *id,
         };
-        let window = self
+        let native = self
             .windows
             .get(&id)
             .ok_or(WindowError::UnknownWindow(id))?
-            .window
+            .native
             .clone();
         match request {
             WindowRequest::Close(_) => {
                 if self.with_ctx(|ctx| app.can_close(ctx, id)) {
-                    #[cfg(windows)]
-                    if self
-                        .windows
-                        .get(&id)
-                        .is_some_and(|record| record.native_file_drag.is_some())
-                    {
-                        self.with_ctx(|ctx| {
-                            app.on_external_file_drag(
-                                ctx,
-                                id,
-                                &aqua_platform::events::ExternalFileDrag::Exit,
-                            )
-                        });
-                    }
                     self.with_ctx(|ctx| app.on_window_event(ctx, id, &WindowEvent::Destroyed(id)));
                     self.remove_window(id);
+                    if let Some(native) = native {
+                        native.destroy();
+                    }
                 }
             }
-            WindowRequest::SetTextRasterMode(_, mode) => {
-                let record = self.windows.get_mut(&id).expect("validated window");
-                let gpu = record.gpu.as_mut().ok_or(WindowError::Unsupported(
-                    "text raster mode requires a renderer",
-                ))?;
-                gpu.renderer
-                    .set_text_raster_mode(*mode)
-                    .map_err(|error| WindowError::Native(error.to_string()))?;
-                gpu.text_raster_mode = *mode;
-                gpu.surface.request_present();
-                self.scheduler.request_frame(id, FrameReason::EXPLICIT);
+            WindowRequest::Create(_) => {
+                return Err(WindowError::Unsupported("requires the native loop"));
             }
-            WindowRequest::BeginSnapshotTransition(_, settings) => {
-                let now = self.clock();
-                let reduced = self.motion_reduced();
-                let record = self.windows.get_mut(&id).expect("validated window");
-                let gpu = record
-                    .gpu
-                    .as_mut()
-                    .ok_or(WindowError::Unsupported("snapshot requires a renderer"))?;
-                if reduced {
-                    gpu.renderer.cancel_snapshot_transition();
-                    record.snapshot_started = None;
-                    record.snapshot_pending = false;
-                } else {
-                    gpu.renderer
-                        .start_snapshot_transition(*settings)
-                        .map_err(|error| WindowError::Native(error.to_string()))?;
-                    record.snapshot_started = Some(now);
-                    record.snapshot_pending = false;
-                }
-                gpu.surface.request_present();
-                self.scheduler.request_frame(id, FrameReason::EXPLICIT);
+            WindowRequest::SetTextRasterMode(..)
+            | WindowRequest::BeginSnapshotTransition(..)
+            | WindowRequest::BeginGpuiSnapshotTransition(..)
+            | WindowRequest::BeginGpuiSourceSnapshotTransition(..) => {
+                return Err(WindowError::Unsupported(
+                    "snapshot transitions and text raster modes belong to the retired wgpu renderer",
+                ));
             }
-            WindowRequest::BeginGpuiSnapshotTransition(_, settings) => {
-                let reduced = self.motion_reduced();
-                let record = self.windows.get_mut(&id).expect("validated window");
-                let gpu = record
-                    .gpu
-                    .as_mut()
-                    .ok_or(WindowError::Unsupported("snapshot requires a renderer"))?;
-                if reduced {
-                    gpu.renderer.cancel_snapshot_transition();
-                    record.snapshot_pending = false;
-                } else {
-                    gpu.renderer
-                        .start_gpui_snapshot_transition(*settings)
-                        .map_err(|error| WindowError::Native(error.to_string()))?;
-                    record.snapshot_pending = gpu.renderer.snapshot_transition_active();
-                }
-                record.snapshot_started = None;
-                gpu.surface.request_present();
-                self.scheduler.request_frame(id, FrameReason::EXPLICIT);
-            }
-            WindowRequest::BeginGpuiSourceSnapshotTransition(_, settings) => {
-                let reduced = self.motion_reduced();
-                let record = self.windows.get_mut(&id).expect("validated window");
-                let gpu = record
-                    .gpu
-                    .as_mut()
-                    .ok_or(WindowError::Unsupported("snapshot requires a renderer"))?;
-                if reduced {
-                    gpu.renderer.cancel_snapshot_transition();
-                    record.snapshot_pending = false;
-                } else {
-                    gpu.renderer
-                        .start_gpui_source_snapshot_transition(*settings)
-                        .map_err(|error| WindowError::Native(error.to_string()))?;
-                    record.snapshot_pending = gpu.renderer.snapshot_transition_active();
-                }
-                record.snapshot_started = None;
-                gpu.surface.request_present();
-                self.scheduler.request_frame(id, FrameReason::EXPLICIT);
+            WindowRequest::SetBadge(..) => {
+                return Err(WindowError::Unsupported("taskbar badges are not ported"));
             }
             WindowRequest::SetMaxFrameRate(_, target) => {
                 self.scheduler.set_window_fps_target(id, *target);
@@ -896,106 +890,86 @@ impl Aqua {
             }
             WindowRequest::SetVsync(_, enabled) => {
                 if let Some(record) = self.windows.get_mut(&id) {
-                    if let (Some(gpu), Some(shared)) =
-                        (record.gpu.as_mut(), self.shared_gpu.as_ref())
-                    {
-                        let mode = if *enabled {
-                            wgpu::PresentMode::AutoVsync
-                        } else {
-                            wgpu::PresentMode::AutoNoVsync
-                        };
-                        gpu.surface
-                            .set_present_mode(&shared.device, &shared.adapter, mode)
-                            .map_err(|error| WindowError::Native(error.to_string()))?;
-                    }
                     record.vsync = *enabled;
+                    if let Some(link) = record.link.as_ref() {
+                        link.set_immediate(!*enabled);
+                    }
                 }
                 self.scheduler.request_frame(id, FrameReason::EXPLICIT);
-            }
-            WindowRequest::SetBadge(_, badge) => {
-                self.windows.get_mut(&id).expect("validated window").badge = *badge;
-                if let Some(window) = window.as_ref() {
-                    aqua_platform::badge::set_badge(window, *badge)
-                        .map_err(|error| WindowError::Native(error.to_string()))?;
-                }
             }
             WindowRequest::RequestRedraw(_) => {
                 self.scheduler.request_frame(id, FrameReason::EXPLICIT);
             }
-            _ => {
-                if let Some(window) = window.as_ref() {
-                    match request {
-                        WindowRequest::SetTitle(_, title) => {
-                            window.set_title(title);
-                            if let Some(record) = self.windows.get_mut(&id) {
-                                record.observed.title = window.title();
-                            }
-                        }
-                        WindowRequest::SetInnerSize(_, size) => {
-                            let _ = window.request_inner_size(winit::dpi::LogicalSize::new(
-                                size.width,
-                                size.height,
-                            ));
-                        }
-                        WindowRequest::SetVisible(_, visible) => {
-                            window.set_visible(*visible);
-                            if let (Some(record), Some(visible)) =
-                                (self.windows.get_mut(&id), window.is_visible())
-                            {
-                                record.observed.visible = visible;
-                            }
-                        }
-                        WindowRequest::SetMinimized(_, minimized) => {
-                            window.set_minimized(*minimized)
-                        }
-                        WindowRequest::SetMaximized(_, maximized) => {
-                            window.set_maximized(*maximized)
-                        }
-                        WindowRequest::Activate(_) => {
-                            window.set_minimized(false);
-                            window.focus_window();
-                        }
-                        WindowRequest::SetOuterPosition(_, position) => window.set_outer_position(
-                            winit::dpi::PhysicalPosition::new(position.x, position.y),
-                        ),
-                        WindowRequest::Center(_) => {
-                            if let Some(display) = aqua_platform::monitor::current(window) {
-                                let size = window.outer_size();
-                                let position = display.center_physical(size.width, size.height);
-                                window.set_outer_position(winit::dpi::PhysicalPosition::new(
-                                    position.x, position.y,
-                                ));
-                            }
-                        }
-                        _ => {}
-                    }
+            WindowRequest::SetTitle(_, title) => {
+                if let Some(native) = native {
+                    native.set_title(title);
+                }
+                if let Some(record) = self.windows.get_mut(&id) {
+                    record.observed.title = title.clone();
+                }
+            }
+            WindowRequest::SetInnerSize(_, size) => {
+                if let Some(native) = native {
+                    native.set_logical_size(size.width, size.height);
+                }
+            }
+            WindowRequest::SetVisible(_, visible) => {
+                if let Some(native) = native {
+                    native.set_visible(*visible);
+                }
+                if let Some(record) = self.windows.get_mut(&id) {
+                    record.observed.visible = *visible;
+                }
+            }
+            WindowRequest::SetMinimized(_, minimized) => {
+                if let Some(native) = native {
+                    native.set_minimized(*minimized);
+                }
+            }
+            WindowRequest::SetMaximized(_, maximized) => {
+                if let Some(native) = native {
+                    native.set_maximized(*maximized);
+                }
+            }
+            WindowRequest::Activate(_) => {
+                if let Some(native) = native {
+                    native.activate();
+                }
+            }
+            WindowRequest::SetOuterPosition(_, position) => {
+                if let Some(native) = native {
+                    native.set_outer_position(position.x, position.y);
+                }
+            }
+            WindowRequest::Center(_) => {
+                if let Some(native) = native {
+                    native.center();
                 }
             }
         }
         Ok(())
     }
 
-    fn alloc_id(&mut self) -> AquaWindowId {
+    pub(crate) fn alloc_id(&mut self) -> AquaWindowId {
         let id = AquaWindowId::new(self.next_id).expect("window id overflow");
         self.next_id += 1;
         id
     }
 
-    fn with_ctx<R>(&mut self, f: impl FnOnce(&mut AppCtx) -> R) -> R {
+    pub(crate) fn with_ctx<R>(&mut self, f: impl FnOnce(&mut AppCtx) -> R) -> R {
         let now = self.clock();
-        let quit = &mut self.quit_requested;
-        let proxy = self.proxy.clone();
         let mut ctx = AppCtx {
             requested_frames: std::collections::HashSet::new(),
             now,
             scheduler: &mut self.scheduler,
-            quit_requested: &mut *quit,
-            proxy,
+            quit_requested: &mut self.quit_requested,
+            inbox: self.inbox.clone(),
             flushers: &mut self.flushers,
             windows: &self.windows,
-            shared_gpu: self.shared_gpu.as_ref(),
             clipboard: &mut self.clipboard,
             window_requests: &mut self.window_requests,
+            dialogs: &mut self.dialogs,
+            next_request: &mut self.next_request,
         };
         f(&mut ctx)
     }
@@ -1003,38 +977,64 @@ impl Aqua {
     pub fn add_headless_window(&mut self, observed: ObservedWindowState) -> AquaWindowId {
         let id = observed.id;
         self.next_id = self.next_id.max(id.raw().saturating_add(1));
-        self.windows.insert(
-            id,
-            WindowRecord {
-                observed,
-                last_invalidating_input: None,
-                winit_id: None,
-                transparent: false,
-                vsync: self.config.vsync,
-                snapshot_started: None,
-                snapshot_pending: false,
-                badge: None,
-                chrome: None,
-                chrome_overlay: false,
-                last_regions: None,
-                pressed_caption: None,
-                window: None,
-                gpu: None,
-                cursor: None,
-                buttons: 0,
-                modifiers: CoreModifiers::NONE,
-                ime_active: false,
-                #[cfg(windows)]
-                native_ime: None,
-                #[cfg(windows)]
-                native_file_drag: None,
-                #[cfg(windows)]
-                native_file_events: std::rc::Rc::new(std::cell::RefCell::new(VecDeque::new())),
-                #[cfg(windows)]
-                a11y: None,
-            },
-        );
+        self.windows
+            .insert(id, WindowRecord::new(observed, self.config.vsync));
         id
+    }
+
+    pub(crate) fn add_native_window(
+        &mut self,
+        observed: ObservedWindowState,
+        native: Rc<dyn NativeWindow>,
+    ) -> AquaWindowId {
+        let id = self.add_headless_window(observed);
+        if let Some(record) = self.windows.get_mut(&id) {
+            record.native = Some(native);
+        }
+        id
+    }
+
+    pub fn attach_render(
+        &mut self,
+        id: AquaWindowId,
+        factory: InitFactory,
+        interval: Duration,
+    ) -> bool {
+        let inbox = self.inbox.clone();
+        let clock = self.shared_clock();
+        let wake: aqua_transport::Notify = Arc::new(move || {
+            inbox.post(AquaUserEvent::RenderEvents(id));
+        });
+        let immediate = self.windows.get(&id).is_some_and(|record| !record.vsync);
+        match self.windows.get_mut(&id) {
+            Some(record) => {
+                let link = RenderLink::spawn(factory, clock, interval, wake);
+                link.set_immediate(immediate);
+                record.link = Some(link);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn attach_access(&mut self, id: AquaWindowId, sink: Box<dyn AccessSink>) {
+        if let Some(record) = self.windows.get_mut(&id) {
+            record.access = Some(sink);
+        }
+    }
+
+    pub fn attach_ime(&mut self, id: AquaWindowId, sink: Box<dyn ImeSink>) {
+        if let Some(record) = self.windows.get_mut(&id) {
+            record.ime = Some(sink);
+        }
+    }
+
+    pub fn render_stats(&self, id: AquaWindowId) -> Option<Arc<crate::render::host::RenderStats>> {
+        self.windows
+            .get(&id)?
+            .link
+            .as_ref()
+            .map(|link| link.stats().clone())
     }
 
     pub fn dispatch_window_event(
@@ -1047,12 +1047,13 @@ impl Aqua {
             return;
         }
         self.apply_observed(id, event);
-        if let Some(reason) = window_event_frame_reason(event) {
+        if let Some(reason) = frame_reason(event) {
             self.scheduler.request_frame(id, reason);
         }
         let ev = event.clone();
-        self.bind_app_reactive(app, id);
+        self.bind_app_reactive(&*app, id);
         self.with_ctx(|ctx| app.on_window_event(ctx, id, &ev));
+        self.flush_output(app, id);
         if let WindowEvent::Focused(_, focused) = event {
             self.dispatch_app_input(app, id, &CoreInputEvent::Focused(*focused));
         }
@@ -1079,7 +1080,7 @@ impl Aqua {
         self.dispatch_app_input(app, id, event)
     }
 
-    fn dispatch_app_input(
+    pub(crate) fn dispatch_app_input(
         &mut self,
         app: &mut impl Application,
         id: AquaWindowId,
@@ -1090,6 +1091,7 @@ impl Aqua {
         let result = self.dispatch_attributed_input(app, id, count_activity, |app, ctx| {
             app.on_input(ctx, id, event)
         });
+        self.flush_output(app, id);
         if self.frame_stats.is_some() {
             let elapsed = started.elapsed();
             if elapsed >= Duration::from_millis(2) {
@@ -1103,7 +1105,7 @@ impl Aqua {
         result
     }
 
-    fn dispatch_attributed_input<A: Application>(
+    pub(crate) fn dispatch_attributed_input<A: Application>(
         &mut self,
         app: &mut A,
         id: AquaWindowId,
@@ -1146,9 +1148,11 @@ impl Aqua {
         }
         self.scheduler.request_frame(id, FrameReason::INPUT);
         let owned = paths.to_vec();
-        self.dispatch_attributed_input(app, id, true, |app, ctx| {
+        let invalidated = self.dispatch_attributed_input(app, id, true, |app, ctx| {
             app.on_files_dropped_at(ctx, id, &owned, at)
-        })
+        });
+        self.flush_output(app, id);
+        invalidated
     }
 
     fn apply_observed(&mut self, id: AquaWindowId, event: &WindowEvent) {
@@ -1169,7 +1173,6 @@ impl Aqua {
                     if !f {
                         rec.buttons = 0;
                         rec.modifiers = CoreModifiers::NONE;
-                        rec.ime_active = false;
                     }
                 }
             }
@@ -1187,18 +1190,10 @@ impl Aqua {
         }
     }
 
-    fn remove_window(&mut self, id: AquaWindowId) {
-        if let Some(rec) = self.windows.remove(&id) {
-            if let Some(wid) = rec.winit_id {
-                self.winit_map.remove(&wid);
-            }
-        }
+    pub(crate) fn remove_window(&mut self, id: AquaWindowId) {
+        self.windows.remove(&id);
         self.scheduler.remove_window(id);
         self.flushers.remove(&id);
-    }
-
-    pub fn event_proxy(&self) -> Option<winit::event_loop::EventLoopProxy<AquaUserEvent>> {
-        self.proxy.clone()
     }
 
     pub fn set_runs(&mut self, runs: aqua_text::SharedRuns) {
@@ -1209,10 +1204,6 @@ impl Aqua {
         &self.runs
     }
 
-    pub fn text_backend(&self) -> aqua_render::text::TextBackend {
-        aqua_render::text::TextBackend::new(self.fonts.clone(), self.runs.clone())
-    }
-
     pub fn set_fonts(&mut self, fonts: aqua_text::SharedFonts) {
         self.fonts = fonts;
     }
@@ -1221,11 +1212,8 @@ impl Aqua {
         &self.fonts
     }
 
-    pub fn gpu_stats(&self, id: AquaWindowId) -> Option<(u64, u64, u64)> {
-        self.windows
-            .get(&id)
-            .and_then(|r| r.gpu.as_ref())
-            .map(|g| (g.ledger.submitted, g.ledger.presented, g.ledger.completed))
+    pub fn presented_frames(&self, id: AquaWindowId) -> Option<u64> {
+        self.windows.get(&id).map(|record| record.presented)
     }
 
     pub fn preferences(&self) -> &OsPreferences {
@@ -1240,1324 +1228,316 @@ impl Aqua {
         self.clipboard_backend
     }
 
-    pub fn run(mut self, app: impl Application + 'static) -> Result<(), String> {
-        if self.config.headless {
-            return Err("headless config cannot run the GUI loop; use the headless pump".into());
-        }
-        let mut builder = winit::event_loop::EventLoop::<AquaUserEvent>::with_user_event();
-        #[cfg(windows)]
-        let taskbar_proxy = std::rc::Rc::new(std::cell::RefCell::new(
-            None::<winit::event_loop::EventLoopProxy<AquaUserEvent>>,
-        ));
-        #[cfg(windows)]
-        {
-            let proxy = taskbar_proxy.clone();
-            aqua_platform::badge::install_taskbar_wake(&mut builder, move || {
-                if let Some(proxy) = proxy.borrow().as_ref() {
-                    let _ = proxy.send_event(AquaUserEvent::ReplayBadges);
-                }
-            })
-            .map_err(|error| error.to_string())?;
-        }
-        let event_loop = builder
-            .build()
-            .map_err(|e| format!("event loop unavailable: {e:?}"))?;
-        self.proxy = Some(event_loop.create_proxy());
-        #[cfg(windows)]
-        {
-            *taskbar_proxy.borrow_mut() = self.proxy.clone();
-        }
-        let mut loop_ = Loop {
-            aqua: self,
-            app,
-            startup_error: None,
-        };
-        event_loop
-            .run_app(&mut loop_)
-            .map_err(|e| format!("event loop failed: {e:?}"))?;
-        match loop_.startup_error {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
-    }
-}
-
-struct Loop<A: Application> {
-    aqua: Aqua,
-    app: A,
-    startup_error: Option<String>,
-}
-
-impl<A: Application> Loop<A> {
-    #[cfg(not(windows))]
-    fn client_chrome_pointer(&mut self, id: AquaWindowId, pressed: bool) {
-        use aqua_platform::chrome::{CaptionControl, ClientChromeHit, client_chrome_hit};
-        let Some(record) = self.aqua.windows.get_mut(&id) else {
-            return;
-        };
-        if record.chrome_overlay {
-            return;
-        }
-        let hit = match (&record.last_regions, record.cursor) {
-            (Some((regions, _)), Some((x, y))) => client_chrome_hit(regions, x, y),
-            _ => ClientChromeHit::Client,
-        };
-        let request = match (pressed, hit) {
-            (true, ClientChromeHit::Drag) => {
-                if let Some(window) = record.window.as_ref() {
-                    let _ = window.drag_window();
-                }
-                None
-            }
-            (true, ClientChromeHit::Caption(control)) => {
-                record.pressed_caption = Some(control);
-                None
-            }
-            (false, ClientChromeHit::Caption(control)) => {
-                (record.pressed_caption.take() == Some(control)).then_some(control)
-            }
-            (false, _) => {
-                record.pressed_caption = None;
-                None
-            }
-            (true, ClientChromeHit::Client) => None,
-        };
-        let maximized = record.observed.maximized;
-        let request = request.map(|control| match control {
-            CaptionControl::Minimize => WindowRequest::SetMinimized(id, true),
-            CaptionControl::Maximize => WindowRequest::SetMaximized(id, !maximized),
-            CaptionControl::Close => WindowRequest::Close(id),
-        });
-        if let Some(request) = request {
-            if let Err(error) = self.aqua.apply_window_request(&mut self.app, &request) {
-                self.app.on_window_request_error(&request, &error);
-            }
-        }
+    pub fn next_wake(&self, now: Instant) -> Option<Instant> {
+        self.scheduler.next_wakeup(now)
     }
 
-    #[cfg(windows)]
-    fn client_chrome_pointer(&mut self, _id: AquaWindowId, _pressed: bool) {}
-
-    fn process_window_requests(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        let requests: Vec<_> = self.aqua.window_requests.drain(..).collect();
-        for request in requests {
-            let result = match &request {
-                WindowRequest::Create(options) => {
-                    self.create_window(event_loop, options.clone()).map(|_| ())
-                }
-                _ => self.aqua.apply_window_request(&mut self.app, &request),
-            };
-            if let Err(error) = result {
-                self.app.on_window_request_error(&request, &error);
-            }
-        }
-        if self.aqua.windows.is_empty() && !self.aqua.config.headless {
-            event_loop.exit();
-        }
-    }
-    fn create_window(
-        &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
-        options: WindowOptions,
-    ) -> Result<AquaWindowId, aqua_platform::window::WindowError> {
-        options.validated()?;
-        let mut attrs = window_attributes(&options);
-        #[cfg(windows)]
-        let native_external_file_drag = self.app.native_external_file_drag(&options);
-        #[cfg(windows)]
-        if native_external_file_drag {
-            attrs = aqua_platform::host::native_file_drag_attributes(attrs);
-        }
-        if self.aqua.config.material != aqua_platform::WindowMaterial::None {
-            attrs = attrs.with_transparent(true);
-        }
-        #[cfg(windows)]
-        {
-            attrs = attrs.with_visible(false);
-        }
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
-            Err(e) => {
-                self.aqua.render_errors += 1;
-                return Err(aqua_platform::window::WindowError::Native(format!(
-                    "window creation failed: {e}"
-                )));
-            }
-        };
-        let id = self.aqua.alloc_id();
-        #[cfg(windows)]
-        let native_file_events = std::rc::Rc::new(std::cell::RefCell::new(VecDeque::new()));
-        #[cfg(windows)]
-        let native_file_drag = if native_external_file_drag {
-            let events = native_file_events.clone();
-            let proxy = self.aqua.proxy.clone();
-            Some(
-                aqua_platform::file_drag_windows::NativeFileDrag::install(&window, move |event| {
-                    events.borrow_mut().push_back(event);
-                    if let Some(proxy) = &proxy {
-                        let _ = proxy.send_event(AquaUserEvent::ExternalFileDrag(id));
+    pub fn pump_inbox(&mut self, app: &mut impl Application) {
+        for event in self.inbox.drain() {
+            match event {
+                AquaUserEvent::Messages(id) => self.dispatch_wake(app, id),
+                AquaUserEvent::ReactiveWake(id) => {
+                    let ran = self
+                        .flushers
+                        .get_mut(&id)
+                        .map(|flusher| flusher().ran)
+                        .unwrap_or(0);
+                    if ran > 0 {
+                        self.scheduler.request_frame(id, FrameReason::INPUT);
                     }
-                })
-                .map_err(|error| {
-                    aqua_platform::window::WindowError::Native(format!(
-                        "file drag registration failed: {error}"
-                    ))
-                })?,
-            )
-        } else {
-            None
-        };
-        let chrome = match aqua_platform::chrome::WindowsChrome::install(&window, &options) {
-            Ok(guard) => {
-                eprintln!("aqua: window chrome installed: {:?}", guard.diagnostics());
-                Some(guard)
-            }
-            Err(e) => {
-                eprintln!(
-                    "aqua: window chrome install failed ({e:?}) — continuing with native titlebar"
-                );
-                None
-            }
-        };
-        let chrome_overlay = chrome.is_some()
-            && options.effective_titlebar() == aqua_platform::window::Titlebar::Overlay;
-        let scale = window.scale_factor();
-        let size = window.inner_size();
-        let observed = ObservedWindowState {
-            id,
-            title: options.title.clone(),
-            inner_size: aqua_platform::geometry::LogicalSize::new(
-                size.width as f64 / scale,
-                size.height as f64 / scale,
-            ),
-            scale_factor: scale,
-            focused: false,
-            visible: true,
-            occluded: false,
-            maximized: window.is_maximized(),
-        };
-        self.aqua.winit_map.insert(window.id(), id);
-        self.aqua.windows.insert(
-            id,
-            WindowRecord {
-                observed,
-                last_invalidating_input: None,
-                winit_id: Some(window.id()),
-                badge: None,
-                vsync: self.aqua.config.vsync,
-                snapshot_started: None,
-                snapshot_pending: false,
-                transparent: options.transparent
-                    || self.aqua.config.material != aqua_platform::WindowMaterial::None,
-                chrome,
-                chrome_overlay,
-                last_regions: None,
-                pressed_caption: None,
-                window: Some(window.clone()),
-                gpu: None,
-                cursor: None,
-                buttons: 0,
-                modifiers: CoreModifiers::NONE,
-                ime_active: false,
-                #[cfg(windows)]
-                native_ime: None,
-                #[cfg(windows)]
-                native_file_drag,
-                #[cfg(windows)]
-                native_file_events,
-                #[cfg(windows)]
-                a11y: None,
-            },
-        );
-        #[cfg(windows)]
-        {
-            let proxy = self.aqua.proxy.clone();
-            let waker: aqua_platform::a11y::WakeFn = std::sync::Arc::new(move || {
-                if let Some(p) = &proxy {
-                    let _ = p.send_event(AquaUserEvent::A11yActions(id));
                 }
-            });
-            match A11yAdapter::attach_with_waker(event_loop, &window, waker) {
-                Ok(mut adapter) => {
-                    let now = self.aqua.clock();
-                    if let Some(observed) = self
-                        .aqua
-                        .windows
-                        .get(&id)
-                        .map(|record| record.observed.clone())
-                    {
-                        if let Some(deadline) = self.app.prepare_accessibility(&observed, now) {
-                            self.aqua.scheduler.request_animation_deadline(id, deadline);
+                AquaUserEvent::A11yActions(id) => {
+                    self.scheduler.request_frame(id, FrameReason::INPUT);
+                    self.drain_access_actions(app, id);
+                }
+                AquaUserEvent::RenderEvents(id) => self.drain_render_events(app, id),
+                AquaUserEvent::Tsf(id) => self.drain_ime(app, id),
+                AquaUserEvent::WindowRequests => {}
+            }
+        }
+        let ids: Vec<_> = self.windows.keys().copied().collect();
+        for id in ids {
+            self.drain_ime(app, id);
+        }
+    }
+
+    pub fn drain_access_actions(&mut self, app: &mut impl Application, id: AquaWindowId) {
+        let actions = self
+            .windows
+            .get_mut(&id)
+            .and_then(|record| record.access.as_mut())
+            .map(|sink| sink.drain_actions())
+            .unwrap_or_default();
+        for request in &actions {
+            self.with_ctx(|ctx| app.on_a11y_action(ctx, id, request));
+        }
+        self.flush_output(app, id);
+    }
+
+    pub fn drain_ime(&mut self, app: &mut impl Application, id: AquaWindowId) {
+        let mut events = Vec::new();
+        if let Some(sink) = self
+            .windows
+            .get_mut(&id)
+            .and_then(|record| record.ime.as_mut())
+        {
+            sink.drain(&mut events);
+        }
+        if events.is_empty() {
+            return;
+        }
+        for event in events {
+            app.step_input(id, RuntimeInput::Ime(event));
+        }
+        self.flush_output(app, id);
+    }
+
+    pub fn drain_render_events(&mut self, app: &mut impl Application, id: AquaWindowId) {
+        let events = self
+            .windows
+            .get_mut(&id)
+            .and_then(|record| record.link.as_mut())
+            .map(RenderLink::poll)
+            .unwrap_or_default();
+        for event in events {
+            match event {
+                RenderEvent::Presented(frame) => {
+                    if let Some(record) = self.windows.get_mut(&id) {
+                        record.presented += 1;
+                    }
+                    self.frames_presented += 1;
+                    if let Some(budget) = self.smoke_frames {
+                        if self.frames_presented >= budget {
+                            eprintln!(
+                                "aqua: smoke budget reached ({} frames) — exiting",
+                                self.frames_presented
+                            );
+                            self.quit_requested = true;
                         }
                     }
-                    if let Some((root, focus, items)) = self.app.a11y_nodes() {
-                        adapter.push_nodes(root, focus, &items);
-                    }
-                    if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                        rec.a11y = Some(adapter);
-                    }
-                    window.set_visible(true);
+                    app.step_input(id, RuntimeInput::Gpu(GpuEvent::Presented(frame)));
+                    self.dispatch_frame_completed(app, id, frame);
                 }
-                Err(e) => {
-                    eprintln!("aqua: a11y attach failed ({e:?}) — continuing without bridge");
-                    window.set_visible(true);
+                RenderEvent::DeviceLost => {
+                    self.render_errors += 1;
+                    app.step_input(id, RuntimeInput::Gpu(GpuEvent::DeviceLost));
+                    self.with_ctx(|ctx| app.on_render_error(ctx, id, "device lost"));
+                }
+                RenderEvent::DeviceRecovered => {
+                    app.step_input(id, RuntimeInput::Gpu(GpuEvent::DeviceRecovered));
+                    self.scheduler.request_frame(id, FrameReason::EXPLICIT);
+                }
+                RenderEvent::Motion(motion) => {
+                    app.step_input(id, RuntimeInput::Render(RenderEvent::Motion(motion)));
+                    self.with_ctx(|ctx| app.on_motion_event(ctx, id, &motion));
+                    self.scheduler.request_frame(id, FrameReason::ANIMATION);
                 }
             }
-            Self::reapply_material(&mut self.aqua, id);
         }
-        #[cfg(not(windows))]
-        {
-            Self::reapply_material(&mut self.aqua, id);
-        }
-        if let Err(e) = self.attach_gpu_window(id, &window) {
-            self.aqua.render_errors += 1;
-            self.aqua.remove_window(id);
-            return Err(aqua_platform::window::WindowError::Native(format!(
-                "GPU setup failed: {e}"
-            )));
-        }
-        self.aqua.with_ctx(|ctx| self.app.on_start(ctx, id));
-        self.aqua.scheduler.request_frame(id, FrameReason::EXPOSE);
-        Ok(id)
+        self.flush_output(app, id);
     }
 
-    fn ensure_gpu(
-        &mut self,
-        _id: AquaWindowId,
-        window: &Arc<winit::window::Window>,
-    ) -> Result<(), String> {
-        if self.aqua.shared_gpu.is_some() {
-            return Ok(());
-        }
-        let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_desc.backends = wgpu::Backends::from_env().unwrap_or_else(default_backends);
-        instance_desc.flags = wgpu::InstanceFlags::empty().with_env();
-        #[cfg(windows)]
-        if self
-            .aqua
-            .windows
-            .get(&_id)
-            .is_some_and(|record| record.transparent)
-        {
-            instance_desc.backends = wgpu::Backends::DX12;
-            instance_desc.backend_options.dx12.presentation_system =
-                wgpu::Dx12SwapchainKind::DxgiFromVisual;
-        }
-        let instance = wgpu::Instance::new(instance_desc);
-        #[allow(clippy::arc_with_non_send_sync)]
-        let surface = instance
-            .create_surface(window.clone())
-            .map_err(|e| format!("surface creation failed: {e:?}"))?;
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        }))
-        .map_err(|e| format!("no usable GPU adapter (software fallback unresolved): {e:?}"))?;
-        if std::env::var_os("AQUA_FRAME_STATS").is_some() {
-            let info = adapter.get_info();
-            eprintln!("aqua: adapter {} ({:?})", info.name, info.backend);
-        }
-        let required_features = match self.app.color_profile() {
-            aqua_core::ColorProfile::GpuiWindowsEncoded => {
-                wgpu::Features::DUAL_SOURCE_BLENDING | wgpu::Features::CLIP_DISTANCES
-            }
-            aqua_core::ColorProfile::AquaLinear => wgpu::Features::empty(),
-        };
-        if !adapter.features().contains(required_features) {
-            return Err(format!(
-                "GPU adapter lacks required rendering features: {:?}",
-                required_features.difference(adapter.features())
-            ));
-        }
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("aqua"),
-            required_features,
-            required_limits: wgpu::Limits::default(),
-            experimental_features: wgpu::ExperimentalFeatures::default(),
-            memory_hints: wgpu::MemoryHints::default(),
-            trace: wgpu::Trace::Off,
-        }))
-        .map_err(|e| format!("GPU device request failed: {e:?}"))?;
-        self.aqua.shared_gpu = Some(SharedGpu {
-            instance,
-            adapter,
-            device,
-            queue,
-        });
-        Ok(())
-    }
-
-    fn attach_gpu_window(
-        &mut self,
-        id: AquaWindowId,
-        window: &Arc<winit::window::Window>,
-    ) -> Result<(), String> {
-        self.ensure_gpu(id, window)?;
-        let gpu = self.aqua.shared_gpu.as_ref().expect("gpu ensured");
-        let size = window.inner_size();
-        if size.width == 0 || size.height == 0 {
-            return Err("zero-sized surface; window not yet laid out".into());
-        }
-        let mode = if self
-            .aqua
-            .windows
-            .get(&id)
-            .is_some_and(|record| record.vsync)
-        {
-            wgpu::PresentMode::AutoVsync
-        } else {
-            wgpu::PresentMode::AutoNoVsync
-        };
-        #[allow(clippy::arc_with_non_send_sync)]
-        let surface = gpu
-            .instance
-            .create_surface(window.clone())
-            .map_err(|e| format!("surface creation failed: {e:?}"))?;
-        let profile = self.app.color_profile();
-        let preferred_format =
-            (profile == aqua_core::ColorProfile::GpuiWindowsEncoded).then(|| {
-                let formats = surface.get_capabilities(&gpu.adapter).formats;
-                [
-                    wgpu::TextureFormat::Bgra8Unorm,
-                    wgpu::TextureFormat::Rgba8Unorm,
-                ]
-                .into_iter()
-                .find(|format| formats.contains(format))
-                .unwrap_or(wgpu::TextureFormat::Bgra8Unorm)
-            });
-        let facade = SurfaceFacade::with_adapter(
-            &gpu.device,
-            &gpu.adapter,
-            surface,
-            size.width,
-            size.height,
-            preferred_format,
-            Some(mode),
-        )
-        .map_err(|e| format!("surface configuration failed: {e:?}"))?;
-        if preferred_format.is_some_and(|format| facade.format() != format) {
-            return Err("GPUI encoded color requires a BGRA8 or RGBA8 unorm surface".into());
-        }
-        if self
-            .aqua
-            .windows
-            .get(&id)
-            .is_some_and(|record| record.transparent)
-        {
-            eprintln!(
-                "aqua: transparent surface: {:?}, alpha={:?}, format={:?}",
-                gpu.adapter.get_info().backend,
-                facade.alpha_mode(),
-                facade.format(),
-            );
-        }
-        let scale = window.scale_factor() as f32;
-        let backend =
-            aqua_render::text::TextBackend::new(self.aqua.fonts.clone(), self.aqua.runs.clone());
-        let mut renderer = Renderer::new_with_text(
-            gpu.device.clone(),
-            gpu.queue.clone(),
-            facade.format(),
-            backend,
-        );
-        renderer
-            .set_color_profile(profile)
-            .map_err(|e| format!("renderer color profile failed: {e:?}"))?;
-        if profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
-            let opaque = !self
-                .aqua
-                .windows
-                .get(&id)
-                .is_some_and(|record| record.transparent);
-            renderer.set_gpui_window_opaque(opaque);
-        }
-        renderer
-            .set_size(size.width, size.height, scale)
-            .map_err(|e| format!("renderer sizing failed: {e:?}"))?;
-        if let Some(rec) = self.aqua.windows.get_mut(&id) {
-            rec.gpu = Some(GpuWindow {
-                surface: facade,
-                renderer,
-                ledger: GpuLedger::default(),
-                text_raster_mode: aqua_core::scene::TextRasterMode::default(),
-            });
-        }
-        Ok(())
-    }
-
-    fn ensure_completion_worker(&mut self) {
-        if self.aqua.completion_tx.is_some() {
-            return;
-        }
-        let Some(gpu) = self.aqua.shared_gpu.as_ref() else {
-            return;
-        };
-        let device = gpu.device.clone();
-        let proxy = self.aqua.proxy.clone();
-        let (tx, rx) = std::sync::mpsc::channel::<(AquaWindowId, u64)>();
-        std::thread::Builder::new()
-            .name("aqua-gpu-complete".into())
-            .spawn(move || {
-                for (id, seq) in rx {
-                    if let (Ok(_), Some(p)) =
-                        (device.poll(wgpu::PollType::wait_indefinitely()), &proxy)
-                    {
-                        let _ = p.send_event(AquaUserEvent::GpuComplete(id, seq));
-                    }
-                }
-            })
-            .expect("aqua: completion worker spawn failed");
-        self.aqua.completion_tx = Some(tx);
-    }
-
-    fn draw_ready(&mut self, now: Instant) {
-        let ready = self.aqua.scheduler.ready_windows(now);
+    pub fn draw_ready(&mut self, app: &mut impl Application, now: Instant) {
+        let ready = self.scheduler.ready_windows(now);
         if ready.is_empty() {
             return;
         }
         let ids: Vec<AquaWindowId> = ready.iter().map(|(id, _)| *id).collect();
-        self.aqua.scheduler.mark_produced(&ids, now);
+        self.scheduler.mark_produced(&ids, now);
         for (id, reasons) in ready {
-            if self.aqua.frame_stats.is_some() {
+            if self.frame_stats.is_some() {
                 eprintln!("aqua-reason: {reasons:?}");
             }
-            let frame_started = WallInstant::now();
-            let mut build_time = Duration::ZERO;
-            let occluded = self
-                .aqua
-                .windows
-                .get(&id)
-                .is_some_and(|r| r.observed.occluded);
-            if occluded {
-                self.aqua.scheduler.mark_presented(id);
-                continue;
-            }
-            let has_gpu = self.aqua.windows.get(&id).is_some_and(|r| r.gpu.is_some());
-            if !has_gpu {
-                self.aqua.scheduler.mark_presented(id);
-                continue;
-            }
-            if let Some(flusher) = self.aqua.flushers.get_mut(&id) {
-                let _report = flusher();
-            }
-            let observed = self.aqua.windows.get(&id).map(|r| r.observed.clone());
-            let Some(observed) = observed else {
-                self.aqua.scheduler.mark_presented(id);
-                continue;
-            };
-            if reasons != FrameReason::GPUI_PULSE {
-                {
-                    let rec = self.aqua.windows.get_mut(&id).expect("window present");
-                    let gpu = rec.gpu.as_mut().expect("gpu checked");
-                    let format = gpu.renderer.format();
-                    let scale = observed.scale_factor as f32;
-                    let width = ((observed.inner_size.width as f32) * scale)
-                        .round()
-                        .max(1.0) as u32;
-                    let height = ((observed.inner_size.height as f32) * scale)
-                        .round()
-                        .max(1.0) as u32;
-                    let shared = self.aqua.shared_gpu.as_ref().expect("gpu exists");
-                    let mut updates = Vec::new();
-                    let mut register = |update| updates.push(update);
-                    let mut frame = ExternalFrame {
-                        window: &observed,
-                        now,
-                        device: &shared.device,
-                        queue: &shared.queue,
-                        color_format: format,
-                        width,
-                        height,
-                        scale,
-                        gpui_meshes_supported: gpu.renderer.supports_gpui_meshes(),
-                        register: &mut register,
-                    };
-                    self.app.externals(&mut frame);
-                    apply_external_updates(&mut gpu.renderer, updates);
-                }
-                let build_started = WallInstant::now();
-                if let Some(t) = self.app.build_scene(&observed, now) {
-                    self.aqua.scheduler.request_animation_deadline(id, t);
-                }
-                build_time = build_started.elapsed();
-                {
-                    let next = self.app.chrome_regions(&observed);
-                    let scale = observed.scale_factor;
-                    let scale = if scale.is_finite() && scale > 0.0 {
-                        scale
-                    } else {
-                        1.0
-                    };
-                    if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                        if let Some(plan) = chrome_plan(&rec.last_regions, next, scale) {
-                            let cleared;
-                            let payload = match &plan {
-                                ChromePlan::Apply(regions) => regions,
-                                ChromePlan::Clear => {
-                                    cleared = DragRegions::default();
-                                    &cleared
-                                }
-                            };
-                            if let Some(guard) = rec.chrome.as_ref() {
-                                if let Err(e) = guard.set_drag_regions(payload, scale) {
-                                    eprintln!("aqua: chrome regions rejected ({e:?})");
-                                }
-                            }
-                            rec.last_regions = match plan {
-                                ChromePlan::Apply(regions) => Some((regions, scale)),
-                                ChromePlan::Clear => None,
-                            };
-                        }
-                    }
-                }
-                #[cfg(windows)]
-                {
-                    let needed = self
-                        .aqua
-                        .windows
-                        .get(&id)
-                        .and_then(|window| window.a11y.as_ref())
-                        .is_some_and(|adapter| adapter.needs_snapshot());
-                    let snapshot = if needed { self.app.a11y_nodes() } else { None };
-                    if let Some((root, focus, items)) = snapshot {
-                        if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                            if let Some(adapter) = rec.a11y.as_mut() {
-                                adapter.push_nodes(root, focus, &items);
-                            }
-                        }
-                    }
-                }
-                #[cfg(windows)]
-                {
-                    let client = self.app.native_ime_client().map(|inner| {
-                        std::rc::Rc::new(WakeNativeImeClient {
-                            inner,
-                            proxy: self.aqua.proxy.clone(),
-                            window: id,
-                        })
-                            as std::rc::Rc<dyn aqua_platform::ime_windows::NativeImeClient>
-                    });
-                    if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                        let client = if rec.observed.focused { client } else { None };
-                        if let Some(window) = rec.window.as_ref() {
-                            if client.is_some() && rec.native_ime.is_none() {
-                                rec.native_ime =
-                                    aqua_platform::ime_windows::NativeImeWindow::install(window);
-                            }
-                            if let Some(native) = rec.native_ime.as_ref() {
-                                native.set_client(client, window.scale_factor());
-                            }
-                        }
-                    }
-                }
-                {
-                    let area = self.app.ime_cursor_area();
-                    if let Some(rec) = self.aqua.windows.get(&id) {
-                        if let Some(window) = rec.window.as_ref() {
-                            use aqua_platform::services::{ImeCursorArea, set_ime_cursor_area};
-                            let cursor = self.app.cursor();
-                            window.set_cursor_visible(cursor != aqua_core::CursorIcon::Hidden);
-                            window.set_cursor(aqua_platform::host::to_winit_cursor(cursor));
-                            #[cfg(windows)]
-                            let native_ime_active = rec.observed.focused
-                                && self.app.native_ime_client().is_some()
-                                && rec.native_ime.is_some();
-                            #[cfg(not(windows))]
-                            let native_ime_active = false;
-                            if !native_ime_active {
-                                window.set_ime_allowed(rec.observed.focused && area.is_some());
-                            }
-                            if let Some(r) = area.filter(|_| !native_ime_active) {
-                                let logical = aqua_platform::geometry::LogicalPosition {
-                                    x: r.x as f64,
-                                    y: r.y as f64,
-                                };
-                                let size = aqua_platform::geometry::LogicalSize::new(
-                                    r.w.max(1.0) as f64,
-                                    r.h.max(1.0) as f64,
-                                );
-                                set_ime_cursor_area(
-                                    window.as_ref(),
-                                    ImeCursorArea {
-                                        origin: logical,
-                                        size,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            let rec = self.aqua.windows.get_mut(&id).expect("window present");
-            let gpu = rec.gpu.as_mut().expect("gpu checked");
-            let snapshot_active = rec.snapshot_pending
-                || rec.snapshot_started.is_some_and(|started| {
-                    gpu.renderer
-                        .set_snapshot_transition_elapsed(now.saturating_duration_since(started))
-                });
-            if rec.snapshot_started.is_some() && !snapshot_active {
-                rec.snapshot_started = None;
-                gpu.surface.request_present();
-            }
-            let snapshot_interval = rec
-                .window
-                .as_ref()
-                .and_then(|window| window.current_monitor())
-                .and_then(|monitor| monitor.refresh_rate_millihertz())
-                .filter(|rate| *rate > 0)
-                .map(|rate| Duration::from_secs_f64(1000.0 / f64::from(rate)))
-                .unwrap_or(Duration::from_secs_f64(1.0 / 60.0));
-            enum Outcome {
-                Submitted { seq: u64 },
-                Skipped,
-                Failed { message: String, held: u32 },
-            }
-            let submit_started = WallInstant::now();
-            let drawn = match self.app.scene_mut(id) {
-                Some(scene) => gpu.surface.acquire_and_draw(&mut gpu.renderer, scene),
-                None => Ok(false),
-            };
-            let submit_time = submit_started.elapsed();
-            let outcome = match drawn {
-                Ok(true) => {
-                    if rec.snapshot_pending {
-                        rec.snapshot_pending = false;
-                        rec.snapshot_started = Some(now);
-                    }
-                    gpu.ledger.submitted += 1;
-                    gpu.ledger.presented += 1;
-                    gpu.ledger.unreleased += 1;
-                    Outcome::Submitted {
-                        seq: gpu.ledger.submitted,
-                    }
-                }
-                Ok(false) => Outcome::Skipped,
-                Err(e) => {
-                    let held = gpu.ledger.unreleased;
-                    gpu.ledger.unreleased = 0;
-                    Outcome::Failed {
-                        message: format!("{e:?}"),
-                        held,
-                    }
-                }
-            };
-            if snapshot_active {
-                self.aqua
-                    .scheduler
-                    .request_animation_deadline(id, now + snapshot_interval);
-            }
-            let interval = aqua_runtime::scheduler::gpui_pulse_interval(
-                snapshot_interval,
-                rec.observed.focused,
-                rec.last_invalidating_input,
-                now,
-            );
-            let pulse_delay = gpu.renderer.has_gpui_quad_pulse().then_some(interval);
-            let shimmer_delay = gpu
-                .renderer
-                .gpui_shimmer_delay()
-                .map(|delay| if delay.is_zero() { interval } else { delay });
-            if self.aqua.frame_stats.is_some() {
-                eprintln!(
-                    "aqua-pulse-src: quad={} shimmer={:?}",
-                    pulse_delay.is_some(),
-                    shimmer_delay
-                );
-            }
-            if let Some(delay) = pulse_delay.into_iter().chain(shimmer_delay).min() {
-                self.aqua
-                    .scheduler
-                    .request_gpui_pulse_deadline(id, now + delay);
-            }
-            match outcome {
-                Outcome::Submitted { seq } => {
-                    self.ensure_completion_worker();
-                    if let Some(tx) = self.aqua.completion_tx.clone() {
-                        let _ = tx.send((id, seq));
-                    }
-                    self.aqua.frames_presented += 1;
-                    let cpu_time = frame_started.elapsed();
-                    if let Some(stats) = self.aqua.frame_stats.as_mut() {
-                        stats.record(cpu_time, submit_time, build_time);
-                    }
-                    if self.aqua.frames_presented.is_multiple_of(120)
-                        && self.aqua.frame_stats.is_some()
-                    {
-                        if let Some(gpu) = self.aqua.shared_gpu.as_ref() {
-                            let report = gpu.device.generate_allocator_report();
-                            let counters = gpu.device.get_internal_counters();
-                            eprintln!(
-                                "aqua-mem: frames={} allocator={:?} {} {:?}",
-                                self.aqua.frames_presented,
-                                report.map(|r| (
-                                    r.total_allocated_bytes,
-                                    r.total_reserved_bytes,
-                                    r.blocks.len()
-                                )),
-                                crate::mem_probe::summary(),
-                                counters.hal.buffers
-                            );
-                        }
-                    }
-                    if let Some(budget) = self.aqua.smoke_frames {
-                        if self.aqua.frames_presented >= budget {
-                            eprintln!(
-                                "aqua: smoke budget reached ({} frames) — exiting",
-                                self.aqua.frames_presented
-                            );
-                            self.aqua.quit_requested = true;
-                        }
-                    }
-                }
-                Outcome::Skipped => {
-                    self.aqua.scheduler.mark_presented(id);
-                }
-                Outcome::Failed { message, held } => {
-                    self.aqua.render_errors += 1;
-                    for _ in 0..held {
-                        self.aqua.scheduler.mark_presented(id);
-                    }
-                    self.aqua.scheduler.mark_presented(id);
-                    self.aqua
-                        .with_ctx(|ctx| self.app.on_render_error(ctx, id, &message));
-                }
-            }
+            self.produce_frame(app, id, now);
+            self.scheduler.mark_presented(id);
         }
     }
 
-    fn route_winit_event(
-        &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
-        window_id: winit::window::WindowId,
-        event: winit::event::WindowEvent,
-    ) {
-        let Some(&id) = self.aqua.winit_map.get(&window_id) else {
+    fn produce_frame(&mut self, app: &mut impl Application, id: AquaWindowId, now: Instant) {
+        let frame_started = WallInstant::now();
+        let Some(record) = self.windows.get(&id) else {
             return;
         };
-        #[cfg(windows)]
-        {
-            let window = self.aqua.windows.get(&id).and_then(|r| r.window.clone());
-            if let (Some(w), Some(rec)) = (window, self.aqua.windows.get_mut(&id)) {
-                if let Some(adapter) = rec.a11y.as_mut() {
-                    adapter.process_window_event(&w, &event);
-                }
-            }
+        if record.observed.occluded || record.link.is_none() {
+            return;
         }
-        if let Some(record) = self.aqua.windows.get_mut(&id) {
-            if let Some(window) = record.window.as_ref() {
-                record.observed.maximized = window.is_maximized();
-            }
+        if let Some(flusher) = self.flushers.get_mut(&id) {
+            let _report = flusher();
         }
-        let scale = self
-            .aqua
+        let Some(observed) = self.windows.get(&id).map(|r| r.observed.clone()) else {
+            return;
+        };
+        let updates = run_headless_externals(app, &observed, now);
+        if let Some(link) = self.windows.get(&id).and_then(|r| r.link.as_ref()) {
+            updates.into_iter().for_each(|update| link.external(update));
+        }
+        self.sync_access_client(app, id);
+        let build_started = WallInstant::now();
+        if let Some(deadline) = app.build_scene(&observed, now) {
+            self.scheduler.request_animation_deadline(id, deadline);
+        }
+        self.flush_output(app, id);
+        let build_time = build_started.elapsed();
+        self.sync_chrome(app, id, &observed);
+        self.sync_access(app, id);
+        let cursor = app.cursor();
+        let motion = app.motion_commands(id);
+        let submit_started = WallInstant::now();
+        let scale = observed.scale_factor as f32;
+        let Some(record) = self.windows.get_mut(&id) else {
+            return;
+        };
+        if let (Some(native), Some(cursor)) = (record.native.as_ref(), cursor) {
+            native.set_cursor(cursor);
+        }
+        let Some(link) = record.link.as_mut() else {
+            return;
+        };
+        link.set_viewport(observed.inner_size.as_core_size(), scale);
+        if !motion.is_empty() {
+            link.push_commands(motion.into_iter().map(RenderCommand::Motion));
+        }
+        if let Some(scene) = app.scene_mut(id) {
+            link.push_scene(scene);
+        }
+        let submit_time = submit_started.elapsed();
+        let cpu_time = frame_started.elapsed();
+        if let Some(stats) = self.frame_stats.as_mut() {
+            stats.record(cpu_time, submit_time, build_time);
+        }
+    }
+
+    fn sync_access_client(&mut self, app: &mut impl Application, id: AquaWindowId) {
+        let Some(record) = self.windows.get_mut(&id) else {
+            return;
+        };
+        let connected = record.access.as_ref().is_some_and(|sink| sink.connected());
+        if connected != record.access_connected {
+            record.access_connected = connected;
+            app.step_input(id, RuntimeInput::AccessClient { connected });
+            self.flush_output(app, id);
+        }
+    }
+
+    fn sync_chrome(
+        &mut self,
+        app: &impl Application,
+        id: AquaWindowId,
+        observed: &ObservedWindowState,
+    ) {
+        let next = app.chrome_regions(observed);
+        let scale = match observed.scale_factor {
+            scale if scale.is_finite() && scale > 0.0 => scale,
+            _ => 1.0,
+        };
+        let Some(record) = self.windows.get_mut(&id) else {
+            return;
+        };
+        if next.is_none() && record.last_regions.is_none() {
+            return;
+        }
+        let Some(plan) = chrome_plan(&record.last_regions, next, scale) else {
+            return;
+        };
+        let cleared;
+        let payload = match &plan {
+            ChromePlan::Apply(regions) => regions,
+            ChromePlan::Clear => {
+                cleared = DragRegions::default();
+                &cleared
+            }
+        };
+        if let Some(native) = record.native.as_ref() {
+            native.set_drag_regions(payload);
+        }
+        record.last_regions = match plan {
+            ChromePlan::Apply(regions) => Some((regions, scale)),
+            ChromePlan::Clear => None,
+        };
+    }
+
+    fn sync_access(&mut self, app: &impl Application, id: AquaWindowId) {
+        let needed = self
             .windows
             .get(&id)
-            .and_then(|r| r.window.clone())
-            .map(|w| w.scale_factor())
-            .unwrap_or(1.0);
-        if let Some(framework) = translate_window_event(&event, id, scale) {
-            if matches!(framework, WindowEvent::RedrawRequested(_)) {
-                self.aqua.scheduler.request_frame(id, FrameReason::EXPLICIT);
-                self.draw_ready(self.aqua.clock());
-                return;
-            }
-            if let Some(reason) = window_event_frame_reason(&framework) {
-                self.aqua.scheduler.request_frame(id, reason);
-            }
-            let signal = surface_signal(&framework);
-            if signal.resize_gpu {
-                if let WindowEvent::Resized(_, size) = &framework {
-                    let phys = size.to_physical(scale);
-                    if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                        rec.observed.inner_size = *size;
-                        if let Some(gpuw) = rec.gpu.as_mut() {
-                            let g = self.aqua.shared_gpu.as_ref().expect("gpu exists");
-                            let _ = gpuw.surface.resize(
-                                &g.device,
-                                &mut gpuw.renderer,
-                                phys.width,
-                                phys.height,
-                                scale as f32,
-                            );
-                        }
-                    }
-                }
-            }
-            if signal.material_recheck {
-                Self::reapply_material(&mut self.aqua, id);
-            }
-            let fw = framework.clone();
-            self.aqua.apply_observed(id, &fw);
-            self.aqua.bind_app_reactive(&self.app, id);
-            self.aqua
-                .with_ctx(|ctx| self.app.on_window_event(ctx, id, &fw));
-            if let WindowEvent::Focused(_, focused) = fw {
-                self.aqua
-                    .dispatch_app_input(&mut self.app, id, &CoreInputEvent::Focused(focused));
-            }
-            #[cfg(windows)]
-            Self::drain_a11y_actions(&mut self.aqua, &mut self.app, id);
-            let close = match fw {
-                WindowEvent::Destroyed(_) => true,
-                WindowEvent::CloseRequested(_) => {
-                    self.aqua.with_ctx(|ctx| self.app.can_close(ctx, id))
-                }
-                _ => false,
-            };
-            if close {
-                #[cfg(windows)]
-                if self
-                    .aqua
-                    .windows
-                    .get(&id)
-                    .is_some_and(|record| record.native_file_drag.is_some())
-                {
-                    self.aqua.with_ctx(|ctx| {
-                        self.app.on_external_file_drag(
-                            ctx,
-                            id,
-                            &aqua_platform::events::ExternalFileDrag::Exit,
-                        )
-                    });
-                }
-                self.aqua.remove_window(id);
-                if self.aqua.windows.is_empty() {
-                    event_loop.exit();
-                }
-            }
+            .and_then(|record| record.access.as_ref())
+            .is_some_and(|sink| sink.needs_snapshot());
+        if !needed {
             return;
         }
-        self.route_input(event_loop, id, scale, event);
-    }
-
-    fn route_input(
-        &mut self,
-        _event_loop: &winit::event_loop::ActiveEventLoop,
-        id: AquaWindowId,
-        scale: f64,
-        event: winit::event::WindowEvent,
-    ) {
-        use winit::event::WindowEvent as W;
-        if let Some(drop) = translate_file_event(&event) {
-            match drop {
-                FileDrop::Dropped(path) => {
-                    let at = self
-                        .aqua
-                        .windows
-                        .get(&id)
-                        .and_then(|record| record.window.as_ref())
-                        .and_then(|window| aqua_platform::host::cursor_position(window));
-                    self.aqua.dispatch_file_drop_at(
-                        &mut self.app,
-                        id,
-                        std::slice::from_ref(&path),
-                        at,
-                    );
-                }
-                FileDrop::Hovered(_) | FileDrop::HoverCancelled => {}
-            }
+        let Some((root, focus, nodes)) = app.a11y_nodes() else {
             return;
-        }
-        if let W::ModifiersChanged(mods) = &event {
-            let modifiers = translate_modifiers(mods);
-            if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                rec.modifiers = modifiers;
-            }
-            self.aqua.dispatch_app_input(
-                &mut self.app,
-                id,
-                &CoreInputEvent::ModifiersChanged(modifiers),
-            );
-            return;
-        }
-        let mut extra: Option<CoreInputEvent> = None;
-        let input: Option<CoreInputEvent> = match event {
-            W::KeyboardInput { event, .. } => {
-                let pressed = event.state == winit::event::ElementState::Pressed;
-                let modifiers = self
-                    .aqua
-                    .windows
-                    .get(&id)
-                    .map(|r| r.modifiers)
-                    .unwrap_or(CoreModifiers::NONE);
-                let (key_event, text) = translate_key_event(&event, modifiers);
-                if pressed {
-                    let ime = self.aqua.windows.get(&id).is_some_and(|r| r.ime_active);
-                    if !ime {
-                        if let Some(t) = text.filter(|t| !t.is_empty()) {
-                            extra = Some(CoreInputEvent::TextInput { text: t });
-                        }
-                    }
-                }
-                Some(if pressed {
-                    CoreInputEvent::KeyDown(key_event)
-                } else {
-                    CoreInputEvent::KeyUp(key_event)
-                })
-            }
-            W::CursorMoved { position, .. } => {
-                let buttons = self.aqua.windows.get(&id).map(|r| r.buttons).unwrap_or(0);
-                let pointer = pointer_contact(
-                    0,
-                    PointerKind::Mouse,
-                    position.x,
-                    position.y,
-                    scale,
-                    buttons,
-                );
-                if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                    rec.cursor = Some((pointer.position.x as f64, pointer.position.y as f64));
-                }
-                Some(CoreInputEvent::PointerMove(pointer))
-            }
-            W::MouseInput { state, button, .. } => {
-                let core_button = translate_mouse_button_core(button);
-                let bit = match button {
-                    winit::event::MouseButton::Left => 0x01,
-                    winit::event::MouseButton::Right => 0x02,
-                    winit::event::MouseButton::Middle => 0x04,
-                    _ => 0x08,
-                };
-                let pressed = state == winit::event::ElementState::Pressed;
-                if button == winit::event::MouseButton::Left {
-                    self.client_chrome_pointer(id, pressed);
-                }
-                let pointer = match self.aqua.windows.get_mut(&id) {
-                    Some(rec) => {
-                        if pressed {
-                            rec.buttons |= bit;
-                        } else {
-                            rec.buttons &= !bit;
-                        }
-                        let (x, y) = rec.cursor.unwrap_or((0.0, 0.0));
-                        pointer_contact(
-                            0,
-                            PointerKind::Mouse,
-                            x * scale,
-                            y * scale,
-                            scale,
-                            rec.buttons,
-                        )
-                    }
-                    None => pointer_contact(0, PointerKind::Mouse, 0.0, 0.0, 1.0, 0),
-                };
-                Some(if pressed {
-                    CoreInputEvent::PointerDown(pointer, core_button)
-                } else {
-                    CoreInputEvent::PointerUp(pointer, core_button)
-                })
-            }
-            W::MouseWheel { delta, .. } => {
-                let (dx, dy) = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(x, y) => (-x * 16.0, -y * 16.0),
-                    winit::event::MouseScrollDelta::PixelDelta(p) => {
-                        (-(p.x as f32) / scale as f32, -(p.y as f32) / scale as f32)
-                    }
-                };
-                let at = self
-                    .aqua
-                    .windows
-                    .get(&id)
-                    .and_then(|r| r.cursor)
-                    .map(|(x, y)| aqua_core::Point::new(x as f32, y as f32))
-                    .unwrap_or(aqua_core::Point::new(0.0, 0.0));
-                Some(CoreInputEvent::Scroll {
-                    at,
-                    delta: aqua_core::ScrollDelta { x: dx, y: dy },
-                })
-            }
-            W::Touch(t) => {
-                let position = to_core_point(t.location.x, t.location.y, scale);
-                if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                    rec.cursor = Some((position.x as f64, position.y as f64));
-                }
-                use winit::event::TouchPhase as P;
-                let pointer = |buttons| {
-                    pointer_contact(
-                        t.id,
-                        PointerKind::Touch,
-                        t.location.x,
-                        t.location.y,
-                        scale,
-                        buttons,
-                    )
-                };
-                match t.phase {
-                    P::Started => Some(CoreInputEvent::PointerDown(
-                        pointer(1),
-                        translate_mouse_button_core(winit::event::MouseButton::Left),
-                    )),
-                    P::Ended => Some(CoreInputEvent::PointerUp(
-                        pointer(0),
-                        translate_mouse_button_core(winit::event::MouseButton::Left),
-                    )),
-                    P::Cancelled => Some(CoreInputEvent::PointerCancel { contact: t.id }),
-                    P::Moved => Some(CoreInputEvent::PointerMove(pointer(1))),
-                }
-            }
-            W::Ime(ime) => {
-                if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                    rec.ime_active = ime_is_composing(&ime);
-                }
-                Some(translate_ime_core(&ime))
-            }
-            W::ScaleFactorChanged { scale_factor, .. } => {
-                if let Some(rec) = self.aqua.windows.get_mut(&id) {
-                    rec.observed.scale_factor = scale_factor;
-                }
-                self.aqua.scheduler.request_frame(id, FrameReason::RESIZE);
-                let fw = WindowEvent::ScaleChanged(id, scale_factor);
-                self.aqua.bind_app_reactive(&self.app, id);
-                self.aqua
-                    .with_ctx(|ctx| self.app.on_window_event(ctx, id, &fw));
-                None
-            }
-            _ => None,
         };
-        if let Some(input) = input {
-            self.aqua.scheduler.request_frame(id, FrameReason::INPUT);
-            if matches!(input, CoreInputEvent::PointerDown(_, _)) {
-                if let Some(window) = self
-                    .aqua
-                    .windows
-                    .get(&id)
-                    .and_then(|record| record.window.as_ref())
-                {
-                    self.app
-                        .on_click_settings(aqua_platform::host::click_settings(window));
-                }
-            }
-            self.aqua.dispatch_app_input(&mut self.app, id, &input);
-        }
-        if let Some(text_event) = extra {
-            self.aqua.scheduler.request_frame(id, FrameReason::INPUT);
-            self.aqua.dispatch_app_input(&mut self.app, id, &text_event);
-        }
-    }
-
-    #[cfg(windows)]
-    fn drain_a11y_actions(aqua: &mut Aqua, app: &mut A, id: AquaWindowId) {
-        let actions = aqua
+        if let Some(sink) = self
             .windows
             .get_mut(&id)
-            .and_then(|r| r.a11y.as_mut())
-            .map(|a| a.drain_actions())
-            .unwrap_or_default();
-        for request in &actions {
-            let req = request.clone();
-            aqua.with_ctx(|ctx| app.on_a11y_action(ctx, id, &req));
+            .and_then(|record| record.access.as_mut())
+        {
+            sink.apply(&AccessTreeUpdate { root, focus, nodes });
         }
     }
 
-    fn reapply_material(aqua: &mut Aqua, id: AquaWindowId) {
-        let material = aqua.config.effective_material(&aqua.prefs);
-        let capability = aqua_platform::material::material_capability(material);
-        if !capability.supported {
-            eprintln!("aqua: material {:?}: {}", material, capability.reason);
+    pub fn report_host_stats(&mut self) {
+        if self.frame_stats.is_none() {
             return;
         }
-        let window = aqua.windows.get(&id).and_then(|r| r.window.clone());
-        let Some(window) = window else { return };
-        #[cfg(windows)]
-        match aqua_platform::adapters::apply_material(&window, material) {
-            Ok(applied) => eprintln!("aqua: material {:?}: {}", material, applied.reason),
-            Err(e) => {
-                aqua.render_errors += 1;
-                eprintln!("aqua: material apply failed: {e:?}");
-            }
+        let due = self
+            .last_host_report
+            .is_none_or(|last| last.elapsed() >= Duration::from_secs(1));
+        if !due {
+            return;
         }
-        #[cfg(not(windows))]
-        {
-            let applied = aqua_platform::adapters::apply_material(material);
-            eprintln!("aqua: material {:?}: {}", material, applied.reason);
-            let _ = window;
+        self.last_host_report = Some(WallInstant::now());
+        for (id, record) in &self.windows {
+            let Some(link) = record.link.as_ref() else {
+                continue;
+            };
+            use std::sync::atomic::Ordering::Relaxed;
+            let stats = link.stats();
+            eprintln!(
+                "aqua-host-stats: window={} wakeups={} presented={} waits={} lower_ms={:.2} lower_max_ms={:.2} execute_ms={:.2} present_ms={:.2} commands={} glyphs={} skipped={} failures={} recoveries={} backlog={}",
+                id.raw(),
+                self.wakeups,
+                stats.frames.load(Relaxed),
+                stats.waits.load(Relaxed),
+                stats.lower_ns.load(Relaxed) as f64 / 1e6,
+                stats.lower_max_ns.load(Relaxed) as f64 / 1e6,
+                stats.execute_ns.load(Relaxed) as f64 / 1e6,
+                stats.present_ns.load(Relaxed) as f64 / 1e6,
+                stats.commands.load(Relaxed),
+                stats.glyphs.load(Relaxed),
+                stats.skipped_items.load(Relaxed),
+                stats.failures.load(Relaxed),
+                stats.recoveries.load(Relaxed),
+                link.backlog(),
+            );
         }
+    }
+
+    pub fn quit_requested(&self) -> bool {
+        self.quit_requested
+    }
+
+    pub fn run(self, app: impl Application + 'static) -> Result<(), String> {
+        if self.config.headless {
+            return Err("headless config cannot run the GUI loop; use the headless pump".into());
+        }
+        crate::native::run(self, app)
     }
 }
 
-impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for Loop<A> {
-    fn new_events(&mut self, _: &winit::event_loop::ActiveEventLoop, _: winit::event::StartCause) {
-        for window in self.aqua.windows.values_mut() {
-            if let Some(gpu) = window.gpu.as_mut() {
-                gpu.renderer.wake_gpui_shimmers();
-            }
-        }
-    }
-
-    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        if self.aqua.windows.is_empty() && !self.aqua.config.headless {
-            let options = self.aqua.config.window.clone();
-            if let Err(error) = self.create_window(event_loop, options.clone()) {
-                self.app
-                    .on_window_request_error(&WindowRequest::Create(options), &error);
-                self.startup_error = Some(format!("startup window failed: {error:?}"));
-                event_loop.exit();
-            }
-        }
-    }
-
-    fn window_event(
-        &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
-        window_id: winit::window::WindowId,
-        event: winit::event::WindowEvent,
-    ) {
-        self.route_winit_event(event_loop, window_id, event);
-    }
-
-    fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.process_window_requests(event_loop);
-        let wall_now = WallInstant::now();
-        let now = self.aqua.clock();
-        self.aqua.wakeups += 1;
-        if let Some(deadline) = self.aqua.smoke_deadline {
-            if wall_now >= deadline {
-                let stats = self.aqua.scheduler.stats();
-                eprintln!(
-                    "aqua: smoke report: wakeups={} requested={} produced={} presented_frames={} coalesced={} deferred_backpressure={} render_errors={}",
-                    self.aqua.wakeups,
-                    stats.requested,
-                    stats.produced,
-                    self.aqua.frames_presented,
-                    stats.coalesced,
-                    stats.deferred_backpressure,
-                    self.aqua.render_errors,
-                );
-                event_loop.exit();
-                return;
-            }
-        }
-        self.draw_ready(now);
-        let wake = match (
-            self.aqua
-                .scheduler
-                .next_wakeup(now)
-                .map(|t| self.aqua.wall(t)),
-            self.aqua.smoke_deadline,
-        ) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (Some(a), None) => Some(a),
-            (None, b) => b,
-        };
-        let shimmer_wake = self
-            .aqua
-            .windows
-            .values()
-            .filter_map(|window| {
-                window
-                    .gpu
-                    .as_ref()
-                    .and_then(|gpu| gpu.renderer.gpui_shimmer_wake_delay())
-            })
-            .min()
-            .and_then(|delay| wall_now.checked_add(delay));
-        let wake = match (wake, shimmer_wake) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (Some(a), None) => Some(a),
-            (None, b) => b,
-        };
-        event_loop.set_control_flow(control_flow_for_next_wakeup(wake));
-        if self.aqua.quit_requested {
-            event_loop.exit();
-        }
-    }
-
-    fn user_event(
-        &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
-        event: AquaUserEvent,
-    ) {
-        match event {
-            AquaUserEvent::ExternalFileDrag(id) => {
-                #[cfg(windows)]
-                {
-                    let events: Vec<_> = self
-                        .aqua
-                        .windows
-                        .get(&id)
-                        .map(|window| window.native_file_events.borrow_mut().drain(..).collect())
-                        .unwrap_or_default();
-                    for event in events {
-                        self.aqua
-                            .dispatch_attributed_input(&mut self.app, id, true, |app, ctx| {
-                                app.on_external_file_drag(ctx, id, &event)
-                            });
-                    }
-                }
-                #[cfg(not(windows))]
-                let _ = id;
-            }
-            AquaUserEvent::ReplayBadges => {
-                let requests: Vec<_> = self
-                    .aqua
-                    .windows
-                    .iter()
-                    .filter_map(|(id, record)| {
-                        record
-                            .badge
-                            .map(|badge| WindowRequest::SetBadge(*id, Some(badge)))
-                    })
-                    .collect();
-                for request in requests {
-                    if let Err(error) = self.aqua.apply_window_request(&mut self.app, &request) {
-                        self.app.on_window_request_error(&request, &error);
-                    }
-                }
-            }
-            AquaUserEvent::WindowRequests => self.process_window_requests(event_loop),
-            AquaUserEvent::Messages(id) => {
-                self.aqua.dispatch_wake(&mut self.app, id);
-            }
-            AquaUserEvent::ReactiveWake(id) => {
-                let ran = self
-                    .aqua
-                    .flushers
-                    .get_mut(&id)
-                    .map(|flusher| flusher().ran)
-                    .unwrap_or(0);
-                if ran > 0 {
-                    self.aqua.scheduler.request_frame(id, FrameReason::INPUT);
-                }
-            }
-            AquaUserEvent::A11yActions(id) => {
-                self.aqua.scheduler.request_frame(id, FrameReason::INPUT);
-                #[cfg(windows)]
-                Self::drain_a11y_actions(&mut self.aqua, &mut self.app, id);
-                #[cfg(not(windows))]
-                let _ = id;
-            }
-            AquaUserEvent::GpuComplete(id, seq) => {
-                let ledger = self
-                    .aqua
-                    .windows
-                    .get_mut(&id)
-                    .and_then(|record| record.gpu.as_mut())
-                    .map(|gpu| &mut gpu.ledger);
-                let release = complete_gpu_event(ledger, seq);
-                if let Some(release) = release {
-                    for _ in 0..release {
-                        self.aqua.scheduler.mark_presented(id);
-                    }
-                    self.aqua
-                        .with_ctx(|ctx| self.app.on_frame_completed(ctx, id, seq));
-                }
-            }
-        }
-    }
-}
-
-fn default_backends() -> wgpu::Backends {
-    match cfg!(windows) {
-        true => wgpu::Backends::VULKAN,
-        false => wgpu::Backends::all(),
+pub fn physical_extent(window: &ObservedWindowState) -> Extent {
+    let scale = window.scale_factor as f32;
+    Extent {
+        width: ((window.inner_size.width as f32) * scale).round().max(1.0) as u32,
+        height: ((window.inner_size.height as f32) * scale).round().max(1.0) as u32,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aqua_core::PointerKind;
     use aqua_platform::geometry::LogicalSize;
 
     struct Probe {
@@ -2604,7 +1584,7 @@ mod tests {
         fn build_scene(&mut self, _window: &ObservedWindowState, _now: Instant) -> Option<Instant> {
             use aqua_core::{Oklch, Rect};
             self.scenes_built += 1;
-            self.scene.insert(aqua_render::scene::DisplayItem::Rect {
+            self.scene.insert(aqua_core::DisplayItem::Rect {
                 bounds: Rect::from_edges(0.0, 0.0, 100.0, 100.0),
                 radius: 8.0,
                 fill: Oklch::from_hex("#1d4ed8").unwrap(),
@@ -2642,27 +1622,6 @@ mod tests {
             maximized: false,
         });
         (aqua, Probe::new(), id)
-    }
-
-    #[test]
-    fn gpu_completions_require_submitted_new_sequences_and_ignore_closed_windows() {
-        let mut ledger = GpuLedger {
-            submitted: 3,
-            completed: 0,
-            presented: 3,
-            unreleased: 3,
-        };
-        assert_eq!(complete_gpu_event(Some(&mut ledger), 0), None);
-        assert_eq!(complete_gpu_event(Some(&mut ledger), 4), None);
-        assert_eq!(ledger.completed, 0);
-        assert_eq!(complete_gpu_event(Some(&mut ledger), 2), Some(2));
-        assert_eq!(ledger.unreleased, 1);
-        assert_eq!(complete_gpu_event(Some(&mut ledger), 2), None);
-        assert_eq!(complete_gpu_event(Some(&mut ledger), 1), None);
-        assert_eq!(complete_gpu_event(None, 3), None);
-        assert_eq!(complete_gpu_event(Some(&mut ledger), 3), Some(1));
-        assert_eq!(ledger.completed, 3);
-        assert_eq!(ledger.unreleased, 0);
     }
 
     #[test]
@@ -2830,11 +1789,11 @@ mod tests {
     }
 
     #[test]
-    fn headless_windows_carry_no_chrome_guard() {
+    fn headless_windows_carry_no_native_window() {
         let (mut aqua, mut app, id) = headless();
-        assert!(!aqua.has_chrome(id));
+        assert!(!aqua.has_native_window(id));
         aqua.dispatch_window_event(&mut app, id, &WindowEvent::CloseRequested(id));
-        assert!(!aqua.has_chrome(id));
+        assert!(!aqua.has_native_window(id));
     }
 
     #[test]
@@ -2939,5 +1898,266 @@ mod tests {
         assert_eq!(app.build_scene(&observed, aqua.clock()), None);
         assert_eq!(app.scenes_built, 1);
         assert_eq!(app.scene_mut(id).map(|scene| scene.len()), Some(1));
+    }
+
+    use std::cell::RefCell;
+    use std::sync::Mutex;
+
+    use aqua_core::geometry::Rect as CoreRect;
+    use aqua_gpu_ref::RefBackend;
+    use aqua_protocol::{GpuBackend, GpuReadback, SurfacePixels, SurfaceTarget};
+
+    use crate::render::host::{FrameTarget, GpuFrames};
+    use crate::render::lower::Lowering;
+
+    struct Capture {
+        inner: GpuFrames<RefBackend>,
+        pixels: Arc<Mutex<Option<SurfacePixels>>>,
+    }
+
+    impl FrameTarget for Capture {
+        fn paced(&self) -> bool {
+            true
+        }
+
+        fn wait_frame(&mut self) {
+            self.inner.wait_frame();
+        }
+
+        fn present(
+            &mut self,
+            side: &mut aqua_runtime::RenderSide,
+            frame: aqua_protocol::FrameId,
+        ) -> Vec<aqua_protocol::Feedback> {
+            let feedback = self.inner.present(side, frame);
+            let surface = self.inner.surface();
+            if let Ok(read) = self.inner.backend_mut().read_surface(surface) {
+                *self.pixels.lock().unwrap() = Some(read);
+            }
+            feedback
+        }
+    }
+
+    fn reference_factory(
+        extent: Extent,
+        fonts: aqua_text::SharedFonts,
+        runs: aqua_text::SharedRuns,
+        pixels: Arc<Mutex<Option<SurfacePixels>>>,
+    ) -> InitFactory {
+        Box::new(move |externals, stats| {
+            Box::new(move || {
+                let mut backend = RefBackend::new();
+                let surface = backend
+                    .create_surface(SurfaceTarget::Offscreen(extent))
+                    .map_err(|e| e.to_string())?;
+                let frames = GpuFrames::new(
+                    backend,
+                    surface,
+                    extent,
+                    Lowering::new(fonts, runs),
+                    externals,
+                    stats,
+                );
+                Ok(Box::new(Capture {
+                    inner: frames,
+                    pixels,
+                }) as Box<dyn FrameTarget>)
+            })
+        })
+    }
+
+    fn wait_for_presented(aqua: &mut Aqua, app: &mut Probe, id: AquaWindowId, frames: u64) {
+        let deadline = WallInstant::now() + Duration::from_secs(20);
+        while aqua.presented_frames(id).unwrap_or(0) < frames {
+            assert!(
+                WallInstant::now() < deadline,
+                "render thread never presented"
+            );
+            aqua.drain_render_events(app, id);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn scene_reaches_the_render_thread_and_the_reference_surface() {
+        let (mut aqua, mut app, id) = headless();
+        let pixels = Arc::new(Mutex::new(None));
+        let extent = Extent {
+            width: 800,
+            height: 600,
+        };
+        let factory = reference_factory(
+            extent,
+            aqua.fonts().clone(),
+            aqua.runs().clone(),
+            pixels.clone(),
+        );
+        assert!(aqua.attach_render(id, factory, Duration::from_millis(2)));
+        aqua.scheduler.request_frame(id, FrameReason::EXPLICIT);
+        let now = aqua.clock();
+        aqua.draw_ready(&mut app, now);
+        wait_for_presented(&mut aqua, &mut app, id, 1);
+        let frame = pixels
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("a surface was read back");
+        assert_eq!(frame.extent, extent);
+        let at = |x: usize, y: usize| {
+            let offset = (y * extent.width as usize + x) * 4;
+            frame.rgba8[offset..offset + 4].to_vec()
+        };
+        let inside = at(50, 50);
+        let outside = at(300, 300);
+        assert!(inside[2] > 150 && inside[0] < 80, "blue rect at {inside:?}");
+        assert_eq!(outside[3], 0, "empty area is cleared transparent");
+        let _ = CoreRect::from_edges(0.0, 0.0, 1.0, 1.0);
+    }
+
+    #[derive(Default)]
+    struct Calls(RefCell<Vec<String>>);
+
+    struct FakeWindow(Rc<Calls>);
+
+    impl NativeWindow for FakeWindow {
+        fn scale(&self) -> f64 {
+            1.0
+        }
+        fn inner_size(&self) -> (u32, u32) {
+            (800, 600)
+        }
+        fn set_title(&self, title: &str) {
+            self.0 .0.borrow_mut().push(format!("title:{title}"));
+        }
+        fn set_logical_size(&self, width: f64, height: f64) {
+            self.0
+                 .0
+                .borrow_mut()
+                .push(format!("size:{width}x{height}"));
+        }
+        fn set_visible(&self, visible: bool) {
+            self.0 .0.borrow_mut().push(format!("visible:{visible}"));
+        }
+        fn set_minimized(&self, minimized: bool) {
+            self.0
+                 .0
+                .borrow_mut()
+                .push(format!("minimized:{minimized}"));
+        }
+        fn set_maximized(&self, maximized: bool) {
+            self.0
+                 .0
+                .borrow_mut()
+                .push(format!("maximized:{maximized}"));
+        }
+        fn is_maximized(&self) -> bool {
+            false
+        }
+        fn activate(&self) {
+            self.0 .0.borrow_mut().push("activate".into());
+        }
+        fn set_outer_position(&self, x: i32, y: i32) {
+            self.0 .0.borrow_mut().push(format!("position:{x},{y}"));
+        }
+        fn center(&self) {
+            self.0 .0.borrow_mut().push("center".into());
+        }
+        fn set_cursor(&self, cursor: aqua_core::CursorIcon) {
+            self.0 .0.borrow_mut().push(format!("cursor:{cursor:?}"));
+        }
+        fn set_drag_regions(&self, _regions: &DragRegions) {
+            self.0 .0.borrow_mut().push("regions".into());
+        }
+        fn click_settings(&self) -> aqua_core::ClickSettings {
+            aqua_core::ClickSettings::default()
+        }
+        fn display(&self) -> Option<aqua_platform::monitor::DisplayInfo> {
+            None
+        }
+        fn destroy(&self) {
+            self.0 .0.borrow_mut().push("destroy".into());
+        }
+    }
+
+    struct Scripted {
+        outputs: VecDeque<RuntimeOutput>,
+        fed: Vec<RuntimeInput>,
+    }
+
+    impl Application for Scripted {
+        fn on_window_event(&mut self, _c: &mut AppCtx, _: AquaWindowId, _: &WindowEvent) {}
+        fn on_input(&mut self, _c: &mut AppCtx, _: AquaWindowId, _: &CoreInputEvent) {}
+        fn build_scene(&mut self, _: &ObservedWindowState, _: Instant) -> Option<Instant> {
+            None
+        }
+        fn step_input(&mut self, _id: AquaWindowId, input: RuntimeInput) {
+            self.fed.push(input);
+        }
+        fn take_output(&mut self, _id: AquaWindowId) -> RuntimeOutput {
+            self.outputs.pop_front().unwrap_or_default()
+        }
+    }
+
+    #[test]
+    fn machine_output_is_executed_against_the_native_window() {
+        use aqua_protocol::ShellCommand;
+        let mut aqua = Aqua::new(AquaConfig {
+            headless: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let id = aqua.alloc_id();
+        let calls = Rc::new(Calls::default());
+        aqua.add_native_window(
+            ObservedWindowState {
+                id,
+                title: "scripted".into(),
+                inner_size: LogicalSize::new(800.0, 600.0),
+                scale_factor: 1.0,
+                focused: true,
+                visible: true,
+                occluded: false,
+                maximized: false,
+            },
+            Rc::new(FakeWindow(calls.clone())),
+        );
+        let window = aqua_protocol::WindowId::new(id.raw()).unwrap();
+        let mut app = Scripted {
+            outputs: VecDeque::from([RuntimeOutput {
+                shell: vec![
+                    ShellCommand::SetCursor {
+                        window,
+                        icon: aqua_core::CursorIcon::Pointer,
+                    },
+                    ShellCommand::SetTitle {
+                        window,
+                        title: "renamed".into(),
+                    },
+                    ShellCommand::ClipboardRead {
+                        request: RequestId(9),
+                    },
+                    ShellCommand::RequestFrame {
+                        window,
+                        reason: FrameReason::INPUT,
+                    },
+                ],
+                wake_at: Some(Instant::from_nanos(5_000_000)),
+                ..RuntimeOutput::default()
+            }]),
+            fed: Vec::new(),
+        };
+        aqua.flush_output(&mut app, id);
+        assert_eq!(calls.0.borrow().as_slice(), ["cursor:Pointer"]);
+        assert!(matches!(
+            app.fed.as_slice(),
+            [RuntimeInput::Shell(ShellEvent::Clipboard {
+                request: RequestId(9),
+                ..
+            })]
+        ));
+        assert!(aqua.scheduler.has_pending());
+        let creates = aqua.dispatch_window_requests(&mut app);
+        assert!(creates.is_empty());
+        assert!(calls.0.borrow().iter().any(|call| call == "title:renamed"));
     }
 }

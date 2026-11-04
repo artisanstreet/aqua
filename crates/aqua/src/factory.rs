@@ -14,13 +14,13 @@ use aqua_core::ImageId;
 use aqua_reactive::ReadSignal;
 
 use aqua_ui::element::{
-    Button, Canvas, Checkbox, Dropdown, Dynamic, Fragment, Media, NumberArg, Scroll, Slider, Tabs,
-    Text, TextSource, Viewport3D, ui as builders,
+    ui as builders, Button, Canvas, Checkbox, Dropdown, Dynamic, Fragment, Media, NumberArg,
+    Scroll, Slider, Tabs, Text, TextSource, Viewport3D,
 };
 
 // Collection types are re-exported here so the
 // canonical `Aqua::List()` / `aqua::fr` paths resolve to the real types.
-pub use aqua_ui::collection::{Column, ColumnBuilder, ColumnWidth, List, Table, fr};
+pub use aqua_ui::collection::{fr, Column, ColumnBuilder, ColumnWidth, List, Table};
 
 use crate::config::{Config, Window};
 use crate::runtime::Aqua;

@@ -816,7 +816,10 @@ impl Application for Showcase {
                     ImeEvent::Start => {}
                 }
             }
-            InputEvent::Focused(_) | InputEvent::ModifiersChanged(_) => {}
+            InputEvent::Focused(_)
+            | InputEvent::ModifiersChanged(_)
+            | InputEvent::ImeReplace { .. }
+            | InputEvent::ImeSelect { .. } => {}
         }
     }
 

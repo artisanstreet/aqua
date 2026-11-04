@@ -1,37 +1,98 @@
+use std::ops::{Deref, DerefMut};
+
 use aqua_core::{InputEvent as CoreInputEvent, Key, Modifiers, NamedKey};
 use aqua_platform::{
-    AquaWindowId, ObservedWindowState, WindowEvent,
-    a11y::A11yActionRequest,
-    chrome::DragRegions,
     services::{Clipboard, ClipboardError},
+    AquaWindowId, ObservedWindowState, WindowEvent,
 };
-use aqua_protocol::{A11yNode, Input, Instant, Output};
+use aqua_protocol::{
+    A11yActionRequest, Instant, Machine, PixelSize, RuntimeInput, RuntimeOutput, ShellEvent,
+};
 use aqua_reactive::{DepTuple, Runtime as ReactiveRuntime, Scope};
-use aqua_render::Scene;
+use aqua_runtime::Runtime;
 use aqua_ui::element::Element;
 
 use crate::runtime::{AppCtx, Application, Aqua};
 
-pub use aqua_runtime::{Runtime as UiApp, RuntimeError as UiAppError};
+pub use aqua_runtime::RuntimeError as UiAppError;
 
-#[cfg(windows)]
-struct NativeImeClient(aqua_runtime::NativeTextService);
+pub struct UiApp {
+    inner: Runtime,
+    pending: RuntimeOutput,
+}
 
-#[cfg(windows)]
-impl aqua_platform::ime_windows::NativeImeClient for NativeImeClient {
-    fn selected_bounds(&self) -> Option<aqua_platform::services::ImeCursorArea> {
-        let bounds = self.0.selected_bounds()?;
-        Some(aqua_platform::services::ImeCursorArea {
-            origin: aqua_platform::geometry::LogicalPosition {
-                x: bounds.x as f64,
-                y: bounds.y as f64,
-            },
-            size: aqua_platform::geometry::LogicalSize::new(bounds.w as f64, bounds.h as f64),
-        })
+impl UiApp {
+    pub fn new(fonts: aqua_text::SharedFonts, runs: aqua_text::SharedRuns) -> Self {
+        Self::from_runtime(Runtime::new(fonts, runs))
     }
 
-    fn replace(&self, text: &str, selected: Option<std::ops::Range<usize>>) {
-        self.0.replace_utf16(text, selected);
+    pub fn from_runtime(inner: Runtime) -> Self {
+        Self {
+            inner,
+            pending: RuntimeOutput::default(),
+        }
+    }
+
+    pub fn into_runtime(self) -> Runtime {
+        self.inner
+    }
+
+    pub fn absorb(&mut self, output: RuntimeOutput) {
+        self.pending.merge(output);
+    }
+
+    pub fn drive(&mut self, input: RuntimeInput) {
+        let output = self.inner.step(input);
+        self.pending.merge(output);
+    }
+
+    pub fn scene_mut(&mut self) -> &mut aqua_scene::Scene {
+        self.inner.scene_mut()
+    }
+
+    pub fn a11y_nodes(
+        &self,
+    ) -> Option<(
+        aqua_core::NodeId,
+        aqua_core::NodeId,
+        Vec<aqua_protocol::A11yNode>,
+    )> {
+        self.inner.a11y_nodes()
+    }
+
+    pub fn chrome_regions(&self) -> Option<&aqua_protocol::DragRegions> {
+        self.inner.chrome_regions()
+    }
+
+    pub fn cursor(&self) -> aqua_core::CursorIcon {
+        self.inner.cursor()
+    }
+
+    pub fn flush_scene(&mut self) {
+        let diff = aqua_runtime::emit_scene_diff(self.inner.scene_mut());
+        if !diff.is_empty() {
+            self.pending
+                .render
+                .push(aqua_protocol::RenderCommand::Scene(diff));
+        }
+    }
+
+    pub fn take_pending(&mut self) -> RuntimeOutput {
+        std::mem::take(&mut self.pending)
+    }
+}
+
+impl Deref for UiApp {
+    type Target = Runtime;
+
+    fn deref(&self) -> &Runtime {
+        &self.inner
+    }
+}
+
+impl DerefMut for UiApp {
+    fn deref_mut(&mut self) -> &mut Runtime {
+        &mut self.inner
     }
 }
 
@@ -42,7 +103,7 @@ pub enum ClipboardOutcome {
 }
 
 pub fn dispatch_clipboard(
-    app: &mut UiApp,
+    app: &mut Runtime,
     clipboard: &mut dyn Clipboard,
     event: &CoreInputEvent,
 ) -> Result<ClipboardOutcome, ClipboardError> {
@@ -97,16 +158,8 @@ pub fn dispatch_clipboard(
     Ok(ClipboardOutcome::Unhandled)
 }
 
-pub fn dispatch_input_with_clipboard(
-    app: &mut UiApp,
-    clipboard: &mut dyn Clipboard,
-    event: &CoreInputEvent,
-) -> Result<Output, ClipboardError> {
-    dispatch_input_with_clipboard_outcome(app, clipboard, event).map(|result| result.output)
-}
-
 pub fn dispatch_input_with_clipboard_outcome(
-    app: &mut UiApp,
+    app: &mut Runtime,
     clipboard: &mut dyn Clipboard,
     event: &CoreInputEvent,
 ) -> Result<aqua_runtime::InputDispatchOutcome, ClipboardError> {
@@ -127,32 +180,10 @@ pub fn dispatch_input_with_clipboard_outcome(
     }
 }
 
-pub fn dispatch_input(
-    app: &mut UiApp,
-    ctx: &mut AppCtx,
-    id: AquaWindowId,
-    event: &CoreInputEvent,
-) -> bool {
-    let _ = app.step(Input::Tick(ctx.now()));
-    match dispatch_input_with_clipboard_outcome(app, ctx.clipboard(), event) {
-        Ok(outcome) => {
-            if !outcome.output.redraw.is_empty() {
-                ctx.request_input_redraw(id, outcome.output.redraw);
-            }
-            outcome.consumed
-        }
-        Err(error) => {
-            eprintln!("aqua: {error}");
-            true
-        }
-    }
-}
-
-fn request_redraw(ctx: &mut AppCtx, id: AquaWindowId, output: Result<Output, UiAppError>) {
-    if let Ok(output) = output {
-        if !output.redraw.is_empty() {
-            ctx.request_frame(id, output.redraw);
-        }
+fn physical(size: aqua_core::Size, scale: f32) -> PixelSize {
+    PixelSize {
+        width: (size.w * scale).round().max(1.0) as u32,
+        height: (size.h * scale).round().max(1.0) as u32,
     }
 }
 
@@ -161,55 +192,46 @@ impl Application for UiApp {
         &mut self,
         ctx: &mut AppCtx,
         id: AquaWindowId,
-        event: &aqua_platform::events::ExternalFileDrag,
+        event: &crate::runtime::ExternalFileDrag,
     ) {
-        use aqua_platform::events::ExternalFileDrag as Native;
-        use aqua_ui::input::ExternalFileDragEvent as Ui;
-        let event = match event {
-            Native::Enter { paths, position } => Ui::Enter {
-                paths: paths.clone(),
-                position: *position,
-            },
-            Native::Move { position } => Ui::Move {
-                position: *position,
-            },
-            Native::Submit { position } => Ui::Submit {
-                position: *position,
-            },
-            Native::Exit => Ui::Exit,
-        };
-        if self.external_file_drag(event) {
+        if self.inner.external_file_drag(event.clone()) {
             ctx.request_frame(id, aqua_protocol::FrameReason::INPUT);
         }
     }
+
     fn input_invalidation_epoch(&self, _id: AquaWindowId) -> u64 {
         self.tree().invalidation_epoch()
     }
 
     fn color_profile(&self) -> aqua_core::ColorProfile {
-        UiApp::color_profile(self)
+        self.inner.color_profile()
     }
 
     fn on_click_settings(&mut self, settings: aqua_core::ClickSettings) {
         self.set_click_settings(settings);
     }
-    fn cursor(&self) -> aqua_core::CursorIcon {
-        UiApp::cursor(self)
-    }
 
-    fn on_window_event(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, event: &WindowEvent) {
-        let viewport = match event {
+    fn on_window_event(&mut self, _ctx: &mut AppCtx, id: AquaWindowId, event: &WindowEvent) {
+        let resized = match event {
             WindowEvent::Resized(_, size) => Some((size.as_core_size(), self.scale())),
             WindowEvent::ScaleChanged(_, scale) => Some((self.viewport(), *scale as f32)),
             _ => None,
         };
-        if let Some((size, scale)) = viewport {
-            let _ = self.step(Input::Viewport { size, scale });
+        if let Some((size, scale)) = resized {
+            self.drive(RuntimeInput::Shell(ShellEvent::Resized {
+                window: id,
+                size: physical(size, scale),
+                scale,
+            }));
         }
     }
 
     fn on_input(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &CoreInputEvent) {
-        dispatch_input(self, ctx, id, event);
+        self.drive(RuntimeInput::Tick(ctx.now()));
+        self.drive(RuntimeInput::Shell(ShellEvent::Input {
+            window: id,
+            event: event.clone(),
+        }));
     }
 
     fn on_files_dropped(
@@ -235,64 +257,49 @@ impl Application for UiApp {
         }
     }
 
-    fn on_a11y_action(&mut self, ctx: &mut AppCtx, id: AquaWindowId, request: &A11yActionRequest) {
-        let output = self.step(Input::Access(request.clone()));
-        request_redraw(ctx, id, output);
-    }
-
-    fn ime_cursor_area(&self) -> Option<aqua_core::Rect> {
-        self.ime_anchor()
-    }
-
-    #[cfg(windows)]
-    fn native_ime_client(
-        &self,
-    ) -> Option<std::rc::Rc<dyn aqua_platform::ime_windows::NativeImeClient>> {
-        Some(std::rc::Rc::new(NativeImeClient(
-            self.native_text_service()?,
-        )))
-    }
-
-    fn chrome_regions(&self, _window: &ObservedWindowState) -> Option<DragRegions> {
-        UiApp::chrome_regions(self).cloned()
-    }
-
-    fn prepare_accessibility(
+    fn on_a11y_action(
         &mut self,
-        window: &ObservedWindowState,
-        now: Instant,
-    ) -> Option<Instant> {
-        self.build_scene(window, now)
+        _ctx: &mut AppCtx,
+        _id: AquaWindowId,
+        request: &A11yActionRequest,
+    ) {
+        self.drive(RuntimeInput::Access(request.clone()));
     }
 
-    fn a11y_nodes(&self) -> Option<(aqua_core::NodeId, aqua_core::NodeId, Vec<A11yNode>)> {
-        UiApp::a11y_nodes(self)
+    fn on_dialog(
+        &mut self,
+        _ctx: &mut AppCtx,
+        _id: AquaWindowId,
+        request: aqua_protocol::RequestId,
+        outcome: aqua_protocol::DialogOutcome,
+    ) {
+        self.drive(RuntimeInput::Shell(ShellEvent::Dialog { request, outcome }));
     }
 
     fn build_scene(&mut self, window: &ObservedWindowState, now: Instant) -> Option<Instant> {
-        let _ = self.step(Input::Viewport {
-            size: window.inner_size.as_core_size(),
-            scale: window.scale_factor as f32,
-        });
-        let stepped = self.step(Input::Frame(now));
+        self.drive(RuntimeInput::Tick(now));
+        let output = self.inner.step(RuntimeInput::Shell(ShellEvent::Frame {
+            window: window.id,
+            presentation: now,
+        }));
+        let wake = output.wake_at;
+        self.pending.merge(output);
         self.take_diagnostics()
             .iter()
             .for_each(|line| eprintln!("{line}"));
-        match stepped {
-            Ok(output) => output.wake_at,
-            Err(e) => {
-                eprintln!("aqua: build failed: {e}");
-                None
-            }
-        }
+        wake
     }
 
-    fn scene_mut(&mut self, _id: AquaWindowId) -> Option<&mut Scene> {
-        Some(UiApp::scene_mut(self))
+    fn step_input(&mut self, _id: AquaWindowId, input: RuntimeInput) {
+        self.drive(input);
+    }
+
+    fn take_output(&mut self, _id: AquaWindowId) -> RuntimeOutput {
+        self.take_pending()
     }
 
     fn reactive_runtime(&self) -> Option<&ReactiveRuntime> {
-        Some(self.runtime())
+        Some(self.inner.runtime())
     }
 }
 
@@ -317,38 +324,5 @@ impl Aqua {
         app.mount_reactive(deps, render)
             .map_err(|e| format!("ui mount failed: {e}"))?;
         self.run(app)
-    }
-}
-
-#[cfg(test)]
-mod chrome_regions_tests {
-    use super::*;
-    use aqua_platform::geometry::LogicalSize;
-    use aqua_text::{SharedFonts, SharedRuns};
-
-    fn observed() -> ObservedWindowState {
-        ObservedWindowState::new(
-            AquaWindowId::new(1).expect("test window id"),
-            "chrome-test".to_string(),
-            LogicalSize::new(800.0, 600.0),
-        )
-    }
-
-    #[test]
-    fn fixed_chrome_regions_round_trip_through_hook() {
-        let mut app = UiApp::new(SharedFonts::new(), SharedRuns::new());
-        assert!(Application::chrome_regions(&app, &observed()).is_none());
-        let regions = DragRegions {
-            draggable: vec![(0.0, 0.0, 200.0, 40.0)],
-            no_drag: vec![(160.0, 4.0, 196.0, 36.0)],
-            ..Default::default()
-        };
-        app.set_chrome_regions(Some(regions.clone()));
-        assert_eq!(
-            Application::chrome_regions(&app, &observed()),
-            Some(regions)
-        );
-        app.set_chrome_regions(None);
-        assert!(Application::chrome_regions(&app, &observed()).is_none());
     }
 }

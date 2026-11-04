@@ -2,15 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use aqua_core::DisplayItem;
 use aqua_core::{ImageId, InputEvent, NodeId, Rect};
-use aqua_platform::{
-    AquaWindowId, ObservedWindowState, WindowEvent, a11y::A11yActionRequest, chrome::DragRegions,
-};
-use aqua_protocol::{A11yNode, FrameReason, Instant};
-use aqua_render::{
-    DisplayItem, Scene,
-    media::{GpuImageCache, GpuMediaBudget},
-};
+use aqua_platform::{a11y::A11yActionRequest, AquaWindowId, ObservedWindowState, WindowEvent};
+use aqua_protocol::{FrameReason, Instant};
 
 use crate::{
     mailbox::Mailbox,
@@ -22,10 +17,9 @@ use super::{Data, ImageAssetError, ImageAssets};
 
 pub struct ImageFrame {
     pub layer: u64,
-    pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
-    pub gpui_source: Option<(u64, usize, Arc<[u8]>)>,
+    pub rgba: Arc<[u8]>,
 }
 
 pub struct ManagedUiApp {
@@ -33,9 +27,7 @@ pub struct ManagedUiApp {
     images: ImageAssets,
     mailbox: Mailbox<()>,
     _subscription: super::ImageSubscription,
-    gpu: GpuImageCache,
-    device: Option<wgpu::Device>,
-    resident: HashMap<ImageId, usize>,
+    resident: HashMap<ImageId, (usize, u64)>,
     visible: HashSet<ImageId>,
     scene_revision: Option<(u64, aqua_core::Size)>,
     started: HashMap<ImageId, Instant>,
@@ -45,8 +37,6 @@ pub struct ManagedUiApp {
     now: Instant,
     prepared: Option<(Instant, Option<Instant>)>,
     released: Vec<u64>,
-    gpui_assets: HashSet<ImageId>,
-    gpui_released: Vec<u64>,
 }
 
 struct PreviewInstance {
@@ -64,17 +54,11 @@ impl ManagedUiApp {
         let subscription = images.subscribe(Arc::new(move || {
             let _ = sender.send(());
         }));
-        let budget = images.budget();
         Self {
             ui,
             images,
             mailbox,
             _subscription: subscription,
-            gpu: GpuImageCache::new(GpuMediaBudget {
-                max_gpu_bytes: budget.gpu_bytes,
-                max_textures: budget.gpu_images,
-            }),
-            device: None,
             resident: HashMap::new(),
             visible: HashSet::new(),
             scene_revision: None,
@@ -85,19 +69,8 @@ impl ManagedUiApp {
             now: Instant::ZERO,
             prepared: None,
             released: Vec::new(),
-            gpui_assets: HashSet::new(),
-            gpui_released: Vec::new(),
         }
     }
-    pub fn dispatch_input(
-        &mut self,
-        ctx: &mut AppCtx,
-        id: AquaWindowId,
-        event: &InputEvent,
-    ) -> bool {
-        crate::ui_app::dispatch_input(&mut self.ui, ctx, id, event)
-    }
-
     pub fn ui(&self) -> &UiApp {
         &self.ui
     }
@@ -108,7 +81,7 @@ impl ManagedUiApp {
         &self.images
     }
     pub fn gpu_image_bytes(&self) -> u64 {
-        self.gpu.resident_bytes()
+        self.resident.values().map(|(_, bytes)| *bytes).sum()
     }
 
     fn source_id(&self, id: ImageId) -> ImageId {
@@ -277,7 +250,6 @@ impl ManagedUiApp {
     }
 
     fn release_gpu(&mut self, id: ImageId) {
-        self.gpu.release(id);
         if self.resident.remove(&id).is_some() {
             self.released.push(aqua_core::scene::media_layer(id));
         }
@@ -332,32 +304,9 @@ impl ManagedUiApp {
         }
     }
 
-    pub fn synchronize_images(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        now: Instant,
-    ) -> Result<Vec<ImageFrame>, ImageAssetError> {
+    pub fn synchronize_images(&mut self, now: Instant) -> Result<Vec<ImageFrame>, ImageAssetError> {
         self.collect_visible();
-        let stale_assets: Vec<_> = self
-            .gpui_assets
-            .iter()
-            .copied()
-            .filter(|id| self.images.ready(*id).is_none())
-            .collect();
-        for id in stale_assets {
-            self.gpui_assets.remove(&id);
-            self.gpui_released.push(aqua_core::scene::media_layer(id));
-        }
         let budget = self.images.budget();
-        if self.device.as_ref() != Some(device) {
-            self.gpu = GpuImageCache::new(GpuMediaBudget {
-                max_gpu_bytes: budget.gpu_bytes,
-                max_textures: budget.gpu_images,
-            });
-            self.resident.clear();
-            self.device = Some(device.clone());
-        }
         let released: Vec<_> = self
             .resident
             .keys()
@@ -378,20 +327,18 @@ impl ManagedUiApp {
                 continue;
             };
             let (index, _) = self.selected_frame(id, &data, now);
-            if self.resident.get(&id) == Some(&index) {
+            if self.resident.get(&id).map(|(frame, _)| *frame) == Some(index) {
                 continue;
             }
             let image = match &data {
                 Data::Still(image) => image.as_ref(),
                 Data::Animation(animation) => &animation.frames()[index].image,
             };
-            let bytes =
-                u64::from((image.width() * 4).div_ceil(256) * 256) * u64::from(image.height());
-            let previous_bytes = self.gpu.view(id).map_or(0, |image| image.bytes);
+            let bytes = u64::from(image.width()) * u64::from(image.height()) * 4;
+            let previous_bytes = self.resident.get(&id).map_or(0, |(_, bytes)| *bytes);
             let new_count = self.resident.len() + usize::from(!self.resident.contains_key(&id));
             if self
-                .gpu
-                .resident_bytes()
+                .gpu_image_bytes()
                 .saturating_sub(previous_bytes)
                 .saturating_add(bytes)
                 > budget.gpu_bytes
@@ -403,40 +350,13 @@ impl ManagedUiApp {
                 failure = Some(ImageAssetError::OverBudget);
                 continue;
             }
-            let precision = match self.ui.color_profile() {
-                aqua_core::ColorProfile::AquaLinear => aqua_render::media::ImagePrecision::Linear8,
-                aqua_core::ColorProfile::GpuiWindowsEncoded => {
-                    aqua_render::media::ImagePrecision::Encoded8
-                }
-            };
-            let gpui_source =
-                (precision == aqua_render::media::ImagePrecision::Encoded8).then(|| {
-                    (
-                        aqua_core::scene::media_layer(source),
-                        index,
-                        Arc::from(image.pixels()),
-                    )
-                });
-            match self.gpu.upload_precise(device, queue, id, image, precision) {
-                Ok(image) => {
-                    frames.push(ImageFrame {
-                        layer: aqua_core::scene::media_layer(id),
-                        view: image.view.clone(),
-                        width: image.width,
-                        height: image.height,
-                        gpui_source,
-                    });
-                    if precision == aqua_render::media::ImagePrecision::Encoded8 {
-                        self.gpui_assets.insert(source);
-                    }
-                    self.resident.insert(id, index);
-                }
-                Err(error) => {
-                    self.images.fail_upload(source, error.to_string());
-                    self.release_gpu(id);
-                    failure = Some(ImageAssetError::Upload(error.to_string()));
-                }
-            }
+            frames.push(ImageFrame {
+                layer: aqua_core::scene::media_layer(id),
+                width: image.width(),
+                height: image.height(),
+                rgba: Arc::from(image.pixels()),
+            });
+            self.resident.insert(id, (index, bytes));
         }
         self.started
             .retain(|id, _| self.images.ready(*id).is_some());
@@ -476,8 +396,23 @@ impl Application for ManagedUiApp {
     fn on_frame_completed(&mut self, ctx: &mut AppCtx, id: AquaWindowId, sequence: u64) {
         self.ui.on_frame_completed(ctx, id, sequence);
     }
-    fn cursor(&self) -> aqua_core::CursorIcon {
-        self.ui.cursor()
+    fn cursor(&self) -> Option<aqua_core::CursorIcon> {
+        None
+    }
+    fn step_input(&mut self, id: AquaWindowId, input: aqua_protocol::RuntimeInput) {
+        self.ui.step_input(id, input);
+    }
+    fn take_output(&mut self, id: AquaWindowId) -> aqua_protocol::RuntimeOutput {
+        self.ui.take_output(id)
+    }
+    fn on_dialog(
+        &mut self,
+        ctx: &mut AppCtx,
+        id: AquaWindowId,
+        request: aqua_protocol::RequestId,
+        outcome: aqua_protocol::DialogOutcome,
+    ) {
+        self.ui.on_dialog(ctx, id, request, outcome);
     }
     fn on_window_event(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &WindowEvent) {
         if matches!(event, WindowEvent::Focused(_, false)) {
@@ -513,7 +448,7 @@ impl Application for ManagedUiApp {
         &mut self,
         ctx: &mut AppCtx<'_>,
         id: AquaWindowId,
-        event: &aqua_platform::events::ExternalFileDrag,
+        event: &crate::runtime::ExternalFileDrag,
     ) {
         self.ui.on_external_file_drag(ctx, id, event);
     }
@@ -527,32 +462,17 @@ impl Application for ManagedUiApp {
     ) -> Option<Instant> {
         self.ui.prepare_accessibility(window, now)
     }
-    fn a11y_nodes(&self) -> Option<(NodeId, NodeId, Vec<A11yNode>)> {
-        self.ui.a11y_nodes()
-    }
-    fn ime_cursor_area(&self) -> Option<Rect> {
-        self.ui.ime_anchor()
-    }
-    fn chrome_regions(&self, window: &ObservedWindowState) -> Option<DragRegions> {
-        Application::chrome_regions(&self.ui, window)
-    }
     fn externals(&mut self, frame: &mut ExternalFrame<'_>) {
         let deadline = self.build_scene(frame.window, frame.now);
         self.prepared = Some((frame.now, deadline));
-        let images = self.synchronize_images(frame.device, frame.queue, frame.now);
+        let images = self.synchronize_images(frame.now);
         for layer in self.take_released_images() {
             frame.unregister_external(layer);
-        }
-        for asset in self.gpui_released.drain(..) {
-            frame.release_gpui_image(asset);
         }
         match images {
             Ok(images) => {
                 for image in images {
-                    frame.register_external(image.layer, image.view, image.width, image.height);
-                    if let Some((asset, index, rgba)) = image.gpui_source {
-                        frame.register_gpui_image(image.layer, asset, index, rgba);
-                    }
+                    frame.register_image(image.layer, image.width, image.height, image.rgba);
                 }
             }
             Err(error) => eprintln!("aqua: {error}"),
@@ -573,6 +493,7 @@ impl Application for ManagedUiApp {
         self.images.flush_notifications();
         let mut next = self.ui.build_scene(window, now);
         self.prepare_preview_instances();
+        self.ui.flush_scene();
         self.collect_visible();
         let visible: Vec<_> = self.visible.iter().copied().collect();
         for id in visible {
@@ -583,9 +504,6 @@ impl Application for ManagedUiApp {
             }
         }
         next
-    }
-    fn scene_mut(&mut self, _id: AquaWindowId) -> Option<&mut Scene> {
-        Some(self.ui.scene_mut())
     }
     fn reactive_runtime(&self) -> Option<&aqua_reactive::Runtime> {
         Some(self.ui.runtime())

@@ -6,11 +6,11 @@ use aqua_protocol::{
 };
 use aqua_runtime::RenderSide;
 
-use crate::ring::{Notify, Receiver, RecvError, Sender, channel_with_notify};
+use crate::ring::{channel_with_notify, Notify, Receiver, RecvError, Sender};
 
 const DRAIN_LIMIT: usize = 4096;
 
-pub trait RenderHost: Send + 'static {
+pub trait RenderHost: 'static {
     fn present_time(&mut self) -> Instant;
     fn wait_frame(&mut self);
     fn execute(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback>;
@@ -52,14 +52,23 @@ impl RenderThread {
     }
 }
 
-pub fn spawn_render_thread<H: RenderHost>(
+pub fn spawn_render_thread<H: RenderHost + Send>(
     capacity: usize,
-    mut host: H,
+    host: H,
+    wake_app: Notify,
+) -> RenderThread {
+    spawn_render_thread_with(capacity, move || host, wake_app)
+}
+
+pub fn spawn_render_thread_with<H: RenderHost>(
+    capacity: usize,
+    build: impl FnOnce() -> H + Send + 'static,
     wake_app: Notify,
 ) -> RenderThread {
     let (command_tx, mut command_rx) = crate::ring::channel::<RenderCommand>(capacity);
     let (mut event_tx, event_rx) = channel_with_notify::<RenderEvent>(capacity, wake_app);
     let handle = thread::spawn(move || {
+        let mut host = build();
         let mut side = RenderSide::new();
         let mut feedback: Vec<Feedback> = Vec::new();
         let mut wake = RenderWake::NextFrame;
@@ -72,9 +81,17 @@ pub fn spawn_render_thread<H: RenderHost>(
                     Err(RecvError::Disconnected) => break,
                     Err(_) => continue,
                 },
-                (true, RenderWake::NextFrame) => host.wait_frame(),
-                (true, RenderWake::At(_)) | (false, _) => {}
+                (true, RenderWake::At(at)) => {
+                    let remaining = at.saturating_duration_since(host.present_time());
+                    match command_rx.recv_timeout(Some(remaining)) {
+                        Ok(command) => commands.push(command),
+                        Err(RecvError::Disconnected) => break,
+                        Err(_) => {}
+                    }
+                }
+                (true, RenderWake::NextFrame) | (false, _) => {}
             }
+            host.wait_frame();
             commands.extend(command_rx.drain(DRAIN_LIMIT));
             let input = RenderInput {
                 commands,

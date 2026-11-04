@@ -7,6 +7,15 @@ description = "Aqua transport: in-process SPSC ring and render thread driver"
 
 [dependencies]
 aqua-core = { path = "../aqua-core" }
+aqua-graph = { path = "../aqua-graph" }
 aqua-motion = { path = "../aqua-motion" }
 aqua-protocol = { path = "../aqua-protocol" }
 aqua-runtime = { path = "../aqua-runtime" }
+aqua-scene = { path = "../aqua-scene" }
+
+[dev-dependencies]
+aqua-gpu-ref = { path = "../aqua-gpu-ref" }
+
+[target.'cfg(windows)'.dev-dependencies]
+aqua-gpu-d3d12 = { path = "../aqua-gpu-d3d12" }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

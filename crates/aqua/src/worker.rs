@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
 use aqua_reactive::FetchTicket;

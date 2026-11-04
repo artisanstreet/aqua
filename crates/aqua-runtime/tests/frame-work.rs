@@ -2,7 +2,7 @@ use aqua_core::{DisplayItem, NodeId};
 use aqua_runtime::Runtime;
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::element::ui::{Box as UiBox, Text as UiText};
-use aqua_ui::style::{px, Axis, Style};
+use aqua_ui::style::{Axis, Style, px};
 use aqua_ui::tree::NodeKind;
 
 fn transcript() -> (Runtime, Vec<NodeId>) {
@@ -158,8 +158,8 @@ fn changing_selection_preserves_base_scene_ids_and_paints_behind_glyphs() {
 fn loading_a_font_invalidates_idle_text_layout_and_run_revisions() {
     let fonts = SharedFonts::new();
     let bytes = {
-        let manager = fonts.lock();
-        let face = manager.font_system().db().faces().next().unwrap().id;
+        let mut manager = fonts.lock();
+        let face = manager.first_face().unwrap();
         manager.export_face_data(face).unwrap()
     };
     let mut runtime = Runtime::new(fonts.clone(), SharedRuns::new());
@@ -289,4 +289,19 @@ fn control_word_and_document_selection_reuse_the_entire_transcript_scene() {
         assert_eq!(work.text_runs_shaped, 0);
         assert_eq!(work.tree_scene_ops_emitted, 0);
     }
+}
+
+#[test]
+fn zz_probe() {
+    let (mut runtime, nodes) = transcript();
+    runtime.advance_clock(1.0);
+    runtime.build_frame().unwrap();
+    eprintln!("idle {:?}", runtime.frame_work());
+    runtime
+        .tree_mut()
+        .set_text(nodes[999], "changed".to_string());
+    runtime.build_frame().unwrap();
+    eprintln!("stream {:?}", runtime.frame_work());
+    runtime.build_frame().unwrap();
+    eprintln!("after {:?}", runtime.frame_work());
 }

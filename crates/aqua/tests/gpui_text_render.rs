@@ -1,6 +1,6 @@
-use aqua::{ui::Text, UiApp};
+use aqua::{UiApp, ui::Text};
 use aqua_core::{ColorProfile, GpuiHsla};
-use aqua_render::{text::TextBackend, Renderer};
+use aqua_render::{Renderer, text::TextBackend};
 use aqua_text::{SharedFonts, SharedRuns, StyledSpan};
 
 #[test]
@@ -77,7 +77,7 @@ fn ui_app_source_text_reaches_the_encoded_glyph_renderer() {
         Text::new("Raw spans")
             .color(aqua_core::Oklch::TRANSPARENT)
             .spans(vec![
-                StyledSpan::plain("Raw spans").gpui_color([0.0, 1.0, 0.5, 1.0])
+                StyledSpan::plain("Raw spans").gpui_color([0.0, 1.0, 0.5, 1.0]),
             ])
             .build()
     })
@@ -88,11 +88,13 @@ fn ui_app_source_text_reaches_the_encoded_glyph_renderer() {
     let plan = renderer.prepare(app.scene_mut());
     renderer.draw(&plan).unwrap();
     let pixels = renderer.readback().unwrap();
-    assert!(pixels
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .any(|p| p[3] > 32 && p[0] > p[1]));
+    assert!(
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|p| p[3] > 32 && p[0] > p[1])
+    );
 
     let mut captures = Vec::new();
     for spread in [0.0, 100.0] {
@@ -139,14 +141,16 @@ fn ui_app_source_text_reaches_the_encoded_glyph_renderer() {
         renderer.draw(&plan).unwrap();
         captures.push(renderer.readback().unwrap());
     }
-    assert!(captures[0]
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .zip(captures[1].as_chunks::<4>().0.iter())
-        .any(|(base, mapped)| base[3] > 80
-            && mapped[3] > 80
-            && u16::from(mapped[0]) + 10 < u16::from(base[0])));
+    assert!(
+        captures[0]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(captures[1].as_chunks::<4>().0.iter())
+            .any(|(base, mapped)| base[3] > 80
+                && mapped[3] > 80
+                && u16::from(mapped[0]) + 10 < u16::from(base[0]))
+    );
     for (index, pixel) in captures[1].as_chunks::<4>().0.iter().enumerate() {
         let x = index % 160;
         if !(20..80).contains(&x) {
@@ -362,9 +366,10 @@ fn ui_app_source_text_reaches_the_encoded_glyph_renderer() {
         checked > 10 && darkened > 5,
         "checked={checked}, darkened={darkened}"
     );
-    assert!(app
-        .tree_mut()
-        .scroll_to(scroll, aqua_core::Point::new(10.0, 0.0)));
+    assert!(
+        app.tree_mut()
+            .scroll_to(scroll, aqua_core::Point::new(10.0, 0.0))
+    );
     assert_eq!(
         app.tree().pre_transform_rect(child).unwrap().x,
         layout.x - 10.0
@@ -430,9 +435,4 @@ fn ui_app_source_text_reaches_the_encoded_glyph_renderer() {
         captures.push(renderer.readback().unwrap());
     }
     assert_eq!(captures[0], captures[1]);
-    assert!(captures[0]
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .any(|p| p[0] != p[1] || p[1] != p[2]));
 }

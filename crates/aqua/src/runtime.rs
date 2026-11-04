@@ -9,18 +9,18 @@ use aqua_core::{Modifiers as CoreModifiers, PointerKind};
 use aqua_platform::a11y_winit::A11yAdapter;
 use aqua_platform::chrome::DragRegions;
 use aqua_platform::events::{
-    ime_is_composing, pointer_contact, to_core_point, translate_file_event, translate_ime_core,
-    translate_key_event, translate_modifiers, translate_mouse_button_core,
-    window_event_frame_reason, FileDrop,
+    FileDrop, ime_is_composing, pointer_contact, to_core_point, translate_file_event,
+    translate_ime_core, translate_key_event, translate_modifiers, translate_mouse_button_core,
+    window_event_frame_reason,
 };
 use aqua_platform::host::{
     control_flow_for_next_wakeup, surface_signal, translate_window_event, window_attributes,
 };
 use aqua_platform::{
-    a11y::{A11yActionRequest, A11yNode},
-    prefs::{prefers_opaque_frame, query_preferences, OsPreferences},
-    services::{app_clipboard, Clipboard, ClipboardBackend},
     AquaWindowId, FrameReason, ObservedWindowState, WindowEvent, WindowOptions, WindowRequest,
+    a11y::{A11yActionRequest, A11yNode},
+    prefs::{OsPreferences, prefers_opaque_frame, query_preferences},
+    services::{Clipboard, ClipboardBackend, app_clipboard},
 };
 use aqua_protocol::Instant;
 use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
@@ -98,6 +98,54 @@ impl ExternalFrame<'_> {
     }
 }
 
+fn apply_external_updates(renderer: &mut Renderer, updates: Vec<ExternalUpdate>) {
+    for update in updates {
+        match update {
+            ExternalUpdate::Register(layer, view, width, height) => {
+                renderer.register_external(layer, view, width, height)
+            }
+            ExternalUpdate::RegisterGpuiImage(layer, asset, frame, rgba) => {
+                renderer.register_gpui_image(layer, asset, frame, rgba);
+            }
+            ExternalUpdate::ReleaseGpuiImage(asset) => {
+                renderer.release_gpui_image(asset);
+            }
+            ExternalUpdate::Remove(layer) => {
+                renderer.unregister_external(layer);
+            }
+        }
+    }
+}
+
+pub fn run_headless_externals<A: Application>(
+    app: &mut A,
+    renderer: &mut Renderer,
+    window: &ObservedWindowState,
+    now: Instant,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) {
+    let scale = window.scale_factor as f32;
+    let width = ((window.inner_size.width as f32) * scale).round().max(1.0) as u32;
+    let height = ((window.inner_size.height as f32) * scale).round().max(1.0) as u32;
+    let mut updates = Vec::new();
+    let mut register = |update| updates.push(update);
+    let mut frame = ExternalFrame {
+        window,
+        now,
+        device,
+        queue,
+        color_format: renderer.format(),
+        width,
+        height,
+        scale,
+        gpui_meshes_supported: renderer.supports_gpui_meshes(),
+        register: &mut register,
+    };
+    app.externals(&mut frame);
+    apply_external_updates(renderer, updates);
+}
+
 struct WindowRecord {
     observed: ObservedWindowState,
     last_invalidating_input: Option<Instant>,
@@ -113,6 +161,7 @@ struct WindowRecord {
     window: Option<Arc<winit::window::Window>>,
     chrome_overlay: bool,
     last_regions: Option<(DragRegions, f64)>,
+    pressed_caption: Option<aqua_platform::chrome::CaptionControl>,
     gpu: Option<GpuWindow>,
     cursor: Option<(f64, f64)>,
     buttons: u8,
@@ -222,9 +271,9 @@ impl AppCtx<'_> {
         request: aqua_platform::dialogs::DialogRequest,
     ) -> Result<
         impl std::future::Future<
-                Output = Result<Vec<std::path::PathBuf>, aqua_platform::dialogs::DialogError>,
-            > + Send
-            + 'static,
+            Output = Result<Vec<std::path::PathBuf>, aqua_platform::dialogs::DialogError>,
+        > + Send
+        + 'static,
         aqua_platform::window::WindowError,
     > {
         use aqua_platform::window::WindowError;
@@ -258,7 +307,7 @@ impl AppCtx<'_> {
         match &request {
             WindowRequest::Create(options) => options.validated()?,
             WindowRequest::SetTitle(_, title) if title.contains('\0') => {
-                return Err(aqua_platform::window::WindowError::InvalidTitle)
+                return Err(aqua_platform::window::WindowError::InvalidTitle);
             }
             WindowRequest::SetInnerSize(_, size)
                 if size.is_empty() || !size.width.is_finite() || !size.height.is_finite() =>
@@ -278,7 +327,11 @@ impl AppCtx<'_> {
         self.now
     }
 
+    #[track_caller]
     pub fn request_frame(&mut self, id: AquaWindowId, reason: FrameReason) {
+        if std::env::var_os("AQUA_TRACE_REQ").is_some() {
+            eprintln!("req-frame {} {:?}", std::panic::Location::caller(), reason);
+        }
         self.requested_frames.insert(id);
         self.scheduler.request_frame(id, reason);
     }
@@ -472,9 +525,83 @@ pub struct Aqua {
     clipboard_backend: ClipboardBackend,
     smoke_frames: Option<u64>,
     frames_presented: u64,
+    frame_stats: Option<FrameStats>,
     smoke_deadline: Option<WallInstant>,
     epoch: WallInstant,
     wakeups: u64,
+}
+
+struct FrameStats {
+    window_start: WallInstant,
+    frames: u32,
+    cpu_total: Duration,
+    cpu_max: Duration,
+    submit_total: Duration,
+    submit_max: Duration,
+    build_total: Duration,
+    build_max: Duration,
+    per_frame: bool,
+}
+
+impl FrameStats {
+    fn from_environment() -> Option<Self> {
+        std::env::var_os("AQUA_FRAME_STATS")
+            .is_some_and(|value| value == "1")
+            .then(|| Self {
+                window_start: WallInstant::now(),
+                frames: 0,
+                cpu_total: Duration::ZERO,
+                cpu_max: Duration::ZERO,
+                submit_total: Duration::ZERO,
+                submit_max: Duration::ZERO,
+                build_total: Duration::ZERO,
+                build_max: Duration::ZERO,
+                per_frame: std::env::var_os("AQUA_PERF").is_some_and(|value| value == "1"),
+            })
+    }
+
+    fn record(&mut self, cpu: Duration, submit: Duration, build: Duration) {
+        if self.per_frame {
+            let unix_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_millis());
+            eprintln!(
+                "aqua-perf-frame: unix_ms={unix_ms} cpu_ms={:.2} build_ms={:.2} submit_ms={:.2}",
+                cpu.as_secs_f64() * 1000.0,
+                build.as_secs_f64() * 1000.0,
+                submit.as_secs_f64() * 1000.0,
+            );
+        }
+        self.build_total += build;
+        self.build_max = self.build_max.max(build);
+        self.frames += 1;
+        self.cpu_total += cpu;
+        self.cpu_max = self.cpu_max.max(cpu);
+        self.submit_total += submit;
+        self.submit_max = self.submit_max.max(submit);
+        let elapsed = self.window_start.elapsed();
+        if elapsed >= Duration::from_secs(1) {
+            let frames = self.frames.max(1);
+            eprintln!(
+                "aqua-frame-stats: frames={} cpu_avg_ms={:.2} cpu_max_ms={:.2} submit_avg_ms={:.2} submit_max_ms={:.2} build_avg_ms={:.2} build_max_ms={:.2}",
+                self.frames,
+                self.cpu_total.as_secs_f64() * 1000.0 / f64::from(frames),
+                self.cpu_max.as_secs_f64() * 1000.0,
+                self.submit_total.as_secs_f64() * 1000.0 / f64::from(frames),
+                self.submit_max.as_secs_f64() * 1000.0,
+                self.build_total.as_secs_f64() * 1000.0 / f64::from(frames),
+                self.build_max.as_secs_f64() * 1000.0,
+            );
+            self.build_total = Duration::ZERO;
+            self.build_max = Duration::ZERO;
+            self.window_start = WallInstant::now();
+            self.frames = 0;
+            self.cpu_total = Duration::ZERO;
+            self.cpu_max = Duration::ZERO;
+            self.submit_total = Duration::ZERO;
+            self.submit_max = Duration::ZERO;
+        }
+    }
 }
 
 impl Aqua {
@@ -544,6 +671,7 @@ impl Aqua {
             wakeups: 0,
             smoke_frames,
             frames_presented: 0,
+            frame_stats: FrameStats::from_environment(),
         })
     }
 
@@ -594,6 +722,17 @@ impl Aqua {
         }
     }
 
+    pub fn dispatch_frame_completed(
+        &mut self,
+        app: &mut impl Application,
+        id: AquaWindowId,
+        sequence: u64,
+    ) {
+        if self.windows.contains_key(&id) {
+            self.with_ctx(|ctx| app.on_frame_completed(ctx, id, sequence));
+        }
+    }
+
     pub fn dispatch_window_requests(&mut self, app: &mut impl Application) {
         let requests: Vec<_> = self.window_requests.drain(..).collect();
         for request in requests {
@@ -630,7 +769,7 @@ impl Aqua {
         use aqua_platform::window::WindowError;
         let id = match request {
             WindowRequest::Create(_) => {
-                return Err(WindowError::Unsupported("requires active event loop"))
+                return Err(WindowError::Unsupported("requires active event loop"));
             }
             WindowRequest::SetTitle(id, _)
             | WindowRequest::SetInnerSize(id, _)
@@ -878,6 +1017,7 @@ impl Aqua {
                 chrome: None,
                 chrome_overlay: false,
                 last_regions: None,
+                pressed_caption: None,
                 window: None,
                 gpu: None,
                 cursor: None,
@@ -946,9 +1086,21 @@ impl Aqua {
         event: &CoreInputEvent,
     ) -> bool {
         let count_activity = !matches!(event, CoreInputEvent::Focused(_));
-        self.dispatch_attributed_input(app, id, count_activity, |app, ctx| {
+        let started = WallInstant::now();
+        let result = self.dispatch_attributed_input(app, id, count_activity, |app, ctx| {
             app.on_input(ctx, id, event)
-        })
+        });
+        if self.frame_stats.is_some() {
+            let elapsed = started.elapsed();
+            if elapsed >= Duration::from_millis(2) {
+                eprintln!(
+                    "aqua-input-slow: {:.2}ms {:?}",
+                    elapsed.as_secs_f64() * 1000.0,
+                    std::mem::discriminant(event)
+                );
+            }
+        }
+        result
     }
 
     fn dispatch_attributed_input<A: Application>(
@@ -1137,6 +1289,55 @@ struct Loop<A: Application> {
 }
 
 impl<A: Application> Loop<A> {
+    #[cfg(not(windows))]
+    fn client_chrome_pointer(&mut self, id: AquaWindowId, pressed: bool) {
+        use aqua_platform::chrome::{CaptionControl, ClientChromeHit, client_chrome_hit};
+        let Some(record) = self.aqua.windows.get_mut(&id) else {
+            return;
+        };
+        if record.chrome_overlay {
+            return;
+        }
+        let hit = match (&record.last_regions, record.cursor) {
+            (Some((regions, _)), Some((x, y))) => client_chrome_hit(regions, x, y),
+            _ => ClientChromeHit::Client,
+        };
+        let request = match (pressed, hit) {
+            (true, ClientChromeHit::Drag) => {
+                if let Some(window) = record.window.as_ref() {
+                    let _ = window.drag_window();
+                }
+                None
+            }
+            (true, ClientChromeHit::Caption(control)) => {
+                record.pressed_caption = Some(control);
+                None
+            }
+            (false, ClientChromeHit::Caption(control)) => {
+                (record.pressed_caption.take() == Some(control)).then_some(control)
+            }
+            (false, _) => {
+                record.pressed_caption = None;
+                None
+            }
+            (true, ClientChromeHit::Client) => None,
+        };
+        let maximized = record.observed.maximized;
+        let request = request.map(|control| match control {
+            CaptionControl::Minimize => WindowRequest::SetMinimized(id, true),
+            CaptionControl::Maximize => WindowRequest::SetMaximized(id, !maximized),
+            CaptionControl::Close => WindowRequest::Close(id),
+        });
+        if let Some(request) = request {
+            if let Err(error) = self.aqua.apply_window_request(&mut self.app, &request) {
+                self.app.on_window_request_error(&request, &error);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn client_chrome_pointer(&mut self, _id: AquaWindowId, _pressed: bool) {}
+
     fn process_window_requests(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let requests: Vec<_> = self.aqua.window_requests.drain(..).collect();
         for request in requests {
@@ -1251,6 +1452,7 @@ impl<A: Application> Loop<A> {
                 chrome,
                 chrome_overlay,
                 last_regions: None,
+                pressed_caption: None,
                 window: Some(window.clone()),
                 gpu: None,
                 cursor: None,
@@ -1328,7 +1530,8 @@ impl<A: Application> Loop<A> {
             return Ok(());
         }
         let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_desc.backends = wgpu::Backends::all();
+        instance_desc.backends = wgpu::Backends::from_env().unwrap_or_else(default_backends);
+        instance_desc.flags = wgpu::InstanceFlags::empty().with_env();
         #[cfg(windows)]
         if self
             .aqua
@@ -1352,6 +1555,10 @@ impl<A: Application> Loop<A> {
             apply_limit_buckets: false,
         }))
         .map_err(|e| format!("no usable GPU adapter (software fallback unresolved): {e:?}"))?;
+        if std::env::var_os("AQUA_FRAME_STATS").is_some() {
+            let info = adapter.get_info();
+            eprintln!("aqua: adapter {} ({:?})", info.name, info.backend);
+        }
         let required_features = match self.app.color_profile() {
             aqua_core::ColorProfile::GpuiWindowsEncoded => {
                 wgpu::Features::DUAL_SOURCE_BLENDING | wgpu::Features::CLIP_DISTANCES
@@ -1409,8 +1616,17 @@ impl<A: Application> Loop<A> {
             .create_surface(window.clone())
             .map_err(|e| format!("surface creation failed: {e:?}"))?;
         let profile = self.app.color_profile();
-        let preferred_format = (profile == aqua_core::ColorProfile::GpuiWindowsEncoded)
-            .then_some(wgpu::TextureFormat::Bgra8Unorm);
+        let preferred_format =
+            (profile == aqua_core::ColorProfile::GpuiWindowsEncoded).then(|| {
+                let formats = surface.get_capabilities(&gpu.adapter).formats;
+                [
+                    wgpu::TextureFormat::Bgra8Unorm,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                ]
+                .into_iter()
+                .find(|format| formats.contains(format))
+                .unwrap_or(wgpu::TextureFormat::Bgra8Unorm)
+            });
         let facade = SurfaceFacade::with_adapter(
             &gpu.device,
             &gpu.adapter,
@@ -1422,7 +1638,7 @@ impl<A: Application> Loop<A> {
         )
         .map_err(|e| format!("surface configuration failed: {e:?}"))?;
         if preferred_format.is_some_and(|format| facade.format() != format) {
-            return Err("GPUI encoded color requires a BGRA8 unorm surface".into());
+            return Err("GPUI encoded color requires a BGRA8 or RGBA8 unorm surface".into());
         }
         if self
             .aqua
@@ -1504,6 +1720,11 @@ impl<A: Application> Loop<A> {
         let ids: Vec<AquaWindowId> = ready.iter().map(|(id, _)| *id).collect();
         self.aqua.scheduler.mark_produced(&ids, now);
         for (id, reasons) in ready {
+            if self.aqua.frame_stats.is_some() {
+                eprintln!("aqua-reason: {reasons:?}");
+            }
+            let frame_started = WallInstant::now();
+            let mut build_time = Duration::ZERO;
             let occluded = self
                 .aqua
                 .windows
@@ -1554,26 +1775,13 @@ impl<A: Application> Loop<A> {
                         register: &mut register,
                     };
                     self.app.externals(&mut frame);
-                    for update in updates {
-                        match update {
-                            ExternalUpdate::Register(layer, view, width, height) => {
-                                gpu.renderer.register_external(layer, view, width, height)
-                            }
-                            ExternalUpdate::RegisterGpuiImage(layer, asset, frame, rgba) => {
-                                gpu.renderer.register_gpui_image(layer, asset, frame, rgba);
-                            }
-                            ExternalUpdate::ReleaseGpuiImage(asset) => {
-                                gpu.renderer.release_gpui_image(asset);
-                            }
-                            ExternalUpdate::Remove(layer) => {
-                                gpu.renderer.unregister_external(layer);
-                            }
-                        }
-                    }
+                    apply_external_updates(&mut gpu.renderer, updates);
                 }
+                let build_started = WallInstant::now();
                 if let Some(t) = self.app.build_scene(&observed, now) {
                     self.aqua.scheduler.request_animation_deadline(id, t);
                 }
+                build_time = build_started.elapsed();
                 {
                     let next = self.app.chrome_regions(&observed);
                     let scale = observed.scale_factor;
@@ -1648,7 +1856,7 @@ impl<A: Application> Loop<A> {
                     let area = self.app.ime_cursor_area();
                     if let Some(rec) = self.aqua.windows.get(&id) {
                         if let Some(window) = rec.window.as_ref() {
-                            use aqua_platform::services::{set_ime_cursor_area, ImeCursorArea};
+                            use aqua_platform::services::{ImeCursorArea, set_ime_cursor_area};
                             let cursor = self.app.cursor();
                             window.set_cursor_visible(cursor != aqua_core::CursorIcon::Hidden);
                             window.set_cursor(aqua_platform::host::to_winit_cursor(cursor));
@@ -1706,10 +1914,12 @@ impl<A: Application> Loop<A> {
                 Skipped,
                 Failed { message: String, held: u32 },
             }
+            let submit_started = WallInstant::now();
             let drawn = match self.app.scene_mut(id) {
                 Some(scene) => gpu.surface.acquire_and_draw(&mut gpu.renderer, scene),
                 None => Ok(false),
             };
+            let submit_time = submit_started.elapsed();
             let outcome = match drawn {
                 Ok(true) => {
                     if rec.snapshot_pending {
@@ -1745,13 +1955,17 @@ impl<A: Application> Loop<A> {
                 now,
             );
             let pulse_delay = gpu.renderer.has_gpui_quad_pulse().then_some(interval);
-            let shimmer_delay = gpu.renderer.gpui_shimmer_delay().map(|delay| {
-                if delay.is_zero() {
-                    interval
-                } else {
-                    delay
-                }
-            });
+            let shimmer_delay = gpu
+                .renderer
+                .gpui_shimmer_delay()
+                .map(|delay| if delay.is_zero() { interval } else { delay });
+            if self.aqua.frame_stats.is_some() {
+                eprintln!(
+                    "aqua-pulse-src: quad={} shimmer={:?}",
+                    pulse_delay.is_some(),
+                    shimmer_delay
+                );
+            }
             if let Some(delay) = pulse_delay.into_iter().chain(shimmer_delay).min() {
                 self.aqua
                     .scheduler
@@ -1764,6 +1978,29 @@ impl<A: Application> Loop<A> {
                         let _ = tx.send((id, seq));
                     }
                     self.aqua.frames_presented += 1;
+                    let cpu_time = frame_started.elapsed();
+                    if let Some(stats) = self.aqua.frame_stats.as_mut() {
+                        stats.record(cpu_time, submit_time, build_time);
+                    }
+                    if self.aqua.frames_presented.is_multiple_of(120)
+                        && self.aqua.frame_stats.is_some()
+                    {
+                        if let Some(gpu) = self.aqua.shared_gpu.as_ref() {
+                            let report = gpu.device.generate_allocator_report();
+                            let counters = gpu.device.get_internal_counters();
+                            eprintln!(
+                                "aqua-mem: frames={} allocator={:?} {} {:?}",
+                                self.aqua.frames_presented,
+                                report.map(|r| (
+                                    r.total_allocated_bytes,
+                                    r.total_reserved_bytes,
+                                    r.blocks.len()
+                                )),
+                                crate::mem_probe::summary(),
+                                counters.hal.buffers
+                            );
+                        }
+                    }
                     if let Some(budget) = self.aqua.smoke_frames {
                         if self.aqua.frames_presented >= budget {
                             eprintln!(
@@ -1984,6 +2221,9 @@ impl<A: Application> Loop<A> {
                     _ => 0x08,
                 };
                 let pressed = state == winit::event::ElementState::Pressed;
+                if button == winit::event::MouseButton::Left {
+                    self.client_chrome_pointer(id, pressed);
+                }
                 let pointer = match self.aqua.windows.get_mut(&id) {
                     Some(rec) => {
                         if pressed {
@@ -2011,9 +2251,9 @@ impl<A: Application> Loop<A> {
             }
             W::MouseWheel { delta, .. } => {
                 let (dx, dy) = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(x, y) => (x * 16.0, y * 16.0),
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => (-x * 16.0, -y * 16.0),
                     winit::event::MouseScrollDelta::PixelDelta(p) => {
-                        (p.x as f32 / scale as f32, p.y as f32 / scale as f32)
+                        (-(p.x as f32) / scale as f32, -(p.y as f32) / scale as f32)
                     }
                 };
                 let at = self
@@ -2305,6 +2545,13 @@ impl<A: Application> winit::application::ApplicationHandler<AquaUserEvent> for L
                 }
             }
         }
+    }
+}
+
+fn default_backends() -> wgpu::Backends {
+    match cfg!(windows) {
+        true => wgpu::Backends::VULKAN,
+        false => wgpu::Backends::all(),
     }
 }
 

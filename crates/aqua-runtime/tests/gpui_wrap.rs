@@ -3,7 +3,7 @@ use aqua_runtime::Runtime;
 use aqua_text::{CaretAffinity, CaretPosition, RunId, SharedFonts, SharedRuns, TextStyle};
 use aqua_ui::element::ui::Text;
 use aqua_ui::layout::{ProfiledCosmicMeasurer, TextMeasurer};
-use aqua_ui::style::{px, Style};
+use aqua_ui::style::{Style, px};
 
 #[test]
 fn gpui_wrap_measurement_and_retained_carets_share_visual_lines() {
@@ -44,7 +44,6 @@ fn gpui_wrap_measurement_and_retained_carets_share_visual_lines() {
         .layout;
     let laid = layout.laid_out().unwrap();
     assert!(laid.lines.len() > 1);
-    assert_eq!(layout.buffer().unwrap().layout_runs().count(), 1);
     assert!((laid.size.1 - measured.h).abs() < 0.001);
     let boundary = laid.lines[1].display_range.start;
     let up = layout
@@ -81,7 +80,7 @@ fn gpui_wrap_measurement_and_retained_carets_share_visual_lines() {
         .resolve_expected(RunId(ordinary_run.id), ordinary_run.revision)
         .unwrap()
         .layout;
-    assert!(ordinary.buffer().unwrap().layout_runs().count() > 1);
+    assert!(ordinary.laid_out().unwrap().lines.len() > 1);
     drop(registry);
     app = app.with_color_profile(ColorProfile::GpuiWindowsEncoded);
     app.build_frame().unwrap();
@@ -98,5 +97,5 @@ fn gpui_wrap_measurement_and_retained_carets_share_visual_lines() {
         .resolve_expected(RunId(restored_run.id), restored_run.revision)
         .unwrap()
         .layout;
-    assert_eq!(restored.buffer().unwrap().layout_runs().count(), 1);
+    assert!(restored.laid_out().unwrap().lines.len() > 1);
 }

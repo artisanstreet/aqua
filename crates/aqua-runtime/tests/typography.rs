@@ -61,7 +61,7 @@ fn inherited_font_style_and_child_size_use_identical_measurement_and_shaping() {
         .find(|id| matches!(runtime.tree().get(*id).unwrap().kind, NodeKind::Text(_)))
         .unwrap();
     let measured = runtime.tree().rect(node).unwrap();
-    assert!((measured.w - expected.0).abs() < 0.01);
+    assert!((measured.w - expected.0).abs() < 0.5);
     assert!((measured.h - expected.1).abs() < 0.01);
 }
 

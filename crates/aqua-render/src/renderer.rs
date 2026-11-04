@@ -19,8 +19,8 @@ use crate::effects::{BlurParams, CustomPass};
 use crate::resource::{RenderDiagnostics, ResourceBudget, TextureDesc};
 use crate::scene::{DisplayItem, Rect, Scene};
 use crate::text::{
-    resolve_gpui_scene_text, resolve_scene_text, GlyphonProvider, ShapedRun, TextBackend,
-    TextFrame, TextProvider,
+    GlyphonProvider, ShapedRun, TextBackend, TextFrame, TextProvider, resolve_gpui_scene_text,
+    resolve_scene_text,
 };
 
 mod gpui_blur;
@@ -429,6 +429,9 @@ pub struct Renderer {
     gpui_window_opaque: Option<bool>,
     text_raster_mode: aqua_core::scene::TextRasterMode,
     gpui_mesh_renderer: Option<gpui_mesh::GpuiMeshRenderer>,
+    gpui_svg_cache: gpui_svg::Cache,
+    gpui_path_cache: gpui_path::Cache,
+    gpui_blur_cache: gpui_blur::Cache,
     color_profile: aqua_core::ColorProfile,
     effect_compositor: crate::effects::compositor::EffectCompositor,
     snapshot: Option<SnapshotState>,
@@ -874,6 +877,9 @@ impl Renderer {
             gpui_window_opaque: None,
             text_raster_mode: aqua_core::scene::TextRasterMode::default(),
             gpui_mesh_renderer: None,
+            gpui_svg_cache: Default::default(),
+            gpui_path_cache: Default::default(),
+            gpui_blur_cache: Default::default(),
             color_profile: aqua_core::ColorProfile::AquaLinear,
             effect_compositor: crate::effects::compositor::EffectCompositor::new(&device, format),
             snapshot: None,
@@ -1011,7 +1017,7 @@ impl Renderer {
             0,
             bytemuck::cast_slice(&[RectUniforms {
                 viewport: [w as f32, h as f32],
-                pulse_clock_ms: aqua_core::scene::gpui_pulse_clock_ms(),
+                pulse_clock_ms: gpui_pulse_clock_ms(),
                 _pad: 0,
             }]),
         );
@@ -1530,7 +1536,9 @@ impl Renderer {
                         || combined.a != combined.d
                         || combined.a <= 0.0
                     {
-                        plan.validation_error = Some("subtree transform requires finite positive uniform scale and translation");
+                        plan.validation_error = Some(
+                            "subtree transform requires finite positive uniform scale and translation",
+                        );
                     }
                     transforms.push(combined);
                     continue;
@@ -2742,7 +2750,7 @@ impl Renderer {
                 viewport: [w as f32, h as f32],
                 pulse_clock_ms: self
                     .pulse_clock_override
-                    .unwrap_or_else(aqua_core::scene::gpui_pulse_clock_ms),
+                    .unwrap_or_else(gpui_pulse_clock_ms),
                 _pad: 0,
             }),
         );
@@ -5162,6 +5170,12 @@ fn transform_item(item: &DisplayItem, transform: aqua_core::Transform2D) -> Disp
         _ => {}
     }
     result
+}
+
+pub fn gpui_pulse_clock_ms() -> u32 {
+    static EPOCH: std::sync::LazyLock<std::time::Instant> =
+        std::sync::LazyLock::new(std::time::Instant::now);
+    EPOCH.elapsed().as_millis() as u32
 }
 
 #[cfg(test)]

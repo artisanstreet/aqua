@@ -24,6 +24,50 @@ pub(super) fn region(bounds: Rect, radius: f32, width: u32, height: u32) -> Opti
     (x0 != x1 && y0 != y1).then_some([2 * x0, 2 * y0, 2 * x1, 2 * y1])
 }
 
+#[derive(Default)]
+pub(super) struct Cache {
+    pipeline: Option<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    copy: Option<([u32; 2], wgpu::TextureFormat, wgpu::Texture)>,
+}
+
+fn build_pipeline(renderer: &Renderer) -> wgpu::RenderPipeline {
+    let device = &renderer.device;
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("aqua-gpui-blur"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/gpui-blur.wgsl").into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("aqua-gpui-blur"),
+        bind_group_layouts: &[Some(&renderer.blur_bind_layout)],
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("aqua-gpui-blur"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: renderer.format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 pub(super) fn draw(
     renderer: &mut Renderer,
     encoder: &mut wgpu::CommandEncoder,
@@ -53,19 +97,29 @@ pub(super) fn draw(
     let copy = if replace {
         None
     } else {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("aqua-gpui-backdrop-copy"),
-            size: wgpu::Extent3d {
-                width: copy_size[0],
-                height: copy_size[1],
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: renderer.format,
-            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
+        let reusable = renderer
+            .gpui_blur_cache
+            .copy
+            .as_ref()
+            .filter(|(size, format, _)| *size == copy_size && *format == renderer.format)
+            .map(|(_, _, texture)| texture.clone());
+        let texture = reusable.unwrap_or_else(|| {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("aqua-gpui-backdrop-copy"),
+                size: wgpu::Extent3d {
+                    width: copy_size[0],
+                    height: copy_size[1],
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: renderer.format,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            renderer.gpui_blur_cache.copy = Some((copy_size, renderer.format, texture.clone()));
+            texture
         });
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
@@ -109,40 +163,21 @@ pub(super) fn draw(
             return Err(error);
         }
     };
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("aqua-gpui-blur"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/gpui-blur.wgsl").into()),
-    });
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("aqua-gpui-blur"),
-        bind_group_layouts: &[Some(&renderer.blur_bind_layout)],
-        immediate_size: 0,
-    });
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("aqua-gpui-blur"),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: renderer.format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    });
+    if renderer
+        .gpui_blur_cache
+        .pipeline
+        .as_ref()
+        .is_none_or(|(format, _)| *format != renderer.format)
+    {
+        let pipeline = build_pipeline(renderer);
+        renderer.gpui_blur_cache.pipeline = Some((renderer.format, pipeline));
+    }
+    let pipeline = renderer
+        .gpui_blur_cache
+        .pipeline
+        .as_ref()
+        .map(|(_, pipeline)| pipeline.clone())
+        .expect("pipeline built");
     let a = renderer.pool.entries[first].view.clone();
     let b = renderer.pool.entries[second].view.clone();
     for (source, destination, direction, mode) in [

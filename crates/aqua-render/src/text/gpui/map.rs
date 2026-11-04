@@ -1,4 +1,4 @@
-use palette::{rgb::Rgba, Hsla, IntoColor};
+use palette::{Hsla, IntoColor, rgb::Rgba};
 
 pub fn shimmer_color(
     base: [f32; 4],

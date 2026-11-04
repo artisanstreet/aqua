@@ -1,11 +1,12 @@
+use super::RenderingParameters;
 use super::atlas::{AtlasPages, GlyphBitmap, GlyphKey, Tile};
 use super::map::{indistinguishable, shimmer_color};
 use super::pipeline::{GlyphInstance, MaskDraw, Pipelines};
-use super::raster::{atlas_rgba, GlyphRequest, Rasterizer};
-use super::RenderingParameters;
+use super::raster::{GlyphRequest, Rasterizer, atlas_rgba};
 use crate::gpui_atlas::{AtlasKey, SharedGpuiAtlas};
 use crate::text::{ShapedRun, TextBackend, TextFrame, TextStats};
 use aqua_core::scene::TextRasterMode;
+use aqua_text::raster::RasterKey;
 use aqua_text::{ResolveError, RunId};
 
 struct PendingGlyph {
@@ -84,12 +85,7 @@ impl Provider {
                     continue;
                 }
             };
-            let window_subpixel = if self.mode == TextRasterMode::Outline {
-                false
-            } else {
-                run.gpui_subpixel
-                    .ok_or("GPUI window subpixel eligibility is unavailable")?
-            };
+            let window_subpixel = false;
             let default = run
                 .gpui_color
                 .map(|color| [color.h, color.s, color.l, color.a]);
@@ -101,10 +97,6 @@ impl Provider {
                     color.alpha,
                 ]
             });
-            let buffer = handle
-                .layout
-                .buffer()
-                .ok_or("GPUI text requires a shaped buffer")?;
             let laid = handle
                 .layout
                 .laid_out()
@@ -119,12 +111,12 @@ impl Provider {
             } else {
                 self.parameters
             };
-            let buffer_lines: Vec<_> = buffer.layout_runs().collect();
             let mut pending = Vec::new();
             let ordered: Vec<_> = laid
                 .lines
                 .iter()
-                .flat_map(|line| line.glyphs.iter().map(move |glyph| (line, glyph)))
+                .enumerate()
+                .flat_map(|(index, line)| line.glyphs.iter().map(move |glyph| (index, line, glyph)))
                 .collect();
             #[cfg(feature = "gpui-diagnostics")]
             let ordered = if let Some(diagnostic) = super::glyph_diagnostic()?
@@ -135,7 +127,7 @@ impl Provider {
                     let mut matches = ordered
                         .iter()
                         .copied()
-                        .filter(|(_, glyph)| glyph.glyph_id == id);
+                        .filter(|(_, _, glyph)| glyph.glyph_id == id);
                     let item = matches.next().ok_or("GPUI diagnostic glyph missing")?;
                     if matches.next().is_some() {
                         return Err("GPUI diagnostic glyph is ambiguous".into());
@@ -146,23 +138,23 @@ impl Provider {
             } else {
                 ordered
             };
-            for (shaped_line, shaped) in ordered {
-                let glyph = buffer_lines
-                    .get(shaped.buffer_line_index)
-                    .and_then(|line| line.glyphs.get(shaped.buffer_glyph_index))
-                    .ok_or("GPUI glyph buffer mapping unavailable")?;
-                if glyph.font_id != shaped.font_id || glyph.glyph_id != shaped.glyph_id {
-                    return Err("GPUI glyph buffer mapping mismatch".into());
-                }
+            for (line_index, shaped_line, shaped) in ordered {
+                let glyph = shaped;
                 if glyph.glyph_id == 3
-                    && Rasterizer::is_emoji_font(fonts.font_system(), glyph.font_id)?
+                    && Rasterizer::is_emoji_font(
+                        &mut fonts,
+                        glyph.font_id,
+                        glyph.font_weight,
+                        glyph.font_stretch,
+                    )?
                 {
                     continue;
                 }
                 let is_color = self.raster.is_color_glyph(
-                    fonts.font_system_mut(),
+                    &mut fonts,
                     glyph.font_id,
                     glyph.font_weight,
+                    glyph.font_stretch,
                     glyph.glyph_id,
                 )?;
                 #[cfg(feature = "gpui-diagnostics")]
@@ -172,8 +164,9 @@ impl Provider {
                 {
                     return Err("GPUI diagnostic glyph color classification mismatch".into());
                 }
-                let x = run.at_physical[0] + shaped.x * run.scale;
-                let y = run.at_physical[1] + (shaped_line.baseline_y + shaped.y) * run.scale;
+                let x = run.at_physical[0] + (shaped.x + shaped.x_offset) * run.scale;
+                let y = run.at_physical[1]
+                    + (shaped_line.baseline_y + shaped.y - shaped.y_offset) * run.scale;
                 let qx = if is_color {
                     round_half_toward_zero(x)
                 } else {
@@ -181,15 +174,16 @@ impl Provider {
                 };
                 let qy = round_half_toward_zero(y);
                 let variant = (qx.fract() * 4.0) as u8;
-                let font_size = glyph.font_size / handle.layout.scale();
-                let (cache, _, _) = cosmic_text::CacheKey::new(
-                    glyph.font_id,
-                    glyph.glyph_id,
-                    glyph.font_size,
-                    (qx, qy),
-                    glyph.font_weight,
-                    glyph.cache_key_flags,
-                );
+                let font_size = glyph.font_size_px / handle.layout.scale();
+                let cache = RasterKey {
+                    font_id: glyph.font_id,
+                    weight: glyph.font_weight,
+                    stretch: glyph.font_stretch,
+                    synthetic_italic: glyph.synthetic_italic,
+                    glyph_id: glyph.glyph_id,
+                    size_bits: glyph.font_size_px.to_bits(),
+                    subpixel: variant,
+                };
                 let subpixel = !is_color && window_subpixel;
                 let key = GlyphKey {
                     cache,
@@ -213,6 +207,8 @@ impl Provider {
                             let request = GlyphRequest {
                                 font_id: glyph.font_id,
                                 weight: glyph.font_weight,
+                                stretch: glyph.font_stretch,
+                                synthetic_italic: glyph.synthetic_italic,
                                 glyph_id: glyph.glyph_id,
                                 font_size,
                                 scale,
@@ -221,10 +217,9 @@ impl Provider {
                                 subpixel: false,
                                 hint: true,
                             };
-                            let image = self
-                                .raster
-                                .rasterize(fonts.font_system_mut(), &request)?
-                                .ok_or("unable to render GPUI glyph via Swash")?;
+                            let Some(image) = self.raster.rasterize(&mut fonts, &request)? else {
+                                continue;
+                            };
                             if image.placement.width == 0 || image.placement.height == 0 {
                                 continue;
                             }
@@ -269,6 +264,8 @@ impl Provider {
                             let request = GlyphRequest {
                                 font_id: glyph.font_id,
                                 weight: glyph.font_weight,
+                                stretch: glyph.font_stretch,
+                                synthetic_italic: glyph.synthetic_italic,
                                 glyph_id: glyph.glyph_id,
                                 font_size,
                                 scale,
@@ -277,10 +274,9 @@ impl Provider {
                                 subpixel,
                                 hint: self.mode != TextRasterMode::Outline,
                             };
-                            let image = self
-                                .raster
-                                .rasterize(fonts.font_system_mut(), &request)?
-                                .ok_or("unable to render GPUI glyph via Swash")?;
+                            let Some(image) = self.raster.rasterize(&mut fonts, &request)? else {
+                                continue;
+                            };
                             if image.placement.width == 0 || image.placement.height == 0 {
                                 continue;
                             }
@@ -307,7 +303,18 @@ impl Provider {
                 {
                     super::GLYPH_DIAGNOSTIC_DRAWS
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    println!("gpui_glyph_diagnostic id={} color={} font={:?} origin=({qx},{qy}) tile=({},{},{},{}) page=({width},{height}) bearings=({},{})", glyph.glyph_id, is_color, glyph.font_id, tile.x, tile.y, tile.width, tile.height, tile.left, tile.top);
+                    println!(
+                        "gpui_glyph_diagnostic id={} color={} font={:?} origin=({qx},{qy}) tile=({},{},{},{}) page=({width},{height}) bearings=({},{})",
+                        glyph.glyph_id,
+                        is_color,
+                        glyph.font_id,
+                        tile.x,
+                        tile.y,
+                        tile.width,
+                        tile.height,
+                        tile.left,
+                        tile.top
+                    );
                 }
                 let range_opacity = run
                     .gpui_text_opacity
@@ -396,7 +403,7 @@ impl Provider {
                         instance.hsla[3] *= range_opacity;
                     }
                     pending.push(PendingGlyph {
-                        line: shaped.buffer_line_index,
+                        line: line_index,
                         kind: if is_color {
                             2
                         } else if subpixel {

@@ -125,7 +125,7 @@ pub struct RasterObservation {
 
 pub fn observe_emoji_raster(
     fonts: &mut aqua_text::FontManager,
-    glyph: &cosmic_text::LayoutGlyph,
+    glyph: &aqua_text::LaidGlyph,
     scale: f32,
 ) -> Result<Option<RasterObservation>, String> {
     if !scale.is_finite() || scale <= 0.0 {
@@ -133,9 +133,10 @@ pub fn observe_emoji_raster(
     }
     let mut rasterizer = raster::Rasterizer::new();
     if !rasterizer.is_color_glyph(
-        fonts.font_system_mut(),
+        fonts,
         glyph.font_id,
         glyph.font_weight,
+        glyph.font_stretch,
         glyph.glyph_id,
     )? {
         return Err("glyph is not a known color emoji".into());
@@ -143,8 +144,10 @@ pub fn observe_emoji_raster(
     let request = raster::GlyphRequest {
         font_id: glyph.font_id,
         weight: glyph.font_weight,
+        stretch: glyph.font_stretch,
+        synthetic_italic: glyph.synthetic_italic,
         glyph_id: glyph.glyph_id,
-        font_size: glyph.font_size / scale,
+        font_size: glyph.font_size_px / scale,
         scale,
         x_variant: 0,
         is_emoji: true,
@@ -152,7 +155,7 @@ pub fn observe_emoji_raster(
         hint: true,
     };
     let image = rasterizer
-        .rasterize(fonts.font_system_mut(), &request)?
+        .rasterize(fonts, &request)?
         .ok_or("unable to render GPUI glyph via Swash")?;
     if image.placement.width == 0 || image.placement.height == 0 {
         return Ok(None);

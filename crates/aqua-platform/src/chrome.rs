@@ -26,6 +26,29 @@ use crate::window::{Titlebar, WindowOptions};
 pub use crate::chrome_winit::WindowsChrome;
 pub use aqua_protocol::{CaptionControl, CaptionRegion, DragRegions};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClientChromeHit {
+    Drag,
+    Caption(CaptionControl),
+    Client,
+}
+
+pub fn client_chrome_hit(regions: &DragRegions, x: f64, y: f64) -> ClientChromeHit {
+    let contains = |&(left, top, width, height): &(f64, f64, f64, f64)| {
+        x >= left && x < left + width && y >= top && y < top + height
+    };
+    regions
+        .caption_controls
+        .iter()
+        .find(|region| contains(&region.bounds))
+        .map(|region| ClientChromeHit::Caption(region.control))
+        .or_else(|| {
+            (!regions.no_drag.iter().any(contains) && regions.draggable.iter().any(contains))
+                .then_some(ClientChromeHit::Drag)
+        })
+        .unwrap_or(ClientChromeHit::Client)
+}
+
 /// Chrome failures. All are honest runtime results, never panics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChromeError {

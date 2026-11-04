@@ -21,7 +21,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::panic::{resume_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, resume_unwind};
 use std::rc::{Rc, Weak};
 
 use crate::graph::{EdgeOp, Inner, NodeId, NodeKind, ScopeId, Slot};

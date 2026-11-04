@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! `aqua-core`: small platform-neutral contract types shared by every Aqua crate.
 //!
 //! No winit/wgpu dependency is allowed here. Scene data references GPU-backed
@@ -31,8 +32,8 @@ pub use geometry::{CornerRadii, Insets, Point, Rect, Size, Transform2D};
 pub use gpui_mesh::{GpuiMesh, GpuiMeshStyle, GpuiMeshVertex};
 pub use id::{ImageId, NodeId, RawId, ViewportId};
 pub use scene::{
-    decode_layer, media_layer, viewport_layer, DisplayItem, LayerKind, TextRun,
-    LAYER_MAX_GENERATION, LAYER_TAG_MASK, LAYER_TAG_MEDIA, LAYER_TAG_VIEWPORT,
+    DisplayItem, LAYER_MAX_GENERATION, LAYER_TAG_MASK, LAYER_TAG_MEDIA, LAYER_TAG_VIEWPORT,
+    LayerKind, TextRun, decode_layer, media_layer, viewport_layer,
 };
 pub use semantic::{CollectionSemantics, NumericRangeSemantics, Role, SemanticNode};
 

@@ -21,7 +21,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use aqua::{fr, px, Aqua, Style, UiApp};
+use aqua::{Aqua, Style, UiApp, fr, px};
 use aqua_core::{InputEvent, Key, KeyEvent, Modifiers, NamedKey, Oklch, Point, Role, ScrollDelta};
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::tree::NodeKind;
@@ -445,9 +445,10 @@ fn scroll_and_resize_move_the_virtual_window() {
 
     // Real scroll_to near the end: the window must follow through the real
     // frame pipeline (no shadow state).
-    assert!(app
-        .tree_mut()
-        .scroll_to(scroll, Point::new(0.0, 10_000_000.0)));
+    assert!(
+        app.tree_mut()
+            .scroll_to(scroll, Point::new(0.0, 10_000_000.0))
+    );
     frame(&mut app, 600.0, 600.0);
     frame(&mut app, 600.0, 600.0);
     let bottom: Vec<usize> = row_texts(&app, "row-")
@@ -467,7 +468,7 @@ fn scroll_and_resize_move_the_virtual_window() {
         at,
         delta: ScrollDelta {
             x: 0.0,
-            y: -10_000_000.0
+            y: -10_000_001.0
         },
     }));
     frame(&mut app, 600.0, 600.0);
@@ -1366,9 +1367,10 @@ fn live_signal_subscriptions_survive_window_updates_and_dispose_on_eviction() {
     let stats_same = app.runtime().stats();
 
     // Scroll far: first row evicted, its scope/effect disposed.
-    assert!(app
-        .tree_mut()
-        .scroll_to(scroll, Point::new(0.0, 10_000_000.0)));
+    assert!(
+        app.tree_mut()
+            .scroll_to(scroll, Point::new(0.0, 10_000_000.0))
+    );
     frame(&mut app, 600.0, 400.0);
     frame(&mut app, 600.0, 400.0);
     assert!(

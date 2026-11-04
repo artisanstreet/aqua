@@ -7,12 +7,12 @@ use aqua_core::{
     InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Point, PointerButton, Rect,
 };
 use aqua_text::{
+    CaretAffinity, CaretPosition, Selection,
     document::{
         SelectionDocument, SelectionDocumentId, SelectionSource, SelectionSourceError,
         SelectionSourceId, SourcePosition, SourceSlice,
     },
     navigation::SelectionUnit,
-    CaretAffinity, CaretPosition, Selection,
 };
 use aqua_ui::{
     collection_runtime::{CollectionRowRegistration, SelectionBatchOwner},
@@ -1773,6 +1773,14 @@ impl Runtime {
             ),
         );
         (velocity.x != 0.0 || velocity.y != 0.0).then_some((node, velocity))
+    }
+
+    pub(super) fn extend_selection_after_scroll(&mut self) {
+        if let Some(gesture) = self.interaction.gesture.clone() {
+            if gesture.dragged && self.gesture_allowed(&gesture) {
+                self.extend_pointer_selection(&gesture, gesture.pointer);
+            }
+        }
     }
 
     pub(super) fn selection_deadline(&self) -> Option<f64> {

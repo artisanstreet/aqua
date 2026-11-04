@@ -268,6 +268,10 @@ impl UiTree {
         }
     }
 
+    pub(crate) fn control_clock(&self) -> f64 {
+        self.control_router.clock
+    }
+
     pub fn take_control_requests(&mut self) -> Vec<ControlRequest> {
         std::mem::take(&mut self.control_router.requests)
     }

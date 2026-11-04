@@ -117,6 +117,27 @@ pub fn focus_prev(tree: &mut UiTree) -> Option<NodeId> {
     Some(prev)
 }
 
+#[must_use]
+pub fn scroll_target(tree: &UiTree, at: Point, delta: ScrollDelta) -> Option<NodeId> {
+    let mut target = hit_test(tree, at);
+    while let Some(id) = target {
+        if let Some(offset) = tree.scroll_offset(id) {
+            let max = tree.scroll_limit(id);
+            let moves = |current: f32, change: f32, limit: f32| {
+                change != 0.0 && (current + change).clamp(0.0, limit) != current
+            };
+            if moves(offset.x, delta.x, max.x) || moves(offset.y, delta.y, max.y) {
+                return Some(id);
+            }
+        }
+        if tree.is_portal(id) {
+            break;
+        }
+        target = tree.get(id).and_then(|r| r.parent);
+    }
+    None
+}
+
 pub fn dispatch_scroll(tree: &mut UiTree, at: Point, delta: ScrollDelta) -> bool {
     let mut target = hit_test(tree, at);
     while let Some(id) = target {
@@ -687,14 +708,12 @@ mod tests {
             height: Length::Px(100.0),
             ..Default::default()
         };
-        let root = tree.mount_spec(col(vec![NodeSpec::new(
-            NodeKind::Box(BoxContent::default()),
-            bstyle,
-        )
-        .child(NodeSpec::new(
-            NodeKind::Text(TextContent::label("Add")),
-            LayoutStyle::default(),
-        ))]));
+        let root = tree.mount_spec(col(vec![
+            NodeSpec::new(NodeKind::Box(BoxContent::default()), bstyle).child(NodeSpec::new(
+                NodeKind::Text(TextContent::label("Add")),
+                LayoutStyle::default(),
+            )),
+        ]));
         tree.compute_layout(Size::new(300.0, 300.0), &NaiveMeasurer)
             .unwrap();
         let button = tree.get(root).unwrap().children[0];
@@ -895,13 +914,15 @@ mod tests {
             height: Length::Px(400.0),
             ..Default::default()
         };
-        let (mut tree, root) = laid_out(vec![NodeSpec::new(
-            NodeKind::Scroll(ScrollContent {
-                offset: Point::ZERO,
-            }),
-            rs,
-        )
-        .child(NodeSpec::new(NodeKind::Box(BoxContent::default()), cs))]);
+        let (mut tree, root) = laid_out(vec![
+            NodeSpec::new(
+                NodeKind::Scroll(ScrollContent {
+                    offset: Point::ZERO,
+                }),
+                rs,
+            )
+            .child(NodeSpec::new(NodeKind::Box(BoxContent::default()), cs)),
+        ]);
         let scroller = tree.get(root).unwrap().children[0];
         assert!(dispatch_scroll(
             &mut tree,

@@ -1,9 +1,9 @@
 use aqua_core::{InputEvent as CoreInputEvent, Key, Modifiers, NamedKey};
 use aqua_platform::{
+    AquaWindowId, ObservedWindowState, WindowEvent,
     a11y::A11yActionRequest,
     chrome::DragRegions,
     services::{Clipboard, ClipboardError},
-    AquaWindowId, ObservedWindowState, WindowEvent,
 };
 use aqua_protocol::{A11yNode, Input, Instant, Output};
 use aqua_reactive::{DepTuple, Runtime as ReactiveRuntime, Scope};
@@ -274,7 +274,11 @@ impl Application for UiApp {
             size: window.inner_size.as_core_size(),
             scale: window.scale_factor as f32,
         });
-        match self.step(Input::Frame(now)) {
+        let stepped = self.step(Input::Frame(now));
+        self.take_diagnostics()
+            .iter()
+            .for_each(|line| eprintln!("{line}"));
+        match stepped {
             Ok(output) => output.wake_at,
             Err(e) => {
                 eprintln!("aqua: build failed: {e}");
@@ -296,6 +300,7 @@ impl Aqua {
     pub fn run_ui(self, factory: impl FnOnce(&Scope) -> Element) -> Result<(), String> {
         let mut app = UiApp::new(self.fonts().clone(), self.runs().clone());
         app.apply_startup_motion_policy(self.motion_reduced());
+        app.set_frame_stats(std::env::var_os("AQUA_FRAME_STATS").is_some_and(|value| value == "1"));
         app.mount(factory)
             .map_err(|e| format!("ui mount failed: {e}"))?;
         self.run(app)

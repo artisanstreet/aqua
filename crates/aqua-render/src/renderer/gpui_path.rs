@@ -1,9 +1,9 @@
 use aqua_core::vector::{FillRule, GpuiPath, GpuiPathStyle, LineCap, LineJoin, PathCommand};
 use lyon::algorithms::measure::{PathMeasurements, SampleType};
-use lyon::math::{point, vector, Angle};
+use lyon::math::{Angle, point, vector};
+use lyon::path::Path;
 use lyon::path::builder::SvgPathBuilder;
 use lyon::path::geom::ArcFlags;
-use lyon::path::Path;
 use lyon::tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
     StrokeVertex, VertexBuffers,
@@ -149,13 +149,29 @@ pub(super) fn tessellate(path: &GpuiPath, device_scale: f32) -> Result<Vec<[f32;
         .collect())
 }
 
-pub(super) fn draw(
-    renderer: &super::Renderer,
-    encoder: &mut wgpu::CommandEncoder,
-    target: &wgpu::TextureView,
-    path: &super::PathOp,
-) {
-    use wgpu::util::DeviceExt;
+struct Pipelines {
+    format: wgpu::TextureFormat,
+    parameters: wgpu::BindGroupLayout,
+    texture_layout: wgpu::BindGroupLayout,
+    raster: wgpu::RenderPipeline,
+    sprite: wgpu::RenderPipeline,
+}
+
+struct Targets {
+    size: [u32; 2],
+    format: wgpu::TextureFormat,
+    resolved_view: wgpu::TextureView,
+    multisampled_view: wgpu::TextureView,
+    texture_bind: wgpu::BindGroup,
+}
+
+#[derive(Default)]
+pub(super) struct Cache {
+    pipelines: Option<Pipelines>,
+    targets: Option<Targets>,
+}
+
+fn build_pipelines(renderer: &super::Renderer) -> Pipelines {
     let device = &renderer.device;
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("aqua-gpui-path"),
@@ -280,6 +296,17 @@ pub(super) fn draw(
         multiview_mask: None,
         cache: None,
     });
+    Pipelines {
+        format: renderer.format,
+        parameters,
+        texture_layout,
+        raster,
+        sprite,
+    }
+}
+
+fn build_targets(renderer: &super::Renderer, pipelines: &Pipelines) -> Targets {
+    let device = &renderer.device;
     let size = wgpu::Extent3d {
         width: renderer.width,
         height: renderer.height,
@@ -304,6 +331,47 @@ pub(super) fn draw(
     let multisampled = texture(4, wgpu::TextureUsages::RENDER_ATTACHMENT);
     let resolved_view = resolved.create_view(&Default::default());
     let multisampled_view = multisampled.create_view(&Default::default());
+    let texture_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("aqua-gpui-path-texture"),
+        layout: &pipelines.texture_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(&resolved_view),
+        }],
+    });
+    Targets {
+        size: [renderer.width, renderer.height],
+        format: renderer.format,
+        resolved_view,
+        multisampled_view,
+        texture_bind,
+    }
+}
+
+pub(super) fn draw(
+    renderer: &mut super::Renderer,
+    encoder: &mut wgpu::CommandEncoder,
+    target: &wgpu::TextureView,
+    path: &super::PathOp,
+) {
+    use wgpu::util::DeviceExt;
+    let mut cache = std::mem::take(&mut renderer.gpui_path_cache);
+    if cache
+        .pipelines
+        .as_ref()
+        .is_none_or(|pipelines| pipelines.format != renderer.format)
+    {
+        cache.pipelines = Some(build_pipelines(renderer));
+        cache.targets = None;
+    }
+    let pipelines = cache.pipelines.as_ref().expect("pipelines built");
+    if cache.targets.as_ref().is_none_or(|targets| {
+        targets.size != [renderer.width, renderer.height] || targets.format != renderer.format
+    }) {
+        cache.targets = Some(build_targets(renderer, pipelines));
+    }
+    let targets = cache.targets.as_ref().expect("targets built");
+    let device = &renderer.device;
     let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("aqua-gpui-path-vertices"),
         contents: bytemuck::cast_slice(&path.vertices),
@@ -316,27 +384,19 @@ pub(super) fn draw(
     });
     let parameter_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("aqua-gpui-path-parameters"),
-        layout: &parameters,
+        layout: &pipelines.parameters,
         entries: &[wgpu::BindGroupEntry {
             binding: 0,
             resource: uniform.as_entire_binding(),
-        }],
-    });
-    let texture_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("aqua-gpui-path-texture"),
-        layout: &texture_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::TextureView(&resolved_view),
         }],
     });
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("aqua-gpui-path-raster"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &multisampled_view,
+                view: &targets.multisampled_view,
                 depth_slice: None,
-                resolve_target: Some(&resolved_view),
+                resolve_target: Some(&targets.resolved_view),
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                     store: wgpu::StoreOp::Discard,
@@ -347,7 +407,7 @@ pub(super) fn draw(
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&raster);
+        pass.set_pipeline(&pipelines.raster);
         pass.set_bind_group(0, &renderer.rect_uniform_bind, &[]);
         pass.set_bind_group(1, &parameter_bind, &[]);
         pass.set_vertex_buffer(0, vertices.slice(..));
@@ -370,10 +430,11 @@ pub(super) fn draw(
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&sprite);
+        pass.set_pipeline(&pipelines.sprite);
         pass.set_bind_group(0, &renderer.rect_uniform_bind, &[]);
         pass.set_bind_group(1, &parameter_bind, &[]);
-        pass.set_bind_group(2, &texture_bind, &[]);
+        pass.set_bind_group(2, &targets.texture_bind, &[]);
         pass.draw(0..6, 0..1);
     }
+    renderer.gpui_path_cache = cache;
 }

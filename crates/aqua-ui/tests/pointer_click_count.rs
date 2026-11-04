@@ -8,7 +8,7 @@ use aqua_ui::binding::View;
 use aqua_ui::element::Box;
 use aqua_ui::input::{EventPhase, InputKind, InputResponse};
 use aqua_ui::layout::NaiveMeasurer;
-use aqua_ui::style::{px, Style};
+use aqua_ui::style::{Style, px};
 use aqua_ui::tree::UiTree;
 
 #[test]
@@ -23,13 +23,15 @@ fn primary_down_exposes_platform_click_count_and_distance_reset() {
     let mut view = View::new(runtime.create_scope(), tree.command_sink());
     view.set_content(
         &mut tree,
-        vec![Box::new()
-            .style(Style::new().width(px(100.0)).height(px(30.0)))
-            .build()
-            .on_input(InputKind::PointerDown, EventPhase::Bubble, move |event| {
-                output.borrow_mut().push(event.click_count);
-                InputResponse::handled()
-            })],
+        vec![
+            Box::new()
+                .style(Style::new().width(px(100.0)).height(px(30.0)))
+                .build()
+                .on_input(InputKind::PointerDown, EventPhase::Bubble, move |event| {
+                    output.borrow_mut().push(event.click_count);
+                    InputResponse::handled()
+                }),
+        ],
     )
     .unwrap();
     tree.drain_commands();
@@ -67,10 +69,12 @@ fn primary_down_exposes_platform_click_count_and_distance_reset() {
         position: Point::new(1.0, 1.0),
         buttons: 1,
     };
+    tree.advance_control_clock(1.0);
     aqua_ui::events::dispatch_input(
         &mut tree,
         &InputEvent::PointerDown(pointer, PointerButton::Primary),
     );
+    tree.advance_control_clock(2.0);
     aqua_ui::events::dispatch_input(
         &mut tree,
         &InputEvent::PointerDown(pointer, PointerButton::Primary),

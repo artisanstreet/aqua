@@ -381,14 +381,36 @@ pub struct Typography {
     pub wrap: bool,
 }
 
+static ROOT_LETTER_SPACING_BITS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(f32::NAN.to_bits());
+
+pub fn set_root_letter_spacing_em(spacing: Option<f32>) {
+    ROOT_LETTER_SPACING_BITS.store(
+        spacing.unwrap_or(f32::NAN).to_bits(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+pub fn root_letter_spacing_em() -> Option<f32> {
+    let value = f32::from_bits(ROOT_LETTER_SPACING_BITS.load(std::sync::atomic::Ordering::Relaxed));
+    (!value.is_nan()).then_some(value)
+}
+
+pub(crate) fn with_root_letter_spacing(mut style: TextStyle) -> TextStyle {
+    if style.letter_spacing_em.is_none() {
+        style.letter_spacing_em = root_letter_spacing_em();
+    }
+    style
+}
+
 impl Default for Typography {
     fn default() -> Self {
         Self {
-            text_style: TextStyle {
+            text_style: with_root_letter_spacing(TextStyle {
                 size_px: 14.0,
                 line_height_px: 16.8,
                 ..Default::default()
-            },
+            }),
             font_size: 14.0,
             color: Oklch::WHITE,
             wrap: false,
@@ -1395,10 +1417,11 @@ impl Style {
     /// Resolve typography against `Typography::default()`.
     #[must_use]
     pub fn resolve_typography(&self) -> Typography {
-        let mut text_style = self
-            .text_style
-            .clone()
-            .unwrap_or_else(|| Typography::default().text_style);
+        let mut text_style = with_root_letter_spacing(
+            self.text_style
+                .clone()
+                .unwrap_or_else(|| Typography::default().text_style),
+        );
         if let Some(color) = self.gpui_text_color {
             text_style.gpui_color = color.map(|c| [c.h, c.s, c.l, c.a]);
         }

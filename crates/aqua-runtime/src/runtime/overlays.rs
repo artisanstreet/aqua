@@ -6,10 +6,10 @@ use aqua_core::{NodeId, Point, Role};
 use aqua_ui::{
     binding::View,
     controls::{Control, ControlRequest},
-    element::{lower_specs, ui, Element},
+    element::{Element, lower_specs, ui},
     overlay::{CloseReason, OverlayId},
     overlay_host::{HostError, PopupRequest},
-    style::{px, Axis, Style},
+    style::{Axis, Style, px},
     tree::UiCommand,
 };
 

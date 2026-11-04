@@ -220,7 +220,7 @@ struct PointerClick {
     at: aqua_core::Point,
     button: aqua_core::PointerButton,
     contact: u64,
-    time: std::time::Instant,
+    time: f64,
     count: usize,
 }
 
@@ -234,7 +234,7 @@ struct PendingTouch {
 #[derive(Debug)]
 struct CompletedTap {
     position: aqua_core::Point,
-    time: std::time::Instant,
+    time: f64,
     count: usize,
 }
 
@@ -287,13 +287,13 @@ impl super::UiTree {
                     .take_if(|touch| touch.contact == pointer.contact)
                     .is_some_and(|touch| !touch.panning)
                 {
-                    let now = std::time::Instant::now();
+                    let now = self.control_clock();
                     let count = self
                         .interaction
                         .last_tap
                         .as_ref()
                         .filter(|tap| {
-                            now.duration_since(tap.time) <= std::time::Duration::from_millis(400)
+                            now - tap.time <= 0.4
                                 && distance_squared(tap.position, pointer.position) <= 256.0
                         })
                         .map_or(1, |tap| tap.count.saturating_add(1));
@@ -328,7 +328,7 @@ impl super::UiTree {
         if pointer.kind != aqua_core::PointerKind::Mouse {
             return;
         }
-        let now = std::time::Instant::now();
+        let now = self.control_clock();
         let settings = self.interaction.click_settings;
         let mut distance = settings.max_distance();
         if cfg!(windows) {
@@ -341,7 +341,7 @@ impl super::UiTree {
             .as_ref()
             .filter(|previous| {
                 previous.button == *button
-                    && now.duration_since(previous.time) < settings.interval()
+                    && now - previous.time < settings.interval().as_secs_f64()
                     && (previous.at.x - pointer.position.x).abs() <= distance.x
                     && (previous.at.y - pointer.position.y).abs() <= distance.y
             })

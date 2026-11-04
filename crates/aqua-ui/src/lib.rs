@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! `aqua-ui`: retained UI tree, typed styles, Taffy layout, hit-testing.
 //!
 //! The tree never touches GPU or windows: layout runs headless through
@@ -31,8 +32,8 @@ pub use taffy::style::{
     AlignContent, AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent,
 };
 pub use tree::{
-    hash_key, ActionCallback, ActionEvent, ActionKind, ActivationSource, BoxContent, CanvasContent,
+    ActionCallback, ActionEvent, ActionKind, ActivationSource, BoxContent, CanvasContent,
     CanvasPaintCallback, CommandSink, FrameStats, KeyHash, LeafCtx, LeafText, MediaContent,
     NodeKind, NodeRecord, NodeSemantics, NodeSpec, ScrollContent, TextBacking, TextContent,
-    UiCommand, UiTree, ViewportContent,
+    UiCommand, UiTree, ViewportContent, hash_key,
 };

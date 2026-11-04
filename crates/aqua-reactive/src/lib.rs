@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! `aqua-reactive`: standalone explicit-dependency reactive graph.
 //!
 //! No implicit automatic dependency subscription. A computation observes
@@ -44,7 +45,6 @@ mod graph;
 mod resource;
 mod runtime;
 mod signals;
-pub mod worker;
 
 pub use graph::NodeId;
 pub use resource::{

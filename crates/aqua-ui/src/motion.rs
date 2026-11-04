@@ -1,334 +1,14 @@
 use aqua_core::id::RawId;
-use aqua_core::{Arena, NodeId, Oklch};
-use std::f32::consts::TAU;
+use aqua_core::{Arena, NodeId};
 use std::time::Duration;
 
-pub type Seconds = f64;
-
-pub const SPRING_MAX_DURATION_SECS: Seconds = 8.0;
-
-const SETTLE_POS_EPS: f32 = 1e-3;
-const SETTLE_VEL_EPS: f32 = 5e-2;
-const CRITICAL_EPS: f64 = 1e-6;
-const MIN_SPRING_DURATION_SECS: f32 = 0.01;
-const MAX_BOUNCE: f32 = 0.95;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReducedMotion {
-    Full,
-    Reduce,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Easing {
-    Linear,
-    EaseIn,
-    EaseOut,
-    EaseInOut,
-}
-
-impl Easing {
-    #[must_use]
-    pub fn sample(self, t: f32) -> f32 {
-        let t = t.clamp(0.0, 1.0);
-        match self {
-            Easing::Linear => t,
-            Easing::EaseIn => t * t * t,
-            Easing::EaseOut => 1.0 - (1.0 - t).powi(3),
-            Easing::EaseInOut => {
-                if t < 0.5 {
-                    4.0 * t * t * t
-                } else {
-                    1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
-                }
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SpringParams {
-    pub stiffness: f32,
-    pub damping: f32,
-}
-
-impl SpringParams {
-    pub const SMOOTH: SpringParams = SpringParams {
-        stiffness: 170.0,
-        damping: 26.0,
-    };
-    pub const SNAPPY: SpringParams = SpringParams {
-        stiffness: 320.0,
-        damping: 30.0,
-    };
-
-    #[must_use]
-    pub const fn new(stiffness: f32, damping: f32) -> Self {
-        Self { stiffness, damping }
-    }
-
-    #[must_use]
-    pub fn from_duration_bounce(duration_secs: f32, bounce: f32) -> Self {
-        let duration = duration_secs.max(MIN_SPRING_DURATION_SECS);
-        let bounce = match bounce.is_nan() {
-            true => 0.0,
-            false => bounce.clamp(0.0, MAX_BOUNCE),
-        };
-        let omega = TAU / duration;
-        let zeta = 1.0 - bounce;
-        Self {
-            stiffness: omega * omega,
-            damping: 2.0 * zeta * omega,
-        }
-    }
-
-    fn clamped(self) -> (f32, f32) {
-        (
-            self.stiffness.clamp(1.0, 5000.0),
-            self.damping.clamp(0.0, 200.0),
-        )
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum SpringRegime {
-    Underdamped { decay: f64, omega_d: f64 },
-    Critical { omega: f64 },
-    Overdamped { slow: f64, fast: f64 },
-}
-
-impl SpringRegime {
-    fn of(params: SpringParams) -> Self {
-        let (stiffness, damping) = params.clamped();
-        let omega = f64::from(stiffness).sqrt();
-        let zeta = f64::from(damping) / (2.0 * omega);
-        match zeta {
-            z if (z - 1.0).abs() < CRITICAL_EPS => SpringRegime::Critical { omega },
-            z if z < 1.0 => SpringRegime::Underdamped {
-                decay: z * omega,
-                omega_d: omega * (1.0 - z * z).sqrt(),
-            },
-            z => {
-                let fast = -omega * (z + (z * z - 1.0).sqrt());
-                SpringRegime::Overdamped {
-                    slow: omega * omega / fast,
-                    fast,
-                }
-            }
-        }
-    }
-
-    fn displacement(self, a: f64, v0: f64, t: f64) -> (f64, f64) {
-        match self {
-            SpringRegime::Underdamped { decay, omega_d } => {
-                let b = (v0 + decay * a) / omega_d;
-                let envelope = (-decay * t).exp();
-                let (sin, cos) = (omega_d * t).sin_cos();
-                (
-                    envelope * (a * cos + b * sin),
-                    envelope * (v0 * cos - (decay * b + omega_d * a) * sin),
-                )
-            }
-            SpringRegime::Critical { omega } => {
-                let b = v0 + omega * a;
-                let envelope = (-omega * t).exp();
-                (envelope * (a + b * t), envelope * (v0 - omega * b * t))
-            }
-            SpringRegime::Overdamped { slow, fast } => {
-                let c_fast = (v0 - slow * a) / (fast - slow);
-                let c_slow = a - c_fast;
-                let e_slow = (slow * t).exp();
-                let e_fast = (fast * t).exp();
-                (
-                    c_slow * e_slow + c_fast * e_fast,
-                    slow * c_slow * e_slow + fast * c_fast * e_fast,
-                )
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SpringSegment {
-    pub t0: Seconds,
-    pub x0: f32,
-    pub v0: f32,
-    pub target: f32,
-}
-
-impl SpringSegment {
-    #[must_use]
-    pub const fn at_rest(t0: Seconds, x: f32) -> Self {
-        Self {
-            t0,
-            x0: x,
-            v0: 0.0,
-            target: x,
-        }
-    }
-
-    #[must_use]
-    pub fn sample(&self, params: SpringParams, now: Seconds) -> (f32, f32) {
-        self.sample_in(SpringRegime::of(params), now)
-    }
-
-    #[must_use]
-    pub fn retarget(&self, params: SpringParams, now: Seconds, target: f32) -> Self {
-        let (x0, v0) = self.sample(params, now);
-        Self {
-            t0: now,
-            x0,
-            v0,
-            target,
-        }
-    }
-
-    fn sample_in(&self, regime: SpringRegime, now: Seconds) -> (f32, f32) {
-        let target = f64::from(self.target);
-        let (dx, v) = regime.displacement(
-            f64::from(self.x0) - target,
-            f64::from(self.v0),
-            (now - self.t0).max(0.0),
-        );
-        ((target + dx) as f32, v as f32)
-    }
-
-    fn is_settled_at(x: f32, v: f32, target: f32) -> bool {
-        (x - target).abs() <= SETTLE_POS_EPS && v.abs() <= SETTLE_VEL_EPS
-    }
-}
-
-fn rest_segments(now: Seconds, channels: [f32; 4]) -> [SpringSegment; 4] {
-    channels.map(|x| SpringSegment::at_rest(now, x))
-}
-
-fn launch_segments(
-    now: Seconds,
-    positions: [f32; 4],
-    velocities: [f32; 4],
-    targets: [f32; 4],
-) -> [SpringSegment; 4] {
-    std::array::from_fn(|i| SpringSegment {
-        t0: now,
-        x0: positions[i],
-        v0: velocities[i],
-        target: targets[i],
-    })
-}
-
-fn shortest_turn(from: f32, to: f32) -> f32 {
-    let delta = (to - from).rem_euclid(1.0);
-    match delta > 0.5 {
-        true => delta - 1.0,
-        false => delta,
-    }
-}
-
-fn spring_targets(basis: &[f32; 4], to: &MotionValue) -> [f32; 4] {
-    let target = to.channels();
-    match to {
-        MotionValue::Color(_) => [
-            target[0],
-            target[1],
-            basis[2] + shortest_turn(basis[2], target[2]),
-            target[3],
-        ],
-        _ => target,
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum MotionKind {
-    Tween {
-        duration_secs: Seconds,
-        easing: Easing,
-    },
-    Spring(SpringParams),
-    Instant,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Completion {
-    Completed,
-    Cancelled,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum MotionValue {
-    Scalar(f32),
-    Pair(f32, f32),
-    Color(Oklch),
-}
-
-impl MotionValue {
-    #[must_use]
-    pub fn blend(from: &MotionValue, to: &MotionValue, t: f32) -> Option<MotionValue> {
-        let t = t.clamp(0.0, 1.0);
-        match (from, to) {
-            (MotionValue::Scalar(a), MotionValue::Scalar(b)) => {
-                Some(MotionValue::Scalar(a + (b - a) * t))
-            }
-            (MotionValue::Pair(ax, ay), MotionValue::Pair(bx, by)) => {
-                Some(MotionValue::Pair(ax + (bx - ax) * t, ay + (by - ay) * t))
-            }
-            (MotionValue::Color(a), MotionValue::Color(b)) => {
-                Some(MotionValue::Color(a.lerp(*b, t)))
-            }
-            _ => None,
-        }
-    }
-
-    fn channel_count(&self) -> usize {
-        match self {
-            MotionValue::Scalar(_) => 1,
-            MotionValue::Pair(_, _) => 2,
-            MotionValue::Color(_) => 4,
-        }
-    }
-
-    fn channels(&self) -> [f32; 4] {
-        match *self {
-            MotionValue::Scalar(v) => [v, 0.0, 0.0, 0.0],
-            MotionValue::Pair(x, y) => [x, y, 0.0, 0.0],
-            MotionValue::Color(c) => [c.l, c.c, c.h / 360.0, c.alpha],
-        }
-    }
-
-    fn from_channels(model: &MotionValue, channels: &[f32; 4]) -> MotionValue {
-        match *model {
-            MotionValue::Scalar(_) => MotionValue::Scalar(channels[0]),
-            MotionValue::Pair(_, _) => MotionValue::Pair(channels[0], channels[1]),
-            MotionValue::Color(_) => MotionValue::Color(Oklch::oklch(
-                channels[0],
-                channels[1].max(0.0),
-                channels[2] * 360.0,
-                channels[3],
-            )),
-        }
-    }
-
-    fn variant_eq(a: &MotionValue, b: &MotionValue) -> bool {
-        std::mem::discriminant(a) == std::mem::discriminant(b)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MotionError {
-    UnknownHandle,
-    VariantMismatch,
-}
+pub use aqua_motion::{
+    Completion, Easing, MotionError, MotionKind, MotionValue, ReducedMotion,
+    SPRING_MAX_DURATION_SECS, Seconds, SpringParams, SpringSegment, Track,
+};
 
 pub struct Animated {
-    from: MotionValue,
-    to: MotionValue,
-    kind: MotionKind,
-    reduced: ReducedMotion,
-    start_secs: Seconds,
-    last_secs: Seconds,
-    end_secs: Seconds,
-    segments: [SpringSegment; 4],
-    current: MotionValue,
-    settled: bool,
+    track: Track,
     completion: Option<PendingCompletion>,
 }
 
@@ -345,16 +25,7 @@ impl Animated {
         now: Seconds,
     ) -> Self {
         Self {
-            from: initial,
-            to: initial,
-            kind: resolve_kind(kind, reduced),
-            reduced,
-            start_secs: now,
-            last_secs: now,
-            end_secs: now,
-            segments: rest_segments(now, initial.channels()),
-            current: initial,
-            settled: true,
+            track: Track::new(initial, kind, reduced, now),
             completion: None,
         }
     }
@@ -368,35 +39,35 @@ impl Animated {
 
     #[must_use]
     pub fn value(&self) -> MotionValue {
-        self.current
+        self.track.value()
     }
 
     #[must_use]
     pub fn target(&self) -> MotionValue {
-        self.to
+        self.track.target()
     }
 
     #[must_use]
     pub fn kind(&self) -> MotionKind {
-        self.kind
+        self.track.kind()
     }
 
     #[must_use]
     pub fn is_settled(&self) -> bool {
-        self.settled
+        self.track.is_settled()
     }
 
     #[must_use]
     pub fn spring_segments(&self) -> &[SpringSegment] {
-        &self.segments[..self.to.channel_count()]
+        self.track.spring_segments()
     }
 
     pub fn set_target(&mut self, to: MotionValue, now: Seconds) -> Result<(), MotionError> {
-        if !MotionValue::variant_eq(&self.current, &to) {
+        if std::mem::discriminant(&self.track.value()) != std::mem::discriminant(&to) {
             return Err(MotionError::VariantMismatch);
         }
-        let was_settled = self.settled;
-        let reached = self.progress(now);
+        let was_settled = self.track.is_settled();
+        let reached = self.track.progress(now);
         if let Some(mut pending) = self.completion.take() {
             if pending.target.is_none() {
                 pending.target = Some(to);
@@ -405,96 +76,52 @@ impl Animated {
                 (pending.callback)(Completion::Completed);
             }
         }
-        let now = now.max(self.last_secs);
-        let velocities = self.velocities_at(now);
-        self.from = self.current;
-        self.to = to;
-        self.kind = resolve_kind(self.kind, self.reduced);
-        self.start_secs = now;
-        self.last_secs = now;
-        self.settled = false;
-        match self.kind {
-            MotionKind::Tween { duration_secs, .. } => {
-                self.end_secs = now + duration_secs.max(0.0);
-                self.segments = rest_segments(now, to.channels());
-            }
-            MotionKind::Spring(_) => {
-                self.end_secs = now + SPRING_MAX_DURATION_SECS;
-                let basis = self.current.channels();
-                self.segments =
-                    launch_segments(now, basis, velocities, spring_targets(&basis, &to));
-            }
-            MotionKind::Instant => {
-                self.end_secs = now;
-                self.segments = rest_segments(now, to.channels());
-            }
-        }
-        Ok(())
+        let kind = self.track.kind();
+        self.track.retarget(to, kind, now)
     }
 
     pub fn set_reduced_motion(&mut self, reduced: ReducedMotion, now: Seconds) {
-        self.reduced = reduced;
-        if self.progress(now) {
-            self.settle_and_fire(now, Completion::Completed);
-            return;
-        }
-        if !self.settled && reduced == ReducedMotion::Reduce {
-            self.from = self.current;
-            self.kind = MotionKind::Instant;
-            self.end_secs = now.max(self.last_secs);
+        if self.track.set_reduced(reduced, now) {
+            self.fire(Completion::Completed);
         }
     }
 
     pub fn sample(&mut self, now: Seconds) -> MotionValue {
-        if self.settled {
-            if let Some(mut pending) = self.completion.take() {
-                (pending.callback)(Completion::Completed);
-            }
-            return self.current;
+        if self.track.is_settled() {
+            self.fire(Completion::Completed);
+            return self.track.value();
         }
-        if self.progress(now) {
-            self.settle_and_fire(now, Completion::Completed);
+        let value = self.track.sample(now);
+        if self.track.is_settled() {
+            self.fire(Completion::Completed);
         }
-        self.current
+        value
     }
 
     pub fn cancel(&mut self) {
-        if self.settled {
+        if self.track.is_settled() {
             return;
         }
-        self.settled = true;
-        if let Some(mut pending) = self.completion.take() {
-            (pending.callback)(Completion::Cancelled);
-        }
+        self.track.halt();
+        self.fire(Completion::Cancelled);
     }
 
     pub fn finish(&mut self) {
-        if self.settled {
+        if self.track.is_settled() {
             return;
         }
-        self.current = self.to;
-        self.last_secs = self.last_secs.max(self.start_secs);
-        self.settled = true;
-        if let Some(mut pending) = self.completion.take() {
-            (pending.callback)(Completion::Completed);
-        }
+        self.track.finish();
+        self.fire(Completion::Completed);
     }
 
     #[must_use]
     pub fn next_deadline(&self, now: Seconds) -> Option<Seconds> {
-        if self.settled {
-            None
-        } else {
-            Some(now.max(self.last_secs))
-        }
+        self.track.next_deadline(now)
     }
 
     #[must_use]
     pub fn tween_end(&self) -> Option<Seconds> {
-        match self.kind {
-            MotionKind::Tween { .. } if !self.settled => Some(self.end_secs),
-            _ => None,
-        }
+        self.track.tween_end()
     }
 
     pub fn sample_duration(&mut self, now: Duration) -> MotionValue {
@@ -509,90 +136,10 @@ impl Animated {
         self.set_target(to, now.as_secs_f64())
     }
 
-    fn velocities_at(&self, now: Seconds) -> [f32; 4] {
-        match (self.kind, self.settled) {
-            (MotionKind::Spring(params), false) => {
-                let regime = SpringRegime::of(params);
-                self.segments
-                    .map(|segment| segment.sample_in(regime, now).1)
-            }
-            _ => [0.0; 4],
-        }
-    }
-
-    fn progress(&mut self, now: Seconds) -> bool {
-        if self.settled {
-            return true;
-        }
-        let now = now.max(self.last_secs);
-        match self.kind {
-            MotionKind::Instant => {
-                self.current = self.to;
-                self.last_secs = now;
-                true
-            }
-            MotionKind::Tween {
-                duration_secs,
-                easing,
-            } => {
-                let elapsed = now - self.start_secs;
-                if duration_secs <= 0.0
-                    || elapsed >= duration_secs * (1.0 - 1e-9)
-                    || now >= self.end_secs
-                {
-                    self.current = self.to;
-                    self.last_secs = now;
-                    true
-                } else {
-                    let span = (self.end_secs - self.start_secs).max(f32::EPSILON as Seconds);
-                    let t = easing.sample(((now - self.start_secs) / span) as f32);
-                    self.current = MotionValue::blend(&self.from, &self.to, t)
-                        .expect("tween endpoints share a variant");
-                    self.last_secs = now;
-                    false
-                }
-            }
-            MotionKind::Spring(params) => {
-                let regime = SpringRegime::of(params);
-                let states = self.segments.map(|segment| segment.sample_in(regime, now));
-                let count = self.to.channel_count();
-                let at_rest = states
-                    .iter()
-                    .zip(&self.segments)
-                    .take(count)
-                    .all(|(&(x, v), segment)| SpringSegment::is_settled_at(x, v, segment.target));
-                self.last_secs = now;
-                if at_rest || now - self.start_secs >= SPRING_MAX_DURATION_SECS {
-                    self.current = self.to;
-                    true
-                } else {
-                    self.current = MotionValue::from_channels(&self.to, &states.map(|(x, _)| x));
-                    false
-                }
-            }
-        }
-    }
-
-    fn settle_and_fire(&mut self, now: Seconds, completion: Completion) {
-        self.current = match completion {
-            Completion::Completed => self.to,
-            Completion::Cancelled => self.current,
-        };
-        self.last_secs = now.max(self.last_secs);
-        self.settled = true;
+    fn fire(&mut self, completion: Completion) {
         if let Some(mut pending) = self.completion.take() {
             (pending.callback)(completion);
         }
-    }
-}
-
-fn resolve_kind(kind: MotionKind, reduced: ReducedMotion) -> MotionKind {
-    match reduced {
-        ReducedMotion::Full => kind,
-        ReducedMotion::Reduce => match kind {
-            MotionKind::Instant => kind,
-            _ => MotionKind::Instant,
-        },
     }
 }
 
@@ -816,6 +363,7 @@ impl MotionController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aqua_core::Oklch;
     use std::cell::RefCell;
     use std::rc::Rc;
 

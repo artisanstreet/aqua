@@ -30,7 +30,7 @@
 //! Result<ResolvedConfig, ConfigError>` with `ResolvedConfig { runtime:
 //! AquaConfig, material: ResolvedMaterial }`.
 
-use aqua_platform::prefs::{query_preferences, OsPreferences};
+use aqua_platform::prefs::{OsPreferences, query_preferences};
 use aqua_protocol::{Input, Instant};
 use aqua_reactive::{DepTuple, Scope};
 use aqua_ui::element::Element;
@@ -98,10 +98,8 @@ pub struct ReactiveView<D, F> {
 mod sealed {
     pub trait Sealed {}
     impl Sealed for aqua_ui::element::Element {}
-    impl<
-            D: aqua_reactive::DepTuple,
-            F: FnMut(D::Values) -> aqua_ui::element::Element + 'static,
-        > Sealed for super::ReactiveView<D, F>
+    impl<D: aqua_reactive::DepTuple, F: FnMut(D::Values) -> aqua_ui::element::Element + 'static>
+        Sealed for super::ReactiveView<D, F>
     {
     }
 }
@@ -288,11 +286,11 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
-    use aqua_platform::prefs::PrefState;
     use aqua_platform::WindowMaterial;
+    use aqua_platform::prefs::PrefState;
     use aqua_reactive::{ReadSignal, WriteSignal};
     use aqua_ui::element::ui::{Box as UiBox, Text as UiText};
-    use aqua_ui::style::{pct, px, Style};
+    use aqua_ui::style::{Style, pct, px};
     use aqua_ui::tree::NodeKind;
 
     use crate::config::{Material, Theme, Window};

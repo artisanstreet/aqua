@@ -9,9 +9,7 @@
 //! The task executor is deliberately separate: the graph emits
 //! [`FetchRequest`]s into the resource outbox, the host drains them
 //! ([`Resource::take_requests`]), runs the future on its own runtime, and
-//! calls [`Resource::complete`] back on the owner thread. [`crate::worker`]
-//! provides a small blocking-thread helper plus a wake hook so the host
-//! event loop wakes on arrival instead of polling.
+//! calls [`Resource::complete`] back on the owner thread.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;

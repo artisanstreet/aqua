@@ -21,11 +21,11 @@ use aqua_core::{CollectionSemantics, NodeId, Point, RawId, Role, Size};
 use aqua_reactive::{ReadSignal, Scope, WriteSignal};
 
 use crate::collection_runtime::{
-    spacer_spec, CollectionDescriptor, CollectionLayout, CollectionRevealAlignment, CollectionRole,
-    CollectionRowRegistration, CollectionRowSources, CollectionState,
+    CollectionDescriptor, CollectionLayout, CollectionRevealAlignment, CollectionRole,
+    CollectionRowRegistration, CollectionRowSources, CollectionState, spacer_spec,
 };
 use crate::element::{
-    lower_specs, lower_specs_in, splice_top_level, Element, ElementBinding, LowerError, TypoChain,
+    Element, ElementBinding, LowerError, TypoChain, lower_specs, lower_specs_in, splice_top_level,
 };
 use crate::layout::TextMeasurer;
 use crate::style::{Axis, LayoutStyle, Length, Paint};
@@ -2339,7 +2339,7 @@ mod tests {
         }
     }
 
-    use crate::style::{px, Style};
+    use crate::style::{Style, px};
 
     #[test]
     fn mount_box_text_layout_and_scene() {
@@ -2350,20 +2350,23 @@ mod tests {
         let ids = view
             .set_content(
                 &mut tree,
-                vec![ui::Box::builder()
-                    .layout("column")
-                    .gap(16)
-                    .child(ui::Text::builder().arg("hello").build())
-                    .build()],
+                vec![
+                    ui::Box::builder()
+                        .layout("column")
+                        .gap(16)
+                        .child(ui::Text::builder().arg("hello").build())
+                        .build(),
+                ],
             )
             .unwrap();
         assert_eq!(ids.len(), 1);
         assert_eq!(view.root(), Some(ids[0]));
         layout(&mut tree);
         let ops = tree.emit_scene();
-        assert!(ops
-            .iter()
-            .any(|(_, op)| matches!(op, aqua_core::DisplayItem::Text { .. })));
+        assert!(
+            ops.iter()
+                .any(|(_, op)| matches!(op, aqua_core::DisplayItem::Text { .. }))
+        );
     }
 
     #[test]
@@ -2376,9 +2379,11 @@ mod tests {
         let ids = view
             .set_content(
                 &mut tree,
-                vec![ui::Box::builder()
-                    .child(ui::Text::builder().value(label.clone()).build())
-                    .build()],
+                vec![
+                    ui::Box::builder()
+                        .child(ui::Text::builder().value(label.clone()).build())
+                        .build(),
+                ],
             )
             .unwrap();
         layout(&mut tree);
@@ -2397,9 +2402,11 @@ mod tests {
         let (label, set_label) = scope.signal(String::from("a"));
         let mut view = View::new(scope, tree.command_sink());
         let content = || {
-            vec![ui::Box::builder()
-                .child(ui::Text::builder().value(label.clone()).build())
-                .build()]
+            vec![
+                ui::Box::builder()
+                    .child(ui::Text::builder().value(label.clone()).build())
+                    .build(),
+            ]
         };
         view.set_content(&mut tree, content()).unwrap();
         layout(&mut tree);
@@ -2423,12 +2430,14 @@ mod tests {
         let ids = view
             .set_content(
                 &mut tree,
-                vec![ui::Button::builder()
-                    .on_activate(move || {
-                        *fired2.lock().unwrap() += 1;
-                    })
-                    .child(ui::Text::builder().arg("Go").build())
-                    .build()],
+                vec![
+                    ui::Button::builder()
+                        .on_activate(move || {
+                            *fired2.lock().unwrap() += 1;
+                        })
+                        .child(ui::Text::builder().arg("Go").build())
+                        .build(),
+                ],
             )
             .unwrap();
         layout(&mut tree);
@@ -2452,9 +2461,11 @@ mod tests {
         let ids = view
             .set_content(
                 &mut tree,
-                vec![ui::Text::builder()
-                    .bind((text.clone(), _set_text.clone()))
-                    .build()],
+                vec![
+                    ui::Text::builder()
+                        .bind((text.clone(), _set_text.clone()))
+                        .build(),
+                ],
             )
             .unwrap();
         layout(&mut tree);
@@ -2479,14 +2490,16 @@ mod tests {
         let ids = view
             .set_content(
                 &mut tree,
-                vec![ui::Text::builder()
-                    .bind({
-                        let s = view.scope();
-                        let (r, w) = s.signal(String::new());
-                        (r, w)
-                    })
-                    .placeholder("Search...")
-                    .build()],
+                vec![
+                    ui::Text::builder()
+                        .bind({
+                            let s = view.scope();
+                            let (r, w) = s.signal(String::new());
+                            (r, w)
+                        })
+                        .placeholder("Search...")
+                        .build(),
+                ],
             )
             .unwrap();
         layout(&mut tree);
@@ -2522,20 +2535,22 @@ mod tests {
         let (a, set_a) = scope.signal(String::from("a"));
         let (b, set_b) = scope.signal(String::from("b"));
         let rows = |a: &ReadSignal<String>, b: &ReadSignal<String>| {
-            vec![ui::Box::builder()
-                .child(
-                    ui::Text::builder()
-                        .value(a.clone())
-                        .build()
-                        .with_key("row-a"),
-                )
-                .child(
-                    ui::Text::builder()
-                        .value(b.clone())
-                        .build()
-                        .with_key("row-b"),
-                )
-                .build()]
+            vec![
+                ui::Box::builder()
+                    .child(
+                        ui::Text::builder()
+                            .value(a.clone())
+                            .build()
+                            .with_key("row-a"),
+                    )
+                    .child(
+                        ui::Text::builder()
+                            .value(b.clone())
+                            .build()
+                            .with_key("row-b"),
+                    )
+                    .build(),
+            ]
         };
         let mut view = View::new(scope, tree.command_sink());
         view.set_content(&mut tree, rows(&a, &b)).unwrap();
@@ -2545,20 +2560,22 @@ mod tests {
         // Reorder by key.
         view.set_content(
             &mut tree,
-            vec![ui::Box::builder()
-                .child(
-                    ui::Text::builder()
-                        .value(b.clone())
-                        .build()
-                        .with_key("row-b"),
-                )
-                .child(
-                    ui::Text::builder()
-                        .value(a.clone())
-                        .build()
-                        .with_key("row-a"),
-                )
-                .build()],
+            vec![
+                ui::Box::builder()
+                    .child(
+                        ui::Text::builder()
+                            .value(b.clone())
+                            .build()
+                            .with_key("row-b"),
+                    )
+                    .child(
+                        ui::Text::builder()
+                            .value(a.clone())
+                            .build()
+                            .with_key("row-a"),
+                    )
+                    .build(),
+            ],
         )
         .unwrap();
         layout(&mut tree);
@@ -2608,9 +2625,11 @@ mod tests {
         let mut tree = UiTree::new();
         let mut view = View::new(scope, tree.command_sink());
         let content = || {
-            vec![ui::Box::builder()
-                .child(ui::Text::builder().arg("hi").build())
-                .build()]
+            vec![
+                ui::Box::builder()
+                    .child(ui::Text::builder().arg("hi").build())
+                    .build(),
+            ]
         };
         let ids = view.set_content(&mut tree, content()).unwrap();
         layout(&mut tree);
@@ -2633,9 +2652,11 @@ mod tests {
         let mut tree = UiTree::new();
         let mut view = View::new(scope, tree.command_sink());
         let row = |s: &ReadSignal<String>| {
-            vec![ui::Box::builder()
-                .child(ui::Text::builder().value(s.clone()).build().with_key("k"))
-                .build()]
+            vec![
+                ui::Box::builder()
+                    .child(ui::Text::builder().value(s.clone()).build().with_key("k"))
+                    .build(),
+            ]
         };
         let ids = view.set_content(&mut tree, row(&old_src)).unwrap();
         layout(&mut tree);
@@ -2680,17 +2701,19 @@ mod tests {
         // u: uncontrolled editable (mount-time default ""); l: plain label;
         // c: controlled via signal.
         let rows_u_first = |l: &str, c: &ReadSignal<String>| {
-            vec![ui::Box::builder()
-                .child(
-                    ui::Text::builder()
-                        .arg("")
-                        .editable(true)
-                        .build()
-                        .with_key("u"),
-                )
-                .child(ui::Text::builder().arg(l).build().with_key("l"))
-                .child(ui::Text::builder().value(c.clone()).build().with_key("c"))
-                .build()]
+            vec![
+                ui::Box::builder()
+                    .child(
+                        ui::Text::builder()
+                            .arg("")
+                            .editable(true)
+                            .build()
+                            .with_key("u"),
+                    )
+                    .child(ui::Text::builder().arg(l).build().with_key("l"))
+                    .child(ui::Text::builder().value(c.clone()).build().with_key("c"))
+                    .build(),
+            ]
         };
         let ids = view
             .set_content(&mut tree, rows_u_first("v1", &s1))
@@ -2710,17 +2733,19 @@ mod tests {
         let ids2 = view
             .set_content(
                 &mut tree,
-                vec![ui::Box::builder()
-                    .child(ui::Text::builder().arg("v2").build().with_key("l"))
-                    .child(ui::Text::builder().value(s2.clone()).build().with_key("c"))
-                    .child(
-                        ui::Text::builder()
-                            .arg("")
-                            .editable(true)
-                            .build()
-                            .with_key("u"),
-                    )
-                    .build()],
+                vec![
+                    ui::Box::builder()
+                        .child(ui::Text::builder().arg("v2").build().with_key("l"))
+                        .child(ui::Text::builder().value(s2.clone()).build().with_key("c"))
+                        .child(
+                            ui::Text::builder()
+                                .arg("")
+                                .editable(true)
+                                .build()
+                                .with_key("u"),
+                        )
+                        .build(),
+                ],
             )
             .unwrap();
         layout(&mut tree);
@@ -2746,11 +2771,13 @@ mod tests {
         let mut tree = UiTree::new();
         let mut view = View::new(scope, tree.command_sink());
         let field = |editable: bool| {
-            vec![ui::Text::builder()
-                .arg("hello")
-                .editable(editable)
-                .build()
-                .with_key("f")]
+            vec![
+                ui::Text::builder()
+                    .arg("hello")
+                    .editable(editable)
+                    .build()
+                    .with_key("f"),
+            ]
         };
         let ids = view.set_content(&mut tree, field(false)).unwrap();
         layout(&mut tree);
@@ -2796,12 +2823,14 @@ mod tests {
         let mut tree = UiTree::new();
         let mut view = View::new(scope, tree.command_sink());
         let field = |multiline: bool| {
-            vec![ui::Text::builder()
-                .arg("a")
-                .editable(true)
-                .multiline(multiline)
-                .build()
-                .with_key("f")]
+            vec![
+                ui::Text::builder()
+                    .arg("a")
+                    .editable(true)
+                    .multiline(multiline)
+                    .build()
+                    .with_key("f"),
+            ]
         };
         let ids = view.set_content(&mut tree, field(false)).unwrap();
         layout(&mut tree);
@@ -2833,10 +2862,12 @@ mod tests {
         let mut tree = UiTree::new();
         let mut view = View::new(scope, tree.command_sink());
         let rows = |a: &ReadSignal<String>, b: &ReadSignal<String>| {
-            vec![ui::Box::builder()
-                .child(ui::Text::builder().value(a.clone()).build().with_key("ra"))
-                .child(ui::Text::builder().value(b.clone()).build().with_key("rb"))
-                .build()]
+            vec![
+                ui::Box::builder()
+                    .child(ui::Text::builder().value(a.clone()).build().with_key("ra"))
+                    .child(ui::Text::builder().value(b.clone()).build().with_key("rb"))
+                    .build(),
+            ]
         };
         view.set_content(&mut tree, rows(&a, &b)).unwrap();
         layout(&mut tree);
@@ -2844,9 +2875,11 @@ mod tests {
         // Remove one row: its child scope (and effect) must go away.
         view.set_content(
             &mut tree,
-            vec![ui::Box::builder()
-                .child(ui::Text::builder().value(a.clone()).build().with_key("ra"))
-                .build()],
+            vec![
+                ui::Box::builder()
+                    .child(ui::Text::builder().value(a.clone()).build().with_key("ra"))
+                    .build(),
+            ],
         )
         .unwrap();
         layout(&mut tree);
@@ -2896,9 +2929,11 @@ mod tests {
         let ids2 = view
             .set_content(
                 &mut tree,
-                vec![ui::Box::builder()
-                    .child(ui::Text::builder().arg("x").build())
-                    .build()],
+                vec![
+                    ui::Box::builder()
+                        .child(ui::Text::builder().arg("x").build())
+                        .build(),
+                ],
             )
             .unwrap();
         assert_ne!(ids, ids2);
@@ -2935,16 +2970,18 @@ mod tests {
         let scope = rt2.create_scope();
         let mut view = View::new(scope, tree.command_sink());
         let content = |color: aqua_core::Oklch| {
-            vec![ui::Box::builder()
-                .styles([Style::new().text_color(color)])
-                .child(ui::Text::builder().arg("plain").build())
-                .child(
-                    ui::Text::builder()
-                        .arg("pinned")
-                        .color(aqua_core::Oklch::WHITE)
-                        .build(),
-                )
-                .build()]
+            vec![
+                ui::Box::builder()
+                    .styles([Style::new().text_color(color)])
+                    .child(ui::Text::builder().arg("plain").build())
+                    .child(
+                        ui::Text::builder()
+                            .arg("pinned")
+                            .color(aqua_core::Oklch::WHITE)
+                            .build(),
+                    )
+                    .build(),
+            ]
         };
         let ids = view
             .set_content(&mut tree, content(aqua_core::Oklch::BLACK))
@@ -2980,11 +3017,13 @@ mod tests {
         let scope = rt2.create_scope();
         let mut view = View::new(scope, tree.command_sink());
         let content = |color: aqua_core::Oklch| {
-            vec![ui::Text::builder()
-                .arg("")
-                .editable(true)
-                .styles([Style::new().text_color(color)])
-                .build()]
+            vec![
+                ui::Text::builder()
+                    .arg("")
+                    .editable(true)
+                    .styles([Style::new().text_color(color)])
+                    .build(),
+            ]
         };
         let ids = view
             .set_content(&mut tree, content(aqua_core::Oklch::BLACK))
@@ -3016,10 +3055,12 @@ mod tests {
         let (label, set_label) = scope.signal(String::from("one"));
         let mut view = View::new(scope, tree.command_sink());
         let content = || {
-            vec![ui::Box::builder()
-                .styles([Style::new().text_color(aqua_core::Oklch::BLACK)])
-                .child(ui::Text::builder().value(label.clone()).build())
-                .build()]
+            vec![
+                ui::Box::builder()
+                    .styles([Style::new().text_color(aqua_core::Oklch::BLACK)])
+                    .child(ui::Text::builder().value(label.clone()).build())
+                    .build(),
+            ]
         };
         view.set_content(&mut tree, content()).unwrap();
         layout(&mut tree);
@@ -3049,10 +3090,12 @@ mod tests {
         };
         view.set_content(
             &mut tree,
-            vec![ui::Box::builder()
-                .child(row("a", aqua_core::Oklch::BLACK))
-                .child(row("b", aqua_core::Oklch::WHITE))
-                .build()],
+            vec![
+                ui::Box::builder()
+                    .child(row("a", aqua_core::Oklch::BLACK))
+                    .child(row("b", aqua_core::Oklch::WHITE))
+                    .build(),
+            ],
         )
         .unwrap();
         layout(&mut tree);
@@ -3060,10 +3103,12 @@ mod tests {
         let before: Vec<NodeId> = tree.get(root).unwrap().children.clone();
         view.set_content(
             &mut tree,
-            vec![ui::Box::builder()
-                .child(row("b", aqua_core::Oklch::WHITE))
-                .child(row("a", aqua_core::Oklch::BLACK))
-                .build()],
+            vec![
+                ui::Box::builder()
+                    .child(row("b", aqua_core::Oklch::WHITE))
+                    .child(row("a", aqua_core::Oklch::BLACK))
+                    .build(),
+            ],
         )
         .unwrap();
         layout(&mut tree);

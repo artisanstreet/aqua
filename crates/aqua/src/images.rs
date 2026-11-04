@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use aqua_core::{ImageId, ImageRef, RawId};
 use aqua_render::media::{
-    animation::{decode_animation, AnimationBudget, DecodedAnimation},
     DecodedImage,
+    animation::{AnimationBudget, DecodedAnimation, decode_animation},
 };
 
 static NEXT_IMAGE_INDEX: AtomicU32 = AtomicU32::new(0x8000_0000);
@@ -476,63 +476,65 @@ fn spawn_worker(shared: &Arc<Mutex<State>>) {
     let weak = Arc::downgrade(shared);
     let worker = std::thread::Builder::new()
         .name("aqua-image-decode".into())
-        .spawn(move || loop {
-            let (job, budget) = {
-                let Some(shared) = weak.upgrade() else {
-                    return;
+        .spawn(move || {
+            loop {
+                let (job, budget) = {
+                    let Some(shared) = weak.upgrade() else {
+                        return;
+                    };
+                    let mut state = lock(&shared);
+                    let Some(job) = state.queue.pop_front() else {
+                        state.stats.workers -= 1;
+                        return;
+                    };
+                    (job, state.budget.decoded_bytes)
                 };
-                let mut state = lock(&shared);
-                let Some(job) = state.queue.pop_front() else {
-                    state.stats.workers -= 1;
-                    return;
-                };
-                (job, state.budget.decoded_bytes)
-            };
-            #[cfg(test)]
-            let callback = DECODE_STARTED
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .clone();
-            #[cfg(test)]
-            if let Some(callback) = callback {
-                callback(job.id);
-            }
-            let result = if job.preview && job.encoded.len() > 32 * 1024 * 1024 {
-                Err(ImageAssetError::Decode(
-                    "image source exceeds 32 MiB".into(),
-                ))
-            } else if aqua_render::media::is_svg(&job.encoded) {
-                aqua_render::media::decode_svg(&job.encoded, budget)
-                    .map(|image| Data::Still(Arc::new(image)))
-                    .map_err(|error| ImageAssetError::Decode(error.to_string()))
-            } else if job.preview && !aqua_render::media::is_gif(&job.encoded) {
-                aqua_render::media::decode_preview_still(&job.encoded, budget)
-                    .map(|image| Data::Still(Arc::new(image)))
-                    .map_err(|error| ImageAssetError::Decode(error.to_string()))
-            } else {
-                let result = if job.preview {
-                    aqua_render::media::animation::decode_preview_gif(&job.encoded, budget)
+                #[cfg(test)]
+                let callback = DECODE_STARTED
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .clone();
+                #[cfg(test)]
+                if let Some(callback) = callback {
+                    callback(job.id);
+                }
+                let result = if job.preview && job.encoded.len() > 32 * 1024 * 1024 {
+                    Err(ImageAssetError::Decode(
+                        "image source exceeds 32 MiB".into(),
+                    ))
+                } else if aqua_render::media::is_svg(&job.encoded) {
+                    aqua_render::media::decode_svg(&job.encoded, budget)
+                        .map(|image| Data::Still(Arc::new(image)))
+                        .map_err(|error| ImageAssetError::Decode(error.to_string()))
+                } else if job.preview && !aqua_render::media::is_gif(&job.encoded) {
+                    aqua_render::media::decode_preview_still(&job.encoded, budget)
+                        .map(|image| Data::Still(Arc::new(image)))
+                        .map_err(|error| ImageAssetError::Decode(error.to_string()))
                 } else {
-                    decode_animation(
-                        &job.encoded,
-                        AnimationBudget {
-                            max_bytes: budget.min(64 * 1024 * 1024),
-                            ..Default::default()
-                        },
-                    )
+                    let result = if job.preview {
+                        aqua_render::media::animation::decode_preview_gif(&job.encoded, budget)
+                    } else {
+                        decode_animation(
+                            &job.encoded,
+                            AnimationBudget {
+                                max_bytes: budget.min(64 * 1024 * 1024),
+                                ..Default::default()
+                            },
+                        )
+                    };
+                    result
+                        .map(|animation| {
+                            if animation.frames().len() == 1 {
+                                Data::Still(Arc::new(animation.frames()[0].image.clone()))
+                            } else {
+                                Data::Animation(Arc::new(animation))
+                            }
+                        })
+                        .map_err(|error| ImageAssetError::Decode(error.to_string()))
                 };
-                result
-                    .map(|animation| {
-                        if animation.frames().len() == 1 {
-                            Data::Still(Arc::new(animation.frames()[0].image.clone()))
-                        } else {
-                            Data::Animation(Arc::new(animation))
-                        }
-                    })
-                    .map_err(|error| ImageAssetError::Decode(error.to_string()))
-            };
-            if let Some(shared) = weak.upgrade() {
-                complete(&shared, job.id, job.encoded.len(), result);
+                if let Some(shared) = weak.upgrade() {
+                    complete(&shared, job.id, job.encoded.len(), result);
+                }
             }
         });
     if let Err(error) = worker {

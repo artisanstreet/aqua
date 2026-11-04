@@ -45,8 +45,8 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use aqua_core::{
-    media_layer, Arena, CollectionSemantics, DisplayItem, NodeId, Oklch, Point, RawId, Rect, Role,
-    SemanticNode, Size, TextRun, Transform2D, ViewportId,
+    Arena, CollectionSemantics, DisplayItem, NodeId, Oklch, Point, RawId, Rect, Role, SemanticNode,
+    Size, TextRun, Transform2D, ViewportId, media_layer,
 };
 use aqua_text::{LineMode, Selection, TextEditor, TextModel};
 use taffy::{AvailableSpace, LayoutInput, TaffyTree};
@@ -995,6 +995,8 @@ pub struct UiTree {
     taffy: TaffyTree<LeafCtx>,
     gpui_layout_scale: Option<f32>,
     layout_styles_dirty: bool,
+    key_index: RefCell<Option<HashMap<KeyHash, Vec<NodeId>>>>,
+    structure_epoch: u64,
     /// UI node (raw id) to Taffy node.
     tmap: HashMap<RawId, taffy::NodeId>,
     /// Committed absolute rects, refreshed by [`UiTree::compute_layout`].
@@ -1036,6 +1038,7 @@ pub struct UiTree {
     last_viewport: Option<Size>,
     /// Statistics for the last layout + emit (dirty-tracking evidence).
     last_stats: FrameStats,
+    visited: std::cell::Cell<usize>,
 }
 
 impl Default for UiTree {
@@ -1105,6 +1108,8 @@ impl UiTree {
             taffy: TaffyTree::new(),
             gpui_layout_scale: None,
             layout_styles_dirty: false,
+            key_index: RefCell::new(None),
+            structure_epoch: 0,
             tmap: HashMap::new(),
             rects: HashMap::new(),
             content: HashMap::new(),
@@ -1125,7 +1130,12 @@ impl UiTree {
             content_version: 0,
             last_viewport: None,
             last_stats: FrameStats::default(),
+            visited: std::cell::Cell::new(0),
         }
+    }
+
+    pub fn take_visited(&self) -> usize {
+        self.visited.replace(0)
     }
 
     pub fn set_gpui_paint(&mut self, enabled: bool) {
@@ -1688,6 +1698,7 @@ impl UiTree {
             self.remove(old);
         }
         let id = self.build_spec(None, spec);
+        self.structure_changed();
         self.root = Some(id);
         self.bump_layout();
         id
@@ -1915,6 +1926,7 @@ impl UiTree {
                 rec.parent = Some(parent);
             }
         }
+        self.structure_changed();
         if let Some(rec) = self.nodes.get_mut(parent.raw()) {
             rec.children = built.clone();
             rec.dirty_layout = true;
@@ -2072,7 +2084,11 @@ impl UiTree {
             }
         }
         if let Some(rec) = self.nodes.get_mut(id.raw()) {
-            rec.key = spec.key;
+            if rec.key != spec.key {
+                rec.key = spec.key;
+                self.key_index.get_mut().take();
+            }
+            self.structure_epoch += 1;
             let mut next = spec.control;
             if let (Some(next), Some(previous)) = (&mut next, &rec.control) {
                 next.preserve(previous);
@@ -2199,6 +2215,7 @@ impl UiTree {
                 self.taffy.add_child(pt, t).expect("taffy insert");
             }
         }
+        self.structure_changed();
         if let Some(rec) = self.nodes.get_mut(parent.raw()) {
             rec.children = kids;
             rec.dirty_layout = true;
@@ -2238,6 +2255,7 @@ impl UiTree {
                 }
             }
         }
+        self.structure_changed();
         if let Some(rec) = self.nodes.get_mut(parent.raw()) {
             rec.children = kids;
             rec.dirty_layout = true;
@@ -2262,6 +2280,7 @@ impl UiTree {
         if let Some(p) = parent {
             self.attach(p, id);
         } else if self.root.is_none() {
+            self.structure_changed();
             self.root = Some(id);
         }
         id
@@ -2274,6 +2293,7 @@ impl UiTree {
             _ => return,
         };
         self.taffy.add_child(pt, ct).expect("taffy attach");
+        self.structure_changed();
         if let Some(rec) = self.nodes.get_mut(parent.raw()) {
             rec.children.push(child);
             rec.dirty_layout = true;
@@ -2301,12 +2321,14 @@ impl UiTree {
             if let (Some(&pt), Some(&ct)) = (self.tmap.get(&p.raw()), self.tmap.get(&id.raw())) {
                 self.detach_child(pt, ct);
             }
+            self.structure_changed();
             if let Some(prec) = self.nodes.get_mut(p.raw()) {
                 prec.children.retain(|c| *c != id);
             }
             // Ancestor geometry may depend on this child: propagate.
             self.mark_layout_dirty(p);
         } else if self.root == Some(id) {
+            self.structure_changed();
             self.root = None;
             self.bump_layout();
         }
@@ -2708,6 +2730,11 @@ impl UiTree {
         Point::new((content.w - rect.w).max(0.0), (content.h - rect.h).max(0.0))
     }
 
+    #[must_use]
+    pub fn scroll_limit(&self, id: NodeId) -> Point {
+        self.scroll_max(id)
+    }
+
     /// Scroll offset of a scroll node (`None` for unknown/non-scroll nodes).
     /// The collection driver reads this as the single source of truth for
     /// the visible window — virtualization follows actual scroll offsets,
@@ -2751,6 +2778,7 @@ impl UiTree {
         if self.gpui_layout_scale.is_none() && !self.layout_styles_dirty {
             return Ok(());
         }
+        self.visited.set(self.visited.get() + self.tmap.len());
         for (id, record) in self.nodes.iter() {
             let Some(&node) = self.tmap.get(&id) else {
                 continue;
@@ -2920,6 +2948,7 @@ impl UiTree {
                 }
             }
         }
+        self.visited.set(self.visited.get() + self.rects.len());
         self.committed_layout = self.layout_version;
         self.last_viewport = Some(viewport);
         self.last_stats = FrameStats {
@@ -2982,6 +3011,7 @@ impl UiTree {
         let Some(rec) = self.nodes.get(id.raw()) else {
             return;
         };
+        self.visited.set(self.visited.get() + 1);
         let Some(mut rect) = self.rects.get(&id.raw()).copied() else {
             return;
         };
@@ -3505,6 +3535,33 @@ impl UiTree {
         ((id.raw().index as u64) << 32) | id.raw().generation as u64
     }
 
+    fn structure_changed(&mut self) {
+        self.structure_epoch += 1;
+        self.key_index.get_mut().take();
+    }
+
+    pub fn structure_epoch(&self) -> u64 {
+        self.structure_epoch
+    }
+
+    pub fn nodes_with_key(&self, key: KeyHash) -> Vec<NodeId> {
+        let mut index = self.key_index.borrow_mut();
+        let map = index.get_or_insert_with(|| {
+            let mut map: HashMap<KeyHash, Vec<NodeId>> = HashMap::new();
+            for id in self.traverse() {
+                if let Some(key) = self.nodes.get(id.raw()).and_then(|record| record.key) {
+                    map.entry(key).or_default().push(id);
+                }
+            }
+            map
+        });
+        map.get(&key).cloned().unwrap_or_default()
+    }
+
+    pub fn find_by_key(&self, key: KeyHash) -> Option<NodeId> {
+        self.nodes_with_key(key).into_iter().next()
+    }
+
     /// Depth-first traversal in paint order (for focus order, debugging).
     pub fn traverse(&self) -> Vec<NodeId> {
         let mut out = Vec::new();
@@ -3515,6 +3572,7 @@ impl UiTree {
                 stack.extend(rec.children.iter().rev().copied());
             }
         }
+        self.visited.set(self.visited.get() + out.len());
         out
     }
 }
@@ -3576,7 +3634,8 @@ fn measure_leaf(
         let max_width = if *multiline {
             match available_space.width {
                 AvailableSpace::Definite(w) => Some(w),
-                AvailableSpace::MaxContent | AvailableSpace::MinContent => None,
+                AvailableSpace::MinContent => Some(0.0),
+                AvailableSpace::MaxContent => None,
             }
         } else {
             None
@@ -4003,11 +4062,13 @@ mod tests {
     #[test]
     fn kind_change_replaces_node() {
         let mut tree = UiTree::new();
-        let root = tree.mount_spec(column(vec![NodeSpec::new(
-            NodeKind::Text(TextContent::label("x")),
-            LayoutStyle::default(),
-        )
-        .keyed("k")]));
+        let root = tree.mount_spec(column(vec![
+            NodeSpec::new(
+                NodeKind::Text(TextContent::label("x")),
+                LayoutStyle::default(),
+            )
+            .keyed("k"),
+        ]));
         let before: Vec<NodeId> = tree.get(root).unwrap().children.clone();
         let after = tree.sync_children(
             root,
@@ -4073,9 +4134,10 @@ mod tests {
         tree.compute_layout(Size::new(100.0, 100.0), &NaiveMeasurer)
             .unwrap();
         let ops = tree.emit_scene();
-        assert!(ops
-            .iter()
-            .any(|(_, op)| matches!(op, DisplayItem::BackdropBlur { .. })));
+        assert!(
+            ops.iter()
+                .any(|(_, op)| matches!(op, DisplayItem::BackdropBlur { .. }))
+        );
     }
 
     #[test]

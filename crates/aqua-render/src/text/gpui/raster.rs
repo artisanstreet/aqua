@@ -1,12 +1,14 @@
-use cosmic_text::{FontSystem, SwashContent, SwashImage};
-use swash::{
-    scale::{Render, ScaleContext, Source, StrikeWith},
-    zeno::{Format, Vector},
-};
+use aqua_text::FontManager;
+use aqua_text::raster::{RasterKey, Rasterizer as GlyphRasterizer};
+use aqua_text::style::FontStretch;
+
+use crate::text::image::{Content, Image};
 
 pub(super) struct GlyphRequest {
-    pub font_id: fontdb::ID,
-    pub weight: cosmic_text::Weight,
+    pub font_id: aqua_text::FontId,
+    pub weight: u16,
+    pub stretch: FontStretch,
+    pub synthetic_italic: bool,
     pub glyph_id: u16,
     pub font_size: f32,
     pub scale: f32,
@@ -17,58 +19,59 @@ pub(super) struct GlyphRequest {
 }
 
 pub(super) struct Rasterizer {
-    context: ScaleContext,
+    inner: GlyphRasterizer,
 }
 
 impl Rasterizer {
     pub fn new() -> Self {
         Self {
-            context: ScaleContext::new(),
+            inner: GlyphRasterizer::new(),
         }
     }
 
-    pub fn is_emoji_font(fonts: &FontSystem, font_id: fontdb::ID) -> Result<bool, String> {
-        let face = fonts
-            .db()
-            .face(font_id)
+    pub fn is_emoji_font(
+        fonts: &mut FontManager,
+        font_id: aqua_text::FontId,
+        weight: u16,
+        stretch: FontStretch,
+    ) -> Result<bool, String> {
+        let entry = fonts
+            .entry_with(font_id, weight, stretch, false)
             .ok_or("glyph font face is unavailable")?;
-        Ok(matches!(
-            face.post_script_name.as_str(),
-            "NotoColorEmoji"
-                | "SegoeUIEmoji"
-                | "AppleColorEmoji"
-                | ".AppleColorEmojiUI"
-                | "TwemojiMozilla"
-        ))
+        Ok(entry.is_emoji())
     }
 
     pub fn is_color_glyph(
         &mut self,
-        fonts: &mut FontSystem,
-        font_id: fontdb::ID,
-        weight: cosmic_text::Weight,
+        fonts: &mut FontManager,
+        font_id: aqua_text::FontId,
+        weight: u16,
+        stretch: FontStretch,
         glyph_id: u16,
     ) -> Result<bool, String> {
-        if !Self::is_emoji_font(fonts, font_id)? {
+        if !Self::is_emoji_font(fonts, font_id, weight, stretch)? {
             return Ok(false);
         }
-        let font = fonts
-            .get_font(font_id, weight)
-            .ok_or("glyph font is unavailable")?;
-        let mut scaler = self.context.builder(font.as_swash()).build();
-        Ok(scaler.scale_color_bitmap_into(
+        let key = RasterKey {
+            font_id,
+            weight,
+            stretch,
+            synthetic_italic: false,
             glyph_id,
-            StrikeWith::LargestSize,
-            &mut swash::scale::image::Image::new(),
-        ) || scaler
-            .scale_color_outline_into(glyph_id, &mut swash::scale::outline::Outline::new()))
+            size_bits: 32.0f32.to_bits(),
+            subpixel: 0,
+        };
+        Ok(matches!(
+            self.inner.rasterize(fonts, &key),
+            Some(aqua_text::raster::GlyphImage::Color(_))
+        ))
     }
 
     pub fn rasterize(
         &mut self,
-        fonts: &mut FontSystem,
+        fonts: &mut FontManager,
         request: &GlyphRequest,
-    ) -> Result<Option<SwashImage>, String> {
+    ) -> Result<Option<Image>, String> {
         if !request.font_size.is_finite()
             || request.font_size <= 0.0
             || !request.scale.is_finite()
@@ -77,50 +80,29 @@ impl Rasterizer {
         {
             return Err("invalid GPUI glyph request".into());
         }
-        let font = fonts
-            .get_font(request.font_id, request.weight)
-            .ok_or("glyph font is unavailable")?;
-        let mut scaler = self
-            .context
-            .builder(font.as_swash())
-            .size(request.font_size * request.scale)
-            .hint(request.hint)
-            .build();
-        let sources: &[Source] = if request.is_emoji {
-            &[
-                Source::ColorOutline(0),
-                Source::ColorBitmap(StrikeWith::BestFit),
-                Source::Outline,
-            ]
-        } else {
-            &[Source::Bitmap(StrikeWith::ExactSize), Source::Outline]
+        let key = RasterKey {
+            font_id: request.font_id,
+            weight: request.weight,
+            stretch: request.stretch,
+            synthetic_italic: request.synthetic_italic,
+            glyph_id: request.glyph_id,
+            size_bits: (request.font_size * request.scale).to_bits(),
+            subpixel: request.x_variant,
         };
-        let mut renderer = Render::new(sources);
-        let offset = Vector::new(f32::from(request.x_variant) / 4.0 / request.scale, 0.0);
-        if request.subpixel {
-            renderer.format(Format::subpixel_bgra()).offset(offset);
-        } else {
-            renderer.format(Format::Alpha).offset(offset);
-        }
-        Ok(renderer.render(&mut scaler, request.glyph_id))
+        Ok(self.inner.rasterize(fonts, &key).map(Image::from))
     }
 }
 
-pub(super) fn atlas_rgba(image: &SwashImage, subpixel: bool) -> Result<Vec<u8>, String> {
+pub(super) fn atlas_rgba(image: &Image, subpixel: bool) -> Result<Vec<u8>, String> {
     let pixels = u64::from(image.placement.width) * u64::from(image.placement.height);
     match image.content {
-        SwashContent::Mask if image.data.len() as u64 == pixels => Ok(image
+        Content::Mask if image.data.len() as u64 == pixels => Ok(image
             .data
             .iter()
             .flat_map(|&alpha| [alpha, alpha, alpha, alpha])
             .collect()),
-        SwashContent::SubpixelMask | SwashContent::Color
-            if image.data.len() as u64 == pixels * 4 =>
-        {
+        Content::Color if image.data.len() as u64 == pixels * 4 && !subpixel => {
             let mut output = image.data.clone();
-            if !subpixel && image.content == SwashContent::SubpixelMask {
-                return Err("subpixel mask returned for grayscale glyph".into());
-            }
             for pixel in output.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
             }

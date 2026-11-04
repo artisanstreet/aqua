@@ -377,7 +377,7 @@ fn rect_fragment(in: VsOut) -> vec4<f32> {
         let d_in = sd_round_box(in.px - rc, half - vec2<f32>(bw, bw), max(rad - bw, 0.0));
         let inner_cover = min(fill_cover, 1.0 - smoothstep(-aa, aa, d_in));
         let band = max(fill_cover - inner_cover, 0.0);
-        fill_rgb = inst.fill.rgb * inst.fill.a * inner_cover + inst.border_color.rgb * inst.border_color.a * band;
+        fill_rgb = inst.fill.rgb * inner_cover + inst.border_color.rgb * band;
         fill_a = inst.fill.a * inner_cover + inst.border_color.a * band;
     } else {
         fill_rgb = inst.fill.rgb * fill_cover;

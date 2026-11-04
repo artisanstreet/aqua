@@ -1,7 +1,7 @@
-use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::Duration;
 
-use super::{ImageAssetBudget, ImageAssets, DECODE_STARTED};
+use super::{DECODE_STARTED, ImageAssetBudget, ImageAssets};
 
 struct Guard {
     id: u8,

@@ -25,6 +25,10 @@ rfd = "0.17"
 # ~150 packages) is Windows-only until other adapters land.
 accesskit = "0.25"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { version = "3", features = ["wayland-data-control"] }
+notify-rust = "4"
+
 [target.'cfg(windows)'.dependencies]
 windows-registry = "0.6"
 windows-core = "0.62.2"

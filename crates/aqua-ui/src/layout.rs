@@ -10,7 +10,7 @@
 //! [`UiTree::compute_layout`]: crate::tree::UiTree::compute_layout
 
 use aqua_core::Size;
-use aqua_text::{measure_text, LineMode, SharedFonts, StyledSpan, TextLayout, TextStyle, WrapMode};
+use aqua_text::{LineMode, SharedFonts, StyledSpan, TextLayout, TextStyle, WrapMode, measure_text};
 
 /// Text metrics provider for layout. Implementations must return the same
 /// advance/line metrics the renderer will draw with; otherwise committed
@@ -72,7 +72,7 @@ impl TextMeasurer for NaiveMeasurer {
             return Size::new(longest * ADVANCE * font_size, lines * LINE * font_size);
         }
         match max_width {
-            Some(w) if w > 0.0 => {
+            Some(w) => {
                 let per_line = (w / (ADVANCE * font_size)).floor().max(1.0);
                 let mut rows = 0.0f32;
                 let mut width = 0.0f32;

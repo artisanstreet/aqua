@@ -6,7 +6,7 @@ use aqua_core::{CollectionSemantics, DisplayItem, NodeId, Oklch, Point, Rect, Ro
 use aqua_reactive::{ReadSignal, WriteSignal};
 
 use crate::collection_runtime::{
-    validate_descriptor, validate_snapshot, CollectionDescriptor, CollectionError, CollectionRole,
+    CollectionDescriptor, CollectionError, CollectionRole, validate_descriptor, validate_snapshot,
 };
 use crate::controls::{
     Control, SelectControl, SelectOption, SliderControl, SliderRange, TabsControl,
@@ -14,9 +14,9 @@ use crate::controls::{
 use crate::input::{EventPhase, InputCallback, InputKind, InputResponse, RoutedEvent, Shortcut};
 use crate::style::{Axis, LayoutStyle, Length, Paint, Style, Typography};
 use crate::tree::{
-    hash_key, ActionCallback, ActionEvent, ActionKind, BoxContent, CanvasContent,
-    CanvasPaintCallback, MediaContent, NodeKind, NodeSpec, ScrollContent, TextAppearance,
-    TextBacking, TextContent, TextInlineGlyph, UiTree, ViewportContent,
+    ActionCallback, ActionEvent, ActionKind, BoxContent, CanvasContent, CanvasPaintCallback,
+    MediaContent, NodeKind, NodeSpec, ScrollContent, TextAppearance, TextBacking, TextContent,
+    TextInlineGlyph, UiTree, ViewportContent, hash_key,
 };
 use aqua_text::document::{SelectionBinding, SelectionDocumentId, SourceSlice};
 use aqua_text::{LineMode, Selection};
@@ -186,7 +186,16 @@ impl TypoChain {
     /// Child chain: own explicit fields win, otherwise the parent's.
     pub(crate) fn child(&self, own: &TypoChain) -> TypoChain {
         TypoChain {
-            text_style: own.text_style.clone().or_else(|| self.text_style.clone()),
+            text_style: match (&own.text_style, &self.text_style) {
+                (Some(own_style), Some(parent_style)) if own_style.letter_spacing_em.is_none() => {
+                    Some(TextStyle {
+                        letter_spacing_em: parent_style.letter_spacing_em,
+                        ..own_style.clone()
+                    })
+                }
+                (Some(own_style), _) => Some(own_style.clone()),
+                (None, parent_style) => parent_style.clone(),
+            },
             font_size: own.font_size.or(self.font_size),
             color: own.color.or(self.color),
             gpui_color: own.gpui_color.or(self.gpui_color),
@@ -198,7 +207,9 @@ impl TypoChain {
     /// Resolve against the tree defaults (14px / WHITE / no wrap).
     fn resolve(&self) -> Typography {
         let base = Typography::default();
-        let mut text_style = self.text_style.clone().unwrap_or(base.text_style);
+        let mut text_style = crate::style::with_root_letter_spacing(
+            self.text_style.clone().unwrap_or(base.text_style),
+        );
         if let Some(color) = self.gpui_color {
             text_style.gpui_color = color.map(|c| [c.h, c.s, c.l, c.a]);
         }
@@ -3097,7 +3108,10 @@ impl std::fmt::Display for LowerError {
                 f,
                 "text color map requires finite ordered bounds and strength in 0..=1"
             ),
-            LowerError::InvalidTextOpacity => write!(f, "text opacity ranges require ordered nonoverlapping UTF-8 byte boundaries and finite opacity in 0..=1"),
+            LowerError::InvalidTextOpacity => write!(
+                f,
+                "text opacity ranges require ordered nonoverlapping UTF-8 byte boundaries and finite opacity in 0..=1"
+            ),
             LowerError::InvalidContentBlur => {
                 write!(f, "content blur requires a finite nonnegative radius")
             }
@@ -3518,13 +3532,13 @@ pub mod ui {
     pub use super::Viewport3D;
     pub use crate::controls::ResizeHandle;
     pub use crate::style::Axis;
-    pub use crate::style::{auto, pct, px, Length, Style, Typography};
+    pub use crate::style::{Length, Style, Typography, auto, pct, px};
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::{auto, px, Style};
+    use crate::style::{Style, auto, px};
 
     fn label_spec(text: &str) -> NodeSpec {
         NodeSpec::new(

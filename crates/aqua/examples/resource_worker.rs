@@ -1,15 +1,7 @@
-//! End-to-end `Resource` + `Worker` wiring a host would use.
-//!
-//! Run: `cargo run --release --example resource_worker`
-//!
-//! A search box (signal) drives a resource; the host drains requests after
-//! each flush, runs the blocking fetch on the worker thread, and commits
-//! results back on the owner thread. A mid-flight query change demonstrates
-//! stale rejection: only the latest generation commits.
-
 use std::time::Duration;
 
-use aqua_reactive::{worker::Worker, CompleteOutcome, ResourceState, Runtime};
+use aqua::worker::Worker;
+use aqua_reactive::{CompleteOutcome, ResourceState, Runtime};
 
 fn main() {
     let rt = Runtime::new();
@@ -22,8 +14,6 @@ fn main() {
     let paint = |label: &str| {
         println!("{label:<28} state={:?}", search.state().get());
     };
-
-    // Host pump: flush, dispatch new requests, drain completions, commit.
     let pump = |work: fn(String) -> Vec<String>| {
         rt.flush();
         for req in search.take_requests() {
@@ -45,8 +35,6 @@ fn main() {
 
     pump(fake_search);
     paint("after first load");
-
-    // Slow fetch for "abc"; change the query again before it lands.
     set_query.set("abc".to_string());
     rt.flush();
     let slow = search.take_requests();
@@ -55,8 +43,6 @@ fn main() {
     rt.flush();
     let fast = search.take_requests();
     assert_eq!(fast.len(), 1);
-
-    // Deliver out of order: stale first.
     let stale = &slow[0];
     let outcome = search.complete(&stale.ticket, Ok(vec!["stale".to_string()]));
     println!(

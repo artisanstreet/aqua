@@ -6,6 +6,7 @@ mod access;
 mod interaction;
 mod keyed_focus;
 mod overlays;
+mod wheel;
 pub use overlays::{PopupError, PopupFocus, PopupOptions};
 
 use interaction::TextInteraction;
@@ -226,11 +227,68 @@ pub struct FrameWork {
     pub tree_scene_ops_emitted: usize,
     pub scene_items_reconciled: usize,
     pub tree_scene_reused: bool,
+    pub tree_nodes_visited: usize,
+    pub layouts: usize,
+    pub layout_nodes_measured: usize,
+    pub layout_nodes_committed: usize,
+}
+
+type ViewportCap = (NodeId, f32, f32);
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FrameWorkWindow {
+    started: Seconds,
+    builds: usize,
+    total: FrameWork,
+    reused: usize,
+    max_visited: usize,
+}
+
+impl FrameWorkWindow {
+    fn record(&mut self, now: Seconds, work: FrameWork) -> Option<String> {
+        if self.builds == 0 {
+            self.started = now;
+        }
+        self.builds += 1;
+        self.reused += usize::from(work.tree_scene_reused);
+        self.max_visited = self.max_visited.max(work.tree_nodes_visited);
+        let total = &mut self.total;
+        total.text_nodes_checked += work.text_nodes_checked;
+        total.text_source_bytes += work.text_source_bytes;
+        total.text_runs_shaped += work.text_runs_shaped;
+        total.tree_scene_ops_emitted += work.tree_scene_ops_emitted;
+        total.scene_items_reconciled += work.scene_items_reconciled;
+        total.tree_nodes_visited += work.tree_nodes_visited;
+        total.layouts += work.layouts;
+        total.layout_nodes_measured += work.layout_nodes_measured;
+        total.layout_nodes_committed += work.layout_nodes_committed;
+        let total = *total;
+        (now - self.started >= 1.0).then(|| {
+            let line = format!(
+                "aqua-work: builds={} scene_reused={} nodes_visited={} max_visited={} layouts={} measured={} committed={} text_checked={} shaped={} src_bytes={} ops_emitted={} reconciled={}",
+                self.builds,
+                self.reused,
+                total.tree_nodes_visited,
+                self.max_visited,
+                total.layouts,
+                total.layout_nodes_measured,
+                total.layout_nodes_committed,
+                total.text_nodes_checked,
+                total.text_runs_shaped,
+                total.text_source_bytes,
+                total.tree_scene_ops_emitted,
+                total.scene_items_reconciled,
+            );
+            *self = Self::default();
+            line
+        })
+    }
 }
 
 pub struct Runtime {
     color_profile: aqua_core::ColorProfile,
     interaction: TextInteraction,
+    wheel: Option<crate::glide::Glide>,
     tooltip_pending: Option<overlays::PendingTooltip>,
     tooltip_popup: Option<(NodeId, aqua_ui::overlay::OverlayId)>,
     bound_popups: HashMap<aqua_ui::overlay::OverlayId, overlays::BoundPopup>,
@@ -255,10 +313,13 @@ pub struct Runtime {
     clock: Seconds,
     cached_scene: Vec<(SceneKey, DisplayItem)>,
     cached_text_nodes: HashSet<NodeId>,
+    viewport_caps: Option<(u64, Vec<ViewportCap>)>,
     native_paint_revisions: HashMap<NodeId, u64>,
     dynamic_order: Vec<SceneKey>,
     cached_version: Option<(u64, u32, u32, u32, u64)>,
     frame_work: FrameWork,
+    frame_work_window: Option<FrameWorkWindow>,
+    diagnostics: Vec<String>,
 }
 
 impl Runtime {
@@ -358,6 +419,7 @@ impl Runtime {
         Self {
             color_profile: aqua_core::ColorProfile::AquaLinear,
             interaction: TextInteraction::default(),
+            wheel: None,
             tooltip_pending: None,
             tooltip_popup: None,
             bound_popups: HashMap::new(),
@@ -382,10 +444,13 @@ impl Runtime {
             clock: 0.0,
             cached_scene: Vec::new(),
             cached_text_nodes: HashSet::new(),
+            viewport_caps: None,
             native_paint_revisions: HashMap::new(),
             dynamic_order: Vec::new(),
             cached_version: None,
             frame_work: FrameWork::default(),
+            frame_work_window: None,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -776,29 +841,41 @@ impl Runtime {
     }
 
     pub fn layout(&mut self) -> Result<(), String> {
-        let viewport_caps: Vec<_> = self
-            .tree
-            .traverse()
-            .into_iter()
-            .filter_map(|node| {
-                let record = self.tree.get(node)?;
-                let NodeKind::Text(text) = &record.kind else {
-                    return None;
-                };
-                let (share, minimum) = text.viewport_scroll_max?;
-                if !share.is_finite() || !minimum.is_finite() || share < 0.0 || minimum < 0.0 {
-                    return None;
-                }
-                let mut parent = record.parent;
-                while let Some(id) = parent {
-                    let ancestor = self.tree.get(id)?;
-                    if matches!(ancestor.kind, NodeKind::Scroll(_)) {
-                        return Some((id, (self.viewport.h * share).max(minimum)));
+        let epoch = self.tree.structure_epoch();
+        if self.viewport_caps.as_ref().map(|(cached, _)| *cached) != Some(epoch) {
+            let scan: Vec<_> = self
+                .tree
+                .traverse()
+                .into_iter()
+                .filter_map(|node| {
+                    let record = self.tree.get(node)?;
+                    let NodeKind::Text(text) = &record.kind else {
+                        return None;
+                    };
+                    let (share, minimum) = text.viewport_scroll_max?;
+                    if !share.is_finite() || !minimum.is_finite() || share < 0.0 || minimum < 0.0 {
+                        return None;
                     }
-                    parent = ancestor.parent;
-                }
-                None
-            })
+                    let mut parent = record.parent;
+                    while let Some(id) = parent {
+                        let ancestor = self.tree.get(id)?;
+                        if matches!(ancestor.kind, NodeKind::Scroll(_)) {
+                            return Some((id, share, minimum));
+                        }
+                        parent = ancestor.parent;
+                    }
+                    None
+                })
+                .collect();
+            self.viewport_caps = Some((epoch, scan));
+        }
+        let viewport_caps: Vec<_> = self
+            .viewport_caps
+            .as_ref()
+            .map(|(_, caps)| caps.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .map(|(id, share, minimum)| (*id, (self.viewport.h * share).max(*minimum)))
             .collect();
         for (node, max_height) in viewport_caps {
             if let Some(record) = self.tree.get(node) {
@@ -828,6 +905,12 @@ impl Runtime {
             )?
         } else {
             self.tree.compute_layout(viewport, &measurer)?
+        }
+        let stats = self.tree.last_stats();
+        if !stats.layout_skipped {
+            self.frame_work.layouts += 1;
+            self.frame_work.layout_nodes_measured += stats.nodes_measured;
+            self.frame_work.layout_nodes_committed += stats.nodes_traversed;
         }
         for popup in self.bound_popups.values_mut() {
             let interaction = &mut self.interaction;
@@ -977,6 +1060,10 @@ impl Runtime {
             self.process_control_requests();
             return true;
         }
+        if self.begin_wheel(event) {
+            self.tree.drain_commands();
+            return true;
+        }
         let consumed = match event {
             CoreInputEvent::TextInput { text } => {
                 if self.text_input_allowed() {
@@ -1086,8 +1173,27 @@ impl Runtime {
         Some(Rect::from_edges(start.x, start.y, end.x, end.y))
     }
 
+    pub fn set_frame_stats(&mut self, enabled: bool) {
+        self.frame_work_window = enabled.then(FrameWorkWindow::default);
+    }
+
+    pub fn take_diagnostics(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.diagnostics)
+    }
+
     pub fn build_frame(&mut self) -> Result<Option<Seconds>, RuntimeError> {
+        self.tree.take_visited();
         let built = self.build_frame_inner();
+        self.frame_work.tree_nodes_visited = self.tree.take_visited();
+        let now = self.clock;
+        let work = self.frame_work;
+        if let Some(line) = self
+            .frame_work_window
+            .as_mut()
+            .and_then(|window| window.record(now, work))
+        {
+            self.diagnostics.push(line);
+        }
         self.last_build_error = built.as_ref().err().map(ToString::to_string);
         built
     }
@@ -1110,8 +1216,11 @@ impl Runtime {
             }
         }
         self.layout().map_err(RuntimeError::Build)?;
-        if self.advance_text_selection() {
+        if self.advance_text_selection() | self.advance_wheel() {
             self.layout().map_err(RuntimeError::Build)?;
+            if let Some(view) = self.view.as_mut() {
+                view.observe_collection_scrolls(&self.tree);
+            }
         }
         self.follow_external_text_carets();
         self.host.reanchor_all(&mut self.tree);
@@ -1211,6 +1320,7 @@ impl Runtime {
         Ok([
             self.host.motion_deadline(now),
             self.selection_deadline(),
+            self.wheel_deadline(),
             self.tooltip_deadline(),
         ]
         .into_iter()
@@ -2572,7 +2682,7 @@ impl Runtime {
 mod style_decoration_tests {
     use super::*;
     use aqua_ui::element::ui::{Box as UiBox, Text as UiText};
-    use aqua_ui::style::{px, Style};
+    use aqua_ui::style::{Style, px};
 
     #[test]
     fn caret_respects_own_and_ancestor_style_opacity() {

@@ -467,11 +467,7 @@ fn table_chrome(row_styles: &[Style], header_styles: &[Style]) -> (f32, f32, f32
     };
     let resolved = Style::compose(src).resolve_layout();
     let sane = |v: f32| {
-        if v.is_finite() && v >= 0.0 {
-            v
-        } else {
-            0.0
-        }
+        if v.is_finite() && v >= 0.0 { v } else { 0.0 }
     };
     (
         sane(resolved.padding.left),
@@ -729,7 +725,7 @@ impl<T> List<T> {
     pub fn try_row(
         mut self,
         f: impl Fn(&T) -> Result<crate::collection_runtime::PreparedCollectionRow, CollectionError>
-            + 'static,
+        + 'static,
     ) -> Self {
         self.prepared_row_fn = Some(Box::new(f));
         self.batched_row_fn = None;

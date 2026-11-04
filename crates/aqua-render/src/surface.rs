@@ -78,11 +78,68 @@ impl PresentPolicy {
 }
 
 /// Window-surface presenter over an offscreen-compositing [`Renderer`].
+struct PhaseStats {
+    enabled: bool,
+    frames: u32,
+    sum_ms: [f64; 5],
+    max_ms: [f64; 5],
+    window_start: Option<std::time::Instant>,
+}
+
+impl PhaseStats {
+    const NAMES: [&'static str; 5] = ["prepare", "draw", "acquire", "blit", "present"];
+
+    fn new() -> Self {
+        Self {
+            enabled: std::env::var_os("AQUA_FRAME_STATS").is_some(),
+            frames: 0,
+            sum_ms: [0.0; 5],
+            max_ms: [0.0; 5],
+            window_start: None,
+        }
+    }
+
+    fn record(&mut self, marks: [std::time::Instant; 6]) {
+        if !self.enabled {
+            return;
+        }
+        let start = *self.window_start.get_or_insert(marks[0]);
+        self.frames += 1;
+        for i in 0..5 {
+            let ms = (marks[i + 1] - marks[i]).as_secs_f64() * 1e3;
+            self.sum_ms[i] += ms;
+            self.max_ms[i] = self.max_ms[i].max(ms);
+        }
+        if marks[5] - start >= std::time::Duration::from_secs(1) {
+            let parts: Vec<String> = (0..5)
+                .map(|i| {
+                    format!(
+                        "{}={:.2}/{:.1}",
+                        Self::NAMES[i],
+                        self.sum_ms[i] / f64::from(self.frames),
+                        self.max_ms[i]
+                    )
+                })
+                .collect();
+            eprintln!(
+                "aqua-phase frames={} avg/max ms {}",
+                self.frames,
+                parts.join(" ")
+            );
+            self.frames = 0;
+            self.sum_ms = [0.0; 5];
+            self.max_ms = [0.0; 5];
+            self.window_start = None;
+        }
+    }
+}
+
 pub struct SurfaceFacade {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     gamma: f32,
     policy: PresentPolicy,
+    phases: PhaseStats,
 }
 
 impl SurfaceFacade {
@@ -144,6 +201,7 @@ impl SurfaceFacade {
             config,
             gamma,
             policy: PresentPolicy::default(),
+            phases: PhaseStats::new(),
         })
     }
 
@@ -209,23 +267,31 @@ impl SurfaceFacade {
         renderer: &mut Renderer,
         scene: &mut Scene,
     ) -> Result<bool, RenderError> {
+        let t0 = std::time::Instant::now();
         let plan = renderer.prepare(scene);
+        let t1 = std::time::Instant::now();
         let raster_dirty = !plan.is_clean() || renderer.snapshot_transition_active();
         if raster_dirty {
             renderer.draw(&plan)?;
         }
+        let t2 = std::time::Instant::now();
         if !self.policy.should_present(raster_dirty) {
             return Ok(false);
         }
-        let outcome = match self.surface.get_current_texture() {
+        let acq = self.surface.get_current_texture();
+        let t3 = std::time::Instant::now();
+        let outcome = match acq {
             wgpu::CurrentSurfaceTexture::Success(frame) => {
                 let view = frame
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
                 let format = self.config.format;
                 renderer.blit_to(&view, format, self.gamma)?;
+                let t4 = std::time::Instant::now();
                 renderer.present(frame);
                 renderer.note_presented();
+                self.phases
+                    .record([t0, t1, t2, t3, t4, std::time::Instant::now()]);
                 AcquireClass::Ready
             }
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
@@ -234,8 +300,11 @@ impl SurfaceFacade {
                     .create_view(&wgpu::TextureViewDescriptor::default());
                 let format = self.config.format;
                 renderer.blit_to(&view, format, self.gamma)?;
+                let t4 = std::time::Instant::now();
                 renderer.present(frame);
                 renderer.note_presented();
+                self.phases
+                    .record([t0, t1, t2, t3, t4, std::time::Instant::now()]);
                 AcquireClass::Suboptimal
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {

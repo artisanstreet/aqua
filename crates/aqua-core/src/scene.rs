@@ -386,12 +386,6 @@ pub struct GpuiQuadPulse {
     pub min_opacity: f32,
 }
 
-pub fn gpui_pulse_clock_ms() -> u32 {
-    static EPOCH: std::sync::LazyLock<std::time::Instant> =
-        std::sync::LazyLock::new(std::time::Instant::now);
-    EPOCH.elapsed().as_millis() as u32
-}
-
 impl DisplayItem {
     /// Conservative logical bounds of the item INCLUDING effect footprints
     /// (shadow blur/offset, backdrop sampling padding). Used for damage.
@@ -529,11 +523,13 @@ mod tests {
         assert_eq!(decode_layer(0xC000_0000_0000_0001), None);
         // INVALID handles never form a live key (reserved index decodes only
         // as coordinates; stores still reject it via liveness checks).
-        assert!(decode_layer(media_layer(ImageId::from_raw(RawId {
-            index: 0,
-            generation: 0
-        })))
-        .is_some());
+        assert!(
+            decode_layer(media_layer(ImageId::from_raw(RawId {
+                index: 0,
+                generation: 0
+            })))
+            .is_some()
+        );
     }
 
     #[test]

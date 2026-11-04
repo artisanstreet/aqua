@@ -2,17 +2,20 @@ use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
-use cosmic_text::{CacheKey, Font, FontSystem, SwashContent, SwashImage};
-use windows::core::{IUnknown, Interface};
+use aqua_text::raster::RasterKey;
+use aqua_text::{FontEntry, FontManager};
+
+use super::super::image::{Content, Image, Placement};
 use windows::Win32::Graphics::DirectWrite::*;
+use windows::core::{IUnknown, Interface};
 
 struct NativeFace {
     face: IDWriteFontFace,
-    _font: Arc<Font>,
+    _font: Arc<FontEntry>,
 }
 
 pub(super) struct NativeRasterizer {
-    faces: HashMap<(fontdb::ID, u16, bool), NativeFace>,
+    faces: HashMap<(aqua_text::FontId, u16, bool), NativeFace>,
     bytes: usize,
     loader: IDWriteInMemoryFontFileLoader,
     factory: IDWriteFactory5,
@@ -36,24 +39,20 @@ impl NativeRasterizer {
 
     pub fn rasterize(
         &mut self,
-        fonts: &mut FontSystem,
-        key: CacheKey,
-    ) -> Result<Option<SwashImage>, String> {
-        let italic = key.flags.contains(cosmic_text::CacheKeyFlags::FAKE_ITALIC);
-        let cache_key = (key.font_id, key.font_weight.0, italic);
+        fonts: &mut FontManager,
+        key: &RasterKey,
+    ) -> Result<Option<Image>, String> {
+        let italic = key.synthetic_italic;
+        let cache_key = (key.font_id, key.weight, italic);
         if !self.faces.contains_key(&cache_key) {
             if self.faces.len() >= 128 {
                 self.faces.clear();
                 self.bytes = 0;
             }
-            let index = fonts
-                .db()
-                .face(key.font_id)
-                .ok_or("native font missing face")?
-                .index;
             let font = fonts
-                .get_font(key.font_id, key.font_weight)
+                .entry_with(key.font_id, key.weight, key.stretch, key.synthetic_italic)
                 .ok_or("native font data unavailable")?;
+            let index = font.face_index();
             if font.data().len() > 64 * 1024 * 1024 {
                 return Err("native font exceeds byte budget".into());
             }
@@ -101,7 +100,7 @@ impl NativeRasterizer {
                         let resource = variable.GetFontResource().map_err(error)?;
                         let axis = DWRITE_FONT_AXIS_VALUE {
                             axisTag: DWRITE_FONT_AXIS_TAG_WEIGHT,
-                            value: key.font_weight.0 as f32,
+                            value: f32::from(key.weight),
                         };
                         face = resource
                             .CreateFontFace(simulations, &[axis])
@@ -119,7 +118,7 @@ impl NativeRasterizer {
         unsafe {
             let glyph_run = DWRITE_GLYPH_RUN {
                 fontFace: ManuallyDrop::new(Some(face.clone())),
-                fontEmSize: f32::from_bits(key.font_size_bits),
+                fontEmSize: key.size_px(),
                 glyphCount: 1,
                 glyphIndices: &key.glyph_id,
                 ..Default::default()
@@ -131,8 +130,8 @@ impl NativeRasterizer {
                 DWRITE_MEASURING_MODE_NATURAL,
                 DWRITE_GRID_FIT_MODE_DEFAULT,
                 DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
-                key.x_bin.as_float(),
-                key.y_bin.as_float(),
+                f32::from(key.subpixel) / 4.0,
+                0.0,
             );
             let mut glyph_run = glyph_run;
             ManuallyDrop::drop(&mut glyph_run.fontFace);
@@ -155,10 +154,9 @@ impl NativeRasterizer {
             analysis
                 .CreateAlphaTexture(DWRITE_TEXTURE_ALIASED_1x1, &bounds, &mut data)
                 .map_err(error)?;
-            Ok(Some(SwashImage {
-                source: Default::default(),
-                content: SwashContent::Mask,
-                placement: cosmic_text::Placement {
+            Ok(Some(Image {
+                content: Content::Mask,
+                placement: Placement {
                     left: bounds.left,
                     top: -bounds.top,
                     width,

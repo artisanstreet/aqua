@@ -37,10 +37,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::rc::Rc;
 
-use crate::element::{lower_specs_in, Element, Key, LowerError, TypoChain};
+use crate::element::{Element, Key, LowerError, TypoChain, lower_specs_in};
 use crate::style::{Axis, LayoutStyle, Length, Paint, Style};
 use crate::tree::{BoxContent, NodeKind, NodeSpec};
-use crate::virtualization::{window_for_viewport, PrefixSums, ReadingAnchor, RowRange};
+use crate::virtualization::{PrefixSums, ReadingAnchor, RowRange, window_for_viewport};
 
 /// Width plan for one layout pass. The source computes this from
 /// `available_width` only (fit-to-content is explicit, never an implicit scan
@@ -477,11 +477,7 @@ pub fn container_style(desc: &CollectionDescriptor) -> (LayoutStyle, Paint) {
 pub fn body_gap(desc: &CollectionDescriptor) -> f32 {
     let (layout, _) = container_style(desc);
     let g = layout.row_gap.unwrap_or(layout.gap);
-    if g.is_finite() && g >= 0.0 {
-        g
-    } else {
-        0.0
-    }
+    if g.is_finite() && g >= 0.0 { g } else { 0.0 }
 }
 /// Shell shape for a descriptor (agreed contract with the View driver owner,
 /// via parent): tells the driver what to BUILD into the empty lowered shell.

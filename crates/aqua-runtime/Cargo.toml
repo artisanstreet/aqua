@@ -7,6 +7,7 @@ description = "Aqua sans-IO runtime: frame pipeline and demand-driven scheduler"
 
 [dependencies]
 aqua-core = { path = "../aqua-core" }
+aqua-motion = { path = "../aqua-motion" }
 aqua-protocol = { path = "../aqua-protocol" }
 aqua-reactive = { path = "../aqua-reactive" }
 aqua-scene = { path = "../aqua-scene" }

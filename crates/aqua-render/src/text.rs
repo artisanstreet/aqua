@@ -38,10 +38,11 @@
 //! premultiplied by the item opacity at resolve time.
 
 pub mod gpui;
+mod image;
 mod raster;
 
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
+use aqua_core::geometry::Rect;
 use aqua_text::{ResolveError, RunHandle, RunId, RunRegistry, SharedFonts, SharedRuns};
 
 use glyphon::{
@@ -205,6 +206,7 @@ pub struct GlyphonProvider {
     raster_cache: raster::RasterCache,
     backend: TextBackend,
     swash_cache: SwashCache,
+    glyph_fonts: cosmic_text::FontSystem,
     cache: Cache,
     atlas: TextAtlas,
     viewport: Viewport,
@@ -236,6 +238,10 @@ impl GlyphonProvider {
             raster_cache: raster::RasterCache::default(),
             backend,
             swash_cache,
+            glyph_fonts: cosmic_text::FontSystem::new_with_locale_and_db(
+                "und".to_string(),
+                fontdb::Database::new(),
+            ),
             cache,
             atlas,
             viewport,
@@ -399,20 +405,21 @@ impl TextProvider for GlyphonProvider {
                 self.last_stats = stats;
                 return stats;
             }
-            let Some(buffer) = handle.layout.buffer() else {
+            let Some(laid) = handle.layout.laid_out() else {
                 stats.stale_skipped += 1;
                 continue;
             };
             let mut glyphs = Vec::new();
-            for line in buffer.layout_runs() {
-                for glyph in line.glyphs {
-                    let physical =
-                        glyph.physical((run.at_physical[0], run.at_physical[1]), run.scale);
-                    let cached = match self.raster_cache.get(
-                        fonts.font_system_mut(),
-                        &mut self.swash_cache,
-                        physical.cache_key,
-                    ) {
+            for line in &laid.lines {
+                for glyph in &line.glyphs {
+                    let (x, subpixel) = aqua_text::raster::quantize_x(
+                        run.at_physical[0] + (glyph.x + glyph.x_offset) * run.scale,
+                    );
+                    let y = (run.at_physical[1] + (glyph.y - glyph.y_offset) * run.scale).trunc()
+                        as i32;
+                    let mut key = aqua_text::raster::raster_key(glyph, subpixel);
+                    key.size_bits = (glyph.font_size_px * run.scale).to_bits();
+                    let cached = match self.raster_cache.get(&mut fonts, key) {
                         Ok(cached) => cached,
                         Err(error) => {
                             eprintln!("aqua-render: {error}");
@@ -433,14 +440,16 @@ impl TextProvider for GlyphonProvider {
                     }
                     glyphs.push(glyphon::CustomGlyph {
                         id: cached.id,
-                        left: (physical.x + image.placement.left) as f32,
-                        top: ((line.line_y * run.scale).round() as i32 + physical.y
+                        left: (x + image.placement.left) as f32,
+                        top: ((line.baseline_y * run.scale).round() as i32 + y
                             - image.placement.top) as f32,
                         width: image.placement.width as f32,
                         height: image.placement.height as f32,
-                        color: glyph.color_opt,
+                        color: glyph
+                            .color_srgb
+                            .map(|[r, g, b, a]| glyphon::Color::rgba(r, g, b, a)),
                         snap_to_physical_pixel: true,
-                        metadata: glyph.metadata,
+                        metadata: 0,
                     });
                 }
             }
@@ -479,7 +488,7 @@ impl TextProvider for GlyphonProvider {
         if let Err(e) = renderer.prepare_with_custom(
             frame.device,
             frame.queue,
-            fonts.font_system_mut(),
+            &mut self.glyph_fonts,
             &mut self.atlas,
             &self.viewport,
             areas,

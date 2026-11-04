@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use cosmic_text::CacheKey;
+use aqua_text::raster::RasterKey;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct GlyphKey {
-    pub cache: CacheKey,
+    pub cache: RasterKey,
     pub subpixel: bool,
     pub emoji: bool,
     pub scale_bits: u32,

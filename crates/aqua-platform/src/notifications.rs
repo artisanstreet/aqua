@@ -74,7 +74,7 @@ impl std::fmt::Display for NotificationError {
 impl std::error::Error for NotificationError {}
 
 impl Notification {
-    pub fn xml(&self) -> Result<String, NotificationError> {
+    pub fn validate(&self) -> Result<(), NotificationError> {
         let valid_text = |value: &str| {
             value
                 .chars()
@@ -97,6 +97,11 @@ impl Notification {
         {
             return Err(NotificationError::InvalidContent);
         }
+        Ok(())
+    }
+
+    pub fn xml(&self) -> Result<String, NotificationError> {
+        self.validate()?;
         let mut writer = xmlwriter::XmlWriter::new(xmlwriter::Options {
             indent: xmlwriter::Indent::None,
             ..Default::default()
@@ -159,10 +164,16 @@ mod native;
 #[cfg(windows)]
 pub use native::NotificationCenter;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(target_os = "linux")]
+pub use linux::NotificationCenter;
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub struct NotificationCenter;
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 impl NotificationCenter {
     pub fn new(_: AppIdentity, _: ResponseHandler) -> Result<Self, NotificationError> {
         Err(NotificationError::Unsupported)

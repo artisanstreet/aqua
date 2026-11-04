@@ -64,7 +64,7 @@ impl ImagePlacement {
                 return Ok(Self {
                     destination: bounds,
                     source,
-                })
+                });
             }
             ImageFit::Contain => contain,
             ImageFit::Cover => (bounds.w / width).max(bounds.h / height),

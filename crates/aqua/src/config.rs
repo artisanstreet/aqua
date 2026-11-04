@@ -7,11 +7,11 @@
 
 use std::num::NonZeroU32;
 
+use aqua_platform::WindowMaterial;
 use aqua_platform::material::material_capability;
-use aqua_platform::prefs::{prefers_opaque_frame, OsPreferences};
+use aqua_platform::prefs::{OsPreferences, prefers_opaque_frame};
 use aqua_platform::window::ThemePreference;
 pub use aqua_platform::window::{Titlebar, WindowOptions};
-use aqua_platform::WindowMaterial;
 use aqua_ui::style::Length;
 
 /// Top-level application configuration.
@@ -1003,12 +1003,14 @@ mod tests {
             ConfigError::InvalidFps { fps: 0 }.to_string(),
             "frame-rate target must be non-zero (got 0)"
         );
-        assert!(ConfigError::InvalidSize {
-            field: "size",
-            reason: "must be positive",
-        }
-        .to_string()
-        .contains("size"));
+        assert!(
+            ConfigError::InvalidSize {
+                field: "size",
+                reason: "must be positive",
+            }
+            .to_string()
+            .contains("size")
+        );
     }
 
     // -- Titlebar authoring (pure resolve; no window, no pixels) --

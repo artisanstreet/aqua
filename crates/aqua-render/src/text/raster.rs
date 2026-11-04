@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 
-use cosmic_text::{CacheKey, CacheKeyFlags, FontSystem, SwashCache, SwashContent, SwashImage};
+use aqua_text::FontManager;
+use aqua_text::raster::{RasterKey, Rasterizer};
 use glyphon::{ContentType, RasterizedCustomGlyph};
 
 use aqua_core::scene::TextRasterMode;
+
+use super::image::{Content, Image};
 
 #[cfg(target_os = "windows")]
 #[path = "windows.rs"]
@@ -11,13 +14,14 @@ mod windows;
 
 pub(crate) struct CachedGlyph {
     pub id: u16,
-    pub image: Option<SwashImage>,
+    pub image: Option<Image>,
 }
 
 pub(crate) struct RasterCache {
-    entries: HashMap<CacheKey, CachedGlyph>,
+    entries: HashMap<RasterKey, CachedGlyph>,
     bytes: usize,
-    ids: Vec<CacheKey>,
+    ids: Vec<RasterKey>,
+    rasterizer: Rasterizer,
     pub mode: TextRasterMode,
     #[cfg(target_os = "windows")]
     native: Option<windows::NativeRasterizer>,
@@ -29,6 +33,7 @@ impl Default for RasterCache {
             entries: HashMap::new(),
             ids: Vec::new(),
             bytes: 0,
+            rasterizer: Rasterizer::new(),
             mode: TextRasterMode::PlatformDefault,
             #[cfg(target_os = "windows")]
             native: None,
@@ -47,29 +52,21 @@ impl RasterCache {
         self.entries.len() > 60_000 || self.bytes > 48 * 1024 * 1024
     }
 
-    pub fn get(
-        &mut self,
-        fonts: &mut FontSystem,
-        swash: &mut SwashCache,
-        mut key: CacheKey,
-    ) -> Result<&CachedGlyph, String> {
-        if self.mode == TextRasterMode::Outline {
-            key.flags.insert(CacheKeyFlags::DISABLE_HINTING);
-        }
+    pub fn get(&mut self, fonts: &mut FontManager, key: RasterKey) -> Result<&CachedGlyph, String> {
         if !self.entries.contains_key(&key) {
             if self.entries.len() >= u16::MAX as usize {
                 return Err("glyph cache count budget exceeded".into());
             }
-            let image = swash.get_image_uncached(fonts, key);
+            let image = self.rasterizer.rasterize(fonts, &key).map(Image::from);
             #[cfg(target_os = "windows")]
             let image = match (&image, self.mode) {
                 (Some(image), TextRasterMode::PlatformDefault)
-                    if image.content != SwashContent::Color =>
+                    if image.content != Content::Color =>
                 {
                     if self.native.is_none() {
                         self.native = Some(windows::NativeRasterizer::new()?);
                     }
-                    self.native.as_mut().unwrap().rasterize(fonts, key)?
+                    self.native.as_mut().unwrap().rasterize(fonts, &key)?
                 }
                 _ => image,
             };
@@ -94,8 +91,8 @@ impl RasterCache {
         Some(RasterizedCustomGlyph {
             data: image.data.clone(),
             content_type: match image.content {
-                SwashContent::Color => ContentType::Color,
-                _ => ContentType::Mask,
+                Content::Color => ContentType::Color,
+                Content::Mask => ContentType::Mask,
             },
         })
     }

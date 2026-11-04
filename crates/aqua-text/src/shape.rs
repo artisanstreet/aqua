@@ -406,6 +406,8 @@ pub(crate) fn shape_paragraph(
             })
         })
         .unwrap_or((0.0, 0.0));
+    clusters.shrink_to_fit();
+    runs.shrink_to_fit();
     ShapedParagraph {
         start: range.start,
         end: range.end,

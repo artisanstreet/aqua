@@ -1,3 +1,4 @@
+use aqua_protocol::probe::{self, Metric, Phase};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -1210,6 +1211,7 @@ impl Runtime {
         self.tree.take_visited();
         let built = self.build_frame_inner();
         self.frame_work.tree_nodes_visited = self.tree.take_visited();
+        self.report_work();
         let now = self.clock;
         let work = self.frame_work;
         if let Some(line) = self
@@ -1228,7 +1230,10 @@ impl Runtime {
             return Err(RuntimeError::Disposed);
         }
         self.frame_work = FrameWork::default();
-        self.runtime.flush();
+        {
+            let _span = probe::span(Phase::Reactive);
+            self.runtime.flush();
+        }
         self.drain_structural()?;
         self.process_control_requests();
         if self.host.begin_popup_exits(self.clock) {
@@ -1243,8 +1248,12 @@ impl Runtime {
                 self.tree.sync_text_leaf(node);
             }
         }
-        self.layout().map_err(RuntimeError::Build)?;
+        {
+            let _span = probe::span(Phase::Layout);
+            self.layout().map_err(RuntimeError::Build)?;
+        }
         if self.advance_text_selection() {
+            let _span = probe::span(Phase::Layout);
             self.layout().map_err(RuntimeError::Build)?;
             if let Some(view) = self.view.as_mut() {
                 view.observe_collection_scrolls(&self.tree);
@@ -1263,6 +1272,7 @@ impl Runtime {
         self.sync_selection_bindings();
         let content_changed = self.cached_version != Some(version);
         if content_changed {
+            let _span = probe::span(Phase::Text);
             self.sync_text_runs();
         }
         let focused_scroll = |runtime: &Self| {
@@ -1276,6 +1286,7 @@ impl Runtime {
         self.update_text_scroll();
         let changed = content_changed || before_scroll != focused_scroll(self);
         if changed {
+            let _span = probe::span(Phase::Build);
             self.cached_scene = self.emit_keyed();
             self.cached_text_nodes = self
                 .cached_scene
@@ -1354,6 +1365,24 @@ impl Runtime {
         .into_iter()
         .flatten()
         .min_by(f64::total_cmp))
+    }
+
+    fn report_work(&self) {
+        if !probe::active() {
+            return;
+        }
+        let work = self.frame_work;
+        let count = |metric, value: usize| probe::count(metric, value as u64);
+        count(Metric::Layouts, work.layouts);
+        count(Metric::NodesMeasured, work.layout_nodes_measured);
+        count(Metric::NodesCommitted, work.layout_nodes_committed);
+        count(Metric::NodesVisited, work.tree_nodes_visited);
+        count(Metric::TextNodesChecked, work.text_nodes_checked);
+        count(Metric::TextRunsShaped, work.text_runs_shaped);
+        count(Metric::TextSourceBytes, work.text_source_bytes);
+        count(Metric::SceneOpsEmitted, work.tree_scene_ops_emitted);
+        count(Metric::SceneReused, usize::from(work.tree_scene_reused));
+        count(Metric::ScenePatched, work.scene_items_reconciled);
     }
 
     #[must_use]

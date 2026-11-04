@@ -76,7 +76,7 @@ fn queued_events_update_retained_paint_and_semantics_at_drain() {
         LayoutStyle::default(),
     ));
     let sink = tree.command_sink();
-    tree.queue_interaction_binding(node);
+    tree.queue_interaction_binding(node, true);
     sink.interaction(InteractionCommand::Style {
         node,
         kind: InteractionStyleKind::Hover,
@@ -118,7 +118,7 @@ fn semantic_updates_are_ordered_and_removed_nodes_are_ignored() {
         LayoutStyle::default(),
     ));
     let sink = tree.command_sink();
-    tree.queue_interaction_binding(node);
+    tree.queue_interaction_binding(node, true);
     sink.interaction(InteractionCommand::Semantics {
         node,
         value: InteractionSemantic::Selected(true),

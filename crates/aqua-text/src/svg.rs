@@ -463,12 +463,7 @@ fn outline_run(fonts: &mut FontManager, placed: &Placed, origin: [f32; 2]) -> St
     data
 }
 
-fn outline_along(
-    fonts: &mut FontManager,
-    placed: &Placed,
-    line: &Polyline,
-    start: f32,
-) -> String {
+fn outline_along(fonts: &mut FontManager, placed: &Placed, line: &Polyline, start: f32) -> String {
     let mut data = String::new();
     for glyph in placed.laid.lines.iter().flat_map(|line| line.glyphs.iter()) {
         let middle = start + glyph.x + glyph.x_offset + glyph.w * 0.5;

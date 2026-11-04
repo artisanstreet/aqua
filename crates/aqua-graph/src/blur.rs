@@ -23,12 +23,6 @@ pub struct BlurOutput {
     pub texels: Rect,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Snapshot {
-    pub texture: TextureRef,
-    pub bounds: Rect,
-}
-
 fn pixel_region(region: Rect) -> (u32, u32, Extent) {
     let left = region.x.floor().max(0.0) as u32;
     let top = region.y.floor().max(0.0) as u32;
@@ -38,6 +32,8 @@ fn pixel_region(region: Rect) -> (u32, u32, Extent) {
 }
 
 pub const MIX_START: f32 = 0.75;
+pub const HALF_RESOLUTION_LEVELS: u32 = 3;
+pub const HALF_RESOLUTION_OFFSET_SCALE: f32 = 1.03;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BlurDepth {
@@ -61,27 +57,9 @@ pub fn depth_for(radius: f32, size: Extent) -> BlurDepth {
     }
 }
 
-pub fn snapshot(graph: &mut RenderGraph, from: TextureRef, region: Rect) -> Snapshot {
-    let (left, top, size) = pixel_region(region);
-    let texture = graph.create(size, TextureFormat::Rgba16Float);
-    graph.push(Pass::new(
-        PassKind::Copy {
-            source_origin: [left, top],
-            dest_origin: [0, 0],
-            size,
-        },
-        vec![from],
-        vec![texture],
-    ));
-    Snapshot {
-        texture,
-        bounds: Rect {
-            x: left as f32,
-            y: top as f32,
-            w: size.width as f32,
-            h: size.height as f32,
-        },
-    }
+struct Pyramid {
+    texture: TextureRef,
+    extent: Extent,
 }
 
 fn pyramid(
@@ -91,8 +69,13 @@ fn pyramid(
     size: Extent,
     levels: u32,
     radius: f32,
-) -> TextureRef {
-    let offset = radius / (1u32 << levels) as f32;
+) -> Pyramid {
+    let shared = levels >= HALF_RESOLUTION_LEVELS;
+    let offset = radius / (1u32 << levels) as f32
+        * match shared {
+            true => HALF_RESOLUTION_OFFSET_SCALE,
+            false => 1.0,
+        };
     let mut chain = vec![source];
     let mut extents = vec![size];
     for level in 1..=levels {
@@ -115,8 +98,15 @@ fn pyramid(
         chain.push(texture);
         extents.push(extent);
     }
-    let output = graph.create(size, TextureFormat::Rgba16Float);
-    for level in (1..=levels).rev() {
+    let first = match shared {
+        true => 2,
+        false => 1,
+    };
+    let (output, output_extent) = match shared {
+        true => (chain[1], extents[1]),
+        false => (graph.create(size, TextureFormat::Rgba16Float), size),
+    };
+    for level in (first..=levels).rev() {
         let destination = match level {
             1 => output,
             _ => chain[level as usize - 1],
@@ -135,21 +125,28 @@ fn pyramid(
         pass.load = LoadOp::DontCare;
         graph.push(pass);
     }
-    output
+    Pyramid {
+        texture: output,
+        extent: output_extent,
+    }
 }
 
 fn mix(
     graph: &mut RenderGraph,
-    lower: TextureRef,
-    upper: TextureRef,
+    lower: Pyramid,
+    upper: Pyramid,
     weight: f32,
     size: Extent,
-) -> TextureRef {
-    let output = graph.create(size, TextureFormat::Rgba16Float);
-    let layer = |source: TextureRef, opacity: f32| ImageInstance {
-        source,
-        bounds: size.bounds(),
-        texels: size.bounds(),
+) -> Pyramid {
+    let extent = match lower.extent == upper.extent {
+        true => lower.extent,
+        false => size,
+    };
+    let output = graph.create(extent, TextureFormat::Rgba16Float);
+    let layer = |source: &Pyramid, opacity: f32| ImageInstance {
+        source: source.texture,
+        bounds: extent.bounds(),
+        texels: source.extent.bounds(),
         radius: 0.0,
         opacity,
         clip: None,
@@ -159,12 +156,15 @@ fn mix(
     };
     graph.push(Pass::new(
         PassKind::Images {
-            instances: vec![layer(lower, 1.0), layer(upper, weight)],
+            instances: vec![layer(&lower, 1.0), layer(&upper, weight)],
         },
-        vec![lower, upper],
+        vec![lower.texture, upper.texture],
         vec![output],
     ));
-    output
+    Pyramid {
+        texture: output,
+        extent,
+    }
 }
 
 pub fn blur_chain(graph: &mut RenderGraph, request: BlurRequest) -> BlurOutput {
@@ -195,13 +195,13 @@ pub fn blur_chain(graph: &mut RenderGraph, request: BlurRequest) -> BlurOutput {
     };
     let (placed_left, placed_top, _) = pixel_region(request.placement);
     BlurOutput {
-        texture: output,
+        texture: output.texture,
         bounds: Rect {
             x: placed_left as f32,
             y: placed_top as f32,
             w: size.width as f32,
             h: size.height as f32,
         },
-        texels: size.bounds(),
+        texels: output.extent.bounds(),
     }
 }

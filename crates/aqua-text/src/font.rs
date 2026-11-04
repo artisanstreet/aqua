@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use aqua_fonts_system::{FaceBytes, FontDatabase, Query, Stretch, Style, Weight, ID};
@@ -7,6 +8,7 @@ use skrifa::MetadataProvider;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::fallback::{Coverage, FallbackIndex};
+use crate::shape_cache::{ShapeCache, ShapeCacheStats};
 use crate::style::{FontFamily, FontSlant, FontStretch, TextStyle};
 
 pub type FontId = ID;
@@ -365,6 +367,8 @@ pub struct FontManager {
     candidate_cache: HashMap<CandidateKey, Vec<Arc<FontEntry>>>,
     shape_buffer: Option<harfrust::UnicodeBuffer>,
     fallback_index: Option<FallbackIndex>,
+    shapes: ShapeCache,
+    revision_mirror: Arc<AtomicU64>,
 }
 
 impl FontManager {
@@ -388,11 +392,27 @@ impl FontManager {
             candidate_cache: HashMap::new(),
             shape_buffer: None,
             fallback_index: None,
+            shapes: ShapeCache::default(),
+            revision_mirror: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    pub(crate) fn shapes_mut(&mut self) -> &mut ShapeCache {
+        &mut self.shapes
+    }
+
+    pub fn shape_cache_stats(&self) -> ShapeCacheStats {
+        self.shapes.stats()
+    }
+
+    pub fn revision_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.revision_mirror)
     }
 
     fn invalidate(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+        self.revision_mirror.store(self.revision, Ordering::Release);
+        self.shapes.clear();
         self.entries.clear();
         self.family_cache.clear();
         self.formation_cache.clear();
@@ -668,7 +688,12 @@ impl FontManager {
             return found.clone();
         }
         let candidates = self.build_fallback_candidates(style);
-        insert_bounded(&mut self.candidate_cache, CANDIDATE_CACHE_LIMIT, key, candidates.clone());
+        insert_bounded(
+            &mut self.candidate_cache,
+            CANDIDATE_CACHE_LIMIT,
+            key,
+            candidates.clone(),
+        );
         candidates
     }
 
@@ -763,7 +788,12 @@ impl FontManager {
                     .is_some()
             })
         });
-        insert_bounded(&mut self.face_coverage, COVERAGE_CACHE_LIMIT, (id, character), covered);
+        insert_bounded(
+            &mut self.face_coverage,
+            COVERAGE_CACHE_LIMIT,
+            (id, character),
+            covered,
+        );
         covered
     }
 
@@ -904,22 +934,36 @@ impl Default for FontManager {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct SharedFonts {
     inner: Arc<Mutex<FontManager>>,
+    revision: Arc<AtomicU64>,
+}
+
+impl Default for SharedFonts {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SharedFonts {
     pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(FontManager::new())),
-        }
+        Self::wrap(FontManager::new())
     }
 
     pub fn without_system_fonts() -> Self {
+        Self::wrap(FontManager::new_without_system_fonts())
+    }
+
+    pub fn wrap(manager: FontManager) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(FontManager::new_without_system_fonts())),
+            revision: manager.revision_handle(),
+            inner: Arc::new(Mutex::new(manager)),
         }
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision.load(Ordering::Acquire)
     }
 
     pub fn lock(&self) -> std::sync::MutexGuard<'_, FontManager> {

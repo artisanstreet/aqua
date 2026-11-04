@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::hash::FastMap;
 use std::hash::Hash;
 
 use super::shelf::ShelfPacker;
@@ -20,7 +20,7 @@ impl AtlasConfig {
     pub fn glyphs() -> Self {
         Self {
             format: PageFormat::Mask8,
-            base_edge: 256,
+            base_edge: 512,
             max_edge: 4096,
             max_shared_pages: 8,
             budget_bytes: 8 * 1024 * 1024,
@@ -91,7 +91,7 @@ pub struct Atlas<K> {
     frame: u64,
     pages: Vec<Option<Page<K>>>,
     free_indices: Vec<u32>,
-    entries: HashMap<K, Entry>,
+    entries: FastMap<K, Entry>,
     pending: AtlasUpdates,
     evicted: Vec<K>,
     stats: AtlasStats,
@@ -104,7 +104,7 @@ impl<K: Clone + Eq + Hash> Atlas<K> {
             frame: 1,
             pages: Vec::new(),
             free_indices: Vec::new(),
-            entries: HashMap::new(),
+            entries: FastMap::default(),
             pending: AtlasUpdates::default(),
             evicted: Vec::new(),
             stats: AtlasStats::default(),
@@ -124,6 +124,17 @@ impl<K: Clone + Eq + Hash> Atlas<K> {
             pages: self.live_pages() as u32,
             entries: self.entries.len() as u32,
             ..self.stats
+        }
+    }
+
+    pub fn eviction_epoch(&self) -> u64 {
+        self.stats.page_evictions
+    }
+
+    pub fn touch_page(&mut self, index: u32) {
+        let frame = self.frame;
+        if let Some(Some(page)) = self.pages.get_mut(index as usize) {
+            page.last_used = frame;
         }
     }
 

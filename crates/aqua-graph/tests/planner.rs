@@ -454,37 +454,56 @@ fn shaders(plan: &aqua_graph::FramePlan, wanted: ShaderId) -> usize {
 }
 
 #[test]
-fn backdrop_blur_snapshots_the_parent_then_runs_a_pyramid() {
-    let plan = plan(&[quad(), backdrop(10.0), quad_at(50.0, 50.0)]);
+fn backdrop_blur_reads_the_parent_directly_and_composites_the_half_resolution_level() {
+    let plan = plan(&[quad(), backdrop(20.0), quad_at(50.0, 50.0)]);
     assert_eq!(validate(&plan), Ok(()));
-    let copy = plan
+    assert!(plan
         .passes
         .iter()
-        .position(|pass| matches!(pass.kind, PassKind::Copy { .. }))
-        .expect("snapshot copy");
-    assert_eq!(plan.passes[copy].reads, vec![TextureRef::Surface]);
+        .all(|pass| !matches!(pass.kind, PassKind::Copy { .. })));
     let levels = shaders(&plan, ShaderId::BlurDown);
-    assert_eq!(levels, 3);
+    assert_eq!(levels, 4);
+    assert_eq!(shaders(&plan, ShaderId::BlurUp), levels - 1);
+    let first = plan
+        .passes
+        .iter()
+        .find(|pass| matches!(&pass.kind, PassKind::Filter { shader, .. } if *shader == ShaderId::BlurDown))
+        .expect("first down pass");
+    assert_eq!(first.reads, vec![TextureRef::Surface]);
+    let composite = plan.passes.iter().rev().nth(1).expect("composite pass");
+    let PassKind::Images { instances } = &composite.kind else {
+        panic!("composite is an images pass");
+    };
+    assert_eq!(instances[0].bounds.w, 40.0);
+    assert_eq!(instances[0].texels.w, 20.0);
+    let sizes: Vec<u32> = plan
+        .textures
+        .iter()
+        .map(|texture| texture.extent.width)
+        .collect();
+    assert_eq!(sizes[0], 20);
+    assert_eq!(sizes.len(), levels);
+    assert!(sizes.windows(2).all(|pair| pair[1] < pair[0]));
+}
+
+#[test]
+fn shallow_backdrop_blur_keeps_the_full_resolution_output() {
+    let plan = plan(&[quad(), backdrop(5.0), quad_at(50.0, 50.0)]);
+    assert_eq!(validate(&plan), Ok(()));
+    let levels = shaders(&plan, ShaderId::BlurDown);
+    assert_eq!(levels, 2);
     assert_eq!(shaders(&plan, ShaderId::BlurUp), levels);
-    assert!(matches!(
-        plan.passes.iter().rev().nth(1).map(|pass| &pass.kind),
-        Some(PassKind::Images { .. })
-    ));
+    let composite = plan.passes.iter().rev().nth(1).expect("composite pass");
+    let PassKind::Images { instances } = &composite.kind else {
+        panic!("composite is an images pass");
+    };
+    assert_eq!(instances[0].texels.w, instances[0].bounds.w);
     let separate: u64 = plan
         .textures
         .iter()
         .map(|texture| texture.bytes().next_multiple_of(64 * 1024))
         .sum();
     assert!(plan.heap_bytes < separate);
-    let sizes: Vec<u32> = plan
-        .textures
-        .iter()
-        .map(|texture| texture.extent.width)
-        .collect();
-    assert_eq!(sizes[0], 40);
-    assert!(sizes[1..levels + 1]
-        .windows(2)
-        .all(|pair| pair[1] < pair[0]));
 }
 
 fn offset_of(depth: BlurDepth, radius: f32) -> (u32, f32) {

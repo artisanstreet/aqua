@@ -3393,6 +3393,16 @@ pub fn lower_specs(el: &Element) -> Result<Vec<NodeSpec>, LowerError> {
     lower_specs_in(el, &TypoChain::default())
 }
 
+pub(crate) fn lower_root_in(
+    el: &Element,
+    inherited: &TypoChain,
+) -> Result<Vec<NodeSpec>, LowerError> {
+    match &el.kind {
+        ElementKind::Collection(_) | ElementKind::Fragment => lower_specs_in(el, inherited),
+        _ => lower_one(el, inherited).map(|spec| vec![spec]),
+    }
+}
+
 pub(crate) fn lower_specs_in(
     el: &Element,
     inherited: &TypoChain,

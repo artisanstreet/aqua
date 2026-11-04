@@ -20,6 +20,9 @@ pub trait TextMeasurer {
         let _ = spans;
         self.measure_text(text, style.size_px, max_width, multiline)
     }
+    fn memo_epoch(&self) -> Option<u64> {
+        None
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -212,10 +215,6 @@ impl MeasureCache {
         self.current.insert(key, size);
     }
 
-    fn len(&self) -> usize {
-        self.current.len() + self.previous.len()
-    }
-
     fn clear(&mut self) {
         self.current = std::collections::HashMap::new();
         self.previous = std::collections::HashMap::new();
@@ -298,6 +297,16 @@ impl ProfiledCosmicMeasurer {
 }
 
 impl TextMeasurer for ProfiledCosmicMeasurer {
+    fn memo_epoch(&self) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.fonts.lock().font_revision().hash(&mut hasher);
+        self.scale.to_bits().hash(&mut hasher);
+        self.gpui_line_height.hash(&mut hasher);
+        self.gpui_wrap.hash(&mut hasher);
+        Some(hasher.finish())
+    }
+
     fn measure_text(
         &self,
         text: &str,
@@ -369,6 +378,10 @@ impl TextMeasurer for ProfiledCosmicMeasurer {
 mod cache_tests {
     use super::*;
 
+    fn len(cache: &MeasureCache) -> usize {
+        cache.current.len() + cache.previous.len()
+    }
+
     fn key(n: u64) -> MeasureKey {
         MeasureKey(n, !n)
     }
@@ -377,7 +390,7 @@ mod cache_tests {
     fn size_never_exceeds_twice_the_limit() {
         let mut cache = MeasureCache::new(8);
         (0..1000).for_each(|n| cache.insert(key(n), Size::new(n as f32, 1.0)));
-        assert!(cache.len() <= 16, "{}", cache.len());
+        assert!(len(&cache) <= 16, "{}", len(&cache));
     }
 
     #[test]
@@ -413,6 +426,6 @@ mod cache_tests {
         let mut cache = MeasureCache::new(2);
         (0..3).for_each(|n| cache.insert(key(n), Size::new(1.0, 1.0)));
         cache.clear();
-        assert_eq!(cache.len(), 0);
+        assert_eq!(len(&cache), 0);
     }
 }

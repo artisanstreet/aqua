@@ -18,4 +18,4 @@ pub use inspector::{
 pub use lower::{lower_items, GeometryLowering, LowerContext, Lowered, Lowering, TrimRequest};
 pub use ring::{channel, channel_with_notify, Notify, Receiver, RecvError, SendError, Sender};
 pub use thread::{spawn_render_thread, spawn_render_thread_with, RenderHost, RenderThread};
-pub use trim::{TrimAction, TrimInput, TrimPolicy};
+pub use trim::{TrimAction, TrimInput, TrimPolicy, IDLE_TRIM_AFTER};

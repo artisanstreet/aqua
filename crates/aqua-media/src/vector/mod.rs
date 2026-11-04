@@ -1,3 +1,3 @@
 mod raster;
 
-pub use raster::{RasterizedVector, VectorBudget, VectorError, rasterize, retained_source_bytes};
+pub use raster::{rasterize, retained_source_bytes, RasterizedVector, VectorBudget, VectorError};

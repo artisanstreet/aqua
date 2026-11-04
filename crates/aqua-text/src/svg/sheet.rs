@@ -59,7 +59,11 @@ fn parse_compound(part: &str) -> Option<Compound> {
             (b'.', false) => compound.classes.push(token.to_string()),
             (b'#', false) => compound.id = Some(token.to_string()),
             (_, false) if token == "*" => {}
-            (_, false) if token.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') => {
+            (_, false)
+                if token
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_') =>
+            {
                 compound.tag = Some(token.to_string())
             }
             _ => return None,
@@ -78,7 +82,9 @@ fn parse_selector(text: &str) -> Option<Selector> {
     let specificity = chain
         .iter()
         .map(|c| {
-            c.id.iter().count() as u32 * 100 + c.classes.len() as u32 * 10 + c.tag.iter().count() as u32
+            c.id.iter().count() as u32 * 100
+                + c.classes.len() as u32 * 10
+                + c.tag.iter().count() as u32
         })
         .sum();
     Some(Selector { chain, specificity })

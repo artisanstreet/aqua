@@ -5,7 +5,10 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::font::FontManager;
 use crate::lines;
+use aqua_media::hash::FastHasher;
+
 use crate::shape::{scaled_line_height, shape_paragraph, ShapeContext, ShapedParagraph, SpanText};
+use crate::shape_cache::paragraph_key;
 use crate::style::{LineMode, StyledSpan, TextAlign, TextStyle, WrapMode};
 
 #[derive(Clone, Debug)]
@@ -138,7 +141,7 @@ pub struct TextLayout {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct InputKey {
     display_text: String,
-    style_key: String,
+    style_key: (u64, u64),
     wrap: WrapMode,
     align: TextAlign,
     line_mode: LineMode,
@@ -152,7 +155,7 @@ struct InputKey {
 
 struct ShapedCache {
     key: InputKey,
-    paragraphs: Vec<ShapedParagraph>,
+    paragraphs: Vec<Arc<ShapedParagraph>>,
 }
 
 struct PendingLine {
@@ -582,20 +585,26 @@ impl TextLayout {
     }
 
     fn input_key(&self, fonts_rev: u64, display: &str) -> InputKey {
-        let mut style_key = String::new();
-        for s in &self.spans {
-            style_key.push_str(&format!(
-                "{}:{:?}:{:?}:{:?}:{:?}:{:?}:",
-                s.text.len(),
-                s.color_srgb,
-                s.color_hsla.map(|v| v.map(f32::to_bits)),
-                s.source_color_hsla.map(|v| v.map(f32::to_bits)),
-                s.background_hsla.map(|v| v.map(f32::to_bits)),
-                s.inline_cell_width().map(f32::to_bits)
-            ));
-            style_key.push_str(&s.style.cache_key());
-            style_key.push(';');
-        }
+        let style_key = {
+            use std::hash::{Hash, Hasher};
+            let mut first = FastHasher::default();
+            let mut second = FastHasher::default();
+            second.write_u64(0x9e37_79b9_7f4a_7c15);
+            for hasher in [&mut first, &mut second] {
+                for s in &self.spans {
+                    hasher.write_usize(s.text.len());
+                    s.color_srgb.hash(hasher);
+                    s.color_hsla.map(|v| v.map(f32::to_bits)).hash(hasher);
+                    s.source_color_hsla
+                        .map(|v| v.map(f32::to_bits))
+                        .hash(hasher);
+                    s.background_hsla.map(|v| v.map(f32::to_bits)).hash(hasher);
+                    s.inline_cell_width().map(f32::to_bits).hash(hasher);
+                    s.style.identity_hash(hasher);
+                }
+            }
+            (first.finish(), second.finish())
+        };
         InputKey {
             display_text: display.to_string(),
             style_key,
@@ -629,7 +638,10 @@ impl TextLayout {
             let mut span_ranges = Vec::with_capacity(self.spans.len());
             let mut offset = 0;
             for span in &self.spans {
-                let length = masked_span_text(&span.text, self.mask, self.line_mode).len();
+                let length = match self.mask {
+                    None => span.text.len(),
+                    Some(_) => masked_span_text(&span.text, self.mask, self.line_mode).len(),
+                };
                 span_ranges.push(SpanText {
                     range: offset..offset + length,
                 });
@@ -644,7 +656,18 @@ impl TextLayout {
             };
             let paragraphs = paragraph_ranges(&display)
                 .into_iter()
-                .map(|range| shape_paragraph(fonts, &context, &display, range))
+                .map(|range| {
+                    let key = paragraph_key(&context, &display, &range, fonts_rev);
+                    match fonts.shapes_mut().get(&key) {
+                        Some(hit) => hit,
+                        None => {
+                            let shaped =
+                                Arc::new(shape_paragraph(fonts, &context, &display, range));
+                            fonts.shapes_mut().insert(key, Arc::clone(&shaped));
+                            shaped
+                        }
+                    }
+                })
                 .collect();
             self.reshapes += 1;
             self.shaped = Some(ShapedCache {
@@ -1632,6 +1655,9 @@ fn build_display(
     mask: Option<char>,
     line_mode: LineMode,
 ) -> (String, Vec<(usize, usize)>, usize) {
+    if mask.is_none() {
+        return build_plain_display(spans, line_mode);
+    }
     let mut display = String::new();
     let mut map = Vec::new();
     let mut src_off = 0usize;
@@ -1657,6 +1683,30 @@ fn build_display(
         }
     }
     (display, map, src_off)
+}
+
+fn build_plain_display(
+    spans: &[StyledSpan],
+    line_mode: LineMode,
+) -> (String, Vec<(usize, usize)>, usize) {
+    let total: usize = spans.iter().map(|span| span.text.len()).sum();
+    let mut display = String::with_capacity(total);
+    for span in spans {
+        match (line_mode, span.text.contains('\n')) {
+            (LineMode::Single, true) => {
+                let mut previous = '\0';
+                for character in span.text.chars() {
+                    display.push(match (character, previous) {
+                        ('\n', last) if last != '\r' => ' ',
+                        (other, _) => other,
+                    });
+                    previous = character;
+                }
+            }
+            _ => display.push_str(&span.text),
+        }
+    }
+    (display, Vec::new(), total)
 }
 
 fn masked_span_text(text: &str, mask: Option<char>, line_mode: LineMode) -> String {
@@ -2072,5 +2122,56 @@ mod tests {
         let c_end = layout.caret(5).unwrap();
         let idx2 = layout.hit(c_end.x + 100.0, 5.0).unwrap();
         assert_eq!(idx2, 5);
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    fn by_graphemes(spans: &[StyledSpan], line_mode: LineMode) -> String {
+        let mut display = String::new();
+        for span in spans {
+            for g in span.text.graphemes(true) {
+                match (g == "\n", line_mode) {
+                    (true, LineMode::Single) => display.push(' '),
+                    _ => display.push_str(g),
+                }
+            }
+        }
+        display
+    }
+
+    #[test]
+    fn plain_display_matches_grapheme_segmentation() {
+        let samples = [
+            "plain",
+            "line one\nline two\n",
+            "windows\r\nendings\r\nand\nmixed\r",
+            "e\u{301}\nclusters 👨‍👩‍👧\n",
+            "",
+            "\n\n",
+        ];
+        for mode in [LineMode::Single, LineMode::Multi] {
+            let spans: Vec<StyledSpan> = samples
+                .iter()
+                .map(|text| StyledSpan::plain(*text))
+                .collect();
+            let (display, map, length) = build_display(&spans, None, mode);
+            assert_eq!(display, by_graphemes(&spans, mode));
+            assert!(map.is_empty());
+            assert_eq!(
+                length,
+                spans.iter().map(|span| span.text.len()).sum::<usize>()
+            );
+        }
+    }
+
+    #[test]
+    fn masking_still_goes_through_graphemes() {
+        let spans = vec![StyledSpan::plain("ab\ncd")];
+        let (display, map, _) = build_display(&spans, Some('*'), LineMode::Multi);
+        assert_eq!(display, "**\n**");
+        assert_eq!(map.len(), 4);
     }
 }

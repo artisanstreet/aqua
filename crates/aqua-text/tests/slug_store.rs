@@ -103,7 +103,7 @@ mod fonts {
     }
 
     #[test]
-    fn uploads_create_once_then_append_rows_and_recreate_on_growth() {
+    fn uploads_create_once_and_a_warmed_face_never_grows_the_store() {
         let mut fonts = FontManager::new();
         let mut cache = SlugCache::new();
         let mut store = SlugStore::new();
@@ -130,23 +130,37 @@ mod fonts {
             assert_eq!(*format, TextureFormat::Rgba32Float);
         }
         assert!(store.uploads().textures.is_empty());
+        let revision = fonts.font_revision();
         for key in keys(
             "The quick brown fox jumps over the lazy dog 0123456789 @&%",
             32.0,
         ) {
-            store.lookup(&mut cache, &mut fonts, &key);
+            assert!(matches!(
+                store.resident(&key, revision),
+                Some(StoreLookup::Stored(_)) | Some(StoreLookup::Blank)
+            ));
         }
-        let grown = store.uploads();
-        assert!(!grown.textures.is_empty());
+        assert!(store.uploads().textures.is_empty());
         assert_ne!(STORE_HANDLE, TextureHandle(0));
+    }
+
+    #[test]
+    fn resident_lookup_refuses_a_stale_font_revision() {
+        let mut fonts = FontManager::new();
+        let mut cache = SlugCache::new();
+        let mut store = SlugStore::new();
+        let key = keys("a", 32.0)[0];
+        store.lookup(&mut cache, &mut fonts, &key);
+        assert!(store.resident(&key, fonts.font_revision()).is_some());
+        assert!(store.resident(&key, fonts.font_revision() + 1).is_none());
     }
 }
 
 mod eviction {
     use super::*;
     use aqua_graph::slug::STORE_WIDTH;
-    use aqua_text::slug::StoreLookup;
     use aqua_protocol::TextureOp;
+    use aqua_text::slug::StoreLookup;
 
     fn stored(lookup: StoreLookup) -> u32 {
         match lookup {

@@ -11,6 +11,7 @@ pub mod machine;
 pub mod material;
 pub mod monitor;
 pub mod prefs;
+pub mod probe;
 pub mod render;
 pub mod shell;
 pub mod time;
@@ -22,8 +23,8 @@ pub use access::{
 };
 pub use aqua_motion::{MotionCommand, MotionEvent};
 pub use badge::{BadgeError, TaskbarBadge};
-pub use control::{Pace, Timeline};
 pub use chrome::{CaptionControl, CaptionRegion, ChromeError, DragRegions};
+pub use control::{Pace, Timeline};
 pub use geometry::{AquaWindowId, LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 pub use gpu::{
     DeviceStatus, FeatureTier, Features, FrameInputs, FrameReport, GpuBackend, GpuCapabilities,

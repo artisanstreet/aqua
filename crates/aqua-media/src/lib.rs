@@ -2,6 +2,7 @@
 
 pub mod atlas;
 pub mod decode;
+pub mod hash;
 pub mod mesh;
 pub mod reduce;
 pub mod residency;

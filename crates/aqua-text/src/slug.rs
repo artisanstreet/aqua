@@ -1,5 +1,6 @@
-use std::collections::HashMap;
 use std::sync::Arc;
+
+use aqua_media::hash::FastMap;
 
 use aqua_graph::slug::STORE_WIDTH;
 pub use aqua_graph::slug::{pack_glyph, PathCommand, SlugCurve, SlugGlyph};
@@ -69,6 +70,25 @@ pub struct SlugKey {
     pub glyph_id: u16,
 }
 
+impl SlugKey {
+    pub fn of(key: &RasterKey) -> Self {
+        Self {
+            font_id: key.font_id,
+            weight: key.weight,
+            stretch: key.stretch,
+            synthetic_italic: key.synthetic_italic,
+            glyph_id: key.glyph_id,
+        }
+    }
+
+    fn face(self) -> Self {
+        Self {
+            glyph_id: 0,
+            ..self
+        }
+    }
+}
+
 pub const SLUG_CACHE_BUDGET_BYTES: usize = 4 * 1024 * 1024;
 
 fn lookup_bytes(lookup: &SlugLookup) -> usize {
@@ -79,7 +99,7 @@ fn lookup_bytes(lookup: &SlugLookup) -> usize {
 }
 
 pub struct SlugCache {
-    glyphs: HashMap<SlugKey, SlugLookup>,
+    glyphs: FastMap<SlugKey, SlugLookup>,
     revision: u64,
     bytes: usize,
     budget: usize,
@@ -98,7 +118,7 @@ impl SlugCache {
 
     pub fn with_budget(budget: usize) -> Self {
         Self {
-            glyphs: HashMap::new(),
+            glyphs: FastMap::default(),
             revision: 0,
             bytes: 0,
             budget,
@@ -118,7 +138,7 @@ impl SlugCache {
     }
 
     pub fn clear(&mut self) {
-        self.glyphs = HashMap::new();
+        self.glyphs = FastMap::default();
         self.bytes = 0;
     }
 
@@ -127,13 +147,7 @@ impl SlugCache {
             self.clear();
             self.revision = fonts.font_revision();
         }
-        let slug_key = SlugKey {
-            font_id: key.font_id,
-            weight: key.weight,
-            stretch: key.stretch,
-            synthetic_italic: key.synthetic_italic,
-            glyph_id: key.glyph_id,
-        };
+        let slug_key = SlugKey::of(key);
         if let Some(found) = self.glyphs.get(&slug_key) {
             return found.clone();
         }
@@ -222,7 +236,8 @@ struct StoreEntry {
 }
 
 pub struct SlugStore<K = SlugKey> {
-    entries: HashMap<K, StoreEntry>,
+    entries: FastMap<K, StoreEntry>,
+    warmed: Vec<SlugKey>,
     texels: Vec<[f32; 4]>,
     free: Vec<(u32, u32)>,
     rows: u32,
@@ -244,7 +259,8 @@ impl<K: Copy + Eq + std::hash::Hash> Default for SlugStore<K> {
 impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
     pub fn with_budget(bytes: u64) -> Self {
         Self {
-            entries: HashMap::new(),
+            entries: FastMap::default(),
+            warmed: Vec::new(),
             texels: Vec::new(),
             free: Vec::new(),
             rows: 0,
@@ -289,6 +305,7 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
 
     pub fn reset(&mut self) {
         self.entries.clear();
+        self.warmed.clear();
         self.texels.clear();
         self.free.clear();
         self.dirty = None;
@@ -444,12 +461,9 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
                 });
                 (needed_rows > 0).then_some((0, needed_rows))
             }
-            false => self.dirty.map(|(low, high)| {
-                (
-                    (low / ROW_TEXELS) as u32,
-                    high.div_ceil(ROW_TEXELS) as u32,
-                )
-            }),
+            false => self
+                .dirty
+                .map(|(low, high)| ((low / ROW_TEXELS) as u32, high.div_ceil(ROW_TEXELS) as u32)),
         };
         if let Some((first_row, last_row)) = rows_range {
             let rows = last_row - first_row;
@@ -479,9 +493,19 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
     }
 }
 
+const WARM_FIRST: char = ' ';
+const WARM_LAST: char = '~';
+
 impl SlugStore<SlugKey> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn resident(&mut self, key: &RasterKey, font_revision: u64) -> Option<StoreLookup> {
+        match self.revision == font_revision {
+            true => self.touch(&SlugKey::of(key)),
+            false => None,
+        }
     }
 
     pub fn lookup(
@@ -494,20 +518,50 @@ impl SlugStore<SlugKey> {
             self.reset();
             self.revision = fonts.font_revision();
         }
-        let slug_key = SlugKey {
-            font_id: key.font_id,
-            weight: key.weight,
-            stretch: key.stretch,
-            synthetic_italic: key.synthetic_italic,
-            glyph_id: key.glyph_id,
-        };
+        let slug_key = SlugKey::of(key);
         if let Some(found) = self.touch(&slug_key) {
             return found;
         }
+        self.warm_face(cache, fonts, key);
+        match self.touch(&slug_key) {
+            Some(found) => found,
+            None => self.fetch(cache, fonts, key, slug_key),
+        }
+    }
+
+    fn fetch(
+        &mut self,
+        cache: &mut SlugCache,
+        fonts: &mut FontManager,
+        key: &RasterKey,
+        slug_key: SlugKey,
+    ) -> StoreLookup {
         match cache.lookup(fonts, key) {
             SlugLookup::Outline(glyph) => self.insert(slug_key, &glyph),
             SlugLookup::Blank => self.insert_empty(slug_key, StoreLookup::Blank),
             SlugLookup::Unsupported => self.insert_empty(slug_key, StoreLookup::Unsupported),
+        }
+    }
+
+    pub fn warm_face(&mut self, cache: &mut SlugCache, fonts: &mut FontManager, key: &RasterKey) {
+        let face = SlugKey::of(key).face();
+        if self.warmed.contains(&face) {
+            return;
+        }
+        self.warmed.push(face);
+        let Some(entry) =
+            fonts.entry_with(key.font_id, key.weight, key.stretch, key.synthetic_italic)
+        else {
+            return;
+        };
+        for character in WARM_FIRST..=WARM_LAST {
+            let glyph_id = entry.glyph_for(character);
+            let slug_key = SlugKey { glyph_id, ..face };
+            if glyph_id == 0 || self.entries.contains_key(&slug_key) {
+                continue;
+            }
+            let warm = RasterKey { glyph_id, ..*key };
+            self.fetch(cache, fonts, &warm, slug_key);
         }
     }
 }

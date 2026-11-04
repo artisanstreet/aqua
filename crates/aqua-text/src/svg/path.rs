@@ -58,10 +58,7 @@ impl<'a> Scanner<'a> {
         while let Some(&byte) = self.bytes.get(self.at) {
             let accept = match byte {
                 b'0'..=b'9' => true,
-                b'-' | b'+' => {
-                    self.at == start
-                        || matches!(self.bytes[self.at - 1], b'e' | b'E')
-                }
+                b'-' | b'+' => self.at == start || matches!(self.bytes[self.at - 1], b'e' | b'E'),
                 b'.' if !seen_dot && !seen_exp => {
                     seen_dot = true;
                     true

@@ -1,3 +1,4 @@
+use aqua_protocol::probe::{self, Metric, Phase};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -313,6 +314,7 @@ where
             .ok_or(GpuError::Unsupported("frame before viewport"))?;
         let extent = extent_of(size, scale);
         let surface = self.ensure_surface(extent)?;
+        let lower_span = probe::span(Phase::Lower);
         self.lowering.sync();
         let context = LowerContext {
             size,
@@ -320,19 +322,44 @@ where
             now: self.clock.now(),
         };
         let lowered = self.lowering.lower(side.scene(), &context);
+        drop(lower_span);
         let uploaded = !lowered.uploads.textures.is_empty();
         if uploaded {
+            let _span = probe::span(Phase::Upload);
+            if probe::active() {
+                probe::count(
+                    Metric::UploadTextures,
+                    lowered.uploads.textures.len() as u64,
+                );
+                probe::count(Metric::UploadBytes, lowered.uploads.upload_bytes());
+            }
             self.backend.upload(lowered.uploads.clone())?;
         }
+        let plan_span = probe::span(Phase::Plan);
         let plan = plan_paint_with(
             extent,
             self.config.clear,
             &lowered.commands,
             self.backend.capabilities().plan_limits(),
         )?;
+        drop(plan_span);
+        let wait_span = probe::span(Phase::Wait);
         self.acquire_slot(surface)?;
+        drop(wait_span);
+        let record_span = probe::span(Phase::Record);
         let report = self.backend.execute(&plan, &FrameInputs::new(surface))?;
+        drop(record_span);
+        let present_span = probe::span(Phase::Present);
         let times = self.backend.present(surface, self.config.present)?;
+        drop(present_span);
+        if probe::active() {
+            probe::count(Metric::Commands, lowered.commands.len() as u64);
+            probe::count(Metric::Glyphs, u64::from(lowered.glyphs));
+            probe::count(Metric::Passes, u64::from(report.passes));
+            probe::count(Metric::Instances, u64::from(report.instances));
+            probe::count(Metric::Barriers, u64::from(report.barriers));
+            probe::count(Metric::TransientBytes, report.transient_bytes);
+        }
         self.slot_acquired = false;
         self.lowering.frame_reported(&report);
         let trimmed = self.trim_after(&report, uploaded);
@@ -357,8 +384,18 @@ where
         Ok((report, record))
     }
 
+    #[must_use]
+    pub fn idle_trim_in(&mut self) -> Option<Duration> {
+        let now = self.clock.now();
+        self.trim
+            .idle_deadline()
+            .map(|due| due.saturating_duration_since(now))
+    }
+
     fn trim_after(&mut self, report: &FrameReport, uploaded: bool) -> u64 {
+        let now = self.clock.now();
         let action = self.trim.observe(TrimInput {
+            now,
             uploaded,
             cpu_time: report.cpu_time,
             gpu_time: report.gpu_time,

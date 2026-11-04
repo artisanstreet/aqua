@@ -85,6 +85,31 @@ impl Default for TextStyle {
 }
 
 impl TextStyle {
+    pub(crate) fn shaping_hash(&self, hasher: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        self.families.hash(hasher);
+        self.size_px.to_bits().hash(hasher);
+        self.line_height_px.to_bits().hash(hasher);
+        self.weight.hash(hasher);
+        self.slant.hash(hasher);
+        self.stretch.hash(hasher);
+        self.letter_spacing_em.map(f32::to_bits).hash(hasher);
+        self.font_features.hash(hasher);
+    }
+
+    pub(crate) fn identity_hash(&self, hasher: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        self.shaping_hash(hasher);
+        self.gpui_color
+            .map(|color| color.map(f32::to_bits))
+            .hash(hasher);
+        self.gpui_source_color
+            .map(|color| color.map(f32::to_bits))
+            .hash(hasher);
+        self.underline.hash(hasher);
+        self.strikethrough.hash(hasher);
+    }
+
     pub fn cache_key(&self) -> String {
         let families: Vec<String> = self
             .families

@@ -1,9 +1,12 @@
 use std::time::Duration;
 
-use aqua_transport::{TrimAction, TrimInput, TrimPolicy};
+use aqua_protocol::Instant;
+
+use aqua_transport::{TrimAction, TrimInput, TrimPolicy, IDLE_TRIM_AFTER};
 
 fn quiet() -> TrimInput {
     TrimInput {
+        now: Instant::from_nanos(0),
         uploaded: false,
         cpu_time: Duration::from_millis(1),
         gpu_time: Some(Duration::from_millis(1)),
@@ -79,4 +82,52 @@ fn an_explicit_request_trims_everything_immediately_and_restarts_the_interval() 
     let after = run(&mut policy, 299, quiet());
     assert!(after.iter().all(|action| *action == TrimAction::Keep));
     assert!(matches!(policy.observe(quiet()), TrimAction::Unused(_)));
+}
+
+fn at(seconds: f64) -> Instant {
+    Instant::from_nanos((seconds * 1e9) as u64)
+}
+
+#[test]
+fn idle_deadline_follows_the_last_real_frame_and_is_consumed_by_one_trim() {
+    let mut policy = TrimPolicy::new();
+    assert_eq!(policy.idle_deadline(), None);
+    policy.observe(TrimInput {
+        now: at(10.0),
+        ..quiet()
+    });
+    assert_eq!(policy.idle_deadline(), Some(at(10.0) + IDLE_TRIM_AFTER));
+    policy.observe(TrimInput {
+        now: at(10.5),
+        ..quiet()
+    });
+    assert_eq!(policy.idle_deadline(), Some(at(10.5) + IDLE_TRIM_AFTER));
+    let due = TrimInput {
+        now: at(12.6),
+        requested: true,
+        ..quiet()
+    };
+    assert_eq!(policy.observe(due), TrimAction::Everything);
+    assert_eq!(policy.idle_deadline(), None);
+    policy.observe(TrimInput {
+        now: at(20.0),
+        ..quiet()
+    });
+    assert_eq!(policy.idle_deadline(), Some(at(20.0) + IDLE_TRIM_AFTER));
+}
+
+#[test]
+fn a_trim_requested_before_the_deadline_does_not_consume_it() {
+    let mut policy = TrimPolicy::new();
+    policy.observe(TrimInput {
+        now: at(10.0),
+        ..quiet()
+    });
+    let early = TrimInput {
+        now: at(10.5),
+        requested: true,
+        ..quiet()
+    };
+    assert_eq!(policy.observe(early), TrimAction::Everything);
+    assert_eq!(policy.idle_deadline(), Some(at(10.0) + IDLE_TRIM_AFTER));
 }

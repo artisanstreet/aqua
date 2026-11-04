@@ -957,6 +957,14 @@ pub struct LeafText {
     pub font_size: f32,
     /// Whether to wrap at the available width.
     pub multiline: bool,
+    pub memo: Option<MeasureMemo>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MeasureMemo {
+    epoch: u64,
+    max_width_bits: u32,
+    size: Size,
 }
 
 /// Per-frame dirty statistics. Proves that a local update costs work
@@ -1070,6 +1078,7 @@ impl UiTree {
         let root = tree.mount_spec(spec);
         tree.sync_layout_styles()?;
         let troot = tree.tmap[&root.raw()];
+        let epoch = measurer.memo_epoch();
         tree.taffy
             .compute_layout_with_measure(
                 troot,
@@ -1084,9 +1093,9 @@ impl UiTree {
                         |_, _| 0.0,
                         |known, available| match scale {
                             Some(scale) => {
-                                measure_leaf_gpui(known, available, ctx, measurer, scale)
+                                measure_leaf_gpui(known, available, ctx, measurer, scale, epoch)
                             }
-                            None => measure_leaf(known, available, ctx, measurer),
+                            None => measure_leaf(known, available, ctx, measurer, epoch),
                         },
                     )
                 },
@@ -2229,7 +2238,7 @@ impl UiTree {
                             cur.gpui_source_placeholder_color = t.gpui_source_placeholder_color;
                         }
                     }
-                    self.sync_text_leaf(id);
+                    self.sync_text_leaf_if_changed(id);
                     self.touch_paint(id);
                 }
             }
@@ -2321,6 +2330,7 @@ impl UiTree {
                     text_style: t.effective_text_style(),
                     spans: t.shaping_spans().to_vec(),
                     multiline: t.multiline(),
+                    memo: None,
                 }),
             },
             _ => LeafCtx { text: None },
@@ -2739,6 +2749,13 @@ impl UiTree {
         let Some(&t) = self.tmap.get(&id.raw()) else {
             return false;
         };
+        if self
+            .nodes
+            .get(id.raw())
+            .is_some_and(|rec| rec.style == style)
+        {
+            return true;
+        }
         self.taffy
             .set_style(t, crate::style::to_taffy(&style))
             .expect("taffy set_style");
@@ -2791,6 +2808,7 @@ impl UiTree {
                 text_style,
                 spans,
                 multiline,
+                memo: None,
             });
         }
         self.mark_layout_dirty(id);
@@ -2934,10 +2952,36 @@ impl UiTree {
                 text_style: tc.effective_text_style(),
                 spans: tc.shaping_spans().to_vec(),
                 multiline: tc.multiline(),
+                memo: None,
             });
         }
         self.mark_layout_dirty(id);
         true
+    }
+
+    pub fn sync_text_leaf_if_changed(&mut self, id: NodeId) -> bool {
+        let Some(&t) = self.tmap.get(&id.raw()) else {
+            return false;
+        };
+        let unchanged = match (
+            self.nodes.get(id.raw()).map(|rec| &rec.kind),
+            self.taffy
+                .get_node_context(t)
+                .and_then(|ctx| ctx.text.as_ref()),
+        ) {
+            (Some(NodeKind::Text(tc)), Some(leaf)) => {
+                leaf.multiline == tc.multiline()
+                    && leaf.font_size == tc.font_size
+                    && leaf.text == tc.display_text()
+                    && leaf.text_style == tc.effective_text_style()
+                    && leaf.spans.as_slice() == tc.shaping_spans()
+            }
+            _ => false,
+        };
+        if unchanged {
+            return true;
+        }
+        self.sync_text_leaf(id)
     }
 
     /// Scroll clamping target: content size if measured, else the viewport
@@ -2997,7 +3041,11 @@ impl UiTree {
             return Ok(());
         }
         self.visited.set(self.visited.get() + self.tmap.len());
+        let full = self.layout_styles_dirty;
         for (id, record) in self.nodes.iter() {
+            if !full && !record.dirty_layout {
+                continue;
+            }
             let Some(&node) = self.tmap.get(&id) else {
                 continue;
             };
@@ -3077,6 +3125,7 @@ impl UiTree {
         let measured = std::cell::Cell::new(0usize);
         let scale = self.gpui_layout_scale;
         let device_scale = scale.unwrap_or(1.0);
+        let epoch = measurer.memo_epoch();
         self.taffy
             .compute_layout_with_measure(
                 troot,
@@ -3097,8 +3146,15 @@ impl UiTree {
                                 ctx,
                                 measurer,
                                 scale,
+                                epoch,
                             ),
-                            None => measure_leaf(known_dimensions, available_space, ctx, measurer),
+                            None => measure_leaf(
+                                known_dimensions,
+                                available_space,
+                                ctx,
+                                measurer,
+                                epoch,
+                            ),
                         },
                     )
                 },
@@ -3803,6 +3859,7 @@ fn measure_leaf_gpui(
     ctx: Option<&mut LeafCtx>,
     measurer: &dyn TextMeasurer,
     scale: f32,
+    epoch: Option<u64>,
 ) -> taffy::geometry::Size<f32> {
     let available = |value| match value {
         AvailableSpace::Definite(value) => AvailableSpace::Definite(value / scale),
@@ -3819,6 +3876,7 @@ fn measure_leaf_gpui(
         },
         ctx,
         measurer,
+        epoch,
     );
     let device = crate::layout::editor::snap_measured_size_to_device_pixels(
         Size::new(logical.width, logical.height),
@@ -3835,6 +3893,7 @@ fn measure_leaf(
     available_space: taffy::geometry::Size<AvailableSpace>,
     ctx: Option<&mut LeafCtx>,
     measurer: &dyn TextMeasurer,
+    epoch: Option<u64>,
 ) -> taffy::geometry::Size<f32> {
     let mut size = taffy::geometry::Size {
         width: known_dimensions.width.unwrap_or(0.0),
@@ -3848,6 +3907,7 @@ fn measure_leaf(
                 text_style,
                 spans,
                 multiline,
+                memo,
             }),
     }) = ctx
     {
@@ -3860,7 +3920,25 @@ fn measure_leaf(
         } else {
             None
         };
-        let measured = measurer.measure_styled(text, text_style, spans, max_width, *multiline);
+        let max_width_bits = max_width.map_or(u32::MAX, f32::to_bits);
+        let remembered = epoch.and_then(|epoch| {
+            (*memo).filter(|memo| memo.epoch == epoch && memo.max_width_bits == max_width_bits)
+        });
+        let measured = match remembered {
+            Some(memo) => memo.size,
+            None => {
+                let measured =
+                    measurer.measure_styled(text, text_style, spans, max_width, *multiline);
+                if let Some(epoch) = epoch {
+                    *memo = Some(MeasureMemo {
+                        epoch,
+                        max_width_bits,
+                        size: measured,
+                    });
+                }
+                measured
+            }
+        };
         if known_dimensions.width.is_none() {
             size.width = measured.w;
         }

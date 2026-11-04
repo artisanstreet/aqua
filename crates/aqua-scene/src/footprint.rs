@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use aqua_core::geometry::{Point, Transform2D};
 
@@ -18,7 +19,7 @@ enum Kind {
 struct Entry {
     revision: u64,
     kind: Kind,
-    groups: Vec<NodeId>,
+    groups: Arc<[NodeId]>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -92,11 +93,25 @@ fn local_rect(item: &DisplayItem, ink: &dyn Fn(&TextRun) -> Option<Rect>) -> Kin
 
 impl Footprints {
     pub fn of_scene(scene: &Scene, ink: &dyn Fn(&TextRun) -> Option<Rect>) -> Self {
-        let mut out = Footprints::default();
+        let mut out = Footprints {
+            entries: HashMap::with_capacity(scene.len()),
+            groups: HashMap::new(),
+        };
         let mut stack: Vec<Open> = Vec::new();
+        let mut chain: Arc<[NodeId]> = Arc::from([]);
+        let mut chain_depth = 0usize;
         for (id, item) in scene.ordered() {
             let revision = scene.item_revision(id).unwrap_or(0);
-            let chain: Vec<NodeId> = stack.iter().map(|open| open.id).collect();
+            if chain_depth != stack.len()
+                || chain
+                    .iter()
+                    .zip(&stack)
+                    .any(|(chained, open)| *chained != open.id)
+            {
+                chain = stack.iter().map(|open| open.id).collect();
+                chain_depth = stack.len();
+            }
+            let chain = Arc::clone(&chain);
             let world = stack
                 .last()
                 .map_or(Transform2D::IDENTITY, |open| open.transform);

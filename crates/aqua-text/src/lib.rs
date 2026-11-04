@@ -14,6 +14,7 @@ pub mod residency;
 pub mod runs;
 pub mod selection;
 mod shape;
+mod shape_cache;
 pub mod slug;
 pub mod strike;
 pub mod style;
@@ -30,6 +31,7 @@ pub use layout::{
 pub use model::TextModel;
 pub use runs::{ResolveError, RunHandle, RunId, RunRegistry, SharedRuns};
 pub use selection::Selection;
+pub use shape_cache::{ShapeCacheStats, SHAPE_CACHE_BUDGET_BYTES};
 pub use style::{
     FontFamily, FontSlant, FontStretch, FontWeight, InlineCellError, LineMode, StyledSpan,
     TextAlign, TextStyle, WrapMode,

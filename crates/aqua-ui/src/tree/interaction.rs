@@ -161,6 +161,7 @@ pub enum InteractionCommand {
         node: aqua_core::NodeId,
         layout: Box<LayoutStyle>,
         paint: Box<Paint>,
+        styled: bool,
     },
     Style {
         node: aqua_core::NodeId,
@@ -192,16 +193,29 @@ pub struct InteractionSemantics {
 }
 
 #[derive(Clone, Debug)]
-struct RetainedInteraction {
-    state: InteractionState,
+struct InteractionBase {
     styles: InteractionStyles,
     layout: LayoutStyle,
     paint: Paint,
+}
+
+#[derive(Clone, Debug)]
+struct RetainedInteraction {
+    state: InteractionState,
+    base: Option<Box<InteractionBase>>,
     semantics: InteractionSemantics,
     color_registered: bool,
     own_color: Option<aqua_core::Oklch>,
     own_gpui_color: Option<Option<aqua_core::GpuiHsla>>,
     own_source_color: Option<Option<aqua_core::GpuiTextColor>>,
+}
+
+impl RetainedInteraction {
+    fn refinement(&self) -> Style {
+        self.base
+            .as_ref()
+            .map_or_else(Style::new, |base| base.styles.refinement(self.state))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -385,17 +399,23 @@ impl super::UiTree {
         node: aqua_core::NodeId,
         absolute: Option<crate::style::Absolute>,
     ) {
-        if let Some(entry) = self.interaction.nodes.get_mut(&node) {
-            entry.layout.absolute = absolute;
+        if let Some(base) = self
+            .interaction
+            .nodes
+            .get_mut(&node)
+            .and_then(|entry| entry.base.as_mut())
+        {
+            base.layout.absolute = absolute;
         }
     }
 
-    pub fn queue_interaction_binding(&self, node: aqua_core::NodeId) {
+    pub fn queue_interaction_binding(&self, node: aqua_core::NodeId, styled: bool) {
         if let (Some(record), Some(paint)) = (self.get(node), self.paint(node)) {
             self.command_sink().interaction(InteractionCommand::Bind {
                 node,
                 layout: Box::new(record.style.clone()),
                 paint: Box::new(paint),
+                styled,
             });
         }
     }
@@ -464,13 +484,15 @@ impl super::UiTree {
                     color_root = self.root();
                     for (node, entry) in &mut store.nodes {
                         if entry.state.transition(InteractionEvent::Modality(modality)) {
-                            self.apply_interaction_style(
-                                *node,
-                                &entry.styles,
-                                entry.state,
-                                &entry.layout,
-                                &entry.paint,
-                            );
+                            if let Some(base) = &entry.base {
+                                self.apply_interaction_style(
+                                    *node,
+                                    &base.styles,
+                                    entry.state,
+                                    &base.layout,
+                                    &base.paint,
+                                );
+                            }
                         }
                     }
                 }
@@ -479,6 +501,7 @@ impl super::UiTree {
                 node,
                 layout,
                 paint,
+                styled,
             } => {
                 let (layout, paint) = (*layout, *paint);
                 if self.get(node).is_some() {
@@ -493,21 +516,24 @@ impl super::UiTree {
                                 modality,
                                 ..InteractionState::default()
                             },
-                            styles: InteractionStyles::default(),
-                            layout: layout.clone(),
-                            paint: paint.clone(),
+                            base: None,
                             semantics: InteractionSemantics::default(),
                             color_registered: false,
                             own_color: None,
                             own_gpui_color: None,
                             own_source_color: None,
                         });
-                    if style_colors(&entry.styles.refinement(entry.state)) != (None, None, None) {
+                    if style_colors(&entry.refinement()) != (None, None, None) {
                         color_root = Some(node);
                     }
-                    entry.layout = layout;
-                    entry.paint = paint;
-                    entry.styles = InteractionStyles::default();
+                    let had_base = entry.base.is_some();
+                    entry.base = (styled || had_base).then(|| {
+                        Box::new(InteractionBase {
+                            styles: InteractionStyles::default(),
+                            layout,
+                            paint,
+                        })
+                    });
                     entry.state.focused = self.focused() == Some(node);
                     entry
                         .state
@@ -516,32 +542,44 @@ impl super::UiTree {
                         entry.semantics = InteractionSemantics::default();
                         self.touch_paint(node);
                     }
-                    self.apply_interaction_style(
-                        node,
-                        &entry.styles,
-                        entry.state,
-                        &entry.layout,
-                        &entry.paint,
-                    );
+                    if let Some(base) = &entry.base {
+                        self.apply_interaction_style(
+                            node,
+                            &base.styles,
+                            entry.state,
+                            &base.layout,
+                            &base.paint,
+                        );
+                    }
+                    if !styled {
+                        entry.base = None;
+                    }
                 }
             }
             InteractionCommand::Style { node, kind, style } => {
-                if let Some(entry) = store
-                    .nodes
-                    .get_mut(&node)
-                    .filter(|_| self.get(node).is_some())
+                let current = self
+                    .get(node)
+                    .and_then(|record| self.paint(node).map(|paint| (record.style.clone(), paint)));
+                if let (Some(entry), Some((layout, paint))) = (store.nodes.get_mut(&node), current)
                 {
                     let affects_color = style_colors(&style) != (None, None, None);
-                    entry.styles.set(kind, *style);
+                    let base = entry.base.get_or_insert_with(|| {
+                        Box::new(InteractionBase {
+                            styles: InteractionStyles::default(),
+                            layout,
+                            paint,
+                        })
+                    });
+                    base.styles.set(kind, *style);
                     if affects_color {
                         color_root = Some(node);
                     }
                     self.apply_interaction_style(
                         node,
-                        &entry.styles,
+                        &base.styles,
                         entry.state,
-                        &entry.layout,
-                        &entry.paint,
+                        &base.layout,
+                        &base.paint,
                     );
                 }
             }
@@ -554,18 +592,20 @@ impl super::UiTree {
                     if matches!(event, InteractionEvent::Focus(_)) {
                         self.touch_paint(node);
                     }
-                    let before_color = style_colors(&entry.styles.refinement(entry.state));
+                    let before_color = style_colors(&entry.refinement());
                     if entry.state.transition(event) {
-                        if before_color != style_colors(&entry.styles.refinement(entry.state)) {
+                        if before_color != style_colors(&entry.refinement()) {
                             color_root = Some(node);
                         }
-                        self.apply_interaction_style(
-                            node,
-                            &entry.styles,
-                            entry.state,
-                            &entry.layout,
-                            &entry.paint,
-                        );
+                        if let Some(base) = &entry.base {
+                            self.apply_interaction_style(
+                                node,
+                                &base.styles,
+                                entry.state,
+                                &base.layout,
+                                &base.paint,
+                            );
+                        }
                     }
                 }
             }
@@ -638,9 +678,11 @@ impl super::UiTree {
     fn has_interaction_color(&self, store: &InteractionStore, node: aqua_core::NodeId) -> bool {
         let mut current = Some(node);
         while let Some(id) = current {
-            if store.nodes.get(&id).is_some_and(|entry| {
-                style_colors(&entry.styles.refinement(entry.state)) != (None, None, None)
-            }) {
+            if store
+                .nodes
+                .get(&id)
+                .is_some_and(|entry| style_colors(&entry.refinement()) != (None, None, None))
+            {
                 return true;
             }
             current = self.get(id).and_then(|record| record.parent);
@@ -662,8 +704,7 @@ impl super::UiTree {
             Option<aqua_core::GpuiTextColor>,
         )| {
             store.nodes.get(&node).map_or(inherited, |entry| {
-                let (color, gpui_color, source_color) =
-                    style_colors(&entry.styles.refinement(entry.state));
+                let (color, gpui_color, source_color) = style_colors(&entry.refinement());
                 (
                     color.or(entry.own_color).unwrap_or(inherited.0),
                     gpui_color.or(entry.own_gpui_color).unwrap_or(inherited.1),

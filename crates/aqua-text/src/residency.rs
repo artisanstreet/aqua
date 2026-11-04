@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use aqua_media::hash::FastMap;
 
 use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
@@ -7,7 +7,7 @@ use aqua_media::atlas::{ColorGlyphBitmap, GlyphBitmap, GlyphKey, GlyphRaster, Pa
 use aqua_media::residency::{GlyphSlot, Residency, ResidencyError};
 use aqua_media::upload::{glyph_instance, image_instance};
 
-use crate::font::{FontId, FontManager};
+use crate::font::{FontId, FontManager, SharedFonts};
 use crate::layout::LaidOut;
 use crate::raster::{place_glyph, quantize_size, GlyphImage, RasterKey, Rasterizer, SIZE_STEPS};
 use crate::style::FontStretch;
@@ -36,7 +36,7 @@ pub struct TextDraw {
 
 #[derive(Default)]
 pub struct GlyphResolver {
-    interned: HashMap<FaceKey, u64>,
+    interned: FastMap<FaceKey, u64>,
     faces: Vec<FaceKey>,
     rasterizer: Rasterizer,
 }
@@ -105,12 +105,34 @@ impl GlyphResolver {
         fonts: &mut FontManager,
         key: &RasterKey,
     ) -> Result<GlyphSlot, ResidencyError> {
+        self.resolve_with(residency, key, |rasterizer, raster| {
+            rasterizer.rasterize(fonts, raster)
+        })
+    }
+
+    pub fn resolve_shared(
+        &mut self,
+        residency: &mut Residency,
+        fonts: &SharedFonts,
+        key: &RasterKey,
+    ) -> Result<GlyphSlot, ResidencyError> {
+        self.resolve_with(residency, key, |rasterizer, raster| {
+            rasterizer.rasterize(&mut fonts.lock(), raster)
+        })
+    }
+
+    fn resolve_with(
+        &mut self,
+        residency: &mut Residency,
+        key: &RasterKey,
+        mut rasterize: impl FnMut(&mut Rasterizer, &RasterKey) -> Option<GlyphImage>,
+    ) -> Result<GlyphSlot, ResidencyError> {
         let glyph = self.key(key);
         let faces = &self.faces;
         let rasterizer = &mut self.rasterizer;
         let mut source = |requested: &GlyphKey| {
             raster_of(faces, requested)
-                .and_then(|raster| rasterizer.rasterize(fonts, &raster))
+                .and_then(|raster| rasterize(rasterizer, &raster))
                 .filter(|image| !image.bitmap().is_empty())
                 .map(into_raster)
         };

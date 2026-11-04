@@ -826,17 +826,10 @@ impl Emitter {
                 if !self.written(target) {
                     return;
                 }
-                let snapshot = crate::blur::snapshot(&mut self.graph, target, region);
-                let local = Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    w: snapshot.bounds.w,
-                    h: snapshot.bounds.h,
-                };
                 self.blurred(
-                    snapshot.texture,
-                    local,
-                    snapshot.bounds,
+                    target,
+                    region,
+                    region,
                     blur.radius,
                     blur.corner_radius,
                     Blend::Replace,

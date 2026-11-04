@@ -73,7 +73,10 @@ impl std::fmt::Display for PlanError {
                 write!(f, "pass {pass} reads a texture nothing wrote yet")
             }
             PlanError::SurfaceRead { pass } => {
-                write!(f, "pass {pass} reads the surface without being a copy")
+                write!(
+                    f,
+                    "pass {pass} reads the surface without being a copy or a blur downsample"
+                )
             }
             PlanError::PersistentWrite { pass } => {
                 write!(f, "pass {pass} writes a persistent texture")
@@ -470,8 +473,15 @@ pub fn validate(plan: &FramePlan) -> Result<(), PlanError> {
         if !pass.reads.iter().chain(&pass.writes).all(known) {
             return Err(PlanError::UnknownTexture { pass: index });
         }
-        let is_copy = matches!(pass.kind, PassKind::Copy { .. });
-        if pass.reads.contains(&TextureRef::Surface) && !is_copy {
+        let may_read_surface = matches!(
+            pass.kind,
+            PassKind::Copy { .. }
+                | PassKind::Filter {
+                    shader: ShaderId::BlurDown,
+                    ..
+                }
+        );
+        if pass.reads.contains(&TextureRef::Surface) && !may_read_surface {
             return Err(PlanError::SurfaceRead { pass: index });
         }
         if pass

@@ -5,7 +5,8 @@ use aqua_core::vector::VectorSource;
 
 use crate::atlas::{
     Atlas, AtlasConfig, AtlasError, AtlasStats, AtlasUpdates, GlyphBitmap, GlyphKey, GlyphRaster,
-    GlyphRasterizer, GlyphSource, ImageKey, PageId, Raster, Slot, StreamBudget, Streamer,
+    GlyphRasterizer, GlyphSource, ImageKey, PageFormat, PageId, Raster, Slot, StreamBudget,
+    Streamer,
 };
 use crate::vector::{rasterize, retained_source_bytes, VectorBudget, VectorError};
 
@@ -141,6 +142,17 @@ impl Residency {
 
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    pub fn eviction_epoch(&self) -> u64 {
+        self.masks.eviction_epoch() + self.colors.eviction_epoch()
+    }
+
+    pub fn touch_page(&mut self, page: PageId) {
+        match page.format {
+            PageFormat::Mask8 => self.masks.touch_page(page.index),
+            PageFormat::Color8 => self.colors.touch_page(page.index),
+        }
     }
 
     pub fn begin_frame(&mut self) {
@@ -344,7 +356,12 @@ impl Residency {
         self.generation += 1;
     }
 
-    pub fn page_layouts(&self) -> (Vec<crate::atlas::PageSummary>, Vec<crate::atlas::PageSummary>) {
+    pub fn page_layouts(
+        &self,
+    ) -> (
+        Vec<crate::atlas::PageSummary>,
+        Vec<crate::atlas::PageSummary>,
+    ) {
         (self.masks.page_layout(), self.colors.page_layout())
     }
 

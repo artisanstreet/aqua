@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use aqua_verify::lint::{blank_comments_and_strings, scan_crate};
-use aqua_verify::metadata::{Workspace, breaches, load, workspace_root};
+use aqua_verify::metadata::{breaches, load, workspace_root, Workspace};
 use aqua_verify::policy::{
     ALLOWED_ADAPTER_EDGES, FORBIDDEN_ADAPTER_CRATES, FORBIDDEN_EXTERNAL_CRATES, PURE_CRATES,
     UNSAFE_AUDITED_CRATES,
@@ -26,23 +26,20 @@ fn present_pure_crates() -> Vec<(&'static str, PathBuf)> {
 }
 
 #[test]
-fn pure_crates_exist_in_the_workspace() {
+fn every_pure_crate_exists_in_the_workspace() {
     let present: Vec<&str> = present_pure_crates()
         .iter()
         .map(|(name, _)| *name)
         .collect();
-    for required in [
-        "aqua-core",
-        "aqua-protocol",
-        "aqua-graph",
-        "aqua-runtime",
-        "aqua-scene",
-    ] {
-        assert!(
-            present.contains(&required),
-            "{required} missing from workspace metadata"
-        );
-    }
+    let missing: Vec<&str> = PURE_CRATES
+        .iter()
+        .copied()
+        .filter(|name| !present.contains(name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "pure crates missing from workspace metadata: {missing:?}"
+    );
 }
 
 #[test]

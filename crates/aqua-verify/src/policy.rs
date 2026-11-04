@@ -11,6 +11,7 @@ pub const PURE_CRATES: &[&str] = &[
     "aqua-graph",
     "aqua-protocol",
     "aqua-runtime",
+    "aqua-kernels",
 ];
 
 pub const UNSAFE_AUDITED_CRATES: &[&str] = &["aqua-kernels"];
@@ -51,3 +52,9 @@ pub const FORBIDDEN_SOURCE_TOKENS: &[&str] = &[
 ];
 
 pub const ALLOWED_ADAPTER_EDGES: &[(&str, &str)] = &[("aqua-text", "aqua-fonts-system")];
+
+pub const KERNEL_CRATE: &str = "aqua-kernels";
+
+pub const KERNEL_TWIN_FN: &str = "pub fn reference";
+
+pub const REFERENCE_ONLY_KERNEL_USERS: &[&str] = &["aqua-gpu-ref"];

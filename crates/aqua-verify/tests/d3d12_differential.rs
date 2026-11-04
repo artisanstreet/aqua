@@ -1,0 +1,185 @@
+#![cfg(windows)]
+
+use aqua_gpu_d3d12::hal::tier::Tier;
+use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat, TierLimit};
+use aqua_gpu_ref::conformance::{compare, Session, Tolerance};
+use aqua_gpu_ref::RefBackend;
+use aqua_verify::differential::{scenes, variant_case, VARIANTS};
+
+const SEED: u64 = 0xD3D1_2D1F;
+const SAME_DEVICE: Tolerance = Tolerance {
+    interior: 1,
+    soft: 2,
+    edge: 2,
+    edge_band: 2,
+};
+
+const TIERS: [(&str, TierLimit); 3] = [
+    ("baseline", TierLimit::BASELINE),
+    (
+        "bindless",
+        TierLimit {
+            binding: Tier::Bindless,
+            enhanced_barriers: false,
+        },
+    ),
+    ("max", TierLimit::MAX),
+];
+
+fn count() -> usize {
+    std::env::var("AQUA_DIFFERENTIAL_FUZZ")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(120)
+}
+
+fn backend(preference: AdapterPreference, limit: TierLimit) -> Option<OffscreenBackend> {
+    match OffscreenBackend::with_tiers(preference, SurfaceFormat::Rgba16Float, limit) {
+        Ok(backend) => Some(backend),
+        Err(error) => match preference {
+            AdapterPreference::Warp => panic!("WARP must always be available: {error}"),
+            _ => {
+                eprintln!("SKIP-NO-ADAPTER {preference:?}: {error}");
+                None
+            }
+        },
+    }
+}
+
+fn summary(name: &str, comparison: &aqua_gpu_ref::conformance::Comparison) -> String {
+    format!(
+        "{name}: interior {}, soft {}, edge {}",
+        comparison.interior_max, comparison.soft_max, comparison.edge_max
+    )
+}
+
+fn against_reference(preference: AdapterPreference) {
+    let mut reference = RefBackend::new();
+    let mut expected_session = Session::new(&mut reference);
+    let mut failures = Vec::new();
+    for (tier_name, limit) in TIERS {
+        let Some(mut device) = backend(preference, limit) else {
+            return;
+        };
+        let mut actual_session = Session::new(&mut device);
+        let mut worst = (0u8, 0u8, 0u8);
+        let mut runs = 0;
+        for scene in scenes(SEED, count()) {
+            for variant in VARIANTS {
+                let case = variant_case(&scene, variant).unwrap();
+                let expected = expected_session.render_case(&case).unwrap();
+                let name = format!("{tier_name}/{}", case.name);
+                let actual = match actual_session.render_case(&case) {
+                    Ok(actual) => actual,
+                    Err(error) => {
+                        failures.push(format!("{name}: {error}"));
+                        continue;
+                    }
+                };
+                let comparison = compare(&case.plan, &expected, &actual, Tolerance::default());
+                worst = (
+                    worst.0.max(comparison.interior_max),
+                    worst.1.max(comparison.soft_max),
+                    worst.2.max(comparison.edge_max),
+                );
+                runs += 1;
+                if !comparison.passed() {
+                    failures.push(summary(&name, &comparison));
+                }
+            }
+        }
+        eprintln!(
+            "differential {preference:?} {tier_name}: {runs} runs, worst interior {} soft {} edge {}",
+            worst.0, worst.1, worst.2
+        );
+    }
+    let shown = failures.len().min(25);
+    assert!(
+        failures.is_empty(),
+        "{} failures, first {shown}:\n{}",
+        failures.len(),
+        failures[..shown].join("\n")
+    );
+}
+
+fn tiers_agree(preference: AdapterPreference) {
+    let Some(mut baseline) = backend(preference, TierLimit::BASELINE) else {
+        return;
+    };
+    let mut baseline_session = Session::new(&mut baseline);
+    let mut failures = Vec::new();
+    for (tier_name, limit) in TIERS.into_iter().skip(1) {
+        let Some(mut other) = backend(preference, limit) else {
+            return;
+        };
+        let mut other_session = Session::new(&mut other);
+        for scene in scenes(SEED ^ 3, count()) {
+            let case = variant_case(&scene, VARIANTS[0]).unwrap();
+            let a = baseline_session.render_case(&case).unwrap();
+            let b = other_session.render_case(&case).unwrap();
+            let comparison = compare(&case.plan, &a, &b, SAME_DEVICE);
+            if !comparison.passed() {
+                failures.push(summary(
+                    &format!("{tier_name} vs baseline {}", case.name),
+                    &comparison,
+                ));
+            }
+        }
+    }
+    let shown = failures.len().min(25);
+    assert!(
+        failures.is_empty(),
+        "{} failures, first {shown}:\n{}",
+        failures.len(),
+        failures[..shown].join("\n")
+    );
+}
+
+#[test]
+fn warp_matches_the_oracle_on_every_tier_and_plan_variant() {
+    against_reference(AdapterPreference::Warp);
+}
+
+#[test]
+fn hardware_matches_the_oracle_on_every_tier_and_plan_variant() {
+    against_reference(AdapterPreference::HighPerformance);
+}
+
+#[test]
+fn warp_tiers_agree_with_each_other() {
+    tiers_agree(AdapterPreference::Warp);
+}
+
+#[test]
+fn hardware_tiers_agree_with_each_other() {
+    tiers_agree(AdapterPreference::HighPerformance);
+}
+
+#[test]
+fn hardware_and_warp_agree_with_each_other() {
+    let (Some(mut hardware), Some(mut warp)) = (
+        backend(AdapterPreference::HighPerformance, TierLimit::MAX),
+        backend(AdapterPreference::Warp, TierLimit::MAX),
+    ) else {
+        return;
+    };
+    let mut hardware_session = Session::new(&mut hardware);
+    let mut warp_session = Session::new(&mut warp);
+    let mut failures = Vec::new();
+    for scene in scenes(SEED ^ 7, count()) {
+        let case = variant_case(&scene, VARIANTS[0]).unwrap();
+        let a = hardware_session.render_case(&case).unwrap();
+        let b = warp_session.render_case(&case).unwrap();
+        let comparison = compare(&case.plan, &a, &b, Tolerance::default());
+        if !comparison.passed() {
+            failures.push(summary(&case.name, &comparison));
+        }
+    }
+    let shown = failures.len().min(25);
+    assert!(
+        failures.is_empty(),
+        "{} failures, first {shown}:\n{}",
+        failures.len(),
+        failures[..shown].join("\n")
+    );
+}

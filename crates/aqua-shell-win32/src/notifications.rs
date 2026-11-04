@@ -1,3 +1,5 @@
+pub mod activation;
+
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
@@ -101,12 +103,23 @@ impl Notification {
     }
 
     pub fn xml(&self) -> Result<String, NotificationError> {
+        self.xml_for(None)
+    }
+
+    pub fn xml_for(&self, identity: Option<&AppIdentity>) -> Result<String, NotificationError> {
         self.validate()?;
         let mut writer = xmlwriter::XmlWriter::new(xmlwriter::Options {
             indent: xmlwriter::Indent::None,
             ..Default::default()
         });
         writer.start_element("toast");
+        if let Some(identity) = identity {
+            writer.write_attribute("activationType", "protocol");
+            writer.write_attribute(
+                "launch",
+                &xml_content(&activation::activation_url(identity, &self.tag, None)),
+            );
+        }
         writer.start_element("visual");
         writer.start_element("binding");
         writer.write_attribute("template", "ToastGeneric");
@@ -122,7 +135,20 @@ impl Notification {
             for action in &self.actions {
                 writer.start_element("action");
                 writer.write_attribute("content", &xml_content(&action.label));
-                writer.write_attribute("arguments", &xml_content(&action.id));
+                match identity {
+                    Some(identity) => {
+                        writer.write_attribute("activationType", "protocol");
+                        writer.write_attribute(
+                            "arguments",
+                            &xml_content(&activation::activation_url(
+                                identity,
+                                &self.tag,
+                                Some(&action.id),
+                            )),
+                        );
+                    }
+                    None => writer.write_attribute("arguments", &xml_content(&action.id)),
+                }
                 writer.end_element();
             }
             writer.end_element();

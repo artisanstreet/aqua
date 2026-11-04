@@ -26,6 +26,7 @@ pub enum ShellEvent {
     CloseRequested,
     Focused(bool),
     Minimized(bool),
+    Covered(bool),
     Maximized(bool),
     Input(InputEvent),
     FileDrag(FileDrag),

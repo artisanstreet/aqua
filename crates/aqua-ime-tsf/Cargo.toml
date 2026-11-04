@@ -6,6 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 description = "Aqua Text Services Framework adapter: composition, candidate positioning, reconversion, UTF-16 ranges"
 
+[features]
+double = []
+
 [dependencies]
 aqua-core = { path = "../aqua-core" }
 aqua-protocol = { path = "../aqua-protocol" }

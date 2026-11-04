@@ -13,6 +13,7 @@ raw-window-handle = "0.6"
 rfd = "0.17"
 arboard = "3"
 url = "2"
+percent-encoding = "2"
 dunce = "1"
 xmlwriter = "0.1"
 
@@ -73,3 +74,11 @@ windows = { version = "0.62.2", features = [
 
 [dev-dependencies]
 roxmltree = "0.21"
+
+[[test]]
+name = "native_dialog"
+harness = false
+
+[[test]]
+name = "toast_activation"
+harness = false

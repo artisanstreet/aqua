@@ -50,6 +50,24 @@ pub fn modifiers(shift: bool, control: bool, alt: bool, logo: bool) -> Modifiers
     .fold(Modifiers::NONE, |acc, (_, flag)| acc.union(flag))
 }
 
+pub const WM_CUT: u32 = 0x0300;
+pub const WM_COPY: u32 = 0x0301;
+pub const WM_PASTE: u32 = 0x0302;
+
+pub fn clipboard_shortcut(message: u32) -> Option<aqua_core::KeyEvent> {
+    let letter = match message {
+        WM_CUT => 'x',
+        WM_COPY => 'c',
+        WM_PASTE => 'v',
+        _ => return None,
+    };
+    Some(aqua_core::KeyEvent {
+        key: Key::Char(letter),
+        modifiers: Modifiers::CONTROL,
+        repeat: false,
+    })
+}
+
 pub fn is_shortcut(modifiers: Modifiers) -> bool {
     modifiers.contains(Modifiers::LOGO)
         || (modifiers.contains(Modifiers::CONTROL) && !modifiers.contains(Modifiers::ALT))

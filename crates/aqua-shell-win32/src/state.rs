@@ -30,6 +30,7 @@ pub(crate) struct WindowState {
     pub buttons_down: u8,
     pub raw_mouse: bool,
     pub minimized: bool,
+    pub covered: bool,
     pub text: crate::input::Utf16Assembler,
     pub touch_buttons: HashMap<u32, u8>,
     pub composition: Option<crate::composition::Composition>,

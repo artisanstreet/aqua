@@ -1,6 +1,8 @@
 pub mod keystroke;
 pub mod model;
 
+#[cfg(all(windows, feature = "double"))]
+pub mod double;
 #[cfg(windows)]
 mod manager;
 #[cfg(windows)]

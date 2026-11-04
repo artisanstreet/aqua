@@ -5,6 +5,8 @@ mod tree;
 
 #[cfg(windows)]
 mod adapter;
+#[cfg(windows)]
+pub mod probe;
 
 pub use accesskit;
 pub use bridge::{A11yBridge, BridgeActionHandler, BridgeActivationHandler, Connection, WakeFn};

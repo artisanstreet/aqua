@@ -15,11 +15,13 @@ use windows::UI::Notifications::{
 type Active = Arc<Mutex<HashMap<String, (u64, ToastNotification)>>>;
 
 pub struct NotificationCenter {
+    app: AppIdentity,
     identity: HSTRING,
     notifier: ToastNotifier,
     active: Active,
     generation: u64,
     response: ResponseHandler,
+    _receiver: super::activation::Receiver,
     _apartment: crate::apartment::Apartment,
 }
 
@@ -62,22 +64,29 @@ impl NotificationCenter {
             .map_err(native_error)?;
         key.set_string("DisplayName", identity.name())
             .map_err(native_error)?;
+        let exe = std::env::current_exe().map_err(native_error)?;
+        super::activation::register_protocol(&exe)?;
+        let receiver =
+            super::activation::Receiver::create(identity.identifier(), response.clone())?;
+        let app = identity.clone();
         let identity = HSTRING::from(identity.identifier());
         unsafe { SetCurrentProcessExplicitAppUserModelID(&identity) }.map_err(native_error)?;
         let notifier =
             ToastNotificationManager::CreateToastNotifierWithId(&identity).map_err(native_error)?;
         Ok(Self {
+            app,
             identity,
             notifier,
             active: Arc::new(Mutex::new(HashMap::new())),
             generation: 0,
             response,
+            _receiver: receiver,
             _apartment: apartment,
         })
     }
 
     pub fn show(&mut self, notification: Notification) -> Result<(), NotificationError> {
-        let xml = notification.xml()?;
+        let xml = notification.xml_for(Some(&self.app))?;
         {
             let active = self
                 .active

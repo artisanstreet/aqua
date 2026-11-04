@@ -700,6 +700,12 @@ pub(crate) unsafe extern "system" fn wndproc(
             key(raw, wparam, lparam, msg == WM_KEYDOWN);
             Some(LRESULT(0))
         }
+        input::WM_CUT | input::WM_COPY | input::WM_PASTE => {
+            if let Some(event) = input::clipboard_shortcut(msg) {
+                emit_input(raw, InputEvent::KeyDown(event));
+            }
+            Some(LRESULT(0))
+        }
         WM_SYSKEYDOWN | WM_SYSKEYUP => {
             key(raw, wparam, lparam, msg == WM_SYSKEYDOWN);
             None

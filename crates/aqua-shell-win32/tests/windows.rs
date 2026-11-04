@@ -580,3 +580,115 @@ fn leaving_a_file_drag_reports_leave_after_enter_and_never_a_drop() {
     );
     window.destroy();
 }
+
+#[test]
+fn a_file_drag_handed_from_one_window_to_another_is_attributed_to_each_window() {
+    let log: Log = Default::default();
+    let source = Window::create(&hidden()).expect("source window");
+    let sink = Window::create(&hidden()).expect("sink window");
+    let source_target = drop_target_of(source);
+    let sink_target = drop_target_of(sink);
+    let (source_id, sink_id) = (source.id(), sink.id());
+    let path = std::env::temp_dir().join("aqua-shell-drag-between.txt");
+    std::fs::write(&path, b"x").expect("probe file");
+    let object = file_data_object(&path);
+    let at_source = POINTL {
+        x: client_origin(source).x + 12,
+        y: client_origin(source).y + 12,
+    };
+    let at_sink = POINTL {
+        x: client_origin(sink).x + 40,
+        y: client_origin(sink).y + 30,
+    };
+    let body = RefCell::new(Some(move || unsafe {
+        let mut effect = DROPEFFECT(0);
+        source_target
+            .DragEnter(&object, MODIFIERKEYS_FLAGS(0), at_source, &mut effect)
+            .expect("enter source");
+        source_target.DragLeave().expect("leave source");
+        let mut effect = DROPEFFECT(0);
+        sink_target
+            .DragEnter(&object, MODIFIERKEYS_FLAGS(0), at_sink, &mut effect)
+            .expect("enter sink");
+        assert_eq!(effect, DROPEFFECT_COPY);
+        sink_target
+            .Drop(&object, MODIFIERKEYS_FLAGS(0), at_sink, &mut effect)
+            .expect("drop sink");
+    }));
+    drive(
+        log.clone(),
+        vec![
+            Box::new(move |_| {
+                if let Some(body) = body.borrow_mut().take() {
+                    body();
+                }
+                true
+            }),
+            Box::new(|log| {
+                log.borrow()
+                    .iter()
+                    .any(|(_, e)| matches!(e, ShellEvent::FileDrag(FileDrag::Drop { .. })))
+            }),
+        ],
+    );
+    let timeline: Vec<(bool, &'static str)> = log
+        .borrow()
+        .iter()
+        .filter_map(|(id, event)| match event {
+            ShellEvent::FileDrag(FileDrag::Enter { .. }) => Some((*id == sink_id, "enter")),
+            ShellEvent::FileDrag(FileDrag::Over { .. }) => Some((*id == sink_id, "over")),
+            ShellEvent::FileDrag(FileDrag::Leave) => Some((*id == sink_id, "leave")),
+            ShellEvent::FileDrag(FileDrag::Drop { .. }) => Some((*id == sink_id, "drop")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        timeline,
+        vec![(false, "enter"), (false, "leave"), (true, "enter"), (true, "drop")],
+        "source={source_id:?} sink={sink_id:?}"
+    );
+    source.destroy();
+    sink.destroy();
+}
+
+#[test]
+fn clipboard_window_messages_reach_the_handler_as_control_shortcuts() {
+    use aqua_core::{Key, Modifiers};
+    let log: Log = Default::default();
+    let window = Window::create(&hidden()).expect("window");
+    let target = hwnd(window);
+    let sent = Rc::new(RefCell::new(false));
+    drive(
+        log.clone(),
+        vec![
+            Box::new({
+                let sent = sent.clone();
+                move |_| {
+                    for message in [0x0302u32, 0x0301, 0x0300] {
+                        unsafe { SendMessageW(target, message, None, None) };
+                    }
+                    *sent.borrow_mut() = true;
+                    true
+                }
+            }),
+            Box::new(|log| {
+                log.borrow()
+                    .iter()
+                    .filter(|(_, e)| matches!(e, ShellEvent::Input(InputEvent::KeyDown(_))))
+                    .count()
+                    >= 3
+            }),
+        ],
+    );
+    let letters: Vec<Key> = events_of(&log)
+        .into_iter()
+        .filter_map(|e| match e {
+            ShellEvent::Input(InputEvent::KeyDown(k)) if k.modifiers == Modifiers::CONTROL => {
+                Some(k.key)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(letters, vec![Key::Char('v'), Key::Char('c'), Key::Char('x')]);
+    window.destroy();
+}

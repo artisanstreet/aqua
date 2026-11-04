@@ -118,6 +118,7 @@ fn outer_size(
 impl Window {
     pub fn create(options: &WindowOptions) -> Result<Window, ShellError> {
         init();
+        crate::occlusion::watch();
         unsafe {
             let style = style_for(options);
             let ex = ex_style_for(options);
@@ -167,6 +168,7 @@ impl Window {
                         buttons_down: 0,
                         raw_mouse: false,
                         minimized: false,
+                        covered: false,
                         text: Default::default(),
                         touch_buttons: Default::default(),
                         composition: None,
@@ -338,6 +340,10 @@ impl Window {
         })
         .flatten()
         .unwrap_or(Err(ShellError::Win32("attach_composition_surface", 0)))
+    }
+
+    pub fn is_covered(self) -> bool {
+        crate::occlusion::is_covered(self.hwnd())
     }
 
     pub fn has_alpha_surface(self) -> bool {

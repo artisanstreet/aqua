@@ -88,3 +88,13 @@ fn modifier_keys_are_recognized_by_virtual_key() {
     assert!(is_modifier_key(0x5B));
     assert!(!is_modifier_key(0x41));
 }
+
+#[test]
+fn clipboard_window_messages_become_control_shortcuts() {
+    let paste = clipboard_shortcut(WM_PASTE).expect("paste");
+    assert_eq!(paste.key, Key::Char('v'));
+    assert_eq!(paste.modifiers, Modifiers::CONTROL);
+    assert_eq!(clipboard_shortcut(WM_COPY).expect("copy").key, Key::Char('c'));
+    assert_eq!(clipboard_shortcut(WM_CUT).expect("cut").key, Key::Char('x'));
+    assert_eq!(clipboard_shortcut(0x0100), None);
+}

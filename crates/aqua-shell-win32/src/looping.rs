@@ -61,6 +61,7 @@ pub(crate) fn turn() {
     let Some(handler) = HANDLER.get() else {
         return;
     };
+    crate::occlusion::pump();
     IN_HANDLER.set(true);
     let handler = unsafe { &mut *handler };
     let mut worked = false;

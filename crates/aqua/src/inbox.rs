@@ -59,6 +59,11 @@ impl Inbox {
         std::mem::take(&mut *locked(&self.shared.events))
     }
 
+    pub fn drain_into(&self, scratch: &mut Vec<AquaUserEvent>) {
+        scratch.clear();
+        std::mem::swap(&mut *locked(&self.shared.events), scratch);
+    }
+
     pub fn is_empty(&self) -> bool {
         locked(&self.shared.events).is_empty()
     }

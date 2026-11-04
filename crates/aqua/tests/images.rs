@@ -6,3 +6,5 @@ mod composition;
 mod lifecycle;
 #[path = "images/visibility.rs"]
 mod visibility;
+#[path = "images/windows.rs"]
+mod windows;

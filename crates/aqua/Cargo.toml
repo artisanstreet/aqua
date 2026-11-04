@@ -26,7 +26,7 @@ aqua-shell-win32 = { path = "../aqua-shell-win32" }
 [target.'cfg(windows)'.dependencies]
 aqua-gpu-d3d12 = { path = "../aqua-gpu-d3d12" }
 aqua-a11y-uia = { path = "../aqua-a11y-uia" }
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Memory"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_Diagnostics_Debug"] }
 
 [features]
 probe-allocator = []
@@ -42,6 +42,9 @@ windows = { version = "0.62.2", features = [
   "Win32_System_Com",
   "Win32_System_DataExchange",
   "Win32_System_Memory",
+  "Win32_System_Threading",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
   "Win32_UI_Accessibility",
   "Win32_UI_WindowsAndMessaging",
 ] }
@@ -55,6 +58,10 @@ name = "host_windows"
 harness = false
 
 [[test]]
+name = "host_ui_windows"
+harness = false
+
+[[test]]
 name = "windows_desktop"
 harness = false
 
@@ -64,4 +71,12 @@ harness = false
 
 [[test]]
 name = "render_shared"
+harness = false
+
+[[test]]
+name = "host_trim"
+harness = false
+
+[[test]]
+name = "host_material"
 harness = false

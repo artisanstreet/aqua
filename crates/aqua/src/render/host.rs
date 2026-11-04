@@ -72,6 +72,10 @@ pub struct RenderStats {
     pub service_thread: AtomicU64,
     pub device_sharers: AtomicU64,
     pub inject_loss: std::sync::atomic::AtomicBool,
+    pub atlas_mask_bytes: AtomicU64,
+    pub atlas_color_bytes: AtomicU64,
+    pub atlas_pages: AtomicU64,
+    pub slug_bytes: AtomicU64,
 }
 
 impl RenderStats {
@@ -177,7 +181,9 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
         let Some(stage) = self.damage.as_mut() else {
             return;
         };
+        let transitioning = self.host.lowering().transition_active();
         let plan = match side.viewport() {
+            _ if transitioning => Plan::Full,
             Some((size, scale)) => stage.planner.plan(side.scene(), &stage.runs, size, scale),
             None => Plan::Full,
         };

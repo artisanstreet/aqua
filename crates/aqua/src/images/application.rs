@@ -5,6 +5,7 @@ use std::sync::Arc;
 use aqua_core::DisplayItem;
 use aqua_core::{ImageId, InputEvent, NodeId, Rect};
 use aqua_protocol::{A11yActionRequest, AquaWindowId, ObservedWindowState, WindowEvent};
+use aqua_runtime::Runtime;
 use aqua_protocol::{FrameReason, Instant};
 
 use crate::{
@@ -27,16 +28,7 @@ pub struct ManagedUiApp {
     images: ImageAssets,
     mailbox: Mailbox<()>,
     _subscription: super::ImageSubscription,
-    resident: HashMap<ImageId, (usize, u64)>,
-    visible: HashSet<ImageId>,
-    scene_revision: Option<(u64, aqua_core::Size)>,
-    started: HashMap<ImageId, Instant>,
-    preview_instances: HashMap<NodeId, PreviewInstance>,
-    preview_layers: HashMap<ImageId, NodeId>,
-    active: bool,
-    now: Instant,
-    prepared: Option<(Instant, Option<Instant>)>,
-    released: Vec<u64>,
+    states: HashMap<Option<AquaWindowId>, ImageState>,
 }
 
 struct PreviewInstance {
@@ -47,43 +39,20 @@ struct PreviewInstance {
     observed: Option<Instant>,
 }
 
-impl ManagedUiApp {
-    pub fn new(ui: UiApp, images: ImageAssets) -> Self {
-        let mailbox = Mailbox::new(NonZeroUsize::MIN);
-        let sender = mailbox.sender();
-        let subscription = images.subscribe(Arc::new(move || {
-            let _ = sender.send(());
-        }));
-        Self {
-            ui,
-            images,
-            mailbox,
-            _subscription: subscription,
-            resident: HashMap::new(),
-            visible: HashSet::new(),
-            scene_revision: None,
-            started: HashMap::new(),
-            preview_instances: HashMap::new(),
-            preview_layers: HashMap::new(),
-            active: false,
-            now: Instant::ZERO,
-            prepared: None,
-            released: Vec::new(),
-        }
-    }
-    pub fn ui(&self) -> &UiApp {
-        &self.ui
-    }
-    pub fn ui_mut(&mut self) -> &mut UiApp {
-        &mut self.ui
-    }
-    pub fn images(&self) -> &ImageAssets {
-        &self.images
-    }
-    pub fn gpu_image_bytes(&self) -> u64 {
-        self.resident.values().map(|(_, bytes)| *bytes).sum()
-    }
+#[derive(Default)]
+struct ImageState {
+    resident: HashMap<ImageId, (usize, u64)>,
+    visible: HashSet<ImageId>,
+    scene_revision: Option<(u64, aqua_core::Size)>,
+    started: HashMap<ImageId, Instant>,
+    preview_instances: HashMap<NodeId, PreviewInstance>,
+    preview_layers: HashMap<ImageId, NodeId>,
+    active: bool,
+    prepared: Option<(Instant, Option<Instant>)>,
+    released: Vec<u64>,
+}
 
+impl ImageState {
     fn source_id(&self, id: ImageId) -> ImageId {
         self.preview_layers
             .get(&id)
@@ -91,9 +60,12 @@ impl ManagedUiApp {
             .map_or(id, |instance| instance.source)
     }
 
-    fn prepare_preview_instances(&mut self) {
-        let images: Vec<_> = self
-            .ui
+    fn gpu_image_bytes(&self) -> u64 {
+        self.resident.values().map(|(_, bytes)| *bytes).sum()
+    }
+
+    fn prepare_preview_instances(&mut self, rt: &mut Runtime, images: &ImageAssets) {
+        let found: Vec<_> = rt
             .scene()
             .ordered()
             .filter_map(|(node, item)| {
@@ -107,15 +79,15 @@ impl ManagedUiApp {
                 };
                 let id = ImageId::from_raw(raw);
                 let source = self.source_id(id);
-                if !self.images.is_preview(source)
-                    || !matches!(self.images.ready(source), Some(Data::Animation(_)))
+                if !images.is_preview(source)
+                    || !matches!(images.ready(source), Some(Data::Animation(_)))
                 {
                     return None;
                 }
                 Some((node, source, item.clone()))
             })
             .collect();
-        let live: HashSet<_> = images.iter().map(|(node, _, _)| *node).collect();
+        let live: HashSet<_> = found.iter().map(|(node, _, _)| *node).collect();
         let stale: Vec<_> = self
             .preview_instances
             .keys()
@@ -128,7 +100,7 @@ impl ManagedUiApp {
                 self.release_gpu(instance.layer);
             }
         }
-        for (node, source, mut item) in images {
+        for (node, source, mut item) in found {
             let replaced = self
                 .preview_instances
                 .get(&node)
@@ -167,18 +139,18 @@ impl ManagedUiApp {
                 (self.preview_instances.get(&node), &mut item)
             {
                 *layer = aqua_core::scene::media_layer(instance.layer);
-                self.ui.scene_mut().update(node, item);
+                rt.scene_mut().update(node, item);
             }
         }
     }
 
-    fn collect_visible(&mut self) {
-        let key = (self.ui.scene().revision(), self.ui.viewport());
+    fn collect_visible(&mut self, rt: &Runtime) {
+        let key = (rt.scene().revision(), rt.viewport());
         if self.scene_revision == Some(key) {
             return;
         }
         self.visible.clear();
-        let viewport = self.ui.viewport();
+        let viewport = rt.viewport();
         let viewport = Rect {
             x: 0.0,
             y: 0.0,
@@ -188,7 +160,7 @@ impl ManagedUiApp {
         let mut transforms = vec![aqua_core::Transform2D::IDENTITY];
         let mut clips = vec![viewport];
         let mut opacities = vec![1.0f32];
-        for (_, item) in self.ui.scene().ordered() {
+        for (_, item) in rt.scene().ordered() {
             let transform = *transforms.last().unwrap();
             let world = |bounds: Rect| Rect {
                 x: bounds.x * transform.a + transform.tx,
@@ -255,10 +227,6 @@ impl ManagedUiApp {
         }
     }
 
-    pub fn take_released_images(&mut self) -> Vec<u64> {
-        std::mem::take(&mut self.released)
-    }
-
     fn selected_frame(
         &mut self,
         id: ImageId,
@@ -304,14 +272,20 @@ impl ManagedUiApp {
         }
     }
 
-    pub fn synchronize_images(&mut self, now: Instant) -> Result<Vec<ImageFrame>, ImageAssetError> {
-        self.collect_visible();
-        let budget = self.images.budget();
+    fn synchronize(
+        &mut self,
+        rt: &Runtime,
+        images: &ImageAssets,
+        other_bytes: u64,
+        now: Instant,
+    ) -> Result<Vec<ImageFrame>, ImageAssetError> {
+        self.collect_visible(rt);
+        let budget = images.budget();
         let released: Vec<_> = self
             .resident
             .keys()
             .filter(|id| {
-                !self.visible.contains(id) || self.images.ready(self.source_id(**id)).is_none()
+                !self.visible.contains(id) || images.ready(self.source_id(**id)).is_none()
             })
             .copied()
             .collect();
@@ -323,7 +297,7 @@ impl ManagedUiApp {
         let visible: Vec<_> = self.visible.iter().copied().collect();
         for id in visible {
             let source = self.source_id(id);
-            let Some(data) = self.images.ready(source) else {
+            let Some(data) = images.ready(source) else {
                 continue;
             };
             let (index, _) = self.selected_frame(id, &data, now);
@@ -339,12 +313,13 @@ impl ManagedUiApp {
             let new_count = self.resident.len() + usize::from(!self.resident.contains_key(&id));
             if self
                 .gpu_image_bytes()
+                .saturating_add(other_bytes)
                 .saturating_sub(previous_bytes)
                 .saturating_add(bytes)
                 > budget.gpu_bytes
                 || new_count > budget.gpu_images
             {
-                self.images
+                images
                     .fail_upload(source, "visible image GPU budget exceeded".into());
                 self.release_gpu(id);
                 failure = Some(ImageAssetError::OverBudget);
@@ -359,11 +334,113 @@ impl ManagedUiApp {
             self.resident.insert(id, (index, bytes));
         }
         self.started
-            .retain(|id, _| self.images.ready(*id).is_some());
+            .retain(|id, _| images.ready(*id).is_some());
         match failure {
             Some(error) if frames.is_empty() => Err(error),
             _ => Ok(frames),
         }
+    }
+}
+
+type WindowKey = Option<AquaWindowId>;
+
+fn runtime_of(ui: &UiApp, key: WindowKey) -> Option<&Runtime> {
+    match key {
+        None => Some(&**ui),
+        Some(id) => ui.runtime_for(id),
+    }
+}
+
+fn runtime_of_mut(ui: &mut UiApp, key: WindowKey) -> Option<&mut Runtime> {
+    match key {
+        None => Some(&mut **ui),
+        Some(id) => ui.runtime_for_mut(id),
+    }
+}
+
+impl ManagedUiApp {
+    pub fn new(ui: UiApp, images: ImageAssets) -> Self {
+        let mailbox = Mailbox::new(NonZeroUsize::MIN);
+        let sender = mailbox.sender();
+        let subscription = images.subscribe(Arc::new(move || {
+            let _ = sender.send(());
+        }));
+        Self {
+            ui,
+            images,
+            mailbox,
+            _subscription: subscription,
+            states: HashMap::new(),
+        }
+    }
+    pub fn ui(&self) -> &UiApp {
+        &self.ui
+    }
+    pub fn ui_mut(&mut self) -> &mut UiApp {
+        &mut self.ui
+    }
+    pub fn images(&self) -> &ImageAssets {
+        &self.images
+    }
+    pub fn gpu_image_bytes(&self) -> u64 {
+        self.states.values().map(ImageState::gpu_image_bytes).sum()
+    }
+
+    fn key_of(&self, id: AquaWindowId) -> WindowKey {
+        match self.ui.is_root_window(id) {
+            true => None,
+            false => Some(id),
+        }
+    }
+
+    fn other_bytes(&self, key: WindowKey) -> u64 {
+        self.states
+            .iter()
+            .filter(|(other, _)| **other != key)
+            .map(|(_, state)| state.gpu_image_bytes())
+            .sum()
+    }
+
+    pub fn take_released_images(&mut self) -> Vec<u64> {
+        self.take_released_images_for(None)
+    }
+
+    fn take_released_images_for(&mut self, key: WindowKey) -> Vec<u64> {
+        self.states
+            .get_mut(&key)
+            .map(|state| std::mem::take(&mut state.released))
+            .unwrap_or_default()
+    }
+
+    pub fn synchronize_images(&mut self, now: Instant) -> Result<Vec<ImageFrame>, ImageAssetError> {
+        self.synchronize_key(None, now)
+    }
+
+    pub fn synchronize_images_for(
+        &mut self,
+        id: AquaWindowId,
+        now: Instant,
+    ) -> Result<Vec<ImageFrame>, ImageAssetError> {
+        let key = self.key_of(id);
+        self.synchronize_key(key, now)
+    }
+
+    fn synchronize_key(
+        &mut self,
+        key: WindowKey,
+        now: Instant,
+    ) -> Result<Vec<ImageFrame>, ImageAssetError> {
+        let other = self.other_bytes(key);
+        let Self {
+            ui, images, states, ..
+        } = self;
+        let Some(rt) = runtime_of(ui, key) else {
+            return Ok(Vec::new());
+        };
+        states
+            .entry(key)
+            .or_default()
+            .synchronize(rt, images, other, now)
     }
 }
 
@@ -374,6 +451,10 @@ impl Application for ManagedUiApp {
 
     fn color_profile(&self) -> aqua_core::ColorProfile {
         self.ui.color_profile()
+    }
+
+    fn color_profile_for(&self, id: AquaWindowId) -> aqua_core::ColorProfile {
+        self.ui.color_profile_for(id)
     }
 
     fn on_click_settings(&mut self, settings: aqua_core::ClickSettings) {
@@ -399,6 +480,15 @@ impl Application for ManagedUiApp {
     fn cursor(&self) -> Option<aqua_core::CursorIcon> {
         None
     }
+    fn cursor_for(&self, id: AquaWindowId) -> Option<aqua_core::CursorIcon> {
+        self.ui.cursor_for(id)
+    }
+    fn a11y_nodes_for(
+        &self,
+        id: AquaWindowId,
+    ) -> Option<(aqua_core::NodeId, aqua_core::NodeId, Vec<aqua_protocol::A11yNode>)> {
+        self.ui.a11y_nodes_for(id)
+    }
     fn step_input(&mut self, id: AquaWindowId, input: aqua_protocol::RuntimeInput) {
         self.ui.step_input(id, input);
     }
@@ -415,12 +505,21 @@ impl Application for ManagedUiApp {
         self.ui.on_dialog(ctx, id, request, outcome);
     }
     fn on_window_event(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &WindowEvent) {
-        if matches!(event, WindowEvent::Focused(_, false)) {
-            self.active = false;
-            for instance in self.preview_instances.values_mut() {
-                instance.last_frame_time = None;
-                instance.observed = None;
+        let key = self.key_of(id);
+        match event {
+            WindowEvent::Focused(_, false) => {
+                if let Some(state) = self.states.get_mut(&key) {
+                    state.active = false;
+                    for instance in state.preview_instances.values_mut() {
+                        instance.last_frame_time = None;
+                        instance.observed = None;
+                    }
+                }
             }
+            WindowEvent::Destroyed(_) => {
+                self.states.remove(&key);
+            }
+            _ => {}
         }
         self.ui.on_window_event(ctx, id, event);
     }
@@ -463,10 +562,11 @@ impl Application for ManagedUiApp {
         self.ui.prepare_accessibility(window, now)
     }
     fn externals(&mut self, frame: &mut ExternalFrame<'_>) {
+        let key = self.key_of(frame.window.id);
         let deadline = self.build_scene(frame.window, frame.now);
-        self.prepared = Some((frame.now, deadline));
-        let images = self.synchronize_images(frame.now);
-        for layer in self.take_released_images() {
+        self.states.entry(key).or_default().prepared = Some((frame.now, deadline));
+        let images = self.synchronize_key(key, frame.now);
+        for layer in self.take_released_images_for(key) {
             frame.unregister_external(layer);
         }
         match images {
@@ -479,26 +579,43 @@ impl Application for ManagedUiApp {
         }
     }
     fn build_scene(&mut self, window: &ObservedWindowState, now: Instant) -> Option<Instant> {
-        if let Some((prepared, deadline)) = self.prepared.take() {
+        let key = self.key_of(window.id);
+        if let Some((prepared, deadline)) = self
+            .states
+            .get_mut(&key)
+            .and_then(|state| state.prepared.take())
+        {
             if prepared == now {
                 return deadline;
             }
         }
-        self.now = now;
-        self.active = window.focused
-            && !matches!(
-                self.ui.host().motion().reduced_motion(),
-                aqua_ui::motion::ReducedMotion::Reduce
-            );
         self.images.flush_notifications();
         let mut next = self.ui.build_scene(window, now);
-        self.prepare_preview_instances();
-        self.ui.flush_scene();
-        self.collect_visible();
-        let visible: Vec<_> = self.visible.iter().copied().collect();
+        let Self {
+            ui, images, states, ..
+        } = self;
+        let Some(reduced) = runtime_of(ui, key).map(|rt| {
+            matches!(
+                rt.host().motion().reduced_motion(),
+                aqua_ui::motion::ReducedMotion::Reduce
+            )
+        }) else {
+            return next;
+        };
+        let state = states.entry(key).or_default();
+        state.active = window.focused && !reduced;
+        if let Some(rt) = runtime_of_mut(ui, key) {
+            state.prepare_preview_instances(rt, images);
+        }
+        ui.flush_scene_for(window.id);
+        let Some(rt) = runtime_of(ui, key) else {
+            return next;
+        };
+        state.collect_visible(rt);
+        let visible: Vec<_> = state.visible.iter().copied().collect();
         for id in visible {
-            if let Some(data) = self.images.ready(self.source_id(id)) {
-                if let (_, Some(deadline)) = self.selected_frame(id, &data, now) {
+            if let Some(data) = images.ready(state.source_id(id)) {
+                if let (_, Some(deadline)) = state.selected_frame(id, &data, now) {
                     next = Some(next.map_or(deadline, |old| old.min(deadline)));
                 }
             }
@@ -507,5 +624,8 @@ impl Application for ManagedUiApp {
     }
     fn reactive_runtime(&self) -> Option<&aqua_reactive::Runtime> {
         Some(self.ui.runtime())
+    }
+    fn reactive_runtime_for(&self, id: AquaWindowId) -> Option<&aqua_reactive::Runtime> {
+        self.ui.reactive_runtime_for(id)
     }
 }

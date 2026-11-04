@@ -2,6 +2,7 @@ pub use aqua_core::{
     ColorProfile, GpuiBackground, GpuiGradientColorSpace, GpuiGradientStop, GpuiHsla, GpuiTextColor,
 };
 pub mod app;
+pub mod coalesce;
 pub mod config;
 pub mod error;
 pub mod factory;
@@ -77,6 +78,8 @@ pub mod prelude {
     pub use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
     pub use aqua_runtime::Scheduler;
     pub use aqua_scene::Scene;
+    #[cfg(windows)]
+    pub use aqua_shell_win32::notifications::activation::{handle_launch, Activation, Launch};
     #[cfg(windows)]
     pub use aqua_shell_win32::notifications::NotificationCenter;
     pub use aqua_shell_win32::notifications::{

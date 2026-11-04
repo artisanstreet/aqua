@@ -52,12 +52,12 @@ impl Default for ImageAssetBudget {
 impl ImageAssetBudget {
     pub fn editor() -> Self {
         Self {
-            decoded_bytes: u64::MAX,
-            pending_bytes: usize::MAX,
-            images: usize::MAX,
-            workers: usize::MAX,
-            gpu_bytes: u64::MAX,
-            gpu_images: usize::MAX,
+            decoded_bytes: 32 * 1024 * 1024,
+            pending_bytes: 16 * 1024 * 1024,
+            images: 256,
+            workers: 4,
+            gpu_bytes: 24 * 1024 * 1024,
+            gpu_images: 64,
         }
     }
 }

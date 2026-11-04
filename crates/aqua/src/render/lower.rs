@@ -6,7 +6,7 @@ use std::time::Instant as WallInstant;
 
 use aqua_core::geometry::{snap_device_pixel, snap_device_stroke, CornerRadii, Rect};
 use aqua_core::image::ImagePlacement;
-use aqua_core::scene::{DisplayItem, GpuiQuadPulse, ShadowLayer};
+use aqua_core::scene::{DisplayItem, GpuiQuadPulse, ShadowLayer, TextRasterMode};
 use aqua_core::{GpuiBackground, GpuiHsla, Oklch, Point, Size, Transform2D};
 use aqua_graph::tone::luminance;
 use aqua_graph::{
@@ -15,6 +15,7 @@ use aqua_graph::{
     SlugRun,
 };
 use aqua_media::atlas::{AtlasConfig, ImageKey, Placement, Slot, StreamBudget};
+use aqua_media::reduce::{reduce, reduction_level};
 use aqua_media::residency::{GlyphSlot, Residency, ResidencyConfig, VectorMode};
 use aqua_media::upload::texture_handle;
 use aqua_protocol::{Instant, UploadBatch};
@@ -33,6 +34,7 @@ use super::link::ExternalUpdate;
 use super::mesh;
 use super::shape::{self, Border, Fidelity, Paint, Radii, ShadowSpec, Sides};
 use super::text::{ShimmerClocks, TextScope, TextStack};
+use super::transition::{Phase, Settings, Transition};
 use super::vector::{gradient_axis, rotation_steps, VectorCache};
 
 const MESH_TAG: u64 = 0xC000_0000_0000_0000;
@@ -233,15 +235,21 @@ pub struct Lowering {
     slug_store: SlugStore,
     retained: HashMap<u64, RetainedImage>,
     meshes: HashMap<u64, ImageKey>,
+    reduced: HashMap<u64, Vec<ImageKey>>,
     vectors: VectorCache,
     text: TextStack,
     shimmer: ShimmerClocks,
     externals: Option<Receiver<ExternalUpdate>>,
     recovery: RecoverySignal,
     stats: Option<Arc<RenderStats>>,
+    report_pages: u32,
     clear: Oklch,
     last_now: Instant,
     last_report: LowerReport,
+    last_commands: Vec<PaintCommand>,
+    begun: Option<Settings>,
+    transition: Option<Transition>,
+    outline_text: bool,
 }
 
 fn residency_config() -> ResidencyConfig {
@@ -414,15 +422,21 @@ impl Lowering {
             slug_store: SlugStore::new(),
             retained: HashMap::new(),
             meshes: HashMap::new(),
+            reduced: HashMap::new(),
             vectors: VectorCache::default(),
             text: TextStack::default(),
             shimmer: ShimmerClocks::default(),
             externals: None,
             recovery: RecoverySignal::default(),
             stats: None,
+            report_pages: 0,
             clear: Oklch::TRANSPARENT,
             last_now: Instant::ZERO,
             last_report: LowerReport::default(),
+            last_commands: Vec::new(),
+            begun: None,
+            transition: None,
+            outline_text: false,
         }
     }
 
@@ -479,6 +493,9 @@ impl Lowering {
         if let Some(image) = self.retained.remove(&layer) {
             self.residency.remove_image(&image_key(layer, &image));
         }
+        self.reduced.remove(&layer).into_iter().flatten().for_each(|key| {
+            self.residency.remove_image(&key);
+        });
     }
 
     pub fn reset(&mut self) {
@@ -487,6 +504,7 @@ impl Lowering {
         self.slug_cache.clear();
         self.slug_store.reset();
         self.meshes.clear();
+        self.reduced.clear();
         self.vectors.clear();
     }
 
@@ -512,6 +530,7 @@ impl Lowering {
     ) -> (Vec<PaintCommand>, UploadBatch, LowerReport) {
         let started = WallInstant::now();
         self.last_now = now;
+        let mut previous = std::mem::take(&mut self.last_commands);
         self.residency.begin_frame();
         self.shimmer.begin_frame();
         self.text.clear();
@@ -552,12 +571,43 @@ impl Lowering {
         }
         walk.report.shimmering = self.shimmer.active();
         self.shimmer.end_frame();
+        self.adopt_previous(&previous);
+        previous.clone_from(&walk.out);
+        self.last_commands = previous;
+        walk.report.shimmering |= self.overlay_transition(&mut walk.out, walk.surface, now);
         walk.report.commands = walk.out.len() as u32;
         let updates = self.residency.finish_frame();
         let mut uploads = aqua_media::upload::upload_batch(updates);
         uploads.textures.extend(self.slug_store.uploads().textures);
         if let Some(stats) = &self.stats {
             record_lowering(stats, &walk.report, started.elapsed());
+            let resident = self.residency.stats();
+            let report_signature = resident.colors.pages
+                + (self.slug_store.resident_bytes() / 16384) as u32 * 64;
+            if self.report_pages != report_signature && crate::mem_probe::memory_report_enabled() {
+                self.report_pages = report_signature;
+                eprintln!("aqua-atlas-pages: {:?}", self.residency.page_layouts());
+                eprintln!("aqua-atlas-keys: {:?}", self.residency.page_keys());
+                eprintln!(
+                    "aqua-lowering-heap: slug_cache={} slug_store_cpu={} slug_store_gpu={} retained_vectors={} retained_images={} streaming={}",
+                    self.slug_cache.heap_bytes(),
+                    self.slug_store.texel_count() * 16,
+                    self.slug_store.resident_bytes(),
+                    resident.retained_source_bytes,
+                    self.retained.values().map(|image| image.premultiplied.len()).sum::<usize>(),
+                    resident.streaming_bytes,
+                );
+            }
+            stats
+                .atlas_mask_bytes
+                .store(resident.masks.resident_bytes, Ordering::Relaxed);
+            stats
+                .atlas_color_bytes
+                .store(resident.colors.resident_bytes, Ordering::Relaxed);
+            stats.atlas_pages.store(
+                u64::from(resident.masks.pages + resident.colors.pages),
+                Ordering::Relaxed,
+            );
         }
         self.last_report = walk.report.clone();
         (walk.out, uploads, walk.report)
@@ -974,7 +1024,7 @@ impl Lowering {
         let mut curves: Vec<SlugInstance> = Vec::new();
         for line in &laid.lines {
             for glyph in &line.glyphs {
-                if moving || glyph.font_size_px * s >= SLUG_TEXT_PX {
+                if moving || self.outline_text || glyph.font_size_px * s >= SLUG_TEXT_PX {
                     let key = raster_key(glyph, 0);
                     let looked = {
                         let mut fonts = self.fonts.lock();
@@ -1133,15 +1183,6 @@ impl Lowering {
             walk.report.pending += 1;
             return;
         };
-        let key = image_key(layer, &image);
-        let slot = match self.residency.image_resident(&key) {
-            Some(slot) => Ok(slot),
-            None => self.residency.image(key, &image.premultiplied),
-        };
-        let Ok(Slot::Resident(placement)) = slot else {
-            walk.report.pending += 1;
-            return;
-        };
         let (destination, source, clipped) = match fit {
             None => (bounds, full_source(), false),
             Some((fit, position, source)) => {
@@ -1154,6 +1195,39 @@ impl Lowering {
                     Err(_) => (bounds, source, false),
                 }
             }
+        };
+        let level = reduction_level(
+            image.width,
+            image.height,
+            destination.w / source.w.max(1e-3),
+            destination.h / source.h.max(1e-3),
+        );
+        let key = match level {
+            0 => image_key(layer, &image),
+            level => ImageKey {
+                asset: layer,
+                frame: level,
+                width: image.width >> level,
+                height: image.height >> level,
+            },
+        };
+        let slot = match self.residency.image_resident(&key) {
+            Some(slot) => Ok(slot),
+            None => match level {
+                0 => self.residency.image(key, &image.premultiplied),
+                level => {
+                    let reduced = reduce(&image.premultiplied, image.width, image.height, level);
+                    let levels = self.reduced.entry(layer).or_default();
+                    if !levels.contains(&key) {
+                        levels.push(key);
+                    }
+                    self.residency.image(key, &reduced.pixels)
+                }
+            },
+        };
+        let Ok(Slot::Resident(placement)) = slot else {
+            walk.report.pending += 1;
+            return;
         };
         let overflow = clipped
             && (destination.x < bounds.x
@@ -1295,7 +1369,50 @@ impl Lowering {
                 rgba,
             } => self.register_image(layer, width, height, &rgba),
             ExternalUpdate::Release { layer } => self.release_image(layer),
+            ExternalUpdate::Transition(settings) => self.begin_transition(settings),
+            ExternalUpdate::TextRaster(mode) => self.set_text_raster(mode),
         });
+    }
+
+    pub fn begin_transition(&mut self, settings: Settings) {
+        self.begun = Some(settings);
+    }
+
+    pub fn set_text_raster(&mut self, mode: TextRasterMode) {
+        self.outline_text = mode == TextRasterMode::Outline;
+    }
+
+    pub fn transition_active(&self) -> bool {
+        self.transition.is_some() || self.begun.is_some()
+    }
+
+    fn adopt_previous(&mut self, previous: &[PaintCommand]) {
+        if let Some(settings) = self.begun.take() {
+            self.transition = Some(Transition::begin(previous.to_vec(), settings));
+        }
+    }
+
+    fn overlay_transition(
+        &mut self,
+        out: &mut Vec<PaintCommand>,
+        surface: Rect,
+        now: Instant,
+    ) -> bool {
+        let phase = self
+            .transition
+            .as_mut()
+            .map(|transition| transition.advance(now));
+        match (phase, self.transition.as_ref()) {
+            (Some(Phase::Running(progress)), Some(transition)) => {
+                transition.overlay(surface, progress, out);
+                true
+            }
+            (Some(Phase::Finished), _) => {
+                self.transition = None;
+                false
+            }
+            _ => false,
+        }
     }
 }
 

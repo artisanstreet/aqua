@@ -15,7 +15,7 @@ use aqua_protocol::{
     RuntimeInput, RuntimeOutput, ShellCommand, WindowOp,
 };
 use aqua_protocol::{
-    AquaWindowId, FrameReason, ObservedWindowState, WindowEvent, WindowOptions, WindowRequest,
+    AquaWindowId, FrameReason, ObservedWindowState, WindowError, WindowEvent, WindowOptions, WindowRequest,
 };
 use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
 use aqua_runtime::Scheduler;
@@ -28,6 +28,7 @@ use crate::inbox::{AquaUserEvent, Inbox};
 use crate::native_window::NativeWindow;
 use crate::render::host::Clock;
 use crate::render::link::{CompositionSink, ExternalUpdate, InitFactory, RenderLink};
+use crate::render::transition::{Invalid, Settings};
 use crate::render::pressure::MemoryPressure;
 use crate::render::service::RenderService;
 
@@ -88,6 +89,14 @@ impl ExternalFrame<'_> {
     pub fn unregister_external(&mut self, layer: u64) {
         (self.register)(ExternalUpdate::Release { layer });
     }
+}
+
+fn invalid_transition(invalid: Invalid) -> WindowError {
+    WindowError::Unsupported(match invalid {
+        Invalid::Duration => "snapshot transition needs a non-zero duration",
+        Invalid::Band => "snapshot transition band must be in (0, 1]",
+        Invalid::Tint => "snapshot transition tint must be finite",
+    })
 }
 
 pub fn run_headless_externals<A: Application>(
@@ -184,6 +193,7 @@ impl AppCtx<'_> {
     }
 
     pub fn request_trim(&self, id: AquaWindowId) {
+        aqua_ui::layout::trim_measure_cache();
         if let Some(link) = self.windows.get(&id).and_then(|r| r.link.as_ref()) {
             link.request_trim();
         }
@@ -281,6 +291,10 @@ pub trait Application {
         aqua_core::ColorProfile::AquaLinear
     }
 
+    fn color_profile_for(&self, _id: AquaWindowId) -> aqua_core::ColorProfile {
+        self.color_profile()
+    }
+
     fn on_click_settings(&mut self, _settings: aqua_core::ClickSettings) {}
 
     fn on_caption_hover(
@@ -333,6 +347,10 @@ pub trait Application {
         None
     }
 
+    fn cursor_for(&self, _id: AquaWindowId) -> Option<aqua_core::CursorIcon> {
+        self.cursor()
+    }
+
     fn on_window_event(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &WindowEvent);
     fn on_input(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &CoreInputEvent);
     fn on_files_dropped(
@@ -369,6 +387,13 @@ pub trait Application {
 
     fn a11y_nodes(&self) -> Option<(aqua_core::NodeId, aqua_core::NodeId, Vec<A11yNode>)> {
         None
+    }
+
+    fn a11y_nodes_for(
+        &self,
+        _id: AquaWindowId,
+    ) -> Option<(aqua_core::NodeId, aqua_core::NodeId, Vec<A11yNode>)> {
+        self.a11y_nodes()
     }
     fn chrome_regions(&self, _window: &ObservedWindowState) -> Option<DragRegions> {
         None
@@ -538,6 +563,8 @@ pub struct Aqua {
     pub(crate) quit_requested: bool,
     pub(crate) render_errors: u64,
     pub(crate) inbox: Inbox,
+    inbox_scratch: Vec<AquaUserEvent>,
+    window_scratch: Vec<AquaWindowId>,
     pub(crate) flushers: HashMap<AquaWindowId, Box<dyn FnMut() -> FlushReport>>,
     fonts: aqua_text::SharedFonts,
     runs: aqua_text::SharedRuns,
@@ -612,6 +639,8 @@ impl Aqua {
             quit_requested: false,
             render_errors: 0,
             inbox: Inbox::default(),
+            inbox_scratch: Vec::new(),
+            window_scratch: Vec::new(),
             flushers: HashMap::new(),
             fonts: aqua_text::SharedFonts::new(),
             runs: aqua_text::SharedRuns::new(),
@@ -915,13 +944,20 @@ impl Aqua {
             WindowRequest::Create(_) => {
                 return Err(WindowError::Unsupported("requires the native loop"));
             }
-            WindowRequest::SetTextRasterMode(..)
-            | WindowRequest::BeginSnapshotTransition(..)
-            | WindowRequest::BeginGpuiSnapshotTransition(..)
-            | WindowRequest::BeginGpuiSourceSnapshotTransition(..) => {
-                return Err(WindowError::Unsupported(
-                    "snapshot transitions and text raster modes belong to the retired wgpu renderer",
-                ));
+            WindowRequest::SetTextRasterMode(_, mode) => {
+                self.send_external(id, ExternalUpdate::TextRaster(*mode))?;
+            }
+            WindowRequest::BeginSnapshotTransition(_, request) => {
+                let settings = Settings::plain(*request).map_err(invalid_transition)?;
+                self.send_external(id, ExternalUpdate::Transition(settings))?;
+            }
+            WindowRequest::BeginGpuiSnapshotTransition(_, request) => {
+                let settings = Settings::gpui(*request).map_err(invalid_transition)?;
+                self.send_external(id, ExternalUpdate::Transition(settings))?;
+            }
+            WindowRequest::BeginGpuiSourceSnapshotTransition(_, request) => {
+                let settings = Settings::gpui_source(*request).map_err(invalid_transition)?;
+                self.send_external(id, ExternalUpdate::Transition(settings))?;
             }
             WindowRequest::SetBadge(_, badge) => {
                 let native =
@@ -996,6 +1032,21 @@ impl Aqua {
                 }
             }
         }
+        Ok(())
+    }
+
+    pub fn send_external(
+        &mut self,
+        id: AquaWindowId,
+        update: ExternalUpdate,
+    ) -> Result<(), WindowError> {
+        let link = self
+            .windows
+            .get(&id)
+            .and_then(|record| record.link.as_ref())
+            .ok_or(WindowError::Unsupported("window has no render link"))?;
+        link.external(update);
+        self.scheduler.request_frame(id, FrameReason::EXPLICIT);
         Ok(())
     }
 
@@ -1313,7 +1364,9 @@ impl Aqua {
 
     pub fn pump_inbox(&mut self, app: &mut impl Application) {
         self.check_memory_pressure();
-        for event in self.inbox.drain() {
+        let mut events = std::mem::take(&mut self.inbox_scratch);
+        self.inbox.drain_into(&mut events);
+        for event in events.drain(..) {
             match event {
                 AquaUserEvent::Messages(id) => self.dispatch_wake(app, id),
                 AquaUserEvent::ReactiveWake(id) => {
@@ -1335,10 +1388,14 @@ impl Aqua {
                 AquaUserEvent::WindowRequests => {}
             }
         }
-        let ids: Vec<_> = self.windows.keys().copied().collect();
-        for id in ids {
+        self.inbox_scratch = events;
+        let mut ids = std::mem::take(&mut self.window_scratch);
+        ids.clear();
+        ids.extend(self.windows.keys().copied());
+        for id in ids.iter().copied() {
             self.drain_ime(app, id);
         }
+        self.window_scratch = ids;
     }
 
     pub fn drain_access_actions(&mut self, app: &mut impl Application, id: AquaWindowId) {
@@ -1405,6 +1462,7 @@ impl Aqua {
     }
 
     pub fn request_trim_all(&self) {
+        aqua_ui::layout::trim_measure_cache();
         self.windows
             .values()
             .filter_map(|record| record.link.as_ref())
@@ -1485,7 +1543,12 @@ impl Aqua {
         let Some(record) = self.windows.get(&id) else {
             return;
         };
-        if record.observed.occluded || record.link.is_none() {
+        let hidden = record.observed.occluded;
+        let wants_tree = record
+            .access
+            .as_ref()
+            .is_some_and(|sink| sink.needs_snapshot());
+        if record.link.is_none() || (hidden && !wants_tree) {
             return;
         }
         if let Some(flusher) = self.flushers.get_mut(&id) {
@@ -1500,14 +1563,18 @@ impl Aqua {
         }
         self.sync_access_client(app, id);
         let build_started = WallInstant::now();
-        if let Some(deadline) = app.build_scene(&observed, now) {
+        let deadline = app.build_scene(&observed, now);
+        if let Some(deadline) = deadline.filter(|_| !hidden) {
             self.scheduler.request_animation_deadline(id, deadline);
         }
         self.flush_output(app, id);
         let build_time = build_started.elapsed();
         self.sync_chrome(app, id, &observed);
         self.sync_access(app, id);
-        let cursor = app.cursor();
+        if hidden {
+            return;
+        }
+        let cursor = app.cursor_for(id);
         let motion = app.motion_commands(id);
         let submit_started = WallInstant::now();
         let scale = observed.scale_factor as f32;
@@ -1597,7 +1664,7 @@ impl Aqua {
         if !needed {
             return;
         }
-        let Some((root, focus, nodes)) = app.a11y_nodes() else {
+        let Some((root, focus, nodes)) = app.a11y_nodes_for(id) else {
             return;
         };
         if let Some(sink) = self
@@ -1627,7 +1694,7 @@ impl Aqua {
             use std::sync::atomic::Ordering::Relaxed;
             let stats = link.stats();
             eprintln!(
-                "aqua-host-stats: window={} wakeups={} presented={} waits={} lower_ms={:.2} lower_max_ms={:.2} execute_ms={:.2} present_ms={:.2} commands={} glyphs={} skipped={} failures={} recoveries={} backlog={} partial={} full={} damaged_px={} forced={} trims={} sharers={}",
+                "aqua-host-stats: window={} wakeups={} presented={} waits={} lower_ms={:.2} lower_max_ms={:.2} execute_ms={:.2} present_ms={:.2} commands={} glyphs={} skipped={} failures={} recoveries={} backlog={} partial={} full={} damaged_px={} forced={} trims={} sharers={} atlas_mask_kb={} atlas_color_kb={} atlas_pages={}",
                 id.raw(),
                 self.wakeups,
                 stats.frames.load(Relaxed),
@@ -1648,7 +1715,15 @@ impl Aqua {
                 stats.forced.load(Relaxed),
                 stats.trims.load(Relaxed),
                 stats.device_sharers.load(Relaxed),
+                stats.atlas_mask_bytes.load(Relaxed) / 1024,
+                stats.atlas_color_bytes.load(Relaxed) / 1024,
+                stats.atlas_pages.load(Relaxed),
             );
+            if crate::mem_probe::memory_report_enabled() {
+                eprintln!("aqua-heap: {:?}", crate::mem_probe::process_heap());
+                #[cfg(feature = "probe-allocator")]
+                eprintln!("aqua-heap-sites (allocations >= 4 KiB):\n{}\n{}", crate::mem_probe::site_report(), crate::mem_probe::summary());
+            }
         }
     }
 
@@ -2090,6 +2165,7 @@ mod tests {
             } = context;
             Box::new(move || {
                 let mut backend = RefBackend::new();
+                crate::render::transition::register(backend.kernels_mut());
                 let surface = backend
                     .create_surface(SurfaceTarget::Offscreen(extent))
                     .map_err(|e| e.to_string())?;

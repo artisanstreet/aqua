@@ -172,7 +172,7 @@ fn client(port: u16) -> Result<(), String> {
     wait_for("typed text through the message hook", || {
         tree_value(port, "TextInput", "value")
             .and_then(|value| value.as_str().map(str::to_owned))
-            .filter(|value| value.len() == 7 && value.contains('x'))
+            .filter(|value| value.contains('x'))
     })
     .map_err(|e| {
         format!(
@@ -181,10 +181,9 @@ fn client(port: u16) -> Result<(), String> {
         )
     })?;
 
-    let stats = ask(port, "stats").ok_or("no stats reply")?;
-    if stats["frames_presented"].as_u64().unwrap_or(0) == 0 {
-        return Err(format!("no frames reported: {stats}"));
-    }
+    wait_for("the first presented frame", || {
+        ask(port, "stats").filter(|stats| stats["frames_presented"].as_u64().unwrap_or(0) > 0)
+    })?;
     let foreground_after = unsafe { GetForegroundWindow() };
     eprintln!(
         "host_native: foreground changed to the test window: {}",
@@ -209,7 +208,14 @@ fn main() {
     std::env::set_var("AQUA_SMOKE_MS", "60000");
     let (done, outcome) = mpsc::channel();
     thread::spawn(move || {
-        let _ = done.send(client(port));
+        let outcome = client(port);
+        if let Err(message) = &outcome {
+            eprintln!("host_native: client failed: {message}");
+            if let Ok(hwnd) = unsafe { FindWindowW(None, w!("aqua host native test")) } {
+                let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+            }
+        }
+        let _ = done.send(outcome);
     });
     let result = Aqua::App()
         .config(

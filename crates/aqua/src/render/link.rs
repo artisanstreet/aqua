@@ -4,12 +4,14 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 
+use aqua_core::scene::TextRasterMode;
 use aqua_core::Size;
 use aqua_protocol::{RenderCommand, RenderEvent, SceneDiff};
 use aqua_runtime::{emit_scene_diff, RenderSide};
 use aqua_scene::Scene;
 use aqua_transport::{channel_with_notify, Notify, Sender as RingSender};
 
+use super::transition::Settings;
 use super::host::{Clock, RenderStats, TargetInit};
 use super::service::{NewSlot, RenderService, ServiceHandle};
 
@@ -26,6 +28,8 @@ pub enum ExternalUpdate {
     Release {
         layer: u64,
     },
+    Transition(Settings),
+    TextRaster(TextRasterMode),
 }
 
 pub type CompositionSink = Arc<dyn Fn(Box<dyn Any + Send>) + Send + Sync>;

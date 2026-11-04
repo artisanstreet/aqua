@@ -515,3 +515,46 @@ fn trimming_everything_releases_pages_that_the_last_frame_did_not_use() {
         .iter()
         .any(|upload| matches!(upload.op, aqua_protocol::TextureOp::Release)));
 }
+
+fn resident_images(lowering: &Lowering) -> Vec<aqua_media::atlas::ImageKey> {
+    lowering
+        .residency()
+        .page_keys()
+        .1
+        .into_iter()
+        .flatten()
+        .filter_map(|key| match key {
+            aqua_media::residency::ColorKey::Image(key) => Some(key),
+            _ => None,
+        })
+        .collect()
+}
+
+fn image_item(bounds: Rect) -> DisplayItem {
+    DisplayItem::Image {
+        bounds,
+        layer: 7,
+        fit: aqua_core::image::ImageFit::Fill,
+        position: Point { x: 0.5, y: 0.5 },
+        source: rect(0.0, 0.0, 1.0, 1.0),
+        opacity: 1.0,
+        rounded_clip: 0.0,
+    }
+}
+
+#[test]
+fn images_drawn_small_upload_a_reduced_copy_and_release_every_level() {
+    let mut lowering = Lowering::new(SharedFonts::new(), SharedRuns::new());
+    lowering.register_image(7, 128, 128, &vec![200; 128 * 128 * 4]);
+    lowered(&mut lowering, &scene_of(vec![image_item(rect(0.0, 0.0, 16.0, 16.0))]));
+    let small = resident_images(&lowering);
+    assert_eq!(small.len(), 1);
+    assert_eq!((small[0].frame, small[0].width, small[0].height), (3, 16, 16));
+    lowered(&mut lowering, &scene_of(vec![image_item(rect(0.0, 0.0, 128.0, 128.0))]));
+    let both = resident_images(&lowering);
+    assert!(both.iter().any(|key| key.frame == 0 && key.width == 128));
+    assert!(both.iter().any(|key| key.frame == 3));
+    lowering.release_image(7);
+    lowered(&mut lowering, &Scene::new());
+    assert!(resident_images(&lowering).is_empty());
+}

@@ -81,6 +81,14 @@ impl Painter {
         self.lowering.release_image(layer);
     }
 
+    pub fn begin_transition(&mut self, settings: aqua::render::transition::Settings) {
+        self.lowering.begin_transition(settings);
+    }
+
+    pub fn set_text_raster(&mut self, mode: aqua_core::scene::TextRasterMode) {
+        self.lowering.set_text_raster(mode);
+    }
+
     pub fn paint(&mut self, scene: &Scene, size: Size, scale: f32) -> Frame {
         self.paint_at(scene, size, scale, Instant::ZERO)
     }
@@ -98,7 +106,9 @@ impl Painter {
 }
 
 pub fn reference(fonts: SharedFonts, runs: SharedRuns) -> Painter {
-    Painter::new("reference".into(), Box::new(RefBackend::new()), fonts, runs)
+    let mut backend = RefBackend::new();
+    aqua::render::transition::register(backend.kernels_mut());
+    Painter::new("reference".into(), Box::new(backend), fonts, runs)
 }
 
 #[cfg(windows)]

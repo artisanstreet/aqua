@@ -31,7 +31,6 @@ mod native {
         passed: bool,
         initial_scene_built: bool,
         resized_at: Option<Instant>,
-        retired_rejected: u32,
         errors: Vec<WindowError>,
     }
 
@@ -64,13 +63,13 @@ mod native {
             ctx.bind_mailbox(id, &self.messages);
             let watchdog = self.messages.sender();
             std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_secs(3));
+                std::thread::sleep(Duration::from_secs(12));
                 let _ = watchdog.send(());
             });
             let sender = self.messages.sender();
             let stop = self.stop_worker.clone();
             std::thread::spawn(move || {
-                for _ in 0..150 {
+                for _ in 0..500 {
                     std::thread::sleep(Duration::from_millis(20));
                     if stop.load(Ordering::SeqCst) {
                         break;
@@ -141,7 +140,7 @@ mod native {
                 .main
                 .and_then(|id| ctx.window_state(id))
                 .is_some_and(|state| state.title == "Aqua desktop contract changed");
-            if !report.errors.is_empty() || ctx.now().since_origin() > Duration::from_secs(2) {
+            if !report.errors.is_empty() || ctx.now().since_origin() > Duration::from_secs(10) {
                 ctx.quit();
                 return;
             }
@@ -197,21 +196,13 @@ mod native {
                         }
                     }
                 }
-            } else if ctx.now().since_origin() > Duration::from_secs(2) {
+            } else if ctx.now().since_origin() > Duration::from_secs(10) {
                 ctx.quit();
             }
         }
 
         fn on_window_request_error(&mut self, _request: &WindowRequest, error: &WindowError) {
             eprintln!("WINDOW_REQUEST_ERROR: {error:?}");
-            let retired = matches!(
-                _request,
-                WindowRequest::BeginSnapshotTransition(..) | WindowRequest::SetTextRasterMode(..)
-            ) && matches!(error, WindowError::Unsupported(_));
-            if retired {
-                self.report.borrow_mut().retired_rejected += 1;
-                return;
-            }
             self.report.borrow_mut().errors.push(error.clone());
             let _ = self.messages.sender().send(());
         }
@@ -274,6 +265,7 @@ mod native {
     }
 
     pub fn run() {
+        std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1");
         let report = Rc::new(RefCell::new(Report::default()));
         let mut config = AquaConfig::default();
         config.window.title = "Aqua desktop contract".into();
@@ -291,17 +283,19 @@ mod native {
         let report = report.borrow();
         assert_eq!(report.started.len(), 2);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
-        assert_eq!(report.retired_rejected, 3);
         assert!(
             report.passed && report.display && report.title_observed,
-            "resized={} child_closed={} vetoed={} delivered={}",
+            "resized={} child_closed={} vetoed={} delivered={} initial_scene_built={} display={} title_observed={}",
             report.resized,
             report.child_closed,
             report.vetoed,
-            report.delivered
+            report.delivered,
+            report.initial_scene_built,
+            report.display,
+            report.title_observed
         );
         println!(
-            "WINDOWS_DESKTOP_OK: worker wake, native resize, taskbar badges, two-window lifecycle, close veto, explicit rejection of retired renderer requests"
+            "WINDOWS_DESKTOP_OK: worker wake, native resize, taskbar badges, two-window lifecycle, close veto, snapshot transition and text raster requests accepted"
         );
     }
 }

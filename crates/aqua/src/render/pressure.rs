@@ -1,6 +1,13 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+static SIMULATED: AtomicBool = AtomicBool::new(false);
+
+pub fn simulate_low_memory(low: bool) {
+    SIMULATED.store(low, Ordering::Release);
+}
 
 #[derive(Debug)]
 pub struct MemoryPressure {
@@ -19,12 +26,19 @@ fn open() -> Option<windows::Win32::Foundation::HANDLE> {
 }
 
 #[cfg(windows)]
-fn query(handle: windows::Win32::Foundation::HANDLE) -> Option<bool> {
-    use windows::Win32::System::Memory::QueryMemoryResourceNotification;
-    let mut state = windows::core::BOOL(0);
-    unsafe { QueryMemoryResourceNotification(handle, &mut state) }
-        .ok()
-        .map(|()| state.as_bool())
+static INJECTED: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+#[cfg(windows)]
+pub fn watch_notification(handle: Option<windows::Win32::Foundation::HANDLE>) {
+    INJECTED.store(handle.map_or(0, |handle| handle.0 as isize), Ordering::Release);
+}
+
+#[cfg(windows)]
+fn signalled(handle: windows::Win32::Foundation::HANDLE) -> bool {
+    use windows::Win32::Foundation::WAIT_OBJECT_0;
+    use windows::Win32::System::Threading::WaitForSingleObject;
+    let state = unsafe { WaitForSingleObject(handle, 0) };
+    state == WAIT_OBJECT_0
 }
 
 impl MemoryPressure {
@@ -39,12 +53,18 @@ impl MemoryPressure {
 
     #[cfg(windows)]
     fn sample(&self) -> bool {
-        self.handle.and_then(query).unwrap_or(false)
+        let injected = match INJECTED.load(Ordering::Acquire) {
+            0 => None,
+            raw => Some(windows::Win32::Foundation::HANDLE(raw as *mut _)),
+        };
+        SIMULATED.load(Ordering::Acquire)
+            || self.handle.is_some_and(signalled)
+            || injected.is_some_and(signalled)
     }
 
     #[cfg(not(windows))]
     fn sample(&self) -> bool {
-        false
+        SIMULATED.load(Ordering::Acquire)
     }
 
     pub fn rising_edge(&mut self, now: Instant) -> bool {

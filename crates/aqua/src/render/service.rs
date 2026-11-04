@@ -326,10 +326,9 @@ impl Slot {
                 break;
             }
         }
-        let forced = output.frame.is_none()
-            && (arrived || trim || repaint)
-            && self.side.viewport().is_some();
-        let frame = match (output.frame, forced) {
+        let sized = self.side.viewport().is_some();
+        let forced = output.frame.is_none() && (arrived || trim || repaint) && sized;
+        let frame = match (output.frame.filter(|_| sized), forced) {
             (Some(frame), _) => {
                 self.last_frame = frame;
                 Some(frame)

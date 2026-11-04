@@ -121,6 +121,19 @@ impl WindowHandle {
         self.hub.backend.borrow().pipeline_cache()
     }
 
+    fn report_memory(&self) {
+        if !crate::mem_probe::memory_report_enabled() {
+            return;
+        }
+        if let Ok(memory) = self.hub.backend.borrow().memory_breakdown() {
+            eprintln!(
+                "aqua-gpu-memory: {memory:?} unattributed={} heap={:?}",
+                memory.unattributed(),
+                crate::mem_probe::process_heap()
+            );
+        }
+    }
+
     fn generation(&self) -> u32 {
         self.generation
     }
@@ -357,6 +370,7 @@ pub fn factory(
                 .with_damage(damage, runs)
                 .with_maintenance(move |backend: &mut WindowHandle| {
                     saver.save(backend.pipeline_cache());
+                    backend.report_memory();
                     persist::save_fallback_index(&fonts);
                 });
             let mut target = WindowTarget {

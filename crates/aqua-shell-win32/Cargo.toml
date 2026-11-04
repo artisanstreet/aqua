@@ -11,11 +11,21 @@ aqua-core = { path = "../aqua-core" }
 aqua-protocol = { path = "../aqua-protocol" }
 raw-window-handle = "0.6"
 rfd = "0.17"
+arboard = "3"
+url = "2"
+dunce = "1"
+xmlwriter = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.62.2"
+windows-registry = "0.6"
 windows = { version = "0.62.2", features = [
+  "Foundation",
+  "Data_Xml_Dom",
+  "UI_Notifications",
   "Win32_Foundation",
+  "Win32_Globalization",
+  "Win32_System_WinRT",
   "Win32_Graphics_DirectComposition",
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Dxgi",
@@ -37,6 +47,7 @@ windows = { version = "0.62.2", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Input_Pointer",
   "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
   "Win32_UI_WindowsAndMessaging",
 ] }
 
@@ -59,3 +70,6 @@ windows = { version = "0.62.2", features = [
   "Win32_UI_Shell_Common",
   "Win32_UI_WindowsAndMessaging",
 ] }
+
+[dev-dependencies]
+roxmltree = "0.21"

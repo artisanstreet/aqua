@@ -136,3 +136,49 @@ pub fn hit_test_chrome(input: &HitInput<'_>) -> i32 {
         (false, false) => ht::CLIENT,
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClientChromeHit {
+    Drag,
+    Caption(CaptionControl),
+    Client,
+}
+
+pub fn client_chrome_hit(regions: &DragRegions, x: f64, y: f64) -> ClientChromeHit {
+    let contains = |&(left, top, width, height): &(f64, f64, f64, f64)| {
+        x >= left && x < left + width && y >= top && y < top + height
+    };
+    regions
+        .caption_controls
+        .iter()
+        .find(|region| contains(&region.bounds))
+        .map(|region| ClientChromeHit::Caption(region.control))
+        .or_else(|| {
+            (!regions.no_drag.iter().any(contains) && regions.draggable.iter().any(contains))
+                .then_some(ClientChromeHit::Drag)
+        })
+        .unwrap_or(ClientChromeHit::Client)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChromeError {
+    Unsupported(&'static str),
+    NullHandle,
+    InvalidOptions(&'static str),
+    WrongThread,
+}
+
+impl std::fmt::Display for ChromeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChromeError::Unsupported(reason) => write!(f, "window overlay unsupported: {reason}"),
+            ChromeError::NullHandle => write!(f, "null window handle"),
+            ChromeError::InvalidOptions(reason) => write!(f, "invalid chrome options: {reason}"),
+            ChromeError::WrongThread => {
+                write!(f, "chrome must be installed on the window's GUI thread")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ChromeError {}

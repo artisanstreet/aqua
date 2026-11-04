@@ -1,6 +1,6 @@
 use std::sync::{
-    Arc, OnceLock,
     atomic::{AtomicBool, Ordering},
+    Arc,
 };
 
 use aqua_core::vector::{Brush, Drawing, FillRule, LineCap, LineJoin, PathCommand, VectorSource};
@@ -102,7 +102,7 @@ pub fn rasterize(
             let external = rejected.clone();
             let embedded = rejected.clone();
             let default_data = resvg::usvg::ImageHrefResolver::default_data_resolver();
-            let mut options = resvg::usvg::Options {
+            let options = resvg::usvg::Options {
                 image_href_resolver: resvg::usvg::ImageHrefResolver {
                     resolve_string: Box::new(move |_, _| {
                         external.store(true, Ordering::Relaxed);
@@ -131,16 +131,6 @@ pub fn rasterize(
                 },
                 ..Default::default()
             };
-            if svg.source.contains("<text") {
-                static FONTS: OnceLock<Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
-                options.fontdb = FONTS
-                    .get_or_init(|| {
-                        let mut fonts = resvg::usvg::fontdb::Database::new();
-                        fonts.load_system_fonts();
-                        Arc::new(fonts)
-                    })
-                    .clone();
-            }
             let tree = resvg::usvg::Tree::from_str(&svg.source, &options)
                 .map_err(|error| VectorError::InvalidSvg(error.to_string()))?;
             if rejected.load(Ordering::Relaxed) {

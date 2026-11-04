@@ -72,6 +72,7 @@ mod demo {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render(
         width: u32,
         height: u32,
@@ -575,7 +576,7 @@ mod demo {
                     post(window, WM_CHAR, 'a' as usize, 0x001E_0001);
                     post(window, WM_KEYUP, 0x41, 0xC01E_0001u32 as isize);
                     post(window, WM_KEYDOWN, 0x25, 0x014B_0001);
-                    post(window, WM_CHAR, 0x1F600usize & 0, 0);
+                    post(window, WM_CHAR, 0, 0);
                     post(window, WM_CHAR, 0xD83D, 1);
                     post(window, WM_CHAR, 0xDE00, 1);
                     post(

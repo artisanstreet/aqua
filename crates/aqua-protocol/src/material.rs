@@ -48,3 +48,38 @@ pub fn decide(
         (material, _, _) => MaterialDecision::Apply(material),
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaterialCapability {
+    pub requested: WindowMaterial,
+    pub supported: bool,
+    pub active: WindowMaterial,
+    pub reason: &'static str,
+}
+
+impl MaterialCapability {
+    pub fn fallback(requested: WindowMaterial, reason: &'static str) -> Self {
+        Self {
+            requested,
+            supported: false,
+            active: WindowMaterial::Solid,
+            reason,
+        }
+    }
+
+    pub fn available(requested: WindowMaterial, reason: &'static str) -> Self {
+        Self {
+            requested,
+            supported: true,
+            active: requested,
+            reason,
+        }
+    }
+}
+
+pub fn select_material(requested: WindowMaterial, prefs: &SystemPrefs) -> WindowMaterial {
+    match decide(requested, None, prefs) {
+        MaterialDecision::Apply(material) => material,
+        MaterialDecision::Fallback(_) => WindowMaterial::Solid,
+    }
+}

@@ -10,7 +10,7 @@ aqua-core = { path = "../aqua-core" }
 aqua-graph = { path = "../aqua-graph" }
 aqua-protocol = { path = "../aqua-protocol" }
 tiny-skia = "0.12"
-resvg = "0.48.1"
+resvg = { version = "0.48.1", default-features = false, features = ["svgz", "raster-images"] }
 kurbo = "0.13"
 roxmltree = "0.21"
 image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif", "webp"] }

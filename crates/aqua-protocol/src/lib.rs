@@ -1,11 +1,14 @@
 #![forbid(unsafe_code)]
 
 pub mod access;
+pub mod badge;
 pub mod chrome;
+pub mod geometry;
 pub mod gpu;
 pub mod ime;
 pub mod machine;
 pub mod material;
+pub mod monitor;
 pub mod prefs;
 pub mod render;
 pub mod shell;
@@ -17,7 +20,9 @@ pub use access::{
     AccessTreeUpdate,
 };
 pub use aqua_motion::{MotionCommand, MotionEvent};
-pub use chrome::{CaptionControl, CaptionRegion, DragRegions};
+pub use badge::{BadgeError, TaskbarBadge};
+pub use chrome::{CaptionControl, CaptionRegion, ChromeError, DragRegions};
+pub use geometry::{AquaWindowId, LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 pub use gpu::{
     DeviceStatus, FeatureTier, Features, FrameInputs, FrameReport, GpuBackend, GpuCapabilities,
     GpuError, GpuReadback, NativeSurface, PresentHint, PresentTimes, RecoveryReport, SurfaceId,
@@ -28,14 +33,19 @@ pub use machine::{
     first_divergence, replay, Input as RuntimeInput, Machine, Output as RuntimeOutput, Recorded,
     Recorder,
 };
+pub use material::MaterialCapability;
+pub use monitor::DisplayInfo;
 pub use render::{
     Feedback, FrameId, GpuEvent, RenderCommand, RenderEvent, RenderInput, RenderOutput, RenderWake,
     SceneDiff,
 };
 pub use shell::{
-    ColorScheme, DialogFilter, DialogKind, DialogOutcome, DialogSpec, FileDropEvent, OsPreferences,
-    PixelSize, RequestId, ShellCommand, ShellEvent, TitlebarMode, WindowKind, WindowMaterial,
-    WindowOp, WindowSpec,
+    ClipboardImage, ColorScheme, DialogFilter, DialogKind, DialogOutcome, DialogSpec,
+    FileDropEvent, OsPreferences, PixelSize, RequestId, ShellCommand, ShellEvent, TitlebarMode,
+    WindowKind, WindowMaterial, WindowOp, WindowSpec,
 };
 pub use time::Instant;
-pub use window::{FrameReason, WindowId};
+pub use window::{
+    FrameReason, ObservedWindowState, ThemePreference, Titlebar, WindowError, WindowEvent,
+    WindowId, WindowOptions, WindowRequest,
+};

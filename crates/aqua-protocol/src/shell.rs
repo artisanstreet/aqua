@@ -7,6 +7,13 @@ use crate::window::{FrameReason, WindowId};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RequestId(pub u64);
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClipboardImage {
+    pub width: usize,
+    pub height: usize,
+    pub rgba: std::sync::Arc<[u8]>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PixelSize {
     pub width: u32,
@@ -150,6 +157,8 @@ pub enum ShellEvent {
     Clipboard {
         request: RequestId,
         text: Option<String>,
+        image: Option<ClipboardImage>,
+        paths: Vec<String>,
     },
     FileDrop {
         window: WindowId,

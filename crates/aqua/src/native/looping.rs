@@ -34,6 +34,32 @@ struct Host<A: Application> {
     shell: HashMap<AquaWindowId, Window>,
     dialogs: Vec<(AquaWindowId, RequestId, DialogJob)>,
     inspector: Option<HostInspector>,
+    pending_scroll: Option<PendingScroll>,
+}
+
+struct PendingScroll {
+    id: AquaWindowId,
+    at: aqua_core::Point,
+    delta: aqua_core::ScrollDelta,
+}
+
+enum ScrollMerge {
+    Merged(PendingScroll),
+    Split(PendingScroll, PendingScroll),
+}
+
+fn merge_scroll(held: PendingScroll, next: PendingScroll) -> ScrollMerge {
+    match held.id == next.id {
+        true => ScrollMerge::Merged(PendingScroll {
+            id: next.id,
+            at: next.at,
+            delta: aqua_core::ScrollDelta {
+                x: held.delta.x + next.delta.x,
+                y: held.delta.y + next.delta.y,
+            },
+        }),
+        false => ScrollMerge::Split(held, next),
+    }
 }
 
 fn shell_options(options: &WindowOptions, aqua: &Aqua) -> ShellOptions {
@@ -283,6 +309,32 @@ impl<A: Application + 'static> Host<A> {
         self.aqua.flush_output(&mut self.app, id);
     }
 
+    fn flush_scroll(&mut self) {
+        if let Some(scroll) = self.pending_scroll.take() {
+            self.input(
+                scroll.id,
+                InputEvent::Scroll {
+                    at: scroll.at,
+                    delta: scroll.delta,
+                },
+            );
+        }
+    }
+
+    fn queue_scroll(&mut self, next: PendingScroll) {
+        match self.pending_scroll.take() {
+            None => self.pending_scroll = Some(next),
+            Some(held) => match merge_scroll(held, next) {
+                ScrollMerge::Merged(merged) => self.pending_scroll = Some(merged),
+                ScrollMerge::Split(held, next) => {
+                    self.pending_scroll = Some(held);
+                    self.flush_scroll();
+                    self.pending_scroll = Some(next);
+                }
+            },
+        }
+    }
+
     fn input(&mut self, id: AquaWindowId, input: InputEvent) {
         if matches!(input, InputEvent::PointerDown(..)) {
             if let Some(native) = self
@@ -304,6 +356,11 @@ impl<A: Application + 'static> Handler for Host<A> {
             return;
         }
         let scale = self.shell.get(&id).map_or(1.0, |window| window.scale());
+        if let ShellEvent::Input(InputEvent::Scroll { at, delta }) = event {
+            self.queue_scroll(PendingScroll { id, at, delta });
+            return;
+        }
+        self.flush_scroll();
         match event {
             ShellEvent::Resized { width, height } if width > 0 && height > 0 => {
                 let size = LogicalSize::new(f64::from(width) / scale, f64::from(height) / scale);
@@ -344,11 +401,13 @@ impl<A: Application + 'static> Handler for Host<A> {
     }
 
     fn woken(&mut self) {
+        self.flush_scroll();
         self.aqua.pump_inbox(&mut self.app);
     }
 
     fn tick(&mut self, now: Instant) -> Option<Instant> {
         self.aqua.wakeups += 1;
+        self.flush_scroll();
         self.aqua.pump_inbox(&mut self.app);
         self.process_requests();
         self.poll_dialogs();
@@ -396,6 +455,7 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
         shell: HashMap::new(),
         dialogs: Vec::new(),
         inspector: HostInspector::from_env(),
+        pending_scroll: None,
     };
     aqua_shell_win32::set_message_hook(TsfHook::new());
     if let Err(message) = host.create_window(options.clone()) {

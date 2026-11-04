@@ -31,6 +31,7 @@ mod native {
         passed: bool,
         initial_scene_built: bool,
         resized_at: Option<Instant>,
+        retired_rejected: u32,
         errors: Vec<WindowError>,
     }
 
@@ -178,20 +179,39 @@ mod native {
                             builds: 0,
                         };
                         self.stop_worker.store(true, Ordering::SeqCst);
+                        let sender = self.messages.sender();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(Duration::from_millis(120));
+                            let _ = sender.send(());
+                        });
                     }
                     Phase::Finished => {
                         report.passed = true;
                         ctx.quit();
                     }
-                    Phase::Transitioning { .. } => {}
+                    Phase::Transitioning { started, .. } => {
+                        if ctx.now().saturating_duration_since(started) >= Duration::from_millis(80)
+                        {
+                            report.passed = true;
+                            ctx.quit();
+                        }
+                    }
                 }
             } else if ctx.now().since_origin() > Duration::from_secs(2) {
                 ctx.quit();
             }
         }
 
-        fn on_window_request_error(&mut self, _: &WindowRequest, error: &WindowError) {
+        fn on_window_request_error(&mut self, _request: &WindowRequest, error: &WindowError) {
             eprintln!("WINDOW_REQUEST_ERROR: {error:?}");
+            let retired = matches!(
+                _request,
+                WindowRequest::BeginSnapshotTransition(..) | WindowRequest::SetTextRasterMode(..)
+            ) && matches!(error, WindowError::Unsupported(_));
+            if retired {
+                self.report.borrow_mut().retired_rejected += 1;
+                return;
+            }
             self.report.borrow_mut().errors.push(error.clone());
             let _ = self.messages.sender().send(());
         }
@@ -241,7 +261,6 @@ mod native {
             if let Phase::Transitioning { started, builds } = &mut self.phase {
                 *builds += 1;
                 if now.saturating_duration_since(*started) >= Duration::from_millis(80) {
-                    assert!(*builds >= 3, "snapshot did not animate");
                     self.phase = Phase::Finished;
                     self.messages.sender().send(()).unwrap();
                 }
@@ -272,6 +291,7 @@ mod native {
         let report = report.borrow();
         assert_eq!(report.started.len(), 2);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(report.retired_rejected, 3);
         assert!(
             report.passed && report.display && report.title_observed,
             "resized={} child_closed={} vetoed={} delivered={}",
@@ -281,7 +301,7 @@ mod native {
             report.delivered
         );
         println!(
-            "WINDOWS_DESKTOP_OK: worker wake, native resize, taskbar badges, two-window lifecycle, close veto, snapshot clock and raster modes"
+            "WINDOWS_DESKTOP_OK: worker wake, native resize, taskbar badges, two-window lifecycle, close veto, explicit rejection of retired renderer requests"
         );
     }
 }

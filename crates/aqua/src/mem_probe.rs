@@ -47,6 +47,7 @@ unsafe impl GlobalAlloc for Probe {
     }
 }
 
+#[cfg(feature = "probe-allocator")]
 #[global_allocator]
 static ALLOC: Probe = Probe;
 

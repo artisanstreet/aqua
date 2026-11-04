@@ -2,7 +2,7 @@ use aqua_a11y_uia::{Connection, UiaAdapter};
 use aqua_core::{ClickSettings, CursorIcon, Rect};
 use aqua_protocol::chrome::DragRegions;
 use aqua_protocol::monitor::DisplayInfo;
-use aqua_protocol::{A11yActionRequest, AccessTreeUpdate};
+use aqua_protocol::{A11yActionRequest, AccessTreeUpdate, BadgeError, TaskbarBadge};
 use aqua_shell_win32::Window;
 use aqua_transport::Inspector;
 
@@ -102,8 +102,18 @@ impl NativeWindow for Win32Window {
         })
     }
 
+    fn set_badge(&self, badge: Option<TaskbarBadge>) -> Result<(), BadgeError> {
+        aqua_shell_win32::taskbar::set_badge(&self.window.native_handle(), badge)
+    }
+
     fn destroy(&self) {
         self.window.destroy();
+    }
+
+    fn attach_composition(&self, content: &dyn std::any::Any) -> bool {
+        content
+            .downcast_ref::<super::d3d12::CompositionContent>()
+            .is_some_and(|content| self.window.attach_composition_surface(&content.0).is_ok())
     }
 }
 

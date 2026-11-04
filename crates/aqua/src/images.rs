@@ -190,6 +190,7 @@ struct State {
     stats: ImageAssetStats,
     revision: u64,
     wake: Option<crate::mailbox::Wake>,
+    fonts: Option<aqua_text::SharedFonts>,
 }
 
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
@@ -268,6 +269,9 @@ impl Default for ImageAssets {
 }
 
 impl ImageAssets {
+    pub fn set_fonts(&self, fonts: aqua_text::SharedFonts) {
+        lock(&self.state).fonts = Some(fonts);
+    }
     pub fn new(budget: ImageAssetBudget) -> Self {
         let subscribers = Arc::new(Mutex::new(Subscribers::default()));
         let weak = Arc::downgrade(&subscribers);
@@ -296,6 +300,7 @@ impl ImageAssets {
                 stats: ImageAssetStats::default(),
                 revision: 0,
                 wake: Some(wake),
+                fonts: None,
             })),
         }
     }
@@ -475,7 +480,7 @@ fn spawn_worker(shared: &Arc<Mutex<State>>) {
     let worker = std::thread::Builder::new()
         .name("aqua-image-decode".into())
         .spawn(move || loop {
-            let (job, budget) = {
+            let (job, budget, fonts) = {
                 let Some(shared) = weak.upgrade() else {
                     return;
                 };
@@ -484,7 +489,7 @@ fn spawn_worker(shared: &Arc<Mutex<State>>) {
                     state.stats.workers -= 1;
                     return;
                 };
-                (job, state.budget.decoded_bytes)
+                (job, state.budget.decoded_bytes, state.fonts.clone())
             };
             #[cfg(test)]
             let callback = DECODE_STARTED
@@ -500,7 +505,11 @@ fn spawn_worker(shared: &Arc<Mutex<State>>) {
                     "image source exceeds 32 MiB".into(),
                 ))
             } else if aqua_media::decode::is_svg(&job.encoded) {
-                aqua_media::decode::decode_svg(&job.encoded, budget)
+                let source = match &fonts {
+                    Some(fonts) => aqua_text::svg::outline_text(&job.encoded, &mut fonts.lock()),
+                    None => std::borrow::Cow::Borrowed(&job.encoded[..]),
+                };
+                aqua_media::decode::decode_svg(&source, budget)
                     .map(|image| Data::Still(Arc::new(image)))
                     .map_err(|error| ImageAssetError::Decode(error.to_string()))
             } else if job.preview && !aqua_media::decode::is_gif(&job.encoded) {

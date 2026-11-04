@@ -55,13 +55,17 @@ fn native_value_and_invoke_requests_update_the_real_bound_field_and_button() {
         .iter()
         .find(|(id, _)| *id == pack_node_id(field))
         .unwrap();
-    assert!(native_field.1.supports_action(accesskit::Action::SetValue));
+    assert!(native_field
+        .1
+        .supports_action(aqua_a11y_uia::accesskit::Action::SetValue));
     let bridge = A11yBridge::new(Arc::new(|| {}));
-    bridge.native_action(&accesskit::ActionRequest {
-        action: accesskit::Action::SetValue,
-        target_tree: accesskit::TreeId::ROOT,
+    bridge.native_action(&aqua_a11y_uia::accesskit::ActionRequest {
+        action: aqua_a11y_uia::accesskit::Action::SetValue,
+        target_tree: aqua_a11y_uia::accesskit::TreeId::ROOT,
         target_node: native_field.0,
-        data: Some(accesskit::ActionData::Value("updated\r\nmessage".into())),
+        data: Some(aqua_a11y_uia::accesskit::ActionData::Value(
+            "updated\r\nmessage".into(),
+        )),
     });
     let requests = bridge.drain_actions();
     assert_eq!(requests.len(), 1);
@@ -116,7 +120,7 @@ fn password_content_is_protected_in_accessibility_and_clipboard() {
             .unwrap()
             .1
             .role(),
-        accesskit::Role::PasswordInput
+        aqua_a11y_uia::accesskit::Role::PasswordInput
     );
     app.tree_mut().set_focused(Some(field.semantic.node));
     app.tree_mut()

@@ -181,6 +181,15 @@ fn client(log: Arc<Mutex<Log>>) -> Result<(), String> {
     {
         return Err("the app never saw the close request".into());
     }
+    if !log
+        .lock()
+        .unwrap()
+        .events
+        .iter()
+        .any(|(id, label)| id.raw() == second_id && label == "destroyed")
+    {
+        return Err("the app never saw the window destroyed".into());
+    }
     if unsafe { FindWindowW(None, w!("aqua mw first")) }
         .map(|hwnd| hwnd.0.is_null())
         .unwrap_or(true)

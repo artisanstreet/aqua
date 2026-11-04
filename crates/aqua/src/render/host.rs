@@ -1,22 +1,37 @@
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant as WallInstant};
 
+use aqua_core::Rect;
 use aqua_graph::Extent;
 use aqua_protocol::{Feedback, FrameId, GpuBackend, GpuError, Instant, PresentHint, SurfaceId};
 use aqua_runtime::RenderSide;
+use aqua_text::SharedRuns;
 use aqua_transport::{
     GpuRenderHost, HostConfig, HostCounters, Inspector, MonotonicClock, RenderHost,
 };
 
+use super::damage::{DamagePlanner, Plan};
 use super::link::ExternalUpdate;
 use super::lower::Lowering;
 
 const MAINTENANCE_FRAMES: u64 = 900;
+const PENDING_POLL: Duration = Duration::from_millis(33);
 
 pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Repaint {
+    #[default]
+    Settled,
+    NextFrame,
+    Poll(Duration),
+}
+
+pub type DamageSlot = Rc<RefCell<Option<Vec<Rect>>>>;
 
 pub trait FrameTarget {
     fn paced(&self) -> bool {
@@ -24,6 +39,10 @@ pub trait FrameTarget {
     }
     fn wait_frame(&mut self);
     fn present(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback>;
+    fn invalidate(&mut self) {}
+    fn repaint(&self) -> Repaint {
+        Repaint::Settled
+    }
 }
 
 #[derive(Debug, Default)]
@@ -43,6 +62,16 @@ pub struct RenderStats {
     pub trim: std::sync::atomic::AtomicBool,
     pub gpu_ns: AtomicU64,
     pub waits: AtomicU64,
+    pub arrivals: AtomicU64,
+    pub forced: AtomicU64,
+    pub partial_frames: AtomicU64,
+    pub full_frames: AtomicU64,
+    pub damaged_pixels: AtomicU64,
+    pub trims: AtomicU64,
+    pub attached: AtomicU64,
+    pub service_thread: AtomicU64,
+    pub device_sharers: AtomicU64,
+    pub inject_loss: std::sync::atomic::AtomicBool,
 }
 
 impl RenderStats {
@@ -57,6 +86,12 @@ impl RenderStats {
 
 type Maintenance<B> = Box<dyn FnMut(&mut B)>;
 
+struct DamageStage {
+    planner: DamagePlanner,
+    slot: DamageSlot,
+    runs: SharedRuns,
+}
+
 pub struct GpuFrames<B: GpuBackend<Error = GpuError> + 'static> {
     host: GpuRenderHost<B, Lowering, MonotonicClock>,
     surface: SurfaceId,
@@ -65,6 +100,7 @@ pub struct GpuFrames<B: GpuBackend<Error = GpuError> + 'static> {
     maintenance: Option<Maintenance<B>>,
     since_maintenance: u64,
     counted: HostCounters,
+    damage: Option<DamageStage>,
 }
 
 impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
@@ -93,7 +129,17 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
             maintenance: None,
             since_maintenance: 0,
             counted: HostCounters::default(),
+            damage: None,
         }
+    }
+
+    pub fn with_damage(mut self, slot: DamageSlot, runs: SharedRuns) -> Self {
+        self.damage = Some(DamageStage {
+            planner: DamagePlanner::new(),
+            slot,
+            runs,
+        });
+        self
     }
 
     pub fn with_hint(mut self, hint: PresentHint) -> Self {
@@ -125,6 +171,50 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
 
     pub fn host(&self) -> &GpuRenderHost<B, Lowering, MonotonicClock> {
         &self.host
+    }
+
+    fn stage_damage(&mut self, side: &RenderSide) {
+        let Some(stage) = self.damage.as_mut() else {
+            return;
+        };
+        let plan = match side.viewport() {
+            Some((size, scale)) => stage.planner.plan(side.scene(), &stage.runs, size, scale),
+            None => Plan::Full,
+        };
+        let stats = &self.stats;
+        match &plan {
+            Plan::Full => {
+                stats.full_frames.fetch_add(1, Ordering::Relaxed);
+            }
+            Plan::Regions(rects) => {
+                stats.partial_frames.fetch_add(1, Ordering::Relaxed);
+                let pixels: f64 = rects.iter().map(|r| f64::from(r.w) * f64::from(r.h)).sum();
+                stats
+                    .damaged_pixels
+                    .fetch_add(pixels as u64, Ordering::Relaxed);
+            }
+        }
+        *stage.slot.borrow_mut() = match plan {
+            Plan::Full => None,
+            Plan::Regions(rects) => Some(rects),
+        };
+    }
+
+    fn settle_damage(&mut self, feedback: &[Feedback]) {
+        let Some(stage) = self.damage.as_mut() else {
+            return;
+        };
+        *stage.slot.borrow_mut() = None;
+        let clean = feedback
+            .iter()
+            .any(|item| matches!(item, Feedback::Presented(_)))
+            && !feedback
+                .iter()
+                .any(|item| matches!(item, Feedback::DeviceLost));
+        match clean {
+            true => stage.planner.commit(),
+            false => stage.planner.invalidate(),
+        }
     }
 
     fn maintain(&mut self) {
@@ -198,8 +288,11 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
         self.host.set_present(hint);
         if self.stats.trim.swap(false, Ordering::AcqRel) {
             self.host.trim_handle().request();
+            self.stats.trims.fetch_add(1, Ordering::Relaxed);
         }
+        self.stage_damage(side);
         let feedback = self.host.execute(side, frame);
+        self.settle_damage(&feedback);
         self.account();
         self.since_maintenance += 1;
         if self.since_maintenance >= MAINTENANCE_FRAMES {
@@ -208,120 +301,21 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
         }
         feedback
     }
+
+    fn invalidate(&mut self) {
+        if let Some(stage) = self.damage.as_mut() {
+            stage.planner.invalidate();
+        }
+    }
+
+    fn repaint(&self) -> Repaint {
+        let report = self.host.lowering().last_report();
+        match (report.pulsing || report.shimmering, report.pending > 0) {
+            (true, _) => Repaint::NextFrame,
+            (false, true) => Repaint::Poll(PENDING_POLL),
+            (false, false) => Repaint::Settled,
+        }
+    }
 }
 
 pub type TargetInit = Box<dyn FnOnce() -> Result<Box<dyn FrameTarget>, String> + Send>;
-
-thread_local! {
-    static TARGET: RefCell<Option<Box<dyn FrameTarget>>> = const { RefCell::new(None) };
-}
-
-enum Stage {
-    Pending(TargetInit),
-    Running,
-    Dead,
-}
-
-pub struct DeferredHost {
-    stats: Option<Arc<RenderStats>>,
-    stage: Stage,
-    clock: Clock,
-    interval: Duration,
-    deadline: Option<WallInstant>,
-    paced: bool,
-    presented_last: bool,
-}
-
-impl DeferredHost {
-    pub fn new(
-        init: TargetInit,
-        clock: Clock,
-        interval: Duration,
-        stats: Option<Arc<RenderStats>>,
-    ) -> Self {
-        Self {
-            stats,
-            stage: Stage::Pending(init),
-            clock,
-            interval,
-            deadline: None,
-            paced: false,
-            presented_last: false,
-        }
-    }
-
-    fn start(&mut self) -> bool {
-        let stage = std::mem::replace(&mut self.stage, Stage::Dead);
-        match stage {
-            Stage::Pending(init) => match init() {
-                Ok(target) => {
-                    self.paced = target.paced();
-                    TARGET.with(|slot| *slot.borrow_mut() = Some(target));
-                    self.stage = Stage::Running;
-                    true
-                }
-                Err(message) => {
-                    eprintln!("aqua: render target failed: {message}");
-                    false
-                }
-            },
-            Stage::Running => {
-                self.stage = Stage::Running;
-                true
-            }
-            Stage::Dead => false,
-        }
-    }
-
-    fn pace(&mut self) {
-        let now = WallInstant::now();
-        let target = match self.deadline {
-            Some(deadline) if deadline > now => deadline,
-            _ => now,
-        };
-        if target > now {
-            std::thread::sleep(target - now);
-        }
-        self.deadline = Some(target + self.interval);
-    }
-}
-
-impl RenderHost for DeferredHost {
-    fn present_time(&mut self) -> Instant {
-        (self.clock)() + self.interval
-    }
-
-    fn wait_frame(&mut self) {
-        if let Some(stats) = self.stats.as_ref() {
-            stats.waits.fetch_add(1, Ordering::Relaxed);
-        }
-        match self.start() {
-            true => {
-                TARGET.with(|slot| {
-                    if let Some(target) = slot.borrow_mut().as_mut() {
-                        target.wait_frame();
-                    }
-                });
-                if self.paced || !self.presented_last {
-                    self.pace();
-                }
-                self.presented_last = false;
-            }
-            false => std::thread::sleep(self.interval),
-        }
-    }
-
-    fn execute(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback> {
-        let feedback = match self.start() {
-            true => TARGET.with(|slot| match slot.borrow_mut().as_mut() {
-                Some(target) => target.present(side, frame),
-                None => Vec::new(),
-            }),
-            false => vec![Feedback::DeviceLost],
-        };
-        self.presented_last = feedback
-            .iter()
-            .any(|item| matches!(item, Feedback::Presented(_)));
-        feedback
-    }
-}

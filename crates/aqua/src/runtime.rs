@@ -1,6 +1,7 @@
+use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant as WallInstant};
 
 use aqua_core::InputEvent as CoreInputEvent;
@@ -26,7 +27,9 @@ use crate::config::AquaConfig;
 use crate::inbox::{AquaUserEvent, Inbox};
 use crate::native_window::NativeWindow;
 use crate::render::host::Clock;
-use crate::render::link::{ExternalUpdate, InitFactory, RenderLink};
+use crate::render::link::{CompositionSink, ExternalUpdate, InitFactory, RenderLink};
+use crate::render::pressure::MemoryPressure;
+use crate::render::service::RenderService;
 
 pub use aqua_ui::input::ExternalFileDragEvent as ExternalFileDrag;
 
@@ -69,6 +72,10 @@ pub struct ExternalFrame<'a> {
 }
 
 impl ExternalFrame<'_> {
+    pub fn meshes_supported(&self) -> bool {
+        true
+    }
+
     pub fn register_image(&mut self, layer: u64, width: u32, height: u32, rgba: Arc<[u8]>) {
         (self.register)(ExternalUpdate::Image {
             layer,
@@ -166,6 +173,26 @@ impl AppCtx<'_> {
         self.dialogs.push_back((id, request, spec));
         self.inbox.post(AquaUserEvent::WindowRequests);
         request
+    }
+
+    pub fn render_stats(&self, id: AquaWindowId) -> Option<Arc<crate::render::host::RenderStats>> {
+        self.windows
+            .get(&id)?
+            .link
+            .as_ref()
+            .map(|link| link.stats().clone())
+    }
+
+    pub fn request_trim(&self, id: AquaWindowId) {
+        if let Some(link) = self.windows.get(&id).and_then(|r| r.link.as_ref()) {
+            link.request_trim();
+        }
+    }
+
+    pub fn inject_device_loss(&self, id: AquaWindowId) {
+        if let Some(link) = self.windows.get(&id).and_then(|r| r.link.as_ref()) {
+            link.inject_device_loss();
+        }
     }
 
     pub fn display(&self, id: AquaWindowId) -> Option<aqua_protocol::monitor::DisplayInfo> {
@@ -354,6 +381,9 @@ pub trait Application {
     fn reactive_runtime(&self) -> Option<&ReactiveRuntime> {
         None
     }
+    fn reactive_runtime_for(&self, _id: AquaWindowId) -> Option<&ReactiveRuntime> {
+        self.reactive_runtime()
+    }
     fn on_render_error(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _message: &str) {}
 }
 
@@ -498,6 +528,8 @@ impl FrameStats {
     }
 }
 
+type Compositions = Arc<Mutex<Vec<(AquaWindowId, Box<dyn Any + Send>)>>>;
+
 pub struct Aqua {
     pub(crate) config: AquaConfig,
     pub(crate) scheduler: Scheduler,
@@ -523,6 +555,9 @@ pub struct Aqua {
     pub(crate) wakeups: u64,
     native_loop: bool,
     last_host_report: Option<WallInstant>,
+    render_service: Option<RenderService>,
+    compositions: Compositions,
+    pressure: MemoryPressure,
 }
 
 impl Aqua {
@@ -594,6 +629,9 @@ impl Aqua {
             frame_stats: FrameStats::from_environment(),
             native_loop: false,
             last_host_report: None,
+            render_service: None,
+            compositions: Arc::default(),
+            pressure: MemoryPressure::new(),
         })
     }
 
@@ -652,7 +690,7 @@ impl Aqua {
         if self.flushers.contains_key(&id) {
             return;
         }
-        if let Some(rt) = app.reactive_runtime() {
+        if let Some(rt) = app.reactive_runtime_for(id) {
             self.with_ctx(|ctx| ctx.bind_reactive(id, rt));
         }
     }
@@ -765,8 +803,8 @@ impl Aqua {
 
     pub fn dispatch_start(&mut self, app: &mut impl Application, id: AquaWindowId) {
         if self.windows.contains_key(&id) {
-            self.bind_app_reactive(&*app, id);
             self.with_ctx(|ctx| app.on_start(ctx, id));
+            self.bind_app_reactive(&*app, id);
             self.flush_output(app, id);
         }
     }
@@ -885,8 +923,15 @@ impl Aqua {
                     "snapshot transitions and text raster modes belong to the retired wgpu renderer",
                 ));
             }
-            WindowRequest::SetBadge(..) => {
-                return Err(WindowError::Unsupported("taskbar badges are not ported"));
+            WindowRequest::SetBadge(_, badge) => {
+                let native =
+                    native.ok_or(WindowError::Unsupported("window has no native handle"))?;
+                native.set_badge(*badge).map_err(|error| match error {
+                    aqua_protocol::BadgeError::Unsupported => {
+                        WindowError::Unsupported("taskbar badges")
+                    }
+                    aqua_protocol::BadgeError::Native(message) => WindowError::Native(message),
+                })?;
             }
             WindowRequest::SetMaxFrameRate(_, target) => {
                 self.scheduler.set_window_fps_target(id, *target);
@@ -1006,14 +1051,38 @@ impl Aqua {
     ) -> bool {
         let inbox = self.inbox.clone();
         let clock = self.shared_clock();
-        let wake: aqua_transport::Notify = Arc::new(move || {
+        let wake: aqua_transport::Notify = {
+            let inbox = inbox.clone();
+            Arc::new(move || {
+                inbox.post(AquaUserEvent::RenderEvents(id));
+            })
+        };
+        let pending = self.compositions.clone();
+        let composition: CompositionSink = Arc::new(move |content| {
+            pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((id, content));
             inbox.post(AquaUserEvent::RenderEvents(id));
         });
         let immediate = self.windows.get(&id).is_some_and(|record| !record.vsync);
+        if !self.windows.contains_key(&id) {
+            return false;
+        }
+        let service = match self.render_service.as_ref() {
+            Some(service) => service,
+            None => match RenderService::new() {
+                Ok(service) => self.render_service.insert(service),
+                Err(error) => {
+                    eprintln!("aqua: render thread failed to start: {error}");
+                    return false;
+                }
+            },
+        };
+        let link = RenderLink::spawn(service, factory, composition, clock, interval, wake);
+        link.set_immediate(immediate);
         match self.windows.get_mut(&id) {
             Some(record) => {
-                let link = RenderLink::spawn(factory, clock, interval, wake);
-                link.set_immediate(immediate);
                 record.link = Some(link);
                 true
             }
@@ -1067,6 +1136,9 @@ impl Aqua {
             _ => false,
         };
         if close {
+            if matches!(event, WindowEvent::CloseRequested(_)) {
+                self.with_ctx(|ctx| app.on_window_event(ctx, id, &WindowEvent::Destroyed(id)));
+            }
             self.remove_window(id);
         }
     }
@@ -1184,6 +1256,9 @@ impl Aqua {
                 if let Some(rec) = self.windows.get_mut(&id) {
                     rec.observed.occluded = *o;
                 }
+                if *o {
+                    self.request_trim(id);
+                }
             }
             WindowEvent::ThemeChanged(_, theme) => {
                 self.prefs.theme = *theme;
@@ -1237,6 +1312,7 @@ impl Aqua {
     }
 
     pub fn pump_inbox(&mut self, app: &mut impl Application) {
+        self.check_memory_pressure();
         for event in self.inbox.drain() {
             match event {
                 AquaUserEvent::Messages(id) => self.dispatch_wake(app, id),
@@ -1296,7 +1372,53 @@ impl Aqua {
         self.flush_output(app, id);
     }
 
+    fn attach_compositions(&mut self, id: AquaWindowId) {
+        let ready: Vec<Box<dyn Any + Send>> = {
+            let mut pending = self
+                .compositions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let (mine, rest): (Vec<_>, Vec<_>) =
+                pending.drain(..).partition(|(window, _)| *window == id);
+            *pending = rest;
+            mine.into_iter().map(|(_, content)| content).collect()
+        };
+        let native = self.windows.get(&id).and_then(|r| r.native.clone());
+        if let (Some(native), Some(latest)) = (native, ready.last()) {
+            match native.attach_composition(latest.as_ref()) {
+                true => {
+                    if let Some(link) = self.windows.get(&id).and_then(|r| r.link.as_ref()) {
+                        link.stats()
+                            .attached
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                false => eprintln!("aqua: composition surface could not be attached"),
+            }
+        }
+    }
+
+    pub fn request_trim(&self, id: AquaWindowId) {
+        if let Some(link) = self.windows.get(&id).and_then(|r| r.link.as_ref()) {
+            link.request_trim();
+        }
+    }
+
+    pub fn request_trim_all(&self) {
+        self.windows
+            .values()
+            .filter_map(|record| record.link.as_ref())
+            .for_each(RenderLink::request_trim);
+    }
+
+    fn check_memory_pressure(&mut self) {
+        if self.pressure.rising_edge(WallInstant::now()) {
+            self.request_trim_all();
+        }
+    }
+
     pub fn drain_render_events(&mut self, app: &mut impl Application, id: AquaWindowId) {
+        self.attach_compositions(id);
         let events = self
             .windows
             .get_mut(&id)
@@ -1358,6 +1480,7 @@ impl Aqua {
     }
 
     fn produce_frame(&mut self, app: &mut impl Application, id: AquaWindowId, now: Instant) {
+        self.check_memory_pressure();
         let frame_started = WallInstant::now();
         let Some(record) = self.windows.get(&id) else {
             return;
@@ -1504,7 +1627,7 @@ impl Aqua {
             use std::sync::atomic::Ordering::Relaxed;
             let stats = link.stats();
             eprintln!(
-                "aqua-host-stats: window={} wakeups={} presented={} waits={} lower_ms={:.2} lower_max_ms={:.2} execute_ms={:.2} present_ms={:.2} commands={} glyphs={} skipped={} failures={} recoveries={} backlog={}",
+                "aqua-host-stats: window={} wakeups={} presented={} waits={} lower_ms={:.2} lower_max_ms={:.2} execute_ms={:.2} present_ms={:.2} commands={} glyphs={} skipped={} failures={} recoveries={} backlog={} partial={} full={} damaged_px={} forced={} trims={} sharers={}",
                 id.raw(),
                 self.wakeups,
                 stats.frames.load(Relaxed),
@@ -1519,6 +1642,12 @@ impl Aqua {
                 stats.failures.load(Relaxed),
                 stats.recoveries.load(Relaxed),
                 link.backlog(),
+                stats.partial_frames.load(Relaxed),
+                stats.full_frames.load(Relaxed),
+                stats.damaged_pixels.load(Relaxed),
+                stats.forced.load(Relaxed),
+                stats.trims.load(Relaxed),
+                stats.device_sharers.load(Relaxed),
             );
         }
     }
@@ -1918,6 +2047,7 @@ mod tests {
     use aqua_protocol::{GpuBackend, GpuReadback, SurfacePixels, SurfaceTarget};
 
     use crate::render::host::{FrameTarget, GpuFrames};
+    use crate::render::link::RenderContext;
     use crate::render::lower::Lowering;
 
     struct Capture {
@@ -1954,7 +2084,10 @@ mod tests {
         runs: aqua_text::SharedRuns,
         pixels: Arc<Mutex<Option<SurfacePixels>>>,
     ) -> InitFactory {
-        Box::new(move |externals, stats| {
+        Box::new(move |context| {
+            let RenderContext {
+                externals, stats, ..
+            } = context;
             Box::new(move || {
                 let mut backend = RefBackend::new();
                 let surface = backend
@@ -2083,6 +2216,16 @@ mod tests {
         }
         fn display(&self) -> Option<aqua_protocol::monitor::DisplayInfo> {
             None
+        }
+        fn set_badge(
+            &self,
+            badge: Option<aqua_protocol::TaskbarBadge>,
+        ) -> Result<(), aqua_protocol::BadgeError> {
+            self.0
+                 .0
+                .borrow_mut()
+                .push(format!("badge:{}", badge.map_or(0, |b| b.count)));
+            Ok(())
         }
         fn destroy(&self) {
             self.0 .0.borrow_mut().push("destroy".into());

@@ -200,6 +200,7 @@ impl App {
             prefs.reduce_motion.is_on() || resolved.runtime.reduced_motion,
         );
         let images = crate::images::ImageAssets::default();
+        images.set_fonts(aqua.fonts().clone());
         let view = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let ctx = Context {
                 scope: ui.scope(),

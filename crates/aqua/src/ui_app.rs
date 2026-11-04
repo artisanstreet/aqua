@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 
 use aqua_core::{InputEvent as CoreInputEvent, Key, Modifiers, NamedKey};
@@ -14,9 +15,39 @@ use crate::runtime::{AppCtx, Application, Aqua};
 
 pub use aqua_runtime::RuntimeError as UiAppError;
 
-pub struct UiApp {
-    inner: Runtime,
+pub type WindowFactory = Box<dyn FnMut(AquaWindowId) -> Result<Runtime, UiAppError>>;
+
+struct Slot {
+    runtime: Runtime,
     pending: RuntimeOutput,
+}
+
+impl Slot {
+    fn new(runtime: Runtime) -> Self {
+        Self {
+            runtime,
+            pending: RuntimeOutput::default(),
+        }
+    }
+
+    fn drive(&mut self, input: RuntimeInput) {
+        let output = self.runtime.step(input);
+        self.pending.merge(output);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RootBinding {
+    Unbound,
+    Bound(AquaWindowId),
+    Retired,
+}
+
+pub struct UiApp {
+    root: Slot,
+    binding: RootBinding,
+    extra: HashMap<AquaWindowId, Slot>,
+    factory: Option<WindowFactory>,
 }
 
 impl UiApp {
@@ -26,26 +57,115 @@ impl UiApp {
 
     pub fn from_runtime(inner: Runtime) -> Self {
         Self {
-            inner,
-            pending: RuntimeOutput::default(),
+            root: Slot::new(inner),
+            binding: RootBinding::Unbound,
+            extra: HashMap::new(),
+            factory: None,
         }
     }
 
+    pub fn with_window_factory(
+        mut self,
+        factory: impl FnMut(AquaWindowId) -> Result<Runtime, UiAppError> + 'static,
+    ) -> Self {
+        self.factory = Some(Box::new(factory));
+        self
+    }
+
     pub fn into_runtime(self) -> Runtime {
-        self.inner
+        self.root.runtime
+    }
+
+    pub fn window_count(&self) -> usize {
+        self.extra.len()
+            + match self.binding {
+                RootBinding::Bound(_) => 1,
+                RootBinding::Unbound | RootBinding::Retired => 0,
+            }
+    }
+
+    pub fn runtime_for(&self, id: AquaWindowId) -> Option<&Runtime> {
+        self.slot(id).map(|slot| &slot.runtime)
+    }
+
+    pub fn runtime_for_mut(&mut self, id: AquaWindowId) -> Option<&mut Runtime> {
+        self.claim(id).map(|slot| &mut slot.runtime)
+    }
+
+    fn slot(&self, id: AquaWindowId) -> Option<&Slot> {
+        match self.binding {
+            RootBinding::Bound(root) if root == id => Some(&self.root),
+            RootBinding::Unbound | RootBinding::Bound(_) | RootBinding::Retired => {
+                self.extra.get(&id)
+            }
+        }
+    }
+
+    fn slot_mut(&mut self, id: AquaWindowId) -> Option<&mut Slot> {
+        match self.binding {
+            RootBinding::Bound(root) if root == id => Some(&mut self.root),
+            RootBinding::Unbound | RootBinding::Bound(_) | RootBinding::Retired => {
+                self.extra.get_mut(&id)
+            }
+        }
+    }
+
+    fn claim(&mut self, id: AquaWindowId) -> Option<&mut Slot> {
+        match self.binding {
+            RootBinding::Unbound => {
+                self.binding = RootBinding::Bound(id);
+                Some(&mut self.root)
+            }
+            RootBinding::Bound(_) | RootBinding::Retired => self.slot_mut(id),
+        }
+    }
+
+    fn open(&mut self, id: AquaWindowId) {
+        if self.claim(id).is_some() {
+            return;
+        }
+        let built = match self.factory.as_mut() {
+            Some(factory) => factory(id),
+            None => return,
+        };
+        match built {
+            Ok(runtime) => {
+                self.extra.insert(id, Slot::new(runtime));
+            }
+            Err(error) => eprintln!("aqua: window {id:?} mount failed: {error}"),
+        }
+    }
+
+    fn retire(&mut self, id: AquaWindowId) {
+        match self.binding {
+            RootBinding::Bound(root) if root == id => {
+                self.root
+                    .drive(RuntimeInput::Shell(ShellEvent::Destroyed(id)));
+                self.root.pending = RuntimeOutput::default();
+                self.binding = RootBinding::Retired;
+            }
+            RootBinding::Unbound | RootBinding::Bound(_) | RootBinding::Retired => {
+                self.extra.remove(&id);
+            }
+        }
     }
 
     pub fn absorb(&mut self, output: RuntimeOutput) {
-        self.pending.merge(output);
+        self.root.pending.merge(output);
     }
 
     pub fn drive(&mut self, input: RuntimeInput) {
-        let output = self.inner.step(input);
-        self.pending.merge(output);
+        self.root.drive(input);
+    }
+
+    pub fn drive_window(&mut self, id: AquaWindowId, input: RuntimeInput) {
+        if let Some(slot) = self.claim(id) {
+            slot.drive(input);
+        }
     }
 
     pub fn scene_mut(&mut self) -> &mut aqua_scene::Scene {
-        self.inner.scene_mut()
+        self.root.runtime.scene_mut()
     }
 
     pub fn a11y_nodes(
@@ -55,28 +175,29 @@ impl UiApp {
         aqua_core::NodeId,
         Vec<aqua_protocol::A11yNode>,
     )> {
-        self.inner.a11y_nodes()
+        self.root.runtime.a11y_nodes()
     }
 
     pub fn chrome_regions(&self) -> Option<&aqua_protocol::DragRegions> {
-        self.inner.chrome_regions()
+        self.root.runtime.chrome_regions()
     }
 
     pub fn cursor(&self) -> aqua_core::CursorIcon {
-        self.inner.cursor()
+        self.root.runtime.cursor()
     }
 
     pub fn flush_scene(&mut self) {
-        let diff = aqua_runtime::emit_scene_diff(self.inner.scene_mut());
+        let diff = aqua_runtime::emit_scene_diff(self.root.runtime.scene_mut());
         if !diff.is_empty() {
-            self.pending
+            self.root
+                .pending
                 .render
                 .push(aqua_protocol::RenderCommand::Scene(diff));
         }
     }
 
     pub fn take_pending(&mut self) -> RuntimeOutput {
-        std::mem::take(&mut self.pending)
+        std::mem::take(&mut self.root.pending)
     }
 }
 
@@ -84,13 +205,13 @@ impl Deref for UiApp {
     type Target = Runtime;
 
     fn deref(&self) -> &Runtime {
-        &self.inner
+        &self.root.runtime
     }
 }
 
 impl DerefMut for UiApp {
     fn deref_mut(&mut self) -> &mut Runtime {
-        &mut self.inner
+        &mut self.root.runtime
     }
 }
 
@@ -186,50 +307,71 @@ fn physical(size: aqua_core::Size, scale: f32) -> PixelSize {
 }
 
 impl Application for UiApp {
+    fn on_start(&mut self, _ctx: &mut AppCtx, id: AquaWindowId) {
+        self.open(id);
+    }
+
     fn on_external_file_drag(
         &mut self,
         ctx: &mut AppCtx,
         id: AquaWindowId,
         event: &crate::runtime::ExternalFileDrag,
     ) {
-        if self.inner.external_file_drag(event.clone()) {
+        let handled = self
+            .claim(id)
+            .is_some_and(|slot| slot.runtime.external_file_drag(event.clone()));
+        if handled {
             ctx.request_frame(id, aqua_protocol::FrameReason::INPUT);
         }
     }
 
-    fn input_invalidation_epoch(&self, _id: AquaWindowId) -> u64 {
-        self.tree().invalidation_epoch()
+    fn input_invalidation_epoch(&self, id: AquaWindowId) -> u64 {
+        self.slot(id)
+            .map_or(0, |slot| slot.runtime.tree().invalidation_epoch())
     }
 
     fn color_profile(&self) -> aqua_core::ColorProfile {
-        self.inner.color_profile()
+        self.root.runtime.color_profile()
     }
 
     fn on_click_settings(&mut self, settings: aqua_core::ClickSettings) {
-        self.set_click_settings(settings);
+        self.root.runtime.set_click_settings(settings);
+        self.extra
+            .values_mut()
+            .for_each(|slot| slot.runtime.set_click_settings(settings));
     }
 
     fn on_window_event(&mut self, _ctx: &mut AppCtx, id: AquaWindowId, event: &WindowEvent) {
-        let resized = match event {
-            WindowEvent::Resized(_, size) => Some((size.as_core_size(), self.scale())),
-            WindowEvent::ScaleChanged(_, scale) => Some((self.viewport(), *scale as f32)),
+        let resized = |slot: &Slot| match event {
+            WindowEvent::Resized(_, size) => Some((size.as_core_size(), slot.runtime.scale())),
+            WindowEvent::ScaleChanged(_, scale) => Some((slot.runtime.viewport(), *scale as f32)),
             _ => None,
         };
-        if let Some((size, scale)) = resized {
-            self.drive(RuntimeInput::Shell(ShellEvent::Resized {
-                window: id,
-                size: physical(size, scale),
-                scale,
-            }));
+        match event {
+            WindowEvent::Destroyed(_) => self.retire(id),
+            _ => {
+                if let Some(slot) = self.claim(id) {
+                    if let Some((size, scale)) = resized(slot) {
+                        slot.drive(RuntimeInput::Shell(ShellEvent::Resized {
+                            window: id,
+                            size: physical(size, scale),
+                            scale,
+                        }));
+                    }
+                }
+            }
         }
     }
 
     fn on_input(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &CoreInputEvent) {
-        self.drive(RuntimeInput::Tick(ctx.now()));
-        self.drive(RuntimeInput::Shell(ShellEvent::Input {
-            window: id,
-            event: event.clone(),
-        }));
+        let now = ctx.now();
+        if let Some(slot) = self.claim(id) {
+            slot.drive(RuntimeInput::Tick(now));
+            slot.drive(RuntimeInput::Shell(ShellEvent::Input {
+                window: id,
+                event: event.clone(),
+            }));
+        }
     }
 
     fn on_files_dropped(
@@ -238,7 +380,10 @@ impl Application for UiApp {
         id: AquaWindowId,
         paths: &[std::path::PathBuf],
     ) {
-        if self.drop_files(paths.to_vec()) {
+        let handled = self
+            .claim(id)
+            .is_some_and(|slot| slot.runtime.drop_files(paths.to_vec()));
+        if handled {
             ctx.request_frame(id, aqua_protocol::FrameReason::INPUT);
         }
     }
@@ -250,58 +395,81 @@ impl Application for UiApp {
         paths: &[std::path::PathBuf],
         at: Option<aqua_core::Point>,
     ) {
-        if self.drop_files_at(paths.to_vec(), at) {
+        let handled = self
+            .claim(id)
+            .is_some_and(|slot| slot.runtime.drop_files_at(paths.to_vec(), at));
+        if handled {
             ctx.request_frame(id, aqua_protocol::FrameReason::INPUT);
         }
     }
 
-    fn on_a11y_action(
-        &mut self,
-        _ctx: &mut AppCtx,
-        _id: AquaWindowId,
-        request: &A11yActionRequest,
-    ) {
-        self.drive(RuntimeInput::Access(request.clone()));
+    fn on_a11y_action(&mut self, _ctx: &mut AppCtx, id: AquaWindowId, request: &A11yActionRequest) {
+        self.drive_window(id, RuntimeInput::Access(request.clone()));
     }
 
     fn on_dialog(
         &mut self,
         _ctx: &mut AppCtx,
-        _id: AquaWindowId,
+        id: AquaWindowId,
         request: aqua_protocol::RequestId,
         outcome: aqua_protocol::DialogOutcome,
     ) {
-        self.drive(RuntimeInput::Shell(ShellEvent::Dialog { request, outcome }));
+        self.drive_window(
+            id,
+            RuntimeInput::Shell(ShellEvent::Dialog { request, outcome }),
+        );
     }
 
     fn build_scene(&mut self, window: &ObservedWindowState, now: Instant) -> Option<Instant> {
-        self.drive(RuntimeInput::Tick(now));
-        let output = self.inner.step(RuntimeInput::Shell(ShellEvent::Frame {
+        let slot = self.claim(window.id)?;
+        slot.drive(RuntimeInput::Tick(now));
+        let output = slot.runtime.step(RuntimeInput::Shell(ShellEvent::Frame {
             window: window.id,
             presentation: now,
         }));
         let wake = output.wake_at;
-        self.pending.merge(output);
-        self.take_diagnostics()
+        slot.pending.merge(output);
+        slot.runtime
+            .take_diagnostics()
             .iter()
             .for_each(|line| eprintln!("{line}"));
         wake
     }
 
-    fn step_input(&mut self, _id: AquaWindowId, input: RuntimeInput) {
-        self.drive(input);
+    fn step_input(&mut self, id: AquaWindowId, input: RuntimeInput) {
+        self.drive_window(id, input);
     }
 
-    fn take_output(&mut self, _id: AquaWindowId) -> RuntimeOutput {
-        self.take_pending()
+    fn take_output(&mut self, id: AquaWindowId) -> RuntimeOutput {
+        self.slot_mut(id)
+            .map(|slot| std::mem::take(&mut slot.pending))
+            .unwrap_or_default()
     }
 
     fn reactive_runtime(&self) -> Option<&ReactiveRuntime> {
-        Some(self.inner.runtime())
+        Some(self.root.runtime.runtime())
+    }
+
+    fn reactive_runtime_for(&self, id: AquaWindowId) -> Option<&ReactiveRuntime> {
+        self.slot(id).map(|slot| slot.runtime.runtime())
     }
 }
 
 impl Aqua {
+    pub fn run_ui_windows(
+        self,
+        factory: impl FnOnce(&Scope) -> Element,
+        windows: impl FnMut(AquaWindowId) -> Result<Runtime, UiAppError> + 'static,
+    ) -> Result<(), String> {
+        let mut app =
+            UiApp::new(self.fonts().clone(), self.runs().clone()).with_window_factory(windows);
+        app.apply_startup_motion_policy(self.motion_reduced());
+        app.set_frame_stats(std::env::var_os("AQUA_FRAME_STATS").is_some_and(|value| value == "1"));
+        app.mount(factory)
+            .map_err(|e| format!("ui mount failed: {e}"))?;
+        self.run(app)
+    }
+
     pub fn run_ui(self, factory: impl FnOnce(&Scope) -> Element) -> Result<(), String> {
         let mut app = UiApp::new(self.fonts().clone(), self.runs().clone());
         app.apply_startup_motion_policy(self.motion_reduced());

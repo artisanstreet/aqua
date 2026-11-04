@@ -1,10 +1,14 @@
 pub mod affine;
 pub mod color;
+pub mod damage;
 pub mod host;
 pub mod link;
 pub mod lower;
 pub mod mesh;
+pub mod namespace;
 pub mod persist;
+pub mod pressure;
+pub mod service;
 pub mod shape;
 pub mod text;
 pub mod vector;

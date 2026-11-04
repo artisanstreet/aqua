@@ -1,5 +1,6 @@
+use std::any::Any;
 use std::collections::VecDeque;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,9 +8,10 @@ use aqua_core::Size;
 use aqua_protocol::{RenderCommand, RenderEvent, SceneDiff};
 use aqua_runtime::{emit_scene_diff, RenderSide};
 use aqua_scene::Scene;
-use aqua_transport::{spawn_render_thread, Notify, RenderThread};
+use aqua_transport::{channel_with_notify, Notify, Sender as RingSender};
 
-use super::host::{Clock, DeferredHost, RenderStats, TargetInit};
+use super::host::{Clock, RenderStats, TargetInit};
+use super::service::{NewSlot, RenderService, ServiceHandle};
 
 const RING_CAPACITY: usize = 4096;
 
@@ -26,8 +28,21 @@ pub enum ExternalUpdate {
     },
 }
 
+pub type CompositionSink = Arc<dyn Fn(Box<dyn Any + Send>) + Send + Sync>;
+
+pub struct RenderContext {
+    pub externals: Receiver<ExternalUpdate>,
+    pub stats: Arc<RenderStats>,
+    pub composition: CompositionSink,
+}
+
+pub type InitFactory = Box<dyn FnOnce(RenderContext) -> TargetInit + Send>;
+
 pub struct RenderLink {
-    thread: Option<RenderThread>,
+    service: ServiceHandle,
+    slot: u64,
+    commands: RingSender<RenderCommand>,
+    events: aqua_transport::Receiver<RenderEvent>,
     backlog: VecDeque<RenderCommand>,
     externals: Sender<ExternalUpdate>,
     viewport: Option<(Size, f32)>,
@@ -35,19 +50,38 @@ pub struct RenderLink {
     submitted: u64,
 }
 
-pub type InitFactory = Box<
-    dyn FnOnce(std::sync::mpsc::Receiver<ExternalUpdate>, Arc<RenderStats>) -> TargetInit + Send,
->;
-
 impl RenderLink {
-    pub fn spawn(factory: InitFactory, clock: Clock, interval: Duration, wake: Notify) -> Self {
+    pub fn spawn(
+        service: &RenderService,
+        factory: InitFactory,
+        composition: CompositionSink,
+        clock: Clock,
+        interval: Duration,
+        wake: Notify,
+    ) -> Self {
         let (externals, receiver) = channel();
         let stats = Arc::new(RenderStats::default());
-        let init = factory(receiver, stats.clone());
-        let host = DeferredHost::new(init, clock, interval, Some(stats.clone()));
-        let thread = spawn_render_thread(RING_CAPACITY, host, wake);
+        let init = factory(RenderContext {
+            externals: receiver,
+            stats: stats.clone(),
+            composition,
+        });
+        let handle = service.handle();
+        let (commands, command_rx) = channel_with_notify(RING_CAPACITY, handle.notifier());
+        let (event_tx, events) = channel_with_notify(RING_CAPACITY, wake);
+        let slot = handle.add(NewSlot {
+            commands: command_rx,
+            events: event_tx,
+            init,
+            clock,
+            interval,
+            stats: stats.clone(),
+        });
         Self {
-            thread: Some(thread),
+            service: handle,
+            slot,
+            commands,
+            events,
             backlog: VecDeque::new(),
             externals,
             viewport: None,
@@ -66,6 +100,14 @@ impl RenderLink {
         self.stats
             .trim
             .store(true, std::sync::atomic::Ordering::Release);
+        self.service.wake();
+    }
+
+    pub fn inject_device_loss(&self) {
+        self.stats
+            .inject_loss
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.service.wake();
     }
 
     pub fn stats(&self) -> &Arc<RenderStats> {
@@ -116,37 +158,38 @@ impl RenderLink {
     }
 
     pub fn external(&self, update: ExternalUpdate) {
-        let _ = self.externals.send(update);
+        if self.externals.send(update).is_ok() {
+            self.stats
+                .arrivals
+                .fetch_add(1, std::sync::atomic::Ordering::Release);
+            self.service.wake();
+        }
     }
 
     pub fn flush(&mut self) {
-        let Some(thread) = self.thread.as_mut() else {
-            return;
-        };
         while let Some(command) = self.backlog.pop_front() {
-            if !thread.send(command.clone()) {
-                self.backlog.push_front(command);
-                break;
+            match self.commands.try_send(command) {
+                Ok(()) => {}
+                Err(aqua_transport::SendError::Full(command))
+                | Err(aqua_transport::SendError::Disconnected(command)) => {
+                    self.backlog.push_front(command);
+                    break;
+                }
             }
         }
     }
 
     pub fn poll(&mut self) -> Vec<RenderEvent> {
         self.flush();
-        match self.thread.as_mut() {
-            Some(thread) => thread.poll(),
-            None => Vec::new(),
-        }
+        self.events.drain(RING_CAPACITY)
     }
 
     pub fn wait_event(&mut self, timeout: Duration) -> Option<RenderEvent> {
-        self.thread
-            .as_mut()
-            .and_then(|thread| thread.wait_event(timeout))
+        self.events.recv_timeout(Some(timeout)).ok()
     }
 
     pub fn shutdown(&mut self) -> Option<RenderSide> {
-        self.thread.take().and_then(RenderThread::shutdown)
+        self.service.remove(self.slot)
     }
 }
 

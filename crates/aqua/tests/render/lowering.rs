@@ -285,7 +285,7 @@ fn transforms_translate_and_scale_every_primitive_under_them() {
 }
 
 #[test]
-fn rotated_transforms_are_reported_as_approximated_not_dropped() {
+fn rotated_quads_are_rotated_exactly_and_not_reported_as_approximated() {
     let transform = Transform2D {
         a: 0.8,
         b: 0.6,
@@ -303,8 +303,15 @@ fn rotated_transforms_are_reported_as_approximated_not_dropped() {
                 DisplayItem::PopTransform,
             ],
         );
-        assert_eq!(painter.report.approximated, 1, "{}", painter.label);
-        assert!(frame.pixels().any(|p| p[3] > 200), "{}", painter.label);
+        assert_eq!(painter.report.approximated, 0, "{}", painter.label);
+        assert!(frame.pixel(21, 16)[3] > 250, "{}: center", painter.label);
+        assert!(frame.pixel(24, 18)[3] > 250, "{}: inside", painter.label);
+        assert_eq!(
+            frame.pixel(16, 11)[3],
+            0,
+            "{}: the old bounding box corner",
+            painter.label
+        );
     }
 }
 

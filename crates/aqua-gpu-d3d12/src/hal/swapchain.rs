@@ -212,6 +212,10 @@ impl Swapchain {
         Ok(())
     }
 
+    pub fn buffer_count(&self) -> u32 {
+        self.buffers.len() as u32
+    }
+
     pub fn extent(&self) -> (u32, u32) {
         (self.width, self.height)
     }

@@ -30,8 +30,8 @@ fn record_site() {
         let trace = std::backtrace::Backtrace::force_capture().to_string();
         let frames: Vec<&str> = trace
             .lines()
-            .filter(|line| line.contains("aqua_") && !line.contains("heap::"))
-            .take(6)
+            .filter(|line| line.trim_start().starts_with(|c: char| c.is_ascii_digit()) && !line.contains("heap::") && !line.contains("std::") && !line.contains("core::") && !line.contains("alloc::"))
+            .take(10)
             .collect();
         SITES.lock().unwrap().push(frames.join(" <- "));
         inside.set(false);
@@ -84,7 +84,7 @@ fn settle(backend: &mut OffscreenBackend, case: &Case) -> aqua_protocol::Surface
     let mut session = Session::new(backend);
     session.render_case(case).unwrap();
     let surface = session.surface(case.plan.extent).unwrap();
-    for _ in 0..8 {
+    for _ in 0..(aqua_gpu_d3d12::policy::SHRINK_AFTER_FRAMES + 8) {
         session.render(&case.plan).unwrap();
     }
     surface
@@ -136,9 +136,21 @@ fn steady_state_frames_stay_inside_their_allocation_budget() {
                     eprintln!("{name} site: {site}");
                 }
             }
-            for _ in 0..16 {
+            for round in 0..16 {
+                if round == 5 && std::env::var("AQUA_HEAP_TRACE").is_ok() {
+                    SITES.lock().unwrap().clear();
+                    TRACING.store(true, Ordering::Relaxed);
+                }
                 let (result, allocations, bytes) = counted(|| backend.execute(&case.plan, &inputs));
                 result.unwrap();
+                if allocations != 0 && std::env::var("AQUA_HEAP_TRACE").is_ok() {
+                    eprintln!("{name} frame {round} allocated {allocations}");
+                }
+                if round == 5 && TRACING.swap(false, Ordering::Relaxed) {
+                    for site in SITES.lock().unwrap().iter() {
+                        eprintln!("{name} site: {site}");
+                    }
+                }
                 worst = (worst.0.max(allocations), worst.1.max(bytes));
             }
             eprintln!(

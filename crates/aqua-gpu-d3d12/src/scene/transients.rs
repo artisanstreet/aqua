@@ -270,7 +270,7 @@ impl Transients {
         if same && resize.is_none() {
             return Ok(false);
         }
-        let keys = fresh.unwrap_or_else(|| self.keys.clone());
+        let keys = fresh.unwrap_or_else(|| std::mem::take(&mut self.keys));
         let placement = placement.unwrap_or_else(|| place_keys(device, &keys));
         let old_entries = std::mem::take(&mut self.entries);
         let mut old_heap = None;

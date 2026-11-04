@@ -320,6 +320,10 @@ impl SceneRenderer {
         self.timestamps.as_ref().and_then(Timestamps::latest)
     }
 
+    pub fn slot_upload_bytes(&self) -> u64 {
+        self.slots.iter().map(|slot| slot.capacity).sum()
+    }
+
     pub fn retired_transient_bytes(&self) -> u64 {
         self.transients.retired_bytes()
     }

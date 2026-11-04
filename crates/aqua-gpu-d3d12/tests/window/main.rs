@@ -9,6 +9,8 @@ mod composition;
 #[cfg(windows)]
 mod cross_adapter;
 #[cfg(windows)]
+mod memory;
+#[cfg(windows)]
 mod recovery_textures;
 #[cfg(windows)]
 mod refresh;
@@ -19,3 +21,6 @@ mod shared_device;
 #[cfg(windows)]
 #[path = "../hal/window.rs"]
 mod test_window;
+#[cfg(windows)]
+#[path = "../support/mod.rs"]
+mod support;

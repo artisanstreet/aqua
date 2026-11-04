@@ -37,6 +37,7 @@ fn drives_window(info: &AdapterInfo, window: &TestWindow) -> bool {
 }
 
 fn present_on(info: &AdapterInfo) -> (bool, u64, u64) {
+    crate::support::hold_software();
     let preference = AdapterPreference::Luid(info.luid);
     let mut backend = WindowBackend::new(WindowOptions {
         device: options(preference).device,
@@ -124,6 +125,7 @@ fn the_integrated_adapter_presents_and_matches_the_reference() {
         eprintln!("SKIP-NO-INTEGRATED-GPU only {} is enabled", integrated.name);
         return;
     }
+    crate::support::hold_software();
     let mut backend = WindowBackend::new(WindowOptions {
         device: options(AdapterPreference::Luid(integrated.luid)).device,
         mirror_textures: false,

@@ -16,7 +16,8 @@ use super::damage::{Damage, DamageTracker, PixelRect};
 use super::mirror::TextureMirror;
 use super::pacing::{PaceReport, Pacer};
 use super::timing;
-use crate::hal::{self, Core, DeviceOptions, PresentMode, PresentStatus, Swapchain, RENDER_FORMAT};
+use crate::hal::budget::{Trim, Visibility};
+use crate::hal::{self, BudgetStatus, Core, DeviceOptions, PresentMode, PresentStatus, Swapchain, RENDER_FORMAT};
 use crate::half::bgra8_srgb_rows_to_linear_rgba8;
 use crate::scene::util::{footprint_location, texture_location};
 use crate::scene::{
@@ -73,6 +74,35 @@ pub struct WindowStats {
     pub last_repaint_area: i64,
     pub scissored_frames: u64,
     pub skipped_pixels: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MemoryBreakdown {
+    pub swapchain_bytes: u64,
+    pub transient_heap_bytes: u64,
+    pub retired_transient_bytes: u64,
+    pub frame_upload_bytes: u64,
+    pub scene_upload_bytes: u64,
+    pub atlas_resident_bytes: u64,
+    pub atlas_staging_bytes: u64,
+    pub local_usage: u64,
+    pub local_budget: u64,
+}
+
+impl MemoryBreakdown {
+    pub fn attributed(&self) -> u64 {
+        self.swapchain_bytes
+            + self.transient_heap_bytes
+            + self.retired_transient_bytes
+            + self.frame_upload_bytes
+            + self.scene_upload_bytes
+            + self.atlas_resident_bytes
+            + self.atlas_staging_bytes
+    }
+
+    pub fn unattributed(&self) -> u64 {
+        self.local_usage.saturating_sub(self.attributed())
+    }
 }
 
 struct WindowSurface {
@@ -253,6 +283,76 @@ impl WindowBackend {
 
     pub fn stats(&self) -> WindowStats {
         self.stats
+    }
+
+    pub fn memory_breakdown(&self) -> Result<MemoryBreakdown, GpuError> {
+        let core = self.core.as_ref().ok_or(no_device())?;
+        let memory = core.memory()?;
+        let swapchain_bytes = self
+            .surfaces
+            .values()
+            .map(|entry| {
+                let (width, height) = entry.swapchain.extent();
+                width as u64 * height as u64 * 4 * entry.swapchain.buffer_count() as u64
+            })
+            .sum();
+        let (transient, retired, scene_upload, atlas) = match self.gpu.as_ref() {
+            Some(gpu) => (
+                gpu.renderer.transient_heap_bytes(),
+                gpu.renderer.retired_transient_bytes(),
+                gpu.renderer.slot_upload_bytes(),
+                gpu.textures.stats(),
+            ),
+            None => Default::default(),
+        };
+        Ok(MemoryBreakdown {
+            swapchain_bytes,
+            transient_heap_bytes: transient,
+            retired_transient_bytes: retired,
+            frame_upload_bytes: core.upload_capacity(),
+            scene_upload_bytes: scene_upload,
+            atlas_resident_bytes: atlas.resident_bytes,
+            atlas_staging_bytes: atlas.staging_bytes,
+            local_usage: memory.local.usage,
+            local_budget: memory.local.budget,
+        })
+    }
+
+    pub fn trim(&mut self, trim: Trim) -> Result<u64, GpuError> {
+        let core = self.core.as_mut().ok_or(no_device())?;
+        core.trim(trim)?;
+        self.release(&trim)
+    }
+
+    pub fn set_visibility(&mut self, visibility: Visibility) -> Result<Trim, GpuError> {
+        let core = self.core.as_mut().ok_or(no_device())?;
+        let trim = core.set_visibility(visibility)?;
+        self.release(&trim)?;
+        Ok(trim)
+    }
+
+    pub fn service_budget(&mut self) -> Result<Option<BudgetStatus>, GpuError> {
+        let core = self.core.as_mut().ok_or(no_device())?;
+        let status = core.service_budget()?;
+        if let Some(status) = &status {
+            self.release(&status.applied)?;
+        }
+        Ok(status)
+    }
+
+    fn release(&mut self, trim: &Trim) -> Result<u64, GpuError> {
+        let (Some(core), Some(gpu)) = (self.core.as_mut(), self.gpu.as_mut()) else {
+            return Err(no_device());
+        };
+        if !trim.free_transients && !trim.shrink_upload_ring {
+            return Ok(0);
+        }
+        core.wait_idle()?;
+        let completed = core.completed_fence();
+        gpu.renderer.retire(completed);
+        let freed = gpu.renderer.trim(trim, completed);
+        gpu.renderer.retire(completed);
+        Ok(freed)
     }
 
     pub fn pipeline_stats(&self) -> Option<PipelineStats> {

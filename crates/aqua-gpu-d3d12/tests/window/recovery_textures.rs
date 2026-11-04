@@ -113,6 +113,7 @@ type Setup = (
 );
 
 fn setup(mirror: bool, preference: AdapterPreference) -> Option<Setup> {
+    crate::support::hold_software();
     let options = options(preference).with_mirror(mirror);
     let mut backend = match WindowBackend::new(options) {
         Ok(backend) => backend,

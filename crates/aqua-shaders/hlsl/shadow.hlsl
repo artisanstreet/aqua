@@ -1,5 +1,7 @@
 #include "common.hlsli"
 
+static const float HARD_EDGE_SIGMA = 0.05;
+
 struct ShadowIn
 {
     float4 bounds : BOUNDS;
@@ -59,9 +61,9 @@ float shadow_alpha(float2 p, float4 rect, float radius, float sigma)
 {
     float2 half_size = rect.zw * 0.5;
     float2 relative = p - rect.xy - half_size;
-    if (sigma <= 0.0)
+    if (sigma < HARD_EDGE_SIGMA)
     {
-        return saturate(0.5 - box_distance(p, rect, radius));
+        return saturate(0.5 - box_distance(p, rect, min(radius, min(half_size.x, half_size.y))));
     }
     float low = relative.y - half_size.y;
     float high = relative.y + half_size.y;
@@ -84,7 +86,9 @@ float4 ps_shadow(ShadowOut i) : SV_Target
 {
     float2 p = i.position.xy;
     float spread = i.shape.z;
-    float4 rect = float4(i.bounds.xy + i.offset.xy - spread, i.bounds.zw + 2.0 * spread);
+    float2 size = max(i.bounds.zw + 2.0 * spread, 0.0);
+    float2 center = i.bounds.xy + i.bounds.zw * 0.5 + i.offset.xy;
+    float4 rect = float4(center - size * 0.5, size);
     float radius = max(i.shape.x + spread, 0.0);
     float alpha = shadow_alpha(p, rect, radius, i.shape.y);
     float clip_cover = saturate(0.5 - box_distance(p, i.clip, 0.0));

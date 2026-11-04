@@ -390,6 +390,10 @@ impl Core {
         self.apply(trim_for(level, self.visibility))
     }
 
+    pub fn trim(&mut self, trim: Trim) -> Result<Trim, Error> {
+        self.apply(trim)
+    }
+
     fn apply(&mut self, trim: Trim) -> Result<Trim, Error> {
         if trim.shrink_upload_ring {
             self.wait_idle()?;

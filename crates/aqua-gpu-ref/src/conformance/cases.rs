@@ -604,6 +604,31 @@ fn effect_cases() -> Vec<Case> {
             ],
         ),
         standard(
+            "shadow_hard_edge_negative_spread",
+            Oklch::TRANSPARENT,
+            vec![
+                backdrop(),
+                shadow(
+                    rect(20.0, 16.0, 40.0, 30.0),
+                    10.0,
+                    [2.5, 1.5],
+                    0.008,
+                    -6.3,
+                    "#000000",
+                    0.7,
+                ),
+                shadow(
+                    rect(8.0, 8.0, 10.0, 10.0),
+                    4.0,
+                    [60.0, 40.0],
+                    0.04,
+                    -7.0,
+                    "#2040a0",
+                    0.8,
+                ),
+            ],
+        ),
+        standard(
             "shadow_clipped_in_group",
             Oklch::TRANSPARENT,
             vec![

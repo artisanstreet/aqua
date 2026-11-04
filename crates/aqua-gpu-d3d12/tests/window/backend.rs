@@ -24,6 +24,7 @@ pub(crate) fn options(preference: AdapterPreference) -> WindowOptions {
 }
 
 pub(crate) fn backend(preference: AdapterPreference) -> Option<WindowBackend> {
+    crate::support::hold_software();
     match WindowBackend::new(options(preference)) {
         Ok(backend) => Some(backend),
         Err(error) => match preference {

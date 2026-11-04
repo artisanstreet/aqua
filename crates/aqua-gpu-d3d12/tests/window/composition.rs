@@ -205,6 +205,7 @@ fn render(backend: &mut WindowBackend, id: SurfaceId, plan: &FramePlan) {
 }
 
 fn composes(preference: AdapterPreference, material: WindowMaterial, label: &str) {
+    crate::support::hold_software();
     let mut backend = match WindowBackend::new(options(preference)) {
         Ok(backend) => backend,
         Err(error) => {
@@ -358,6 +359,7 @@ fn warp_mica_composes_premultiplied_alpha() {
 
 #[test]
 fn composition_surface_survives_resize_and_device_loss() {
+    crate::support::hold_software();
     let Ok(mut backend) = WindowBackend::new(options(AdapterPreference::HighPerformance)) else {
         return;
     };

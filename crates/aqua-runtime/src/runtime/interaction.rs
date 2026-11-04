@@ -7,12 +7,12 @@ use aqua_core::{
     InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Point, PointerButton, Rect,
 };
 use aqua_text::{
-    CaretAffinity, CaretPosition, Selection,
     document::{
         SelectionDocument, SelectionDocumentId, SelectionSource, SelectionSourceError,
         SelectionSourceId, SourcePosition, SourceSlice,
     },
     navigation::SelectionUnit,
+    CaretAffinity, CaretPosition, Selection,
 };
 use aqua_ui::{
     collection_runtime::{CollectionRowRegistration, SelectionBatchOwner},
@@ -816,35 +816,40 @@ impl Runtime {
     }
 
     pub(super) fn follow_external_text_carets(&mut self) {
-        let pending: Vec<_> = self
-            .tree
-            .traverse()
-            .into_iter()
-            .filter_map(|node| {
-                let record = self.tree.get(node)?;
-                let NodeKind::Text(text) = &record.kind else {
-                    return None;
-                };
-                if !text.external_text_input
-                    || !text.follow_text_caret
-                    || text.viewport_scroll_max.is_none()
-                {
-                    return None;
+        let queued = self.tree.take_follow_caret_nodes();
+        if queued.is_empty() {
+            return;
+        }
+        let mut pending = Vec::new();
+        for node in queued {
+            let Some(record) = self.tree.get(node) else {
+                continue;
+            };
+            let NodeKind::Text(text) = &record.kind else {
+                continue;
+            };
+            if !text.external_text_input || !text.follow_text_caret {
+                continue;
+            }
+            let ready = text.viewport_scroll_max.is_some();
+            let TextBacking::Editable(editor) = &text.backing else {
+                continue;
+            };
+            let caret = editor.selection().caret;
+            let mut scroll = None;
+            let mut parent = record.parent;
+            while let Some(ancestor) = parent.and_then(|id| self.tree.get(id).map(|a| (id, a))) {
+                if matches!(ancestor.1.kind, NodeKind::Scroll(_)) {
+                    scroll = Some(ancestor.0);
+                    break;
                 }
-                let TextBacking::Editable(editor) = &text.backing else {
-                    return None;
-                };
-                let mut parent = record.parent;
-                while let Some(id) = parent {
-                    let ancestor = self.tree.get(id)?;
-                    if matches!(ancestor.kind, NodeKind::Scroll(_)) {
-                        return Some((node, id, editor.selection().caret));
-                    }
-                    parent = ancestor.parent;
-                }
-                None
-            })
-            .collect();
+                parent = ancestor.1.parent;
+            }
+            match (ready, scroll) {
+                (true, Some(scroll)) => pending.push((node, scroll, caret)),
+                _ => self.tree.requeue_follow_caret(node),
+            }
+        }
         for (node, scroll, byte) in pending {
             if let Some(record) = self.tree.get_mut(node) {
                 if let NodeKind::Text(text) = &mut record.kind {
@@ -1108,7 +1113,10 @@ impl Runtime {
                 }
                 false
             }
-            InputEvent::TextInput { .. } | InputEvent::Ime(_) => {
+            InputEvent::TextInput { .. }
+            | InputEvent::Ime(_)
+            | InputEvent::ImeReplace { .. }
+            | InputEvent::ImeSelect { .. } => {
                 self.interaction.goal_x = None;
                 false
             }

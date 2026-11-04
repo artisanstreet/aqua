@@ -45,8 +45,8 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use aqua_core::{
-    Arena, CollectionSemantics, DisplayItem, NodeId, Oklch, Point, RawId, Rect, Role, SemanticNode,
-    Size, TextRun, Transform2D, ViewportId, media_layer,
+    media_layer, Arena, CollectionSemantics, DisplayItem, NodeId, Oklch, Point, RawId, Rect, Role,
+    SemanticNode, Size, TextRun, Transform2D, ViewportId,
 };
 use aqua_text::{LineMode, Selection, TextEditor, TextModel};
 use taffy::{AvailableSpace, LayoutInput, TaffyTree};
@@ -988,6 +988,8 @@ pub struct UiTree {
     gpui_paint: bool,
     portal_roots: std::collections::HashSet<NodeId>,
     portal_order: Vec<NodeId>,
+    follow_caret_queue: Vec<NodeId>,
+    exiting: std::collections::HashSet<NodeId>,
     pub(crate) control_router: crate::controls::ControlRouter,
     pub(crate) input: crate::input::InputRouter,
     nodes: Arena<NodeRecord>,
@@ -1100,7 +1102,9 @@ impl UiTree {
             interaction: interaction::InteractionStore::default(),
             gpui_paint: false,
             portal_roots: std::collections::HashSet::new(),
+            follow_caret_queue: Vec::new(),
             portal_order: Vec::new(),
+            exiting: std::collections::HashSet::new(),
             control_router: crate::controls::ControlRouter::default(),
             input: crate::input::InputRouter::default(),
             nodes: Arena::new(),
@@ -1132,6 +1136,14 @@ impl UiTree {
             last_stats: FrameStats::default(),
             visited: std::cell::Cell::new(0),
         }
+    }
+
+    pub fn take_follow_caret_nodes(&mut self) -> Vec<NodeId> {
+        std::mem::take(&mut self.follow_caret_queue)
+    }
+
+    pub fn requeue_follow_caret(&mut self, node: NodeId) {
+        self.follow_caret_queue.push(node);
     }
 
     pub fn take_visited(&self) -> usize {
@@ -1631,6 +1643,7 @@ impl UiTree {
                             if let NodeKind::Text(text) = &mut record.kind {
                                 if text.external_text_input {
                                     text.follow_text_caret = true;
+                                    self.follow_caret_queue.push(node);
                                 }
                             }
                         }
@@ -1706,6 +1719,78 @@ impl UiTree {
 
     pub fn is_portal(&self, node: NodeId) -> bool {
         self.portal_roots.contains(&node)
+    }
+
+    #[must_use]
+    pub fn is_exiting(&self, node: NodeId) -> bool {
+        self.exiting.contains(&node)
+    }
+
+    #[must_use]
+    pub fn exiting_nodes(&self) -> Vec<NodeId> {
+        let mut nodes: Vec<NodeId> = self.exiting.iter().copied().collect();
+        nodes.sort_by_key(|node| node.raw().index);
+        nodes
+    }
+
+    fn exit_motion_of(&self, node: NodeId) -> Option<aqua_style::motion::MotionRef> {
+        self.paint(node)
+            .and_then(|paint| paint.motion)
+            .and_then(|spec| spec.presence.exit_motion())
+    }
+
+    fn begin_exit(&mut self, node: NodeId) -> bool {
+        let Some(record) = self.get(node) else {
+            return false;
+        };
+        let (Some(parent), Some(_)) = (record.parent, record.key) else {
+            return false;
+        };
+        let mut style = record.style.clone();
+        if self.exit_motion_of(node).is_none() {
+            return false;
+        }
+        let (Some(rect), Some(parent_rect)) = (self.rect(node), self.rect(parent)) else {
+            return false;
+        };
+        if self
+            .focused
+            .is_some_and(|focused| self.is_within(focused, node))
+        {
+            self.set_focused(Some(parent));
+        }
+        style.absolute = Some(crate::style::Absolute {
+            left: Some(rect.x - parent_rect.x),
+            top: Some(rect.y - parent_rect.y),
+            right: None,
+            bottom: None,
+        });
+        style.width = crate::style::Length::Px(rect.w);
+        style.height = crate::style::Length::Px(rect.h);
+        style.flex_grow = 0.0;
+        style.flex_shrink = 0.0;
+        self.set_style(node, style);
+        if let Some(record) = self.nodes.get_mut(node.raw()) {
+            record.hit_test_excluded = true;
+        }
+        self.exiting.insert(node);
+        true
+    }
+
+    fn is_within(&self, mut node: NodeId, ancestor: NodeId) -> bool {
+        loop {
+            if node == ancestor {
+                return true;
+            }
+            match self.get(node).and_then(|record| record.parent) {
+                Some(parent) => node = parent,
+                None => return false,
+            }
+        }
+    }
+
+    pub fn finish_exit(&mut self, node: NodeId) -> bool {
+        self.exiting.contains(&node) && self.remove(node)
     }
 
     pub fn visual_transform(&self, node: NodeId) -> Option<Transform2D> {
@@ -1865,6 +1950,11 @@ impl UiTree {
                     if let Some(&i) = old_index.get(&id.raw()) {
                         reused[i] = true;
                     }
+                    if self.exiting.remove(&id) {
+                        if let Some(record) = self.nodes.get_mut(id.raw()) {
+                            record.hit_test_excluded = false;
+                        }
+                    }
                     self.update_spec(id, spec);
                     out.push(Some(id));
                 }
@@ -1884,9 +1974,14 @@ impl UiTree {
             }
         }
         // Remove leftovers (missing keys / consumed positional slots).
+        let mut lingering: Vec<NodeId> = Vec::new();
         for (id, used) in old.iter().zip(reused.iter()) {
             if !used {
-                self.remove(*id);
+                if self.exiting.contains(id) || self.begin_exit(*id) {
+                    lingering.push(*id);
+                } else {
+                    self.remove(*id);
+                }
             }
         }
         // Build fresh nodes in order via a draining iterator (the old
@@ -1903,6 +1998,14 @@ impl UiTree {
             }
         }
         let content = built.clone();
+        for node in &lingering {
+            let before = old.iter().position(|id| id == node).unwrap_or(0);
+            let anchor = old[..before]
+                .iter()
+                .rev()
+                .find_map(|id| built.iter().position(|kept| kept == id));
+            built.insert(anchor.map_or(0, |at| at + 1), *node);
+        }
         built.extend(portals.into_iter().filter(|node| self.get(*node).is_some()));
         if let Some(&pt) = self.tmap.get(&parent.raw()) {
             let attached: Vec<taffy::NodeId> = self
@@ -2347,6 +2450,7 @@ impl UiTree {
                 self.tmap.remove(&n.raw());
             }
             self.portal_roots.remove(&n);
+            self.exiting.remove(&n);
             self.portal_order.retain(|node| *node != n);
             self.remove_interaction(n);
             self.control_router.remove_node(n);
@@ -4062,13 +4166,11 @@ mod tests {
     #[test]
     fn kind_change_replaces_node() {
         let mut tree = UiTree::new();
-        let root = tree.mount_spec(column(vec![
-            NodeSpec::new(
-                NodeKind::Text(TextContent::label("x")),
-                LayoutStyle::default(),
-            )
-            .keyed("k"),
-        ]));
+        let root = tree.mount_spec(column(vec![NodeSpec::new(
+            NodeKind::Text(TextContent::label("x")),
+            LayoutStyle::default(),
+        )
+        .keyed("k")]));
         let before: Vec<NodeId> = tree.get(root).unwrap().children.clone();
         let after = tree.sync_children(
             root,
@@ -4134,10 +4236,9 @@ mod tests {
         tree.compute_layout(Size::new(100.0, 100.0), &NaiveMeasurer)
             .unwrap();
         let ops = tree.emit_scene();
-        assert!(
-            ops.iter()
-                .any(|(_, op)| matches!(op, DisplayItem::BackdropBlur { .. }))
-        );
+        assert!(ops
+            .iter()
+            .any(|(_, op)| matches!(op, DisplayItem::BackdropBlur { .. })));
     }
 
     #[test]

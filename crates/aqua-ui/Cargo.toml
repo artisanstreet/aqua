@@ -9,6 +9,8 @@ rust-version.workspace = true
 [dependencies]
 aqua-core = { workspace = true }
 aqua-motion = { path = "../aqua-motion" }
+aqua-style = { workspace = true }
+aqua-layout = { workspace = true }
 aqua-reactive = { workspace = true }
 aqua-text = { workspace = true }
 taffy = { workspace = true }

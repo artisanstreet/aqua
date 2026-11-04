@@ -1,5 +1,5 @@
-use aqua_core::NodeId;
 use aqua_core::id::RawId;
+use aqua_core::NodeId;
 
 use crate::curve::{MotionKind, MotionValue, ReducedMotion, Seconds};
 
@@ -59,6 +59,14 @@ pub enum MotionCommand {
     SetTarget {
         track: TrackId,
         generation: u32,
+        to: MotionValue,
+        kind: MotionKind,
+        at: Seconds,
+    },
+    Shift {
+        track: TrackId,
+        generation: u32,
+        delta: MotionValue,
         to: MotionValue,
         kind: MotionKind,
         at: Seconds,

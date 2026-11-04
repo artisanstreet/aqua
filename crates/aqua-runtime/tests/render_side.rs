@@ -3,7 +3,7 @@ use aqua_motion::{AppMotion, Binding, Easing, MotionKind, MotionValue, Property,
 use aqua_protocol::{
     Feedback, Instant, RenderCommand, RenderEvent, RenderInput, RenderOutput, RenderWake,
 };
-use aqua_runtime::{RenderSide, emit_scene_diff};
+use aqua_runtime::{emit_scene_diff, RenderSide};
 use aqua_scene::Scene;
 
 fn red() -> Oklch {
@@ -185,12 +185,10 @@ fn bound_fill_animates_on_the_render_side_while_the_app_scene_is_untouched() {
     }
     let output = pair.sync(1.1);
     assert_eq!(fill_of(pair.render.presented(id).unwrap()), blue());
-    assert!(
-        output
-            .events
-            .iter()
-            .any(|e| matches!(e, RenderEvent::Motion(_)))
-    );
+    assert!(output
+        .events
+        .iter()
+        .any(|e| matches!(e, RenderEvent::Motion(_))));
     assert!(pair.app.is_settled(track));
     assert_eq!(pair.sync(1.2).wake, RenderWake::Idle);
 }
@@ -366,4 +364,26 @@ fn stepping_in_one_batch_equals_stepping_frame_by_frame_at_the_same_times() {
             .collect::<Vec<_>>()
     );
     assert_eq!(&final_state, states.last().unwrap());
+}
+
+#[test]
+fn a_viewport_change_alone_requests_a_frame_and_an_unchanged_one_does_not() {
+    let mut render = RenderSide::new();
+    let viewport = |w: f32| RenderCommand::Viewport {
+        size: aqua_core::Size::new(w, 100.0),
+        scale: 1.0,
+    };
+    assert!(render
+        .step(input(vec![viewport(200.0)], 0.0))
+        .frame
+        .is_some());
+    assert!(render.step(input(vec![], 0.016)).frame.is_none());
+    assert!(render
+        .step(input(vec![viewport(200.0)], 0.032))
+        .frame
+        .is_none());
+    assert!(render
+        .step(input(vec![viewport(300.0)], 0.048))
+        .frame
+        .is_some());
 }

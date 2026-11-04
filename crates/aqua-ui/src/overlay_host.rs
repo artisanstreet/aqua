@@ -10,6 +10,7 @@ use crate::style::{Absolute, Length};
 use crate::tree::{NodeSpec, UiTree};
 use aqua_core::id::RawId;
 use aqua_core::{InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Point, Rect, Size};
+use aqua_motion::{AppMotion, Binding, Property, TrackId};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -49,7 +50,25 @@ impl<'a> FocusControl for TreeFocus<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopupMotion {
+    pub property: Property,
+    pub from: MotionValue,
+    pub to: MotionValue,
+    pub kind: MotionKind,
+}
+
+struct PopupAnimation {
+    overlay: RawId,
+    owner: NodeId,
+    root: NodeId,
+    motion: PopupMotion,
+    track: Option<TrackId>,
+}
+
 pub struct OverlayHost {
+    tracks: AppMotion,
+    popup_animations: Vec<PopupAnimation>,
     closed: Vec<ClosedOverlay>,
     pointer_anchors: HashMap<RawId, Point>,
     pointer_tooltips: HashSet<RawId>,
@@ -67,6 +86,8 @@ impl OverlayHost {
         Self {
             service: OverlayService::new(viewport),
             motion: MotionController::new(ReducedMotion::Full),
+            tracks: AppMotion::new(ReducedMotion::Full),
+            popup_animations: Vec::new(),
             closed: Vec::new(),
             pointer_anchors: HashMap::new(),
             pointer_tooltips: HashSet::new(),
@@ -94,6 +115,20 @@ impl OverlayHost {
 
     pub fn motion_mut(&mut self) -> &mut MotionController {
         &mut self.motion
+    }
+
+    #[must_use]
+    pub fn tracks(&self) -> &AppMotion {
+        &self.tracks
+    }
+
+    pub fn tracks_mut(&mut self) -> &mut AppMotion {
+        &mut self.tracks
+    }
+
+    pub fn set_reduced_motion(&mut self, reduced: ReducedMotion, now: Seconds) {
+        self.motion.set_reduced_motion(reduced, now);
+        self.tracks.set_reduced_motion(reduced, now);
     }
 
     pub fn take_closed(&mut self) -> Vec<ClosedOverlay> {
@@ -621,7 +656,10 @@ impl OverlayHost {
             InputEvent::PointerDown(..) => events::dispatch_default(tree, event),
             InputEvent::KeyDown(key) => self.route_key(tree, key).1,
             InputEvent::Scroll { at, delta } => self.handle_scroll(tree, *at, *delta),
-            InputEvent::TextInput { .. } | InputEvent::Ime(_)
+            InputEvent::TextInput { .. }
+            | InputEvent::Ime(_)
+            | InputEvent::ImeReplace { .. }
+            | InputEvent::ImeSelect { .. }
                 if !self.focused_in_modal_domain(tree) =>
             {
                 true
@@ -654,15 +692,91 @@ impl OverlayHost {
             .map(|(raw, _)| OverlayId::from_raw(*raw))
     }
 
-    pub fn animate_popup(
+    pub fn animate_popup(&mut self, overlay: OverlayId, motion: PopupMotion, now: Seconds) -> bool {
+        let supported = matches!(
+            (motion.property, motion.from, motion.to),
+            (
+                Property::Opacity,
+                MotionValue::Scalar(_),
+                MotionValue::Scalar(_)
+            ) | (
+                Property::Translate,
+                MotionValue::Pair(..),
+                MotionValue::Pair(..)
+            )
+        );
+        let (Some(owner), Some(root)) = (
+            self.service.owner_of(overlay),
+            self.mounts.get(&overlay.raw()).copied(),
+        ) else {
+            return false;
+        };
+        if !supported {
+            return false;
+        }
+        let existing = self.popup_animations.iter_mut().find(|entry| {
+            entry.overlay == overlay.raw() && entry.motion.property == motion.property
+        });
+        match existing {
+            Some(entry) => {
+                entry.motion.to = motion.to;
+                entry.motion.kind = motion.kind;
+                if let Some(track) = entry.track {
+                    let _ = self
+                        .tracks
+                        .set_target_with(track, motion.to, motion.kind, now);
+                }
+            }
+            None => self.popup_animations.push(PopupAnimation {
+                overlay: overlay.raw(),
+                owner,
+                root,
+                motion,
+                track: None,
+            }),
+        }
+        true
+    }
+
+    pub fn popup_wraps(&self) -> impl Iterator<Item = (NodeId, Property, MotionValue)> + '_ {
+        self.popup_animations
+            .iter()
+            .map(|entry| (entry.root, entry.motion.property, entry.motion.from))
+    }
+
+    pub fn popup_track(&self, overlay: OverlayId, property: Property) -> Option<TrackId> {
+        self.popup_animations
+            .iter()
+            .find(|entry| entry.overlay == overlay.raw() && entry.motion.property == property)
+            .and_then(|entry| entry.track)
+    }
+
+    pub fn bind_popup_tracks(
         &mut self,
-        initial: MotionValue,
-        kind: MotionKind,
         now: Seconds,
-        overlay: OverlayId,
-    ) -> Option<MotionHandle> {
-        let owner = self.service.owner_of(overlay)?;
-        Some(self.motion.spawn(Some(owner), initial, kind, now))
+        resolve: impl Fn(NodeId, Property) -> Option<NodeId>,
+    ) {
+        for entry in self
+            .popup_animations
+            .iter_mut()
+            .filter(|e| e.track.is_none())
+        {
+            let Some(scene_node) = resolve(entry.root, entry.motion.property) else {
+                continue;
+            };
+            let track = self.tracks.spawn(
+                Some(entry.owner),
+                Some(Binding {
+                    node: scene_node,
+                    property: entry.motion.property,
+                }),
+                entry.motion.from,
+                entry.motion.kind,
+                now,
+            );
+            let _ = self.tracks.set_target(track, entry.motion.to, now);
+            entry.track = Some(track);
+        }
     }
 
     pub fn advance_motion(&mut self, now: Seconds) -> Vec<MotionHandle> {
@@ -686,6 +800,15 @@ impl OverlayHost {
     fn finish_close(&mut self, tree: &mut UiTree, closed: &[ClosedOverlay]) {
         self.closed.extend_from_slice(closed);
         for entry in closed {
+            let raw = entry.id.raw();
+            let tracks = &mut self.tracks;
+            self.popup_animations.retain(|animation| {
+                let gone = animation.overlay == raw;
+                if let (true, Some(track)) = (gone, animation.track) {
+                    tracks.remove(track);
+                }
+                !gone
+            });
             self.pointer_anchors.remove(&entry.id.raw());
             self.pointer_tooltips.remove(&entry.id.raw());
             self.measured.remove(&entry.id.raw());
@@ -1100,10 +1223,9 @@ mod tests {
     }
 
     #[test]
-    fn motion_deadline_helper_drives_popup_animation() {
+    fn popup_animation_spawns_a_bound_track_and_closing_removes_it() {
         use crate::motion::{Easing, MotionKind, MotionValue};
-        use std::cell::RefCell;
-        use std::rc::Rc;
+        use aqua_motion::MotionCommand;
 
         let (mut tree, _root, _scroller, owner) = scrolled_tree();
         let mut host = OverlayHost::new(viewport());
@@ -1113,31 +1235,41 @@ mod tests {
                 menu_request(owner, popup_content(120.0, 60.0, vec![])),
             )
             .unwrap();
-        let handle = host
-            .animate_popup(
-                MotionValue::Scalar(0.0),
-                MotionKind::Tween {
-                    duration_secs: 0.1,
-                    easing: Easing::Linear,
-                },
-                0.0,
-                id,
-            )
-            .unwrap();
-        let seen = Rc::new(RefCell::new(Vec::new()));
-        let seen2 = seen.clone();
-        host.motion_mut()
-            .on_complete(handle, Box::new(move |c| seen2.borrow_mut().push(c)));
-        host.motion_mut()
-            .set_target(handle, MotionValue::Scalar(1.0), 0.0)
-            .unwrap();
-        assert_eq!(host.motion_deadline(0.0), Some(0.0));
+        let fade = PopupMotion {
+            property: Property::Opacity,
+            from: MotionValue::Scalar(0.0),
+            to: MotionValue::Scalar(1.0),
+            kind: MotionKind::Tween {
+                duration_secs: 0.1,
+                easing: Easing::Linear,
+            },
+        };
+        assert!(host.animate_popup(id, fade, 0.0));
+        assert_eq!(host.motion_deadline(0.0), None);
+        assert!(host.tracks_mut().drain_commands().is_empty());
+        assert_eq!(host.popup_wraps().count(), 1);
 
-        host.advance_motion(0.05);
-        assert!(host.motion_deadline(0.05).is_some());
-        host.dispose_owner_motion(owner);
-        assert!(seen.borrow().is_empty());
-        assert_eq!(host.motion_deadline(0.05), None);
+        host.bind_popup_tracks(0.0, |_, _| None);
+        assert!(host.popup_track(id, Property::Opacity).is_none());
+
+        host.bind_popup_tracks(0.0, |root, _| Some(root));
+        let track = host.popup_track(id, Property::Opacity).unwrap();
+        let commands = host.tracks_mut().drain_commands();
+        assert!(matches!(
+            commands[0],
+            MotionCommand::Spawn {
+                binding: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(commands[1], MotionCommand::SetTarget { .. }));
+
+        host.close_popup(&mut tree, id, CloseReason::Requested);
+        assert_eq!(host.popup_wraps().count(), 0);
+        assert_eq!(
+            host.tracks_mut().drain_commands(),
+            vec![MotionCommand::Remove { track }]
+        );
     }
 
     #[test]

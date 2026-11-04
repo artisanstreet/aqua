@@ -216,6 +216,16 @@ pub enum InputEvent {
     },
     /// IME lifecycle.
     Ime(ImeEvent),
+    ImeReplace {
+        start: u32,
+        end: u32,
+        text: String,
+    },
+    ImeSelect {
+        start: u32,
+        end: u32,
+        reversed: bool,
+    },
     /// Window focus gained/lost (drives focus scopes, caret visibility).
     Focused(bool),
 }

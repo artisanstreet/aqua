@@ -21,7 +21,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::panic::{AssertUnwindSafe, resume_unwind};
+use std::panic::{resume_unwind, AssertUnwindSafe};
 use std::rc::{Rc, Weak};
 
 use crate::graph::{EdgeOp, Inner, NodeId, NodeKind, ScopeId, Slot};
@@ -854,6 +854,7 @@ impl Scope {
     }
 
     /// Create a writable source signal with an initial value.
+    #[track_caller]
     pub fn signal<T: Clone + 'static>(&self, initial: T) -> (ReadSignal<T>, WriteSignal<T>) {
         self.graph.ensure_scope(self.id, "Scope::signal");
         let cell = Rc::new(RefCell::new(ValueCell {
@@ -874,6 +875,7 @@ impl Scope {
                 node,
                 slot,
                 cell: cell.clone(),
+                created_at: std::panic::Location::caller(),
             },
             WriteSignal {
                 graph: self.graph.clone(),
@@ -895,6 +897,7 @@ impl Scope {
     ///
     /// The initial computation runs during creation, before the node is
     /// linked — a failure leaves no half-linked node behind.
+    #[track_caller]
     pub fn derive<D, T, F>(&self, deps: D, f: F) -> ReadSignal<T>
     where
         D: DepTuple,
@@ -907,6 +910,7 @@ impl Scope {
     /// Derived value without equality suppression: every recompute notifies.
     /// For values without meaningful equality, or where notification cost is
     /// preferred over comparison cost.
+    #[track_caller]
     pub fn derive_no_eq<D, T, F>(&self, deps: D, f: F) -> ReadSignal<T>
     where
         D: DepTuple,
@@ -918,6 +922,7 @@ impl Scope {
 
     /// Derived value with a custom equality function (float tolerance,
     /// structural comparison, interning checks).
+    #[track_caller]
     pub fn derive_with<D, T, F, E>(&self, deps: D, mut f: F, mut eq: E) -> ReadSignal<T>
     where
         D: DepTuple,
@@ -979,10 +984,12 @@ impl Scope {
             node,
             slot,
             cell,
+            created_at: std::panic::Location::caller(),
         }
     }
 
     /// Single-input [`derive`](Self::derive) without tuple syntax.
+    #[track_caller]
     pub fn derive1<A, T, F>(&self, a: &ReadSignal<A>, mut f: F) -> ReadSignal<T>
     where
         A: Clone + 'static,
@@ -996,6 +1003,7 @@ impl Scope {
     /// are observable values with retry-on-input-change semantics. An `Err`
     /// propagates to dependents as a value (they can match on it); changing
     /// any input recomputes and may recover to `Ok`.
+    #[track_caller]
     pub fn try_derive<D, T, E, F>(&self, deps: D, f: F) -> ReadSignal<Result<T, E>>
     where
         D: DepTuple,
@@ -1130,6 +1138,7 @@ impl Scope {
     /// counted (`stats().cycle_rejections`); the previous target stays
     /// subscribed. Resolving to a foreign runtime's handle is ignored the
     /// same way. Resolution runs inside the purity guard: writes are rejected.
+    #[track_caller]
     pub fn select<K, T, F>(&self, key: &ReadSignal<K>, resolve: F) -> ReadSignal<T>
     where
         K: Clone + PartialEq + 'static,
@@ -1140,6 +1149,7 @@ impl Scope {
     }
 
     /// [`select`](Self::select) without equality suppression.
+    #[track_caller]
     pub fn select_no_eq<K, T, F>(&self, key: &ReadSignal<K>, resolve: F) -> ReadSignal<T>
     where
         K: Clone + PartialEq + 'static,
@@ -1248,6 +1258,7 @@ impl Scope {
             node,
             slot,
             cell,
+            created_at: std::panic::Location::caller(),
         }
     }
 

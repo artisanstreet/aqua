@@ -1,6 +1,6 @@
 use crate::curve::{
-    MotionError, MotionKind, MotionValue, ReducedMotion, SPRING_MAX_DURATION_SECS, Seconds,
-    SpringRegime, SpringSegment, launch_segments, resolve_kind, rest_segments, spring_targets,
+    launch_segments, resolve_kind, rest_segments, spring_targets, MotionError, MotionKind,
+    MotionValue, ReducedMotion, Seconds, SpringRegime, SpringSegment, SPRING_MAX_DURATION_SECS,
 };
 
 #[derive(Clone, Debug)]
@@ -98,13 +98,49 @@ impl Track {
         if !MotionValue::variant_eq(&self.current, &to) {
             return Err(MotionError::VariantMismatch);
         }
-        let now = now.max(self.last_secs);
-        let velocities = self.velocities_at(now);
+        let velocities = self.advance_to(now);
+        self.launch(to, kind, velocities);
+        Ok(())
+    }
+
+    pub fn shift(
+        &mut self,
+        delta: MotionValue,
+        to: MotionValue,
+        kind: MotionKind,
+        now: Seconds,
+    ) -> Result<(), MotionError> {
+        if !MotionValue::variant_eq(&self.current, &to) {
+            return Err(MotionError::VariantMismatch);
+        }
+        if self.current.offset_by(&delta).is_none() {
+            return Err(MotionError::VariantMismatch);
+        }
+        let velocities = self.advance_to(now);
+        self.current = self
+            .current
+            .offset_by(&delta)
+            .ok_or(MotionError::VariantMismatch)?;
+        self.launch(to, kind, velocities);
+        Ok(())
+    }
+
+    fn advance_to(&mut self, now: Seconds) -> [f32; 4] {
+        let at = now.max(self.last_secs);
+        let finished = self.progress(at);
+        self.last_secs = at;
+        match finished {
+            true => [0.0; 4],
+            false => self.velocities_at(at),
+        }
+    }
+
+    fn launch(&mut self, to: MotionValue, kind: MotionKind, velocities: [f32; 4]) {
+        let now = self.last_secs;
         self.from = self.current;
         self.to = to;
         self.kind = resolve_kind(kind, self.reduced);
         self.start_secs = now;
-        self.last_secs = now;
         self.settled = false;
         match self.kind {
             MotionKind::Tween { duration_secs, .. } => {
@@ -137,7 +173,6 @@ impl Track {
                 self.segments = rest_segments(now, to.channels());
             }
         }
-        Ok(())
     }
 
     pub fn set_reduced(&mut self, reduced: ReducedMotion, now: Seconds) -> bool {

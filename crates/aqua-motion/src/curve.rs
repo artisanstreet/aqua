@@ -276,6 +276,17 @@ impl MotionValue {
         }
     }
 
+    #[must_use]
+    pub fn offset_by(&self, delta: &MotionValue) -> Option<MotionValue> {
+        match (self, delta) {
+            (MotionValue::Scalar(a), MotionValue::Scalar(b)) => Some(MotionValue::Scalar(a + b)),
+            (MotionValue::Pair(ax, ay), MotionValue::Pair(bx, by)) => {
+                Some(MotionValue::Pair(ax + bx, ay + by))
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn channel_count(&self) -> usize {
         match self {
             MotionValue::Scalar(_) => 1,

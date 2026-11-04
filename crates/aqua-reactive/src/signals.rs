@@ -31,6 +31,7 @@ pub struct ReadSignal<T> {
     pub(crate) node: NodeId,
     pub(crate) slot: Slot,
     pub(crate) cell: Rc<RefCell<ValueCell<T>>>,
+    pub(crate) created_at: &'static std::panic::Location<'static>,
 }
 
 impl<T> Clone for ReadSignal<T> {
@@ -40,6 +41,7 @@ impl<T> Clone for ReadSignal<T> {
             node: self.node,
             slot: self.slot,
             cell: self.cell.clone(),
+            created_at: self.created_at,
         }
     }
 }
@@ -93,6 +95,7 @@ impl<T: Clone> ReadSignal<T> {
     /// Because Aqua has no implicit tracking, *every* read is a snapshot:
     /// calling this inside a computation does not add a dependency.
     pub fn try_get(&self) -> Option<T> {
+        crate::read_check::note_read(self.node, self.created_at);
         let inner = self.graph.inner.upgrade()?;
         let guard = inner.borrow();
         if !guard.handle_live(self.node, self.slot) {

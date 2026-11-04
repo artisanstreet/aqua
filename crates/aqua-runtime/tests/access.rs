@@ -1,5 +1,6 @@
 use aqua_core::NodeId;
-use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest, Input};
+use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest};
+mod support;
 use aqua_runtime::Runtime;
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::element::ui::Text;
@@ -58,8 +59,9 @@ fn accessible_multiline_text_exposes_shaped_graphemes_and_byte_selections() {
         assert_eq!(run.character_positions.len(), run.character_lengths.len());
         assert!(run.bounds.h > 20.0);
     }
-    runtime
-        .step(Input::Access(A11yActionRequest {
+    support::access(
+        &mut runtime,
+        A11yActionRequest {
             node,
             action: A11yAction::Other("set-text-selection"),
             data: A11yActionData::TextByteSelection {
@@ -68,8 +70,8 @@ fn accessible_multiline_text_exposes_shaped_graphemes_and_byte_selections() {
                 focus_node: node,
                 focus_byte: 13,
             },
-        }))
-        .unwrap();
+        },
+    );
     let NodeKind::Text(content) = &runtime.tree().get(node).unwrap().kind else {
         panic!()
     };
@@ -113,8 +115,9 @@ fn password_fields_do_not_expose_text_runs_or_accept_byte_selection() {
         .unwrap()
         .text
         .is_none());
-    runtime
-        .step(Input::Access(A11yActionRequest {
+    support::access(
+        &mut runtime,
+        A11yActionRequest {
             node,
             action: A11yAction::Other("set-text-selection"),
             data: A11yActionData::TextByteSelection {
@@ -123,8 +126,8 @@ fn password_fields_do_not_expose_text_runs_or_accept_byte_selection() {
                 focus_node: node,
                 focus_byte: 6,
             },
-        }))
-        .unwrap();
+        },
+    );
     let NodeKind::Text(content) = &runtime.tree().get(node).unwrap().kind else {
         panic!()
     };
@@ -174,8 +177,9 @@ fn accessibility_does_not_truncate_oversized_graphemes() {
             assert!(source.is_char_boundary(offset));
         }
     }
-    runtime
-        .step(Input::Access(A11yActionRequest {
+    support::access(
+        &mut runtime,
+        A11yActionRequest {
             node,
             action: A11yAction::Other("set-text-selection"),
             data: A11yActionData::TextByteSelection {
@@ -184,8 +188,8 @@ fn accessibility_does_not_truncate_oversized_graphemes() {
                 focus_node: node,
                 focus_byte: 3,
             },
-        }))
-        .unwrap();
+        },
+    );
     let NodeKind::Text(content) = &runtime.tree().get(node).unwrap().kind else {
         panic!()
     };
@@ -226,8 +230,9 @@ fn accessible_readonly_selection_updates_the_logical_copy_source() {
         .unwrap();
     runtime.build_frame().unwrap();
     let node = field(&runtime);
-    runtime
-        .step(Input::Access(A11yActionRequest {
+    support::access(
+        &mut runtime,
+        A11yActionRequest {
             node,
             action: A11yAction::Other("set-text-selection"),
             data: A11yActionData::TextByteSelection {
@@ -236,8 +241,8 @@ fn accessible_readonly_selection_updates_the_logical_copy_source() {
                 focus_node: node,
                 focus_byte: "👩‍💻".len(),
             },
-        }))
-        .unwrap();
+        },
+    );
     assert_eq!(runtime.selected_text().as_deref(), Some("👩‍💻"));
 }
 

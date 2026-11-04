@@ -1,4 +1,5 @@
-use aqua_core::{NodeId, RawId, ScrollDelta};
+use aqua_core::ScrollDelta;
+use aqua_motion::{MotionKind, Track};
 use aqua_runtime::glide::{self, NOTCH_PIXELS};
 
 fn delta(x: f32, y: f32) -> ScrollDelta {
@@ -18,31 +19,40 @@ fn whole_line_deltas_are_notches_and_fractions_are_precise() {
 }
 
 #[test]
-fn pushes_accumulate_clamp_and_reverse() {
-    let node = NodeId::from_raw(RawId {
-        index: 1,
-        generation: 0,
-    });
-    let first = glide::push(None, node, 100.0, 0.0, 130.0, 0.0);
-    assert_eq!(first.remaining, 100.0);
-    let second = glide::push(Some(first), node, 100.0, 0.0, 130.0, 0.01);
-    assert_eq!(second.remaining, 130.0);
-    let reversed = glide::push(Some(second), node, -50.0, 40.0, 130.0, 0.02);
-    assert_eq!(reversed.remaining, -40.0);
-}
+fn the_glide_kind_is_a_critically_damped_spring_that_never_overshoots() {
+    let MotionKind::Spring(params) = glide::kind() else {
+        panic!("glide must be a spring");
+    };
+    let zeta = params.damping / (2.0 * params.stiffness.sqrt());
+    assert!((zeta - 1.0).abs() < 1e-3);
 
-#[test]
-fn steps_converge_and_settle_exactly() {
-    let mut remaining = 200.0_f32;
-    let mut travelled = 0.0;
-    for _ in 0..120 {
-        let (applied, left) = glide::step(remaining, 1.0 / 60.0);
-        travelled += applied;
-        remaining = left;
-        if remaining == 0.0 {
-            break;
-        }
+    let mut track = Track::new(
+        aqua_motion::MotionValue::Scalar(0.0),
+        glide::kind(),
+        aqua_motion::ReducedMotion::Full,
+        0.0,
+    );
+    track
+        .shift(
+            aqua_motion::MotionValue::Scalar(200.0),
+            aqua_motion::MotionValue::Scalar(0.0),
+            glide::kind(),
+            0.0,
+        )
+        .unwrap();
+    let mut t = 0.0;
+    let mut previous = 200.0_f32;
+    while !track.is_settled() && t < 3.0 {
+        t += 1.0 / 240.0;
+        let aqua_motion::MotionValue::Scalar(value) = track.sample(t) else {
+            unreachable!();
+        };
+        assert!(
+            (0.0..=previous + 1e-4).contains(&value),
+            "{value} after {previous}"
+        );
+        previous = value;
     }
-    assert_eq!(remaining, 0.0);
-    assert!((travelled - 200.0).abs() < 1e-3);
+    assert!(track.is_settled());
+    assert!(t < 1.0, "settles within a second, took {t}");
 }

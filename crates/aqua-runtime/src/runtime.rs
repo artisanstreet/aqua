@@ -5,9 +5,14 @@ use std::rc::Rc;
 mod access;
 mod interaction;
 mod keyed_focus;
+mod machine;
 mod overlays;
+mod render_motion;
 mod wheel;
+pub use machine::GpuState;
 pub use overlays::{PopupError, PopupFocus, PopupOptions};
+
+use crate::emitter::emit_scene_diff;
 
 use interaction::TextInteraction;
 
@@ -15,8 +20,7 @@ use aqua_core::{
     DisplayItem, InputEvent as CoreInputEvent, NodeId, Oklch, Point, Rect, Size, TextRun,
 };
 use aqua_protocol::{
-    A11yAction, A11yActionData, A11yActionRequest, A11yNode, DragRegions, FrameReason, Input,
-    Instant, Output,
+    A11yAction, A11yActionData, A11yActionRequest, A11yNode, DragRegions, FrameReason,
 };
 use aqua_reactive::DepTuple;
 use aqua_reactive::{Runtime as ReactiveRuntime, Scope};
@@ -39,7 +43,7 @@ use aqua_ui::{
 #[derive(Debug, Clone, PartialEq)]
 pub struct InputDispatchOutcome {
     pub consumed: bool,
-    pub output: Output,
+    pub redraw: FrameReason,
 }
 
 fn text_caret_position(text: &TextContent) -> Option<CaretPosition> {
@@ -93,6 +97,10 @@ enum SceneKey {
     CaretClipEnd { node: NodeId },
     CaretOpacityStart { node: NodeId },
     CaretOpacityEnd { node: NodeId },
+    ScrollContentStart { node: NodeId },
+    ScrollContentEnd { node: NodeId },
+    PortalStart { node: NodeId, slot: u8 },
+    PortalEnd { node: NodeId, slot: u8 },
 }
 
 impl SceneKey {
@@ -111,7 +119,11 @@ impl SceneKey {
             | Self::CaretClipStart { node }
             | Self::CaretClipEnd { node }
             | Self::CaretOpacityStart { node }
-            | Self::CaretOpacityEnd { node } => node,
+            | Self::CaretOpacityEnd { node }
+            | Self::ScrollContentStart { node }
+            | Self::ScrollContentEnd { node }
+            | Self::PortalStart { node, .. }
+            | Self::PortalEnd { node, .. } => node,
         }
     }
 }
@@ -288,7 +300,7 @@ impl FrameWorkWindow {
 pub struct Runtime {
     color_profile: aqua_core::ColorProfile,
     interaction: TextInteraction,
-    wheel: Option<crate::glide::Glide>,
+    glides: crate::render::scroll::ScrollGlides,
     tooltip_pending: Option<overlays::PendingTooltip>,
     tooltip_popup: Option<(NodeId, aqua_ui::overlay::OverlayId)>,
     bound_popups: HashMap<aqua_ui::overlay::OverlayId, overlays::BoundPopup>,
@@ -320,6 +332,7 @@ pub struct Runtime {
     frame_work: FrameWork,
     frame_work_window: Option<FrameWorkWindow>,
     diagnostics: Vec<String>,
+    bridge: machine::Bridge,
 }
 
 impl Runtime {
@@ -419,7 +432,7 @@ impl Runtime {
         Self {
             color_profile: aqua_core::ColorProfile::AquaLinear,
             interaction: TextInteraction::default(),
-            wheel: None,
+            glides: crate::render::scroll::ScrollGlides::default(),
             tooltip_pending: None,
             tooltip_popup: None,
             bound_popups: HashMap::new(),
@@ -451,6 +464,7 @@ impl Runtime {
             frame_work: FrameWork::default(),
             frame_work_window: None,
             diagnostics: Vec::new(),
+            bridge: machine::Bridge::new(),
         }
     }
 
@@ -746,9 +760,7 @@ impl Runtime {
 
     pub fn apply_startup_motion_policy(&mut self, reduced: bool) {
         if reduced {
-            self.host
-                .motion_mut()
-                .set_reduced_motion(ReducedMotion::Reduce, 0.0);
+            self.host.set_reduced_motion(ReducedMotion::Reduce, 0.0);
         }
     }
 
@@ -803,8 +815,12 @@ impl Runtime {
         let view_scope = self.runtime.create_scope();
         self.view = Some(View::new(view_scope.clone(), sink));
         let pending = Rc::clone(&self.structural);
+        let declared = deps.clone();
         view_scope.effect(deps, move |values| {
-            *pending.borrow_mut() = Some(render(values));
+            *pending.borrow_mut() =
+                Some(aqua_reactive::read_check::render_scope(&declared, || {
+                    render(values)
+                }));
         });
         self.runtime.flush();
         self.drain_structural()
@@ -964,14 +980,6 @@ impl Runtime {
         self.handle_input_with_default(event, |_| None)
     }
 
-    pub fn step_input_with_default(
-        &mut self,
-        event: &CoreInputEvent,
-        default: impl FnOnce(&mut Self) -> Option<bool>,
-    ) -> Output {
-        self.step_input_with_default_outcome(event, default).output
-    }
-
     pub fn step_input_with_default_outcome(
         &mut self,
         event: &CoreInputEvent,
@@ -986,10 +994,7 @@ impl Runtime {
         });
         InputDispatchOutcome {
             consumed,
-            output: Output {
-                redraw: self.input_redraw(consumed && default_redraw.unwrap_or(true)),
-                ..Output::IDLE
-            },
+            redraw: self.input_redraw(consumed && default_redraw.unwrap_or(true)),
         }
     }
 
@@ -1075,6 +1080,13 @@ impl Runtime {
             CoreInputEvent::Ime(ime) => {
                 if self.text_input_allowed() {
                     events::dispatch_ime(&mut self.tree, ime)
+                } else {
+                    true
+                }
+            }
+            CoreInputEvent::ImeReplace { .. } | CoreInputEvent::ImeSelect { .. } => {
+                if self.text_input_allowed() {
+                    events::dispatch_default(&mut self.tree, event)
                 } else {
                     true
                 }
@@ -1216,7 +1228,7 @@ impl Runtime {
             }
         }
         self.layout().map_err(RuntimeError::Build)?;
-        if self.advance_text_selection() | self.advance_wheel() {
+        if self.advance_text_selection() {
             self.layout().map_err(RuntimeError::Build)?;
             if let Some(view) = self.view.as_mut() {
                 view.observe_collection_scrolls(&self.tree);
@@ -1320,7 +1332,6 @@ impl Runtime {
         Ok([
             self.host.motion_deadline(now),
             self.selection_deadline(),
-            self.wheel_deadline(),
             self.tooltip_deadline(),
         ]
         .into_iter()
@@ -1636,6 +1647,11 @@ impl Runtime {
     }
 
     fn emit_keyed(&mut self) -> Vec<(SceneKey, DisplayItem)> {
+        let items = self.emit_tree_keyed();
+        self.wrap_motion_groups(items)
+    }
+
+    fn emit_tree_keyed(&mut self) -> Vec<(SceneKey, DisplayItem)> {
         let mut out = Vec::new();
         let mut per_node: HashMap<NodeId, u32> = HashMap::new();
         for (node, item) in self.tree.emit_scene() {
@@ -2416,45 +2432,6 @@ impl Drop for Runtime {
 }
 
 impl Runtime {
-    pub fn step(&mut self, input: Input) -> Result<Output, RuntimeError> {
-        match input {
-            Input::Tick(now) => {
-                self.advance_clock(now.as_secs_f64());
-                Ok(Output::IDLE)
-            }
-            Input::Viewport { size, scale } => {
-                self.set_viewport(size.w, size.h, scale);
-                Ok(Output {
-                    redraw: FrameReason::RESIZE,
-                    ..Output::IDLE
-                })
-            }
-            Input::Event(event) => {
-                let consumed = self.handle_input(&event);
-                Ok(Output {
-                    redraw: self.input_redraw(consumed),
-                    ..Output::IDLE
-                })
-            }
-            Input::Access(request) => {
-                self.apply_access(&request);
-                Ok(Output {
-                    redraw: FrameReason::INPUT,
-                    ..Output::IDLE
-                })
-            }
-            Input::Frame(now) => {
-                self.advance_clock(now.as_secs_f64());
-                let deadline = self.build_frame()?;
-                Ok(Output {
-                    redraw: FrameReason::empty(),
-                    wake_at: deadline.map(Instant::from_secs_f64),
-                    ime_area: self.ime_anchor(),
-                })
-            }
-        }
-    }
-
     fn input_redraw(&self, consumed: bool) -> FrameReason {
         let input = match consumed {
             true => FrameReason::INPUT,
@@ -2682,7 +2659,7 @@ impl Runtime {
 mod style_decoration_tests {
     use super::*;
     use aqua_ui::element::ui::{Box as UiBox, Text as UiText};
-    use aqua_ui::style::{Style, px};
+    use aqua_ui::style::{px, Style};
 
     #[test]
     fn caret_respects_own_and_ancestor_style_opacity() {

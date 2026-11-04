@@ -6,7 +6,7 @@ use aqua_core::{CollectionSemantics, DisplayItem, NodeId, Oklch, Point, Rect, Ro
 use aqua_reactive::{ReadSignal, WriteSignal};
 
 use crate::collection_runtime::{
-    CollectionDescriptor, CollectionError, CollectionRole, validate_descriptor, validate_snapshot,
+    validate_descriptor, validate_snapshot, CollectionDescriptor, CollectionError, CollectionRole,
 };
 use crate::controls::{
     Control, SelectControl, SelectOption, SliderControl, SliderRange, TabsControl,
@@ -14,9 +14,9 @@ use crate::controls::{
 use crate::input::{EventPhase, InputCallback, InputKind, InputResponse, RoutedEvent, Shortcut};
 use crate::style::{Axis, LayoutStyle, Length, Paint, Style, Typography};
 use crate::tree::{
-    ActionCallback, ActionEvent, ActionKind, BoxContent, CanvasContent, CanvasPaintCallback,
-    MediaContent, NodeKind, NodeSpec, ScrollContent, TextAppearance, TextBacking, TextContent,
-    TextInlineGlyph, UiTree, ViewportContent, hash_key,
+    hash_key, ActionCallback, ActionEvent, ActionKind, BoxContent, CanvasContent,
+    CanvasPaintCallback, MediaContent, NodeKind, NodeSpec, ScrollContent, TextAppearance,
+    TextBacking, TextContent, TextInlineGlyph, UiTree, ViewportContent,
 };
 use aqua_text::document::{SelectionBinding, SelectionDocumentId, SourceSlice};
 use aqua_text::{LineMode, Selection};
@@ -107,57 +107,6 @@ impl NumberArg for f32 {
 impl NumberArg for f64 {
     fn into_f32(self) -> f32 {
         self as f32
-    }
-}
-
-impl From<i32> for Length {
-    fn from(v: i32) -> Self {
-        Length::Px(v as f32)
-    }
-}
-
-impl From<u32> for Length {
-    fn from(v: u32) -> Self {
-        Length::Px(v as f32)
-    }
-}
-
-impl From<usize> for Length {
-    fn from(v: usize) -> Self {
-        Length::Px(v as f32)
-    }
-}
-
-impl From<f32> for Length {
-    fn from(v: f32) -> Self {
-        Length::Px(v)
-    }
-}
-
-impl From<f64> for Length {
-    fn from(v: f64) -> Self {
-        Length::Px(v as f32)
-    }
-}
-
-impl From<&str> for Axis {
-    /// `"row"` → [`Axis::Row`], `"column"`/`"col"` → [`Axis::Column`].
-    /// Anything else panics with the valid set (fail fast at setup, never a
-    /// silent fallback axis).
-    fn from(v: &str) -> Self {
-        match v {
-            "row" => Axis::Row,
-            "column" | "col" => Axis::Column,
-            other => {
-                panic!("aqua-ui: unknown layout axis `{other}` (expected \"row\" or \"column\")")
-            }
-        }
-    }
-}
-
-impl From<String> for Axis {
-    fn from(v: String) -> Self {
-        Axis::from(v.as_str())
     }
 }
 
@@ -591,6 +540,18 @@ macro_rules! layout_sugar {
         /// Replace the whole paint block.
         pub fn paint(mut self, paint: Paint) -> Self {
             self.paint = paint;
+            self
+        }
+
+        pub fn animate(mut self, animate: aqua_style::motion::Animate) -> Self {
+            let spec = self.paint.motion.take().unwrap_or_default();
+            self.paint.motion = Some(spec.with_animate(animate));
+            self
+        }
+
+        pub fn presence(mut self, presence: aqua_style::motion::Presence) -> Self {
+            let spec = self.paint.motion.take().unwrap_or_default();
+            self.paint.motion = Some(spec.with_presence(presence));
             self
         }
     };
@@ -3532,13 +3493,13 @@ pub mod ui {
     pub use super::Viewport3D;
     pub use crate::controls::ResizeHandle;
     pub use crate::style::Axis;
-    pub use crate::style::{Length, Style, Typography, auto, pct, px};
+    pub use crate::style::{auto, pct, px, Length, Style, Typography};
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::{Style, auto, px};
+    use crate::style::{auto, px, Style};
 
     fn label_spec(text: &str) -> NodeSpec {
         NodeSpec::new(

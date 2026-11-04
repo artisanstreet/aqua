@@ -42,6 +42,7 @@
 //! `docs/REACTIVITY.md` at the workspace root.
 
 mod graph;
+pub mod read_check;
 mod resource;
 mod runtime;
 mod signals;

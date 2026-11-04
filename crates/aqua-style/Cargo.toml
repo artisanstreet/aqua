@@ -1,0 +1,13 @@
+[package]
+name = "aqua-style"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aqua typed styles, tokens and cascade"
+rust-version.workspace = true
+
+[dependencies]
+aqua-core = { workspace = true }
+aqua-motion = { path = "../aqua-motion" }
+aqua-text = { workspace = true }
+taffy = { workspace = true }

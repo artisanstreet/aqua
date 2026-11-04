@@ -35,7 +35,7 @@ fn handled_input_and_redraw_are_independent() {
         .unwrap();
     let outcome = runtime.step_input_with_default_outcome(&unhandled, |_| Some(false));
     assert!(outcome.consumed);
-    assert!(outcome.output.redraw.is_empty());
+    assert!(outcome.redraw.is_empty());
     let outcome = runtime.step_input_with_default_outcome(&unhandled, |_| None);
     assert!(!outcome.consumed);
 }

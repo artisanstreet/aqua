@@ -17,6 +17,25 @@ struct Slot {
     pending: Option<Pending>,
 }
 
+impl Slot {
+    fn retarget(&mut self, to: MotionValue, kind: MotionKind) {
+        self.generation = self.generation.wrapping_add(1);
+        self.kind = kind;
+        self.target = to;
+        self.settled = false;
+        self.pending = self
+            .pending
+            .take()
+            .and_then(|mut pending| match pending.bound {
+                None => {
+                    pending.bound = Some(self.generation);
+                    Some(pending)
+                }
+                Some(_) => None,
+            });
+    }
+}
+
 pub struct AppMotion {
     arena: Arena<Slot>,
     reduced: ReducedMotion,
@@ -128,23 +147,39 @@ impl AppMotion {
         if std::mem::discriminant(&slot.target) != std::mem::discriminant(&to) {
             return Err(MotionError::VariantMismatch);
         }
-        slot.generation = slot.generation.wrapping_add(1);
-        slot.kind = kind;
-        slot.target = to;
-        slot.settled = false;
-        slot.pending = slot
-            .pending
-            .take()
-            .and_then(|mut pending| match pending.bound {
-                None => {
-                    pending.bound = Some(slot.generation);
-                    Some(pending)
-                }
-                Some(_) => None,
-            });
+        slot.retarget(to, kind);
         self.outbox.push(MotionCommand::SetTarget {
             track,
             generation: slot.generation,
+            to,
+            kind,
+            at,
+        });
+        Ok(())
+    }
+
+    pub fn shift(
+        &mut self,
+        track: TrackId,
+        delta: MotionValue,
+        to: MotionValue,
+        kind: MotionKind,
+        at: Seconds,
+    ) -> Result<(), MotionError> {
+        let slot = self
+            .arena
+            .get_mut(track.raw())
+            .ok_or(MotionError::UnknownHandle)?;
+        if std::mem::discriminant(&slot.target) != std::mem::discriminant(&to)
+            || to.offset_by(&delta).is_none()
+        {
+            return Err(MotionError::VariantMismatch);
+        }
+        slot.retarget(to, kind);
+        self.outbox.push(MotionCommand::Shift {
+            track,
+            generation: slot.generation,
+            delta,
             to,
             kind,
             at,

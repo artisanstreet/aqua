@@ -5,20 +5,23 @@ use aqua_core::{
     InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Point, PointerButton, PointerEvent,
     PointerKind, Role,
 };
-use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest, Input};
+use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest};
+
+mod support;
 use aqua_runtime::Runtime;
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::element::ui::{Box, Button};
 use aqua_ui::style::{px, Style};
 
 fn press(runtime: &mut Runtime, node: NodeId) {
-    runtime
-        .step(Input::Access(A11yActionRequest {
+    support::access(
+        runtime,
+        A11yActionRequest {
             node,
             action: A11yAction::Press,
             data: A11yActionData::None,
-        }))
-        .unwrap();
+        },
+    );
 }
 
 #[test]

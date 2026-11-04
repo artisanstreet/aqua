@@ -428,7 +428,8 @@ fn declarative_popup_and_pointer_context_menu_mount_interactive_bound_content() 
 
 #[test]
 fn delayed_tooltip_uses_runtime_deadline_preserves_focus_and_cancels_on_leave() {
-    use aqua_protocol::{Input, Instant};
+    use crate::support;
+    use aqua_protocol::Instant;
 
     let mut runtime = mounted(
         ui::Button::new()
@@ -451,14 +452,10 @@ fn delayed_tooltip_uses_runtime_deadline_preserves_focus_and_cancels_on_leave() 
         position: Point::new(5.0, 8.0),
         buttons: 0,
     }));
-    let pending = runtime
-        .step(Input::Frame(Instant::from_secs_f64(1.1)))
-        .unwrap();
+    let pending = support::frame(&mut runtime, 1.1);
     assert_eq!(pending.wake_at, Some(Instant::from_secs_f64(1.5)));
     assert!(runtime.host().render_plan().is_empty());
-    runtime
-        .step(Input::Frame(Instant::from_secs_f64(1.6)))
-        .unwrap();
+    support::frame(&mut runtime, 1.6);
     assert!(!runtime.host().render_plan().is_empty());
     assert_eq!(runtime.tree().focused(), Some(owner));
     runtime.handle_input(&InputEvent::PointerMove(PointerEvent {
@@ -468,13 +465,7 @@ fn delayed_tooltip_uses_runtime_deadline_preserves_focus_and_cancels_on_leave() 
         buttons: 0,
     }));
     assert!(runtime.host().render_plan().is_empty());
-    assert_eq!(
-        runtime
-            .step(Input::Frame(Instant::from_secs_f64(2.0)))
-            .unwrap()
-            .wake_at,
-        None
-    );
+    assert_eq!(support::frame(&mut runtime, 2.0).wake_at, None);
 }
 
 #[test]
@@ -519,7 +510,8 @@ fn captured_resize_drag_clamps_and_continues_across_refresh_without_accumulating
 
 #[test]
 fn accessibility_controls_apply_range_actions_and_select_expansion_through_same_state_machine() {
-    use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest, Input};
+    use crate::support;
+    use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest};
     let changes = Rc::new(RefCell::new(Vec::new()));
     let output = changes.clone();
     let mut runtime = mounted(
@@ -554,13 +546,14 @@ fn accessibility_controls_apply_range_actions_and_select_expansion_through_same_
         (A11yAction::SetValue, A11yActionData::Numeric(19.5)),
         (A11yAction::SetValue, A11yActionData::Numeric(f64::NAN)),
     ] {
-        runtime
-            .step(Input::Access(A11yActionRequest {
+        support::access(
+            &mut runtime,
+            A11yActionRequest {
                 node: slider,
                 action,
                 data,
-            }))
-            .unwrap();
+            },
+        );
     }
     assert_eq!(*changes.borrow(), vec![12.0, 10.0, 20.0]);
     let numeric = runtime
@@ -581,13 +574,14 @@ fn accessibility_controls_apply_range_actions_and_select_expansion_through_same_
         .into_iter()
         .find(|node| matches!(runtime.tree().control(*node), Some(Control::Select(_))))
         .unwrap();
-    runtime
-        .step(Input::Access(A11yActionRequest {
+    support::access(
+        &mut runtime,
+        A11yActionRequest {
             node: select,
             action: A11yAction::Expand,
             data: A11yActionData::None,
-        }))
-        .unwrap();
+        },
+    );
     runtime.build_frame().unwrap();
     assert!(runtime.tree().select_options(select).unwrap().is_open());
     assert_eq!(
@@ -600,13 +594,14 @@ fn accessibility_controls_apply_range_actions_and_select_expansion_through_same_
             .expanded,
         Some(true)
     );
-    runtime
-        .step(Input::Access(A11yActionRequest {
+    support::access(
+        &mut runtime,
+        A11yActionRequest {
             node: select,
             action: A11yAction::Collapse,
             data: A11yActionData::None,
-        }))
-        .unwrap();
+        },
+    );
     assert!(!runtime.tree().select_options(select).unwrap().is_open());
     assert!(runtime.host().render_plan().is_empty());
 }

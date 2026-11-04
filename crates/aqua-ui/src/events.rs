@@ -212,20 +212,148 @@ pub fn dispatch_text_input(tree: &mut UiTree, text: &str) -> bool {
     }
 }
 
-pub fn dispatch_ime(tree: &mut UiTree, event: &ImeEvent) -> bool {
-    let Some(id) = tree.focused() else {
+fn focused_editable(tree: &UiTree) -> Option<NodeId> {
+    let id = tree.focused()?;
+    let editable = !tree.is_disabled(id)
+        && tree
+            .get(id)
+            .is_some_and(|r| matches!(r.kind, NodeKind::Text(ref t) if t.is_editable()));
+    editable.then_some(id)
+}
+
+fn utf16_to_byte(text: &str, index: u32) -> Option<usize> {
+    let mut units = 0u32;
+    for (byte, ch) in text.char_indices() {
+        match units.cmp(&index) {
+            std::cmp::Ordering::Equal => return Some(byte),
+            std::cmp::Ordering::Greater => return None,
+            std::cmp::Ordering::Less => units += ch.len_utf16() as u32,
+        }
+    }
+    (units == index).then_some(text.len())
+}
+
+fn utf16_to_byte_ceil(text: &str, index: u32) -> usize {
+    let mut units = 0u32;
+    for (byte, ch) in text.char_indices() {
+        if units >= index {
+            return byte;
+        }
+        units += ch.len_utf16() as u32;
+    }
+    text.len()
+}
+
+fn byte_to_utf16(text: &str, byte: usize) -> u32 {
+    text[..byte.min(text.len())]
+        .chars()
+        .map(|c| c.len_utf16() as u32)
+        .sum()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImeSurroundings {
+    pub node: NodeId,
+    pub window_start: u32,
+    pub total_len: u32,
+    pub text: String,
+    pub selection: (u32, u32),
+    pub reversed: bool,
+}
+
+const IME_WINDOW_UNITS: u32 = 4096;
+
+pub fn ime_surroundings(tree: &UiTree) -> Option<ImeSurroundings> {
+    let node = focused_editable(tree)?;
+    let NodeKind::Text(content) = &tree.get(node)?.kind else {
+        return None;
+    };
+    let crate::tree::TextBacking::Editable(editor) = &content.backing else {
+        return None;
+    };
+    let text = editor.text();
+    let selection = editor.selection();
+    let range = selection.range();
+    let total_len = byte_to_utf16(text, text.len());
+    let start_unit = byte_to_utf16(text, range.start);
+    let end_unit = byte_to_utf16(text, range.end);
+    let want_start = start_unit.saturating_sub(IME_WINDOW_UNITS);
+    let want_end = end_unit.saturating_add(IME_WINDOW_UNITS).min(total_len);
+    let window_start = utf16_to_byte_ceil(text, want_start);
+    let window_end = utf16_to_byte_ceil(text, want_end);
+    Some(ImeSurroundings {
+        node,
+        window_start: byte_to_utf16(text, window_start),
+        total_len,
+        text: text[window_start..window_end].to_owned(),
+        selection: (start_unit, end_unit),
+        reversed: selection.caret < selection.anchor,
+    })
+}
+
+fn dispatch_ime_replace(tree: &mut UiTree, start: u32, end: u32, replacement: &str) -> bool {
+    let Some(id) = focused_editable(tree) else {
         return false;
     };
-    if tree.is_disabled(id) {
-        return false;
-    }
-    let is_editable = tree
-        .get(id)
-        .map(|r| matches!(r.kind, NodeKind::Text(ref t) if t.is_editable()))
+    let applied = tree
+        .edit_text(id, |tc| match tc.backing {
+            crate::tree::TextBacking::Editable(ref mut ed) => {
+                let range = utf16_to_byte(ed.text(), start).zip(utf16_to_byte(ed.text(), end));
+                match range {
+                    Some((from, to)) if from <= to => ed.replace_range(from..to, replacement),
+                    _ => false,
+                }
+            }
+            _ => false,
+        })
         .unwrap_or(false);
-    if !is_editable {
-        return false;
+    if applied {
+        tree.sync_text_leaf(id);
+        let committed = tree.get(id).and_then(|r| match r.kind {
+            NodeKind::Text(ref t) => Some(t.text().to_string()),
+            _ => None,
+        });
+        tree.fire_action(ActionEvent {
+            source: None,
+            node: id,
+            kind: ActionKind::TextChanged,
+            text: committed,
+            focused: None,
+        });
     }
+    applied
+}
+
+fn dispatch_ime_select(tree: &mut UiTree, start: u32, end: u32, reversed: bool) -> bool {
+    let Some(id) = focused_editable(tree) else {
+        return false;
+    };
+    let applied = tree
+        .edit_text(id, |tc| match tc.backing {
+            crate::tree::TextBacking::Editable(ref mut ed) if !ed.is_composing() => {
+                let range = utf16_to_byte(ed.text(), start).zip(utf16_to_byte(ed.text(), end));
+                match range {
+                    Some((from, to)) if from <= to => {
+                        let selection = match reversed {
+                            true => aqua_text::Selection::new(to, from),
+                            false => aqua_text::Selection::new(from, to),
+                        };
+                        ed.set_selection(selection);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        })
+        .unwrap_or(false);
+    applied
+}
+
+pub fn dispatch_ime(tree: &mut UiTree, event: &ImeEvent) -> bool {
+    let Some(id) = focused_editable(tree) else {
+        return false;
+    };
     match event {
         ImeEvent::Start => true,
         ImeEvent::Update { marked, cursor } => {
@@ -647,6 +775,14 @@ pub fn dispatch_default(tree: &mut UiTree, event: &InputEvent) -> bool {
         }
         InputEvent::TextInput { text } => dispatch_text_input(tree, text),
         InputEvent::Ime(ime) => dispatch_ime(tree, ime),
+        InputEvent::ImeReplace { start, end, text } => {
+            dispatch_ime_replace(tree, *start, *end, text)
+        }
+        InputEvent::ImeSelect {
+            start,
+            end,
+            reversed,
+        } => dispatch_ime_select(tree, *start, *end, *reversed),
         _ => false,
     }
 }
@@ -708,12 +844,14 @@ mod tests {
             height: Length::Px(100.0),
             ..Default::default()
         };
-        let root = tree.mount_spec(col(vec![
-            NodeSpec::new(NodeKind::Box(BoxContent::default()), bstyle).child(NodeSpec::new(
-                NodeKind::Text(TextContent::label("Add")),
-                LayoutStyle::default(),
-            )),
-        ]));
+        let root = tree.mount_spec(col(vec![NodeSpec::new(
+            NodeKind::Box(BoxContent::default()),
+            bstyle,
+        )
+        .child(NodeSpec::new(
+            NodeKind::Text(TextContent::label("Add")),
+            LayoutStyle::default(),
+        ))]));
         tree.compute_layout(Size::new(300.0, 300.0), &NaiveMeasurer)
             .unwrap();
         let button = tree.get(root).unwrap().children[0];
@@ -884,6 +1022,98 @@ mod tests {
         assert_eq!(text_of(tree.get(field).unwrap()), "に");
     }
 
+    fn focused_field(initial: &str) -> (UiTree, NodeId) {
+        let (mut tree, _root) = laid_out(vec![NodeSpec::new(
+            NodeKind::Text(TextContent::editable(initial, false)),
+            LayoutStyle::default(),
+        )]);
+        let field = tree.get(tree.root().unwrap()).unwrap().children[0];
+        assert!(tree.set_focused(Some(field)));
+        (tree, field)
+    }
+
+    #[test]
+    fn ime_replace_uses_utf16_offsets() {
+        let (mut tree, field) = focused_field("a😀bc");
+        assert!(dispatch_default(
+            &mut tree,
+            &InputEvent::ImeReplace {
+                start: 3,
+                end: 4,
+                text: "XY".into()
+            }
+        ));
+        assert_eq!(text_of(tree.get(field).unwrap()), "a😀XYc");
+    }
+
+    #[test]
+    fn ime_replace_inside_surrogate_pair_is_rejected() {
+        let (mut tree, field) = focused_field("a😀bc");
+        assert!(!dispatch_default(
+            &mut tree,
+            &InputEvent::ImeReplace {
+                start: 2,
+                end: 3,
+                text: "X".into()
+            }
+        ));
+        assert_eq!(text_of(tree.get(field).unwrap()), "a😀bc");
+    }
+
+    #[test]
+    fn ime_select_maps_range_and_direction() {
+        let (mut tree, _field) = focused_field("a😀bc");
+        assert!(dispatch_default(
+            &mut tree,
+            &InputEvent::ImeSelect {
+                start: 1,
+                end: 3,
+                reversed: true
+            }
+        ));
+        let surroundings = ime_surroundings(&tree).unwrap();
+        assert_eq!(surroundings.selection, (1, 3));
+        assert!(surroundings.reversed);
+        assert_eq!(surroundings.total_len, 5);
+        assert_eq!(surroundings.text, "a😀bc");
+    }
+
+    #[test]
+    fn ime_select_is_ignored_while_composing() {
+        let (mut tree, _field) = focused_field("abc");
+        assert!(dispatch_ime(
+            &mut tree,
+            &ImeEvent::Update {
+                marked: "に".into(),
+                cursor: Some((0, 3)),
+            }
+        ));
+        assert!(!dispatch_default(
+            &mut tree,
+            &InputEvent::ImeSelect {
+                start: 0,
+                end: 1,
+                reversed: false
+            }
+        ));
+    }
+
+    #[test]
+    fn surroundings_window_is_bounded_around_the_selection() {
+        let text = "x".repeat(20000);
+        let (mut tree, field) = focused_field(&text);
+        tree.edit_text(field, |tc| {
+            if let crate::tree::TextBacking::Editable(ref mut ed) = tc.backing {
+                ed.set_selection(aqua_text::Selection::caret_at(10000));
+            }
+        });
+        let surroundings = ime_surroundings(&tree).unwrap();
+        assert_eq!(surroundings.total_len, 20000);
+        assert_eq!(surroundings.window_start, 10000 - 4096);
+        assert_eq!(surroundings.text.len(), 8192);
+        assert_eq!(surroundings.selection, (10000, 10000));
+    }
+
     #[test]
     fn hit_test_respects_paint_order_and_clips() {
         let style = LayoutStyle {
@@ -914,15 +1144,13 @@ mod tests {
             height: Length::Px(400.0),
             ..Default::default()
         };
-        let (mut tree, root) = laid_out(vec![
-            NodeSpec::new(
-                NodeKind::Scroll(ScrollContent {
-                    offset: Point::ZERO,
-                }),
-                rs,
-            )
-            .child(NodeSpec::new(NodeKind::Box(BoxContent::default()), cs)),
-        ]);
+        let (mut tree, root) = laid_out(vec![NodeSpec::new(
+            NodeKind::Scroll(ScrollContent {
+                offset: Point::ZERO,
+            }),
+            rs,
+        )
+        .child(NodeSpec::new(NodeKind::Box(BoxContent::default()), cs))]);
         let scroller = tree.get(root).unwrap().children[0];
         assert!(dispatch_scroll(
             &mut tree,

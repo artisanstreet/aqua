@@ -2,9 +2,15 @@ use aqua_core::id::RawId;
 use aqua_core::{Arena, NodeId};
 use std::time::Duration;
 
+pub mod runtime;
+
+pub use aqua_style::motion::{
+    Animate, AnimatedProperty, Motion, MotionRef, MotionSpec, MotionTheme, MotionToken, Presence,
+};
+
 pub use aqua_motion::{
-    Completion, Easing, MotionError, MotionKind, MotionValue, ReducedMotion,
-    SPRING_MAX_DURATION_SECS, Seconds, SpringParams, SpringSegment, Track,
+    Completion, Easing, MotionError, MotionKind, MotionValue, ReducedMotion, Seconds, SpringParams,
+    SpringSegment, Track, SPRING_MAX_DURATION_SECS,
 };
 
 pub struct Animated {

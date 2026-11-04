@@ -1,72 +1,38 @@
-use aqua_core::{InputEvent, Point, ScrollDelta};
+use aqua_core::{InputEvent, Point};
 use aqua_ui::events;
 
 use super::Runtime;
-use crate::glide::{self, Glide};
-
-const FRAME_INTERVAL: f64 = 1.0 / 60.0;
+use crate::glide;
 
 impl Runtime {
     pub(super) fn begin_wheel(&mut self, event: &InputEvent) -> bool {
-        match event {
-            InputEvent::PointerDown(..) | InputEvent::KeyDown(_) => {
-                self.wheel = None;
-                false
-            }
-            InputEvent::Scroll { at, delta } => {
-                let Some(pixels) = glide::notch_pixels(*delta) else {
-                    self.wheel = None;
-                    return false;
-                };
-                if self.host.service().modal_blocker().is_some() {
-                    return false;
-                }
-                let vertical = ScrollDelta { x: 0.0, y: pixels };
-                let Some(node) = events::scroll_target(&self.tree, *at, vertical) else {
-                    return false;
-                };
-                let (Some(offset), max) =
-                    (self.tree.scroll_offset(node), self.tree.scroll_limit(node))
-                else {
-                    return false;
-                };
-                self.wheel = Some(glide::push(
-                    self.wheel, node, pixels, offset.y, max.y, self.clock,
-                ));
-                true
-            }
-            _ => false,
+        let InputEvent::Scroll { at, delta } = event else {
+            return false;
+        };
+        let Some(pixels) = glide::notch_pixels(*delta) else {
+            return false;
+        };
+        if self.host.service().modal_blocker().is_some() {
+            return false;
         }
-    }
-
-    pub(super) fn wheel_deadline(&self) -> Option<f64> {
-        self.wheel.map(|_| self.clock + FRAME_INTERVAL)
-    }
-
-    pub(super) fn advance_wheel(&mut self) -> bool {
-        let Some(active) = self.wheel else {
+        let vertical = aqua_core::ScrollDelta { x: 0.0, y: pixels };
+        let Some(node) = events::scroll_target(&self.tree, *at, vertical) else {
             return false;
         };
-        let Some(offset) = self.tree.scroll_offset(active.node) else {
-            self.wheel = None;
+        let (Some(offset), max) = (self.tree.scroll_offset(node), self.tree.scroll_limit(node))
+        else {
             return false;
         };
-        let elapsed = (self.clock - active.advanced_at).clamp(1.0 / 240.0, 0.05) as f32;
-        let (applied, left) = glide::step(active.remaining, elapsed);
-        self.wheel = (left != 0.0).then_some(Glide {
-            remaining: left,
-            advanced_at: self.clock,
-            ..active
-        });
-        let changed = self
+        let target = (offset.y + pixels).clamp(0.0, max.y.max(0.0));
+        let moved = self.tree.scroll_to(node, Point::new(offset.x, target));
+        let applied = self
             .tree
-            .scroll_to(active.node, Point::new(offset.x, offset.y + applied));
-        if changed {
+            .scroll_offset(node)
+            .map_or(0.0, |now| now.y - offset.y);
+        if moved && applied != 0.0 {
+            self.glides.push(node, applied);
             self.extend_selection_after_scroll();
         }
-        if self.wheel.is_some() && !changed {
-            self.wheel = None;
-        }
-        changed
+        true
     }
 }

@@ -10,8 +10,15 @@ use aqua_protocol::{
 use aqua_scene::Scene;
 
 pub mod property;
+pub mod scroll;
 
 type Overrides = Vec<(Property, MotionValue)>;
+
+#[derive(Clone, Copy, PartialEq)]
+struct Submitted {
+    revision: u64,
+    viewport: Option<(Size, f32)>,
+}
 
 pub struct RenderSide {
     scene: Scene,
@@ -23,7 +30,7 @@ pub struct RenderSide {
     dirty: Vec<NodeId>,
     viewport: Option<(Size, f32)>,
     next_frame: FrameId,
-    submitted_revision: Option<u64>,
+    submitted: Option<Submitted>,
 }
 
 impl Default for RenderSide {
@@ -45,7 +52,7 @@ impl RenderSide {
             dirty: Vec::new(),
             viewport: None,
             next_frame: 1,
-            submitted_revision: None,
+            submitted: None,
         }
     }
 
@@ -116,18 +123,21 @@ impl RenderSide {
             Feedback::Presented(frame) => RenderEvent::Presented(frame),
             Feedback::DeviceLost => RenderEvent::DeviceLost,
             Feedback::DeviceRecovered => {
-                self.submitted_revision = None;
+                self.submitted = None;
                 RenderEvent::DeviceRecovered
             }
         }
     }
 
     fn next_submission(&mut self) -> Option<FrameId> {
-        let revision = self.scene.revision();
-        match self.submitted_revision == Some(revision) {
+        let current = Submitted {
+            revision: self.scene.revision(),
+            viewport: self.viewport,
+        };
+        match self.submitted == Some(current) {
             true => None,
             false => {
-                self.submitted_revision = Some(revision);
+                self.submitted = Some(current);
                 let id = self.next_frame;
                 self.next_frame += 1;
                 Some(id)

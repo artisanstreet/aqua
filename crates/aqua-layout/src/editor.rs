@@ -1,6 +1,6 @@
 use aqua_core::{Insets, Point, Rect, Size};
 
-use crate::style::{Absolute, LayoutStyle, Length};
+use aqua_style::{Absolute, LayoutStyle, Length};
 
 pub fn round_half_toward_zero(value: f32) -> f32 {
     (value.abs() - 0.5).ceil().copysign(value)
@@ -129,5 +129,5 @@ pub fn to_taffy(style: &LayoutStyle, scale_factor: f32) -> taffy::Style {
             .bottom
             .map(|v| round_to_device_pixel(v, scale_factor)),
     });
-    crate::style::to_taffy(&scaled)
+    crate::mapping::to_taffy(&scaled)
 }

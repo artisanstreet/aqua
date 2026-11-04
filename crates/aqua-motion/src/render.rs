@@ -117,6 +117,23 @@ impl TrackSet {
                 }
                 Vec::new()
             }
+            MotionCommand::Shift {
+                track,
+                generation,
+                delta,
+                to,
+                kind,
+                at,
+            } => {
+                if let Some(slot) = self.slots.get_mut(&track.key()) {
+                    if slot.track.shift(delta, to, kind, at).is_ok() {
+                        slot.generation = generation;
+                        slot.dirty = true;
+                        self.active.insert(track.key());
+                    }
+                }
+                Vec::new()
+            }
             MotionCommand::SetReduced { reduced, at } => {
                 self.reduced = reduced;
                 let mut events = Vec::new();

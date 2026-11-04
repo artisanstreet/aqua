@@ -2,7 +2,7 @@ use aqua_core::{
     InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Point, PointerButton, PointerEvent,
     PointerKind,
 };
-use aqua_protocol::Instant;
+mod support;
 use aqua_runtime::Runtime;
 use aqua_text::{LineMode, Selection, SharedFonts, SharedRuns, TextLayout, TextStyle, WrapMode};
 use aqua_ui::{
@@ -333,9 +333,7 @@ fn lost_focus_cancels_selection_capture_and_stale_nodes_do_not_copy() {
     runtime.handle_input(&InputEvent::Focused(false));
     runtime.handle_input(&InputEvent::PointerMove(pointer(end, 1)));
     assert_eq!(runtime.selected_text(), None);
-    runtime
-        .step(aqua_protocol::Input::Tick(Instant::from_secs_f64(3.0)))
-        .unwrap();
+    support::tick(&mut runtime, 3.0);
     runtime.refresh(Vec::new()).unwrap();
     assert_eq!(runtime.selected_text(), None);
 }
@@ -478,37 +476,25 @@ fn stationary_drag_scrolls_on_frame_deadlines_and_stops_on_release() {
     down(&mut runtime, Point::new(5.0, 8.0), 1.0);
     let edge = Point::new(80.0, 110.0);
     runtime.handle_input(&InputEvent::PointerMove(pointer(edge, 1)));
-    let first = runtime
-        .step(aqua_protocol::Input::Frame(Instant::from_secs_f64(1.01)))
-        .unwrap();
+    let first = support::frame(&mut runtime, 1.01);
     assert!(first.wake_at.is_some());
     let before = runtime.tree().scroll_offset(root).unwrap().y;
     for frame in 2..12 {
-        runtime
-            .step(aqua_protocol::Input::Frame(Instant::from_secs_f64(
-                1.0 + frame as f64 / 60.0,
-            )))
-            .unwrap();
+        support::frame(&mut runtime, 1.0 + frame as f64 / 60.0);
     }
     assert!(runtime.tree().scroll_offset(root).unwrap().y > before + 20.0);
     assert!(runtime
         .selected_text()
         .is_some_and(|text| text.contains("paragraph 3")));
     up(&mut runtime, edge);
-    let stopped = runtime
-        .step(aqua_protocol::Input::Frame(Instant::from_secs_f64(1.3)))
-        .unwrap();
+    let stopped = support::frame(&mut runtime, 1.3);
     assert_eq!(stopped.wake_at, None);
     let offset = runtime.tree().scroll_offset(root).unwrap();
-    runtime
-        .step(aqua_protocol::Input::Frame(Instant::from_secs_f64(1.5)))
-        .unwrap();
+    support::frame(&mut runtime, 1.5);
     assert_eq!(runtime.tree().scroll_offset(root), Some(offset));
     down(&mut runtime, Point::new(5.0, 8.0), 2.0);
     runtime.handle_input(&InputEvent::PointerMove(pointer(edge, 1)));
-    let dragging = runtime
-        .step(aqua_protocol::Input::Frame(Instant::from_secs_f64(2.02)))
-        .unwrap();
+    let dragging = support::frame(&mut runtime, 2.02);
     assert!(dragging.wake_at.is_some());
     let offset = runtime.tree().scroll_offset(root).unwrap();
     runtime.tree_mut().set_semantics(
@@ -518,9 +504,7 @@ fn stationary_drag_scrolls_on_frame_deadlines_and_stops_on_release() {
             ..Default::default()
         },
     );
-    let blocked = runtime
-        .step(aqua_protocol::Input::Frame(Instant::from_secs_f64(2.1)))
-        .unwrap();
+    let blocked = support::frame(&mut runtime, 2.1);
     assert_eq!(blocked.wake_at, None);
     assert_eq!(runtime.tree().scroll_offset(root), Some(offset));
 }
@@ -1154,11 +1138,7 @@ fn selection_surface_can_disable_drag_auto_scroll() {
     runtime.handle_input(&InputEvent::PointerMove(pointer(edge, 1)));
     let before = runtime.tree().scroll_offset(root).unwrap();
     for frame in 1..12 {
-        runtime
-            .step(aqua_protocol::Input::Frame(Instant::from_secs_f64(
-                1.0 + frame as f64 / 60.0,
-            )))
-            .unwrap();
+        support::frame(&mut runtime, 1.0 + frame as f64 / 60.0);
     }
     assert_eq!(runtime.tree().scroll_offset(root), Some(before));
 }

@@ -321,7 +321,9 @@ impl RoutedInput {
                 InputEvent::KeyDown(_) => InputKind::KeyDown,
                 InputEvent::KeyUp(_) => InputKind::KeyUp,
                 InputEvent::TextInput { .. } => InputKind::TextInput,
-                InputEvent::Ime(_) => InputKind::Ime,
+                InputEvent::Ime(_)
+                | InputEvent::ImeReplace { .. }
+                | InputEvent::ImeSelect { .. } => InputKind::Ime,
                 InputEvent::Focused(_) => InputKind::Focus,
                 InputEvent::ModifiersChanged(_) => InputKind::Modifiers,
             },

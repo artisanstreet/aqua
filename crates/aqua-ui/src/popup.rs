@@ -118,11 +118,19 @@ impl ReactivePopup {
         let initial_deps = deps.clone();
         let initial_render = render.clone();
         Self {
-            initial: Rc::new(move || initial_render(initial_deps.snapshot())),
+            initial: Rc::new(move || {
+                aqua_reactive::read_check::render_scope(&initial_deps, || {
+                    initial_render(initial_deps.snapshot())
+                })
+            }),
             subscribe: Rc::new(move |scope, pending| {
                 let render = render.clone();
+                let declared = deps.clone();
                 scope.effect(deps.clone(), move |values| {
-                    *pending.borrow_mut() = Some(render(values))
+                    *pending.borrow_mut() =
+                        Some(aqua_reactive::read_check::render_scope(&declared, || {
+                            render(values)
+                        }))
                 });
             }),
         }

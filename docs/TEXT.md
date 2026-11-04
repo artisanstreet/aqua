@@ -1,58 +1,80 @@
 # `aqua-text` — shared text infrastructure
 
-The 2026-11-03 behavior and port gates are recorded in
-[`EDITOR_READINESS.md`](EDITOR_READINESS.md). New public modules include
-`navigation` (Blink-derived Windows rules with ICU dictionary segmentation) and
-`document` (source-backed selections independent of mounted leaves). Shaped
-navigation and hit testing now carry `CaretPosition`/`CaretAffinity`; the
-byte-only methods remain compatibility entrypoints.
+Owner: text agent. Crates: `aqua-text`, `aqua-fonts-system`,
+`aqua-oracle-dwrite`. API version: **1** (`aqua_text::AQUA_TEXT_API_VERSION`).
+The stack is specified in `ARCHITECTURE.md` section 8; this file documents the
+crate surface and the measured behaviour. Windows only.
 
-`Text::text_style`, inherited `Style::text_style`, `Text::spans` and
-`StyledSpan::color` carry rich static text through actual measurement/shaping
-and GPU glyph color. Editable fields retain plain source with full font styling.
-Clipboard shortcuts, selection gestures and autoscroll are wired through the
-runtime and facade; the older gaps below describe the original implementation.
+`aqua-text` has no window, GPU or platform dependency. It depends on
+HarfRust (shaping), skrifa (outlines, color, bitmap strikes), zeno (exact-area
+coverage), `unicode-bidi`, `icu_segmenter` and `unicode-segmentation`. It does
+not depend on cosmic-text, glyphon, wgpu or fontdb. Tests that need real fonts
+(`FontManager::new()`) run on Windows; the pure stages (breaking, tone, slug,
+resampling, font matching) also run under `aqua-cargo test`.
 
-Owner: text agent. Crate: `crates/aqua-text/`. API version: **1**
-(`aqua_text::AQUA_TEXT_API_VERSION`).
+## Pipeline
 
-Real implementation over mature shaping crates, not a stub. No window,
-GPU, or platform dependency — everything runs headless and is covered by
-`cargo test -p aqua-text` (34 tests: shaping, bidi, emoji/combining,
-multiline, wrapping, selection, IME, masking, undo, shared cache).
-
-## Pinned versions (agreed with renderer)
-
-| Crate | Version | Where |
+| Stage | Module | Notes |
 |---|---|---|
-| `cosmic-text` | **0.19** | `aqua-text` + `aqua-render` (same shaping) |
-| `glyphon` | **0.12** | `aqua-render` only (rasterization) |
-| `wgpu` | **30** | `aqua-render` only |
-| `fontdb` | 0.23 | transitive via `cosmic-text 0.19`; direct dep for `fontdb::ID`/DB access |
-| `unicode-segmentation` | 1.12 | grapheme/word boundaries in the editing model |
+| Discovery | `aqua-fonts-system` | Scans `%SystemRoot%\Fonts` and `%LOCALAPPDATA%\Microsoft\Windows\Fonts` for `.ttf/.otf/.ttc/.otc`, memory-maps each file once (the only `unsafe` in the text stack, in `memmap2::Mmap::map`) and reads family names (typographic and legacy, English first), PostScript name, weight, stretch and style from `name`, `OS/2` and `post` through skrifa. Matching is CSS font matching (stretch, then style order, then the weight search order). No fontdb. |
+| Shaping | `shape.rs` | HarfRust per run; spans split at font, bidi level and script; `ShapedParagraph` is the tier-1 cache. Synthetic bold widens each non-zero advance by the stroke width, `embolden_width(size)` = em/24, as FreeType does. |
+| Breaking | `lines.rs` | Tier 2: wrap points per width; never re-shapes (`reshape_count`). |
+| Rasterization | `raster.rs`, `strike.rs` | See below. |
+| Slug outlines | `slug.rs` | See below. |
+| Residency | `residency.rs` | `GlyphResolver` interns faces to the `GlyphKey` of `aqua-media` and fills `Residency` (mask atlas and RGBA atlas). |
+| Tone | `aqua_graph::tone` | Microsoft grayscale contrast and gamma model; `linear_blend_alpha_over` takes the real backdrop luminance. |
 
-Asserted in code: `aqua_text::{COMPAT_COSMIC_TEXT, COMPAT_GLYPHON, COMPAT_WGPU}`.
-Bump together with `aqua-render`; any bump invalidates the contract below.
+## Rasterization
 
-## One font system, shared
+- Outline glyphs: unhinted skrifa outlines, exact-area coverage, 4 horizontal subpixel bins, y snapped, size quantized to 1/64 px, synthetic italic skew, fake bold (stroke unioned with the fill) when the requested weight is 600 or more and the face is lighter and not variable.
+- COLR v0/v1 color glyphs are painted on the CPU into a premultiplied RGBA bitmap.
+- Bitmap strikes (CBDT, sbix, and EBDT masks) go through `strike.rs`. The strike nearest the requested size is decoded (PNG, premultiplied BGRA, or 1/2/4/8-bit masks through skrifa's decoder), placed from its bearings, and resampled to the requested size: area-averaged down, bilinear up. The subpixel bin shifts the resampling phase, so the four bins of a bitmap glyph are four distinct, ink-conserving bitmaps and a bitmap glyph moves exactly like an outline glyph.
+- EBDT mask strikes are used only when the font has them: always when the glyph has no outline, and otherwise only when the strike ppem equals the requested size within half a pixel (a hinted bitmap strike at its design size, as GDI does). Elsewhere the outline is used.
 
-```rust
-let fonts = aqua_text::SharedFonts::new(); // Arc<Mutex<FontManager>>, Send+Sync
-```
+## Slug outlines for scale animation
 
-- `FontManager::new()` loads system fonts; `new_without_system_fonts()`
-  starts empty (hermetic tests, custom font sets).
-- `load_font_bytes(Vec<u8>)`, `load_font_file(path)`, `face_count()`,
-  `has_family()`, `family_names()`, `export_face_data(fontdb::ID)`.
-- `font_system()` / `font_system_mut()` expose the shaping engine state.
+`slug::SlugGlyph` is a size-independent, em-normalized outline: quadratic
+Béziers (cubics are subdivided to 1/8192 em; lines become degenerate
+quadratics), plus horizontal and vertical band tables. Each band lists the
+curves overlapping it, sorted by descending far-side extent so a shader can
+stop at the first curve that cannot reach the pixel. `texels()` packs the
+curves as two RGBA32F texels each (`p1.xy p2.xy`, `p3.xy 0 0`); `BandSet`
+exposes the ranges and index lists for upload as a second buffer.
+`SlugGlyph::coverage(x, y, pixels_per_em)` is the CPU reference of the pixel
+shader (dual-axis root classification with the `0x2E74` table, weighted by the
+distance of the nearest crossing), and is what the tests compare against the
+exact-area rasterizer.
 
-**Renderer contract (resolves the duplicate-database problem):**
-glyphon's `TextRenderer::prepare` borrows `&mut FontSystem` from the
-caller, so `aqua-render` must NOT create its own `FontSystem`. Pass
-`fonts.lock().font_system_mut()` together with `TextLayout::buffer()`
-(the retained shaped buffer). Same buffer + same font system ⇒
-measurement and pixels cannot disagree. Custom fonts loaded into the
-shared manager are visible to both sides automatically.
+`SlugCache::lookup(fonts, key)` returns `Outline`, `Blank` (spaces) or
+`Unsupported` (color glyphs and synthetic bold, which stay on the atlas path).
+The cache is keyed by face and glyph only, so scale animation never builds a
+new entry per frame, and is flushed when the font revision changes.
+Measured on Windows against the rasterizer for `o g S @ W &` at 12, 17, 32 and
+77 px: mean coverage error below 0.045 (the worst case is small `g`), ink
+ratio within 5%; italic `H` at 24 and 64 px within 3%. The GPU side (curve and
+band buffers, the pixel shader, selection of Slug over the atlas while a
+text node has an animated scale) is not built yet.
+
+## Tone and the backdrop
+
+The pipeline blends in linear light and DirectWrite blends in sRGB.
+`ToneCurve::linear_blend_alpha` remaps the toned coverage so the linear blend
+lands on DirectWrite's result when the backdrop is the contrasting extreme
+(black behind light text, white behind dark text). For other backdrops the
+result drifts (gray 200 on gray 30 measures 0.88 to 0.96 of DirectWrite's ink).
+`linear_blend_alpha_over(coverage, text, backdrop)` is exact for any backdrop
+(tested to 1/255 over a text by backdrop by coverage grid). The glyph shader
+still uses the contrasting-backdrop form; using the exact form needs the
+backdrop luminance, either as a per-run constant from the compositor (the
+background of the surface the text sits on) or by reading the render target in
+the glyph pass.
+
+## Real-font verification (Windows)
+
+- CBDT: Noto Color Emoji 2.042 (the Debian `fonts-noto-color-emoji` package; `CBDT` and `CBLC`, 109 ppem strike) at 16, 24, 32, 48 and 96 px and all four subpixel bins: bitmap width equals `size * 136 / 109` within one pixel, ink across bins within 2%. Run with `AQUA_CBDT_FONT` set to the font file (`tests/real_strikes.rs`).
+- EBDT: `simsun.ttc` carries EBDT strikes; at the strike ppem the glyph is a pure 0/255 bitmap, 7.3 px away it is an antialiased outline.
+- sbix: no sbix font is installed or freely available on the test machine; sbix is covered by the synthetic font in `strike.rs` and the shared placement math only.
+- Glyph conformance through D3D12 against `aqua-gpu-ref` and DirectWrite (`aqua-oracle-dwrite/tests/d3d12_glyphs.rs`) now runs on WARP and the RX 9070 XT for baseline, bindless, enhanced barriers and both: backend gap to the reference is 1/255 on every combination, ink ratio 0.88 to 1.05.
 
 ## Layout: `TextLayout` → `Arc<LaidOut>`
 
@@ -79,7 +101,7 @@ let laid: Arc<LaidOut> = t.layout(&mut fonts.lock());
 `LaidOut { size: (w, h), constrained_width, lines, first_baseline_y }`.
 `LaidLine { paragraph, display_range, y_top, height, baseline_y, width,
 rtl, glyphs }`.
-`LaidGlyph { src_byte_start/end, font_id: fontdb::ID, glyph_id: u16,
+`LaidGlyph { src_byte_start/end, font_id: FontId, glyph_id: u16,
 font_size_px, x, y, w, bidi_level }` — glyph `x` has line alignment baked
 in; line boxes are the contract for carets/selection, glyph data for
 custom canvas work and accessibility.
@@ -89,7 +111,6 @@ Geometry (all source coordinates unless noted):
 - `layout.caret(byte) -> Option<CaretRect { x, y_top, height }>`
 - `layout.hit(x, y) -> Option<usize>` (grapheme-snapped)
 - `layout.selection_rects(range) -> Vec<Rect>`
-- `layout.buffer() -> Option<&cosmic_text::Buffer>` — renderer path, see above
 - `measure_text(&mut fonts, text, &style, max_width, scale) -> (w, h)` —
   one-shot helper for `aqua-ui` Taffy measure callbacks (returns unscaled
   logical px). Retained `TextLayout` for repeated measurement.
@@ -100,8 +121,8 @@ widgets — `layout_shared(&mut fonts, &mut cache)`. Capacity counts entries
 (8–128 typical); hits/misses/evictions counters exposed. Font loads
 bump a revision proxy in the cache key, so newly installed fonts reshape.
 
-Bidi note: shaping, fallback and paragraph direction come from the engine
-(full UAX #9/#29 via `harfrust`/`unicode-bidi`, not reimplemented).
+Bidi note: itemization and reordering are UAX 9 via `unicode-bidi`; line
+breaking is UAX 14 via `icu_segmenter`; shaping is HarfRust.
 `hit()` is exact for LTR/RTL paragraphs and nearest-visual-edge inside
 mixed-direction runs (documented in code; still a valid boundary).
 
@@ -130,171 +151,16 @@ ed.undo(); ed.redo(); // bounded (default 100, set_undo_limit), adjacent typing 
   `composition_range()` (display coords, candidate-window placement),
   `ime_caret()` (preedit cursor in display coords). Commit is one undo
   step; cancel drops the preedit; keystrokes replace it silently.
-- Platform wiring: feed winit `Ime::Preedit/Commit` events into
-  `set_composition/commit_composition`; position the OS candidate window
-  with `layout.caret(ed.ime_caret())`. Clipboard/cut/copy stay in
-  `aqua-platform` using `selected_text()`/`delete_selection()`/`insert()`.
-
+- Platform wiring: `aqua-ime-tsf` preedit and commit events feed
+  `set_composition/commit_composition`; the candidate window is placed with
+  `layout.caret(ed.ime_caret())`. Clipboard/cut/copy use
+  `selected_text()`/`delete_selection()`/`insert()`.
 ## Gaps (not claimed)
 
-- No GPU rasterization here — renderer side (glyphon).
-- No line breaking inside `TextEditor` movement (up/down, page) — needs
-  layout lines; UI composes `layout` + `hit` for that.
-- No spellcheck, hyphenation dictionaries, or advanced typography UI
-  (ligature toggles beyond `letter_spacing_em`); shaper supports them,
-  no API yet.
-- `fonts_revision` is an explicit monotonic counter bumped by every
-  `load_font_bytes` / `load_font_file` (face count alone would miss
-  same-count font replacement). Loading through `font_system_mut().db_mut()`
-  bypasses it — documented, use `load_*` instead.
-- Accessibility tree export is `aqua-ui`'s job using `LaidOut` runs.
-- `TextLayout::layout` requires at least one loaded font: an empty
-  `FontManager` panics inside the shaper (cosmic-text 0.19 `no default font
-  found`). UI must always lay out against system fonts or after loading at
-  least one face; the signature stays infallible by contract.
-
-## Status for peers
-
-- **Renderer**: `TextLayout::buffer()` + shared `FontSystem` ready; build
-  `glyphon::TextArea { buffer, … }` from it. If you defined
-  `TextRun{id, revision}`, map it to a retained `TextLayout` keyed by that
-  id — propose the shape in the contract and I will add a convenience
-  `TextRun → layout` registry if wanted.
-- **UI**: `measure_text` + retained `TextLayout` ready for Taffy callbacks
-  before tree integration; `Text(editable:true)` = `TextEditor` +
-  `TextLayout` on the same source coordinates (see
-  `tests/editing_layout.rs`).
-- **Platform**: IME needs are `composition_range()` + `ime_caret()` →
-  `layout.caret()`; no native calls from this crate.
-
-## FROZEN renderer API (text agent, 2026-10-25 — no further trait churn)
-
-`crates/aqua-render/src/text.rs` is final. Versions: cosmic-text 0.19,
-glyphon 0.12, wgpu 30. Manifest requirement (already applied):
-`aqua-text = { path = "../aqua-text" }` in `aqua-render/Cargo.toml`.
-
-```rust
-// Shared handles — construct once (facade), clone into renderer + UI.
-pub struct TextBackend { pub fonts: SharedFonts, pub runs: SharedRuns }
-impl TextBackend {
-    pub fn new(fonts: SharedFonts, runs: SharedRuns) -> Self;
-    pub fn with_system_fonts() -> Self; // tests / single-owner hosts
-}
-
-// Painter-order queue item. No strings: the registry owns text.
-#[derive(Clone, Debug)]
-pub struct ShapedRun {
-    pub id: u64,                    // TextRun.id
-    pub revision: u64,              // TextRun.revision (scene-committed)
-    pub at_physical: [f32; 2],      // top-left, physical px
-    pub color_glyphon: glyphon::Color, // sRGB u8, alpha ALREADY × opacity
-    pub clip_physical: Option<[f32; 4]>, // [x,y,w,h] physical px, None = unclipped
-}
-
-// Same-encoder context. Renderer keeps owning the encoder; text appends
-// ONE Load pass in painter order. No submit inside.
-pub struct TextFrame<'a> {
-    pub device: &'a wgpu::Device,
-    pub queue: &'a wgpu::Queue,
-    pub encoder: &'a mut wgpu::CommandEncoder,
-    pub target: &'a wgpu::TextureView,
-    pub width: u32,
-    pub height: u32,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TextStats {
-    pub areas: usize,                  // resolved + prepared
-    pub stale_skipped: u64,            // unknown ids (explicit, counted)
-    pub revision_mismatches: u64,      // STALE scene revision: SKIPPED, counted
-    pub atlas_upload_bytes: Option<u64>, // ALWAYS None: glyphon exposes no counter
-}
-
-pub trait TextProvider: Send + Sync {
-    fn queue_run(&mut self, run: ShapedRun);
-    fn encode_queued(&mut self, frame: TextFrame<'_>) -> TextStats;
-    fn measure_ink(&mut self, id: u64) -> Option<Rect>; // logical ink at origin
-    fn trim_atlas(&mut self);   // ONCE after final submit, never mid-frame
-    fn stats_last(&self) -> TextStats;
-}
-
-impl GlyphonProvider {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue,
-               format: wgpu::TextureFormat, backend: TextBackend) -> Self;
-    pub fn backend(&self) -> &TextBackend;
-    pub fn set_format(&mut self, device: &wgpu::Device, queue: &wgpu::Queue,
-                      format: wgpu::TextureFormat);
-}
-
-// No shaping, no fallback strings: placement/color/opacity/clip mapping.
-pub fn resolve_scene_text(run: &TextRun, at_logical: [f32; 2], color: Oklch,
-    opacity: f32, clip_logical: Option<Rect>, scale: f32) -> ShapedRun;
-```
-
-Color rule (verified vs glyphon 0.12 source): atlas is `ColorMode::Accurate`,
-so `default_color` bytes are sRGB and linearized in-shader. Pass
-`Oklch::to_srgb8` with alpha pre-multiplied by opacity — linear bytes would
-double-linearize (white primaries hide the bug; mid-gray exposes it).
-Render target stays the linear working texture, matching `to_gpu()` rects.
-`tests/headless.rs::text_color_matches_rect_same_oklch` locks this in.
-
-Coherence rule (strict): a scene revision older than the registry revision
-is SKIPPED and counted — the current layout is NEVER painted under a stale
-`TextRun` revision, since old scene geometry/state plus new text would be an
-incoherent commit. The single decision point is `resolve_for_encode()`,
-which returns `Ok(handle)` only for the live revision (`Err(SkipReason)` —
-carrying no layout — otherwise), so the encoder has nothing to paint for
-mismatches. The host must repair by re-committing the scene run at the live
-revision; UI writes the registry BEFORE the scene, so the next consistent
-commit paints. Treat `revision_mismatches > 0` as a re-render request.
-`text.rs` unit test `stale_revision_never_yields_current_layout` and GPU
-test `stale_revision_paints_nothing_and_counts_mismatch` lock this in.
-
-## Caller patch instructions (renderer owner — apply to your mirror)
-
-`renderer.rs` is yours; the text agent will not edit it again. Against
-your trusted mirror (which has `queue_run` + `flush` callsites), apply:
-
-1. Import: `use crate::text::{resolve_scene_text, GlyphonProvider,
-   ShapedRun, TextBackend, TextFrame, TextProvider};`
-2. Construction: add `Renderer::new_with_text(device, queue, format,
-   backend: TextBackend)` (delegating constructor for the shared backend);
-   keep `new()` delegating with `TextBackend::with_system_fonts()`.
-   Provider line becomes
-   `Box::new(GlyphonProvider::new(&device, &queue, format, backend))`.
-3. `prepare()` damage arm for `DisplayItem::Text`: replace the
-   `format!("run#{}")` measure with `self.text.measure_ink(run.id)`.
-   `Some(ink)` → existing `record_text_change` flow. `None` → repaint any
-   recorded `text_ink.remove(&run.id)` via `record_rect_change`, then
-   `record_change(item, None)` (conservative full).
-4. `prepare()` painter walk `DisplayItem::Text` arm: derive the
-   logical clip from `clip_stack` (physical ÷ scale; `w < 0` → `None`)
-   and call `resolve_scene_text(run, *at, *color, *opacity, clip_logical, s)`
-   (opacity and clip now honored; no `let _ = opacity`).
-5. `Op::Texts` arm in `draw()`: DELETE the submit-boundary
-   (`queue.submit([encoder.finish()])` before text and the encoder
-   re-creation after). Queue runs, build
-   `TextFrame { device: &device, queue: &queue, encoder: &mut encoder,
-   target: &base_view, width: self.width, height: self.height }`, call
-   `encode_queued`. Do NOT add `stats.atlas_upload_bytes` (None) to byte
-   totals; the three `RenderDiagnostics` text counters
-   (`text_areas_last`, `text_stale_last`, `text_mismatch_last` — already
-   added to `resource.rs`) take the exact counts.
-6. `draw_group_isolated()`: single encoder — rect pass, then (if any
-   group texts) queue + `encode_queued` into the SAME encoder targeting
-   the scratch view, then ONE submit. Group texts keep full color;
-   composite applies opacity once.
-7. End of `draw()`, after the final `queue.submit`: call
-   `self.text.trim_atlas()`. Never trim between encode and submit.
-8. Invariants to keep: one `prepare` per `encode_queued` per target,
-   immediately followed by its render (no prepare(A)+prepare(B) before
-   render(A) — glyphon's instance buffer would alias); locks over
-   fonts/registry are held only inside `encode_queued`/`measure_ink`.
-
-## Follow-ups owned elsewhere (not text)
-
-- Render/graphics: `Renderer::new(format)` vs surface sRGB format mismatch
-  (headless base is linear Rgba8Unorm; surface path must normalize the
-  working format) and `frames_presented` counting offscreen draws instead
-  of actual presents — both need the produced-vs-presented split.
-- Render diagnostics: surface the new text counters in the inspector.
+- Slug has no GPU consumer yet; scale animation still re-rasterizes into the atlas at quantized sizes.
+- Fake bold is not applied to Slug glyphs.
+- sbix is unverified against a real font.
+- The glyph shader assumes a contrasting backdrop (see Tone).
+- No line breaking inside `TextEditor` movement (up/down, page); UI composes `layout` + `hit`.
+- No spellcheck or hyphenation dictionaries.
+- `FontManager::new_without_system_fonts()` plus `load_font_*` is the hermetic path.

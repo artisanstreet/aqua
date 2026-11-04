@@ -1,7 +1,8 @@
 #![cfg(windows)]
 
 use aqua_core::Oklch;
-use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend};
+use aqua_gpu_d3d12::hal::tier::Tier;
+use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat, TierLimit};
 use aqua_gpu_ref::{conformance, RefBackend};
 use aqua_graph::tone::linear_to_srgb;
 use aqua_graph::{Extent, FramePlan, GlyphInstance, PlanLimits, RenderGraph, TextureRef};
@@ -84,7 +85,9 @@ fn plan(instances: Vec<(PageId, GlyphInstance)>, size: (u32, u32), background: O
 fn encoded_rgb(pixels: &SurfacePixels) -> Vec<u8> {
     pixels
         .rgba8
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|texel| {
             [0, 1, 2].map(|channel| {
                 (linear_to_srgb(f32::from(texel[channel]) / 255.0) * 255.0).round() as u8
@@ -95,7 +98,9 @@ fn encoded_rgb(pixels: &SurfacePixels) -> Vec<u8> {
 
 fn ink(pixels: &[u8], background: [u8; 3]) -> f64 {
     pixels
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|pixel| {
             (0..3)
                 .map(|channel| (f64::from(pixel[channel]) - f64::from(background[channel])).abs())
@@ -106,8 +111,8 @@ fn ink(pixels: &[u8], background: [u8; 3]) -> f64 {
 
 fn mean_abs(a: &[u8], b: &[u8], background: [u8; 3]) -> f64 {
     let (mut total, mut count) = (0.0f64, 0.0f64);
-    for (pa, pb) in a.chunks_exact(3).zip(b.chunks_exact(3)) {
-        if pa != background || pb != background {
+    for (pa, pb) in a.as_chunks::<3>().0.iter().zip(b.as_chunks::<3>().0.iter()) {
+        if *pa != background || *pb != background {
             for channel in 0..3 {
                 total += (f64::from(pa[channel]) - f64::from(pb[channel])).abs();
                 count += 1.0;
@@ -143,11 +148,41 @@ fn glyph_pixels_through_d3d12_track_directwrite_and_the_reference() {
         weight: 400,
     };
     let mut ran = 0;
-    for preference in [AdapterPreference::Warp, AdapterPreference::HighPerformance] {
-        let Ok(mut gpu) = OffscreenBackend::new(preference) else {
-            eprintln!("SKIP {preference:?}");
+    let combinations = [
+        ("baseline", TierLimit::BASELINE),
+        (
+            "bindless",
+            TierLimit {
+                binding: Tier::Bindless,
+                enhanced_barriers: false,
+            },
+        ),
+        (
+            "enhanced-barriers",
+            TierLimit {
+                binding: Tier::Baseline,
+                enhanced_barriers: true,
+            },
+        ),
+        ("bindless+enhanced-barriers", TierLimit::MAX),
+    ];
+    let adapters = [AdapterPreference::Warp, AdapterPreference::HighPerformance];
+    for (preference, (tier_name, limit)) in adapters.into_iter().flat_map(|preference| {
+        combinations
+            .into_iter()
+            .map(move |entry| (preference, entry))
+    }) {
+        let Ok(mut gpu) =
+            OffscreenBackend::with_tiers(preference, SurfaceFormat::Rgba16Float, limit)
+        else {
+            eprintln!("SKIP {preference:?} {tier_name}");
             continue;
         };
+        let reached = gpu.tiers();
+        println!(
+            "d3d12 glyphs {preference:?} {tier_name}: binding {:?} enhanced barriers {}",
+            reached.binding, reached.enhanced_barriers
+        );
         let mut reference = RefBackend::new();
         for (name, fg, bg) in [
             ("black_on_white", [0u8; 3], [255u8; 3]),
@@ -205,11 +240,11 @@ fn glyph_pixels_through_d3d12_track_directwrite_and_the_reference() {
                 let n = STRINGS.len() as f64;
                 let (ratio, error) = (ratio / n, error / n);
                 println!(
-                    "d3d12 glyphs {preference:?} {name} size={size} ink_ratio={ratio:.4} error={error:.3} backend_gap={backend_gap}"
+                    "d3d12 glyphs {preference:?} {tier_name} {name} size={size} ink_ratio={ratio:.4} error={error:.3} backend_gap={backend_gap}"
                 );
                 assert!(
                     backend_gap <= 3,
-                    "{name} {size}: D3D12 differs from the reference by {backend_gap}"
+                    "{preference:?} {tier_name} {name} {size}: D3D12 differs from the reference by {backend_gap}"
                 );
                 assert!(
                     (0.85..=1.08).contains(&ratio),

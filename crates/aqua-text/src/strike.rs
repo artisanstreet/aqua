@@ -2,9 +2,10 @@ use std::io::Cursor;
 
 use skrifa::bitmap::{BitmapData, BitmapGlyph, Origin};
 use skrifa::instance::Size;
+use skrifa::raw::TableProvider;
 use skrifa::{GlyphId, MetadataProvider};
 
-use crate::raster::Bitmap;
+use crate::raster::{Bitmap, GlyphImage, SUBPIXEL_STEPS};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Premultiplied {
@@ -81,11 +82,17 @@ pub fn from_bgra(bytes: &[u8], width: u32, height: u32) -> Option<Premultiplied>
     })
 }
 
-fn taps(output: u32, source: u32, index: u32) -> Vec<(usize, f32)> {
-    let scale = source as f32 / output as f32;
+fn taps(source: u32, index: u32, phase: f32, extent: f32) -> Vec<(usize, f32)> {
+    let scale = source as f32 / extent;
+    let last_texel = source as f32 - 1.0;
+    let inside = (index as f32 + 1.0).min(phase + extent) - (index as f32).max(phase);
+    let coverage = inside.clamp(0.0, 1.0);
     match scale >= 1.0 {
         true => {
-            let (start, end) = (index as f32 * scale, (index + 1) as f32 * scale);
+            let (start, end) = (
+                ((index as f32 - phase) * scale).max(0.0),
+                (((index + 1) as f32 - phase) * scale).min(source as f32),
+            );
             let first = start.floor() as usize;
             let last = (end.ceil() as usize).min(source as usize);
             (first..last)
@@ -96,21 +103,38 @@ fn taps(output: u32, source: u32, index: u32) -> Vec<(usize, f32)> {
                 .collect()
         }
         false => {
-            let center = (index as f32 + 0.5) * scale - 0.5;
+            let center = (index as f32 + 0.5 - phase) * scale - 0.5;
             let base = center.floor();
             let fraction = center - base;
-            let clamp = |texel: f32| texel.clamp(0.0, source as f32 - 1.0) as usize;
-            vec![(clamp(base), 1.0 - fraction), (clamp(base + 1.0), fraction)]
+            let clamp = |texel: f32| texel.clamp(0.0, last_texel) as usize;
+            vec![
+                (clamp(base), (1.0 - fraction) * coverage),
+                (clamp(base + 1.0), fraction * coverage),
+            ]
         }
     }
 }
 
 pub fn resample(image: &Premultiplied, width: u32, height: u32) -> Premultiplied {
+    resample_shifted(image, width, height, 0.0)
+}
+
+pub fn resample_shifted(
+    image: &Premultiplied,
+    width: u32,
+    height: u32,
+    shift: f32,
+) -> Premultiplied {
     let (width, height) = (width.max(1), height.max(1));
-    let horizontal: Vec<Vec<(usize, f32)>> =
-        (0..width).map(|x| taps(width, image.width, x)).collect();
-    let vertical: Vec<Vec<(usize, f32)>> =
-        (0..height).map(|y| taps(height, image.height, y)).collect();
+    let shift = shift.clamp(0.0, 0.999);
+    let columns = (width as f32 + shift).ceil() as u32;
+    let horizontal: Vec<Vec<(usize, f32)>> = (0..columns)
+        .map(|x| taps(image.width, x, shift, width as f32))
+        .collect();
+    let vertical: Vec<Vec<(usize, f32)>> = (0..height)
+        .map(|y| taps(image.height, y, 0.0, height as f32))
+        .collect();
+    let width = columns;
     let source_width = image.width as usize;
     let mut across = vec![[0.0f32; 4]; width as usize * image.height as usize];
     for row in 0..image.height as usize {
@@ -149,6 +173,32 @@ fn bytes_of(image: &Premultiplied) -> Vec<u8> {
         .collect()
 }
 
+fn alphas_of(image: &Premultiplied) -> Vec<u8> {
+    image
+        .pixels
+        .iter()
+        .map(|pixel| (pixel[3].clamp(0.0, 1.0) * 255.0).round() as u8)
+        .collect()
+}
+
+pub fn from_alpha(alpha: &[u8], width: u32, height: u32) -> Option<Premultiplied> {
+    let count = width as usize * height as usize;
+    (alpha.len() >= count).then_some(())?;
+    let pixels = alpha
+        .iter()
+        .take(count)
+        .map(|value| {
+            let value = f32::from(*value) / 255.0;
+            [value; 4]
+        })
+        .collect();
+    Some(Premultiplied {
+        width,
+        height,
+        pixels,
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StrikePlacement {
     pub left: f32,
@@ -179,32 +229,62 @@ pub fn placement(glyph: &BitmapGlyph<'_>, size: f32, units_per_em: f32) -> Strik
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StrikeKind {
+    Any,
+    MasksAtExactSize,
+}
+
+pub fn has_mask_strikes(font: &skrifa::FontRef<'_>) -> bool {
+    font.data_for_tag(skrifa::Tag::new(b"EBLC")).is_some()
+        && font.data_for_tag(skrifa::Tag::new(b"EBDT")).is_some()
+}
+
 pub fn rasterize_strike(
     font: &skrifa::FontRef<'_>,
     glyph: GlyphId,
     size: f32,
     units_per_em: f32,
-) -> Option<Bitmap> {
+    subpixel: u8,
+    kind: StrikeKind,
+) -> Option<GlyphImage> {
     let strikes = font.bitmap_strikes();
     let found = strikes.glyph_for_size(Size::new(size), glyph)?;
-    let decoded = match &found.data {
-        BitmapData::Png(bytes) => decode_png(bytes)?,
-        BitmapData::Bgra(bytes) => from_bgra(bytes, found.width, found.height)?,
-        BitmapData::Mask(_) => return None,
+    let (decoded, is_mask) = match &found.data {
+        BitmapData::Png(bytes) => (decode_png(bytes)?, false),
+        BitmapData::Bgra(bytes) => (from_bgra(bytes, found.width, found.height)?, false),
+        BitmapData::Mask(mask) => {
+            let mut alpha = vec![0u8; found.width as usize * found.height as usize];
+            mask.decode_to_slice(found.width, found.height, &mut alpha)
+                .ok()?;
+            (from_alpha(&alpha, found.width, found.height)?, true)
+        }
     };
+    let exact = (found.ppem_y - size).abs() < 0.5 && (found.ppem_x - size).abs() < 0.5;
+    if is_mask && kind == StrikeKind::MasksAtExactSize && !exact {
+        return None;
+    }
     let at = placement(&found, size, units_per_em);
     let width = at.width.round().max(1.0) as u32;
     let height = at.height.round().max(1.0) as u32;
-    let scaled = match (decoded.width == width, decoded.height == height) {
-        (true, true) => decoded,
-        _ => resample(&decoded, width, height),
+    let shift = f32::from(subpixel) / f32::from(SUBPIXEL_STEPS);
+    let scaled = match (decoded.width == width, decoded.height == height, subpixel) {
+        (true, true, 0) => decoded,
+        _ => resample_shifted(&decoded, width, height, shift),
     };
-    Some(Bitmap {
+    let bitmap = Bitmap {
         left: at.left.round() as i32,
         top: at.top.round() as i32,
-        width,
-        height,
-        data: bytes_of(&scaled),
+        width: scaled.width,
+        height: scaled.height,
+        data: match is_mask {
+            true => alphas_of(&scaled),
+            false => bytes_of(&scaled),
+        },
+    };
+    Some(match is_mask {
+        true => GlyphImage::Mask(bitmap),
+        false => GlyphImage::Color(bitmap),
     })
 }
 
@@ -339,11 +419,16 @@ mod tests {
         let data = sbix_font(&encode(32, 32, &rgba), 32, (2, -4));
         let font = skrifa::FontRef::new(&data).expect("synthetic font parses");
         assert_eq!(font.bitmap_strikes().len(), 1);
-        let bitmap = rasterize_strike(&font, GlyphId::new(1), 16.0, 1000.0).expect("strike");
+        let bitmap = rasterize_strike(&font, GlyphId::new(1), 16.0, 1000.0, 0, StrikeKind::Any)
+            .expect("strike")
+            .bitmap()
+            .clone();
         assert_eq!((bitmap.width, bitmap.height), (16, 16));
         assert_eq!((bitmap.left, bitmap.top), (1, 14));
         assert_eq!(&bitmap.data[..4], &[200, 100, 50, 255]);
-        assert!(rasterize_strike(&font, GlyphId::new(0), 16.0, 1000.0).is_none());
+        assert!(
+            rasterize_strike(&font, GlyphId::new(0), 16.0, 1000.0, 0, StrikeKind::Any).is_none()
+        );
     }
 
     #[test]
@@ -365,5 +450,50 @@ mod tests {
         assert_eq!(at.left, 1.5);
         assert_eq!(at.top, 50.0);
         assert_eq!((at.width, at.height), (68.0, 64.0));
+    }
+}
+
+#[cfg(test)]
+mod shift_tests {
+    use super::*;
+
+    fn bar() -> Premultiplied {
+        Premultiplied {
+            width: 4,
+            height: 1,
+            pixels: vec![[1.0; 4]; 4],
+        }
+    }
+
+    fn total(image: &Premultiplied) -> f32 {
+        image.pixels.iter().map(|pixel| pixel[3]).sum()
+    }
+
+    #[test]
+    fn shifting_conserves_ink_and_widens_by_one_column() {
+        let unshifted = resample_shifted(&bar(), 4, 1, 0.0);
+        let shifted = resample_shifted(&bar(), 4, 1, 0.25);
+        assert_eq!(unshifted.width, 4);
+        assert_eq!(shifted.width, 5);
+        assert!((total(&unshifted) - 4.0).abs() < 1e-4);
+        assert!((total(&shifted) - 4.0).abs() < 1e-4);
+        assert!((shifted.pixels[0][3] - 0.75).abs() < 1e-4);
+        assert!((shifted.pixels[4][3] - 0.25).abs() < 1e-4);
+    }
+
+    #[test]
+    fn shifting_conserves_ink_when_scaling_up_and_down() {
+        let up = resample_shifted(&bar(), 8, 1, 0.5);
+        let down = resample_shifted(&bar(), 2, 1, 0.5);
+        assert!(up.pixels.iter().all(|pixel| pixel[3] <= 1.0 + 1e-4));
+        assert!((total(&down) - 2.0).abs() < 1e-4);
+        assert!(total(&up) > 7.0 && total(&up) < 8.5);
+    }
+
+    #[test]
+    fn eight_bit_masks_become_alpha_only_pixels() {
+        let image = from_alpha(&[0, 128, 255, 64], 2, 2).unwrap();
+        assert_eq!(alphas_of(&image), vec![0, 128, 255, 64]);
+        assert!(from_alpha(&[0, 1], 2, 2).is_none());
     }
 }

@@ -5,6 +5,7 @@ use unicode_bidi::ParagraphBidiInfo;
 use unicode_script::Script;
 
 use crate::font::{FontEntry, FontManager};
+use crate::raster::embolden_width;
 use crate::style::{StyledSpan, TextStyle};
 
 pub(crate) struct ShapeParams<'a> {
@@ -57,6 +58,10 @@ pub(crate) fn shape_run(
     buffer.guess_segment_properties();
     buffer.set_flags(harfrust::BufferFlags::BEGINNING_OF_TEXT | harfrust::BufferFlags::END_OF_TEXT);
     let scale = params.size_px / entry.units_per_em();
+    let widening = match entry.synthetic_bold() {
+        true => embolden_width(params.size_px),
+        false => 0.0,
+    };
     let shaped = entry.with_shaper(|shaper| {
         let glyphs = shaper.shape(
             buffer,
@@ -67,7 +72,10 @@ pub(crate) fn shape_run(
             out.push(ShapedGlyph {
                 glyph_id: info.glyph_id as u16,
                 cluster: info.cluster as usize,
-                advance: position.x_advance as f32 * scale,
+                advance: match position.x_advance {
+                    0 => 0.0,
+                    advance => advance as f32 * scale + widening,
+                },
                 x_offset: position.x_offset as f32 * scale,
                 y_offset: position.y_offset as f32 * scale,
             });

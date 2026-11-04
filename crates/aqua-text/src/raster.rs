@@ -7,10 +7,10 @@ use zeno::{Command, Mask, Origin, Point, Stroke, Transform, Vector};
 
 use crate::font::{FontEntry, FontId, FontManager};
 use crate::layout::LaidGlyph;
-use crate::strike::rasterize_strike;
+use crate::strike::{has_mask_strikes, rasterize_strike, StrikeKind};
 use crate::style::FontStretch;
 
-const SUBPIXEL_STEPS: u8 = 4;
+pub const SUBPIXEL_STEPS: u8 = 4;
 pub const SIZE_STEPS: f32 = 64.0;
 const ITALIC_SKEW: f32 = 0.2126;
 const EMBOLDEN_EM: f32 = 1.0 / 24.0;
@@ -232,8 +232,27 @@ impl Rasterizer {
                 if let Some(color) = rasterize_color(font, &entry, glyph, size, key.subpixel) {
                     return Some(GlyphImage::Color(color));
                 }
-                if let Some(color) = rasterize_strike(font, glyph, size, entry.units_per_em()) {
-                    return Some(GlyphImage::Color(color));
+                if let Some(image) = rasterize_strike(
+                    font,
+                    glyph,
+                    size,
+                    entry.units_per_em(),
+                    key.subpixel,
+                    StrikeKind::Any,
+                ) {
+                    return Some(image);
+                }
+            }
+            if has_mask_strikes(font) {
+                let has_outline = font.outline_glyphs().get(glyph).is_some();
+                let kind = match has_outline {
+                    true => StrikeKind::MasksAtExactSize,
+                    false => StrikeKind::Any,
+                };
+                if let Some(image) =
+                    rasterize_strike(font, glyph, size, entry.units_per_em(), key.subpixel, kind)
+                {
+                    return Some(image);
                 }
             }
             let commands = outline_commands(font, &entry, glyph, size)?;

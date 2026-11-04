@@ -6,4 +6,5 @@ description = "Aqua system font discovery: memory-mapped faces shared between sh
 license = "BSD-3-Clause"
 
 [dependencies]
-fontdb = "0.23"
+skrifa = "0.46.2"
+memmap2 = "0.9"

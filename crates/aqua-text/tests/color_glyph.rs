@@ -1,6 +1,6 @@
 #![cfg(windows)]
 
-use aqua_text::raster::{GlyphImage, Rasterizer, place_glyph};
+use aqua_text::raster::{place_glyph, GlyphImage, Rasterizer};
 use aqua_text::{FontManager, TextLayout, TextStyle};
 
 #[test]
@@ -29,13 +29,17 @@ fn emoji_falls_back_to_a_color_font_and_rasterizes_rgba() {
     assert!(bitmap.width >= 20 && bitmap.height >= 20);
     let opaque = bitmap
         .data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|px| px[3] == 255)
         .count();
     assert!(opaque > 200, "opaque pixels: {opaque}");
     let yellowish = bitmap
         .data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|px| px[3] == 255 && px[0] > 200 && px[1] > 140 && px[2] < 120)
         .count();
     assert!(yellowish > 100, "yellowish pixels: {yellowish}");

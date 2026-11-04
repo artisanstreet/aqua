@@ -1,8 +1,8 @@
 #![cfg(windows)]
 
 use aqua_oracle_dwrite::{BlendParams, FontSource, GlyphRunSpec, Oracle};
-use aqua_text::raster::{GlyphImage, Rasterizer, place_glyph};
-use aqua_text::tone::{ToneCurve, luminance};
+use aqua_text::raster::{place_glyph, GlyphImage, Rasterizer};
+use aqua_text::tone::{luminance, ToneCurve};
 use aqua_text::{FontFamily, FontManager, TextLayout, TextStyle};
 
 const STRINGS: [&str; 3] = [
@@ -74,7 +74,9 @@ fn blend(coverage: &[u8], curve: &ToneCurve, foreground: [u8; 3], background: [u
 
 fn ink(pixels: &[u8], background: [u8; 3]) -> f64 {
     pixels
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|pixel| {
             (0..3)
                 .map(|c| (f64::from(pixel[c]) - f64::from(background[c])).abs())
@@ -86,8 +88,8 @@ fn ink(pixels: &[u8], background: [u8; 3]) -> f64 {
 fn mean_abs(a: &[u8], b: &[u8], background: [u8; 3]) -> f64 {
     let mut total = 0.0f64;
     let mut count = 0.0f64;
-    for (pa, pb) in a.chunks_exact(3).zip(b.chunks_exact(3)) {
-        if pa != background || pb != background {
+    for (pa, pb) in a.as_chunks::<3>().0.iter().zip(b.as_chunks::<3>().0.iter()) {
+        if *pa != background || *pb != background {
             for channel in 0..3 {
                 total += (f64::from(pa[channel]) - f64::from(pb[channel])).abs();
                 count += 1.0;

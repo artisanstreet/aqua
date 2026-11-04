@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use aqua_fonts_system::{FaceBytes, Family, FontDatabase, Query, Stretch, Style, Weight, ID};
+use aqua_fonts_system::{FaceBytes, FontDatabase, Query, Stretch, Style, Weight, ID};
 use skrifa::raw::TableProvider;
 use skrifa::MetadataProvider;
 use unicode_segmentation::UnicodeSegmentation;
@@ -413,7 +413,7 @@ impl FontManager {
         self.database.faces().any(|face| {
             face.families
                 .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(family))
+                .any(|name| name.eq_ignore_ascii_case(family))
         })
     }
 
@@ -421,7 +421,7 @@ impl FontManager {
         let mut names: Vec<String> = self
             .database
             .faces()
-            .flat_map(|face| face.families.iter().map(|(name, _)| name.clone()))
+            .flat_map(|face| face.families.iter().cloned())
             .collect();
         names.sort();
         names.dedup();
@@ -432,6 +432,10 @@ impl FontManager {
         self.database
             .face_bytes(face)
             .map(|bytes| bytes.bytes().to_vec())
+    }
+
+    pub fn face_for_family(&self, family: &str) -> Option<ID> {
+        self.query_name(family, 400, FontStretch::Normal, FontSlant::Normal)
     }
 
     pub fn first_face(&self) -> Option<ID> {
@@ -460,16 +464,16 @@ impl FontManager {
         slant: FontSlant,
     ) -> Option<ID> {
         let query = Query {
-            families: &[Family::Name(name)],
+            family: name,
             weight: Weight(weight),
-            stretch: fontdb_stretch(stretch),
-            style: fontdb_style(slant),
+            stretch: query_stretch(stretch),
+            style: query_style(slant),
         };
         let found = self.database.query(&query)?;
         let matches = self.database.face(found).is_some_and(|face| {
             face.families
                 .iter()
-                .any(|(family, _)| family.eq_ignore_ascii_case(name))
+                .any(|family| family.eq_ignore_ascii_case(name))
         });
         matches.then_some(found)
     }
@@ -862,15 +866,15 @@ impl FontManager {
     }
 }
 
-fn fontdb_stretch(stretch: FontStretch) -> Stretch {
+fn query_stretch(stretch: FontStretch) -> Stretch {
     match stretch {
-        FontStretch::Condensed => Stretch::Condensed,
-        FontStretch::Normal => Stretch::Normal,
-        FontStretch::Expanded => Stretch::Expanded,
+        FontStretch::Condensed => Stretch::CONDENSED,
+        FontStretch::Normal => Stretch::NORMAL,
+        FontStretch::Expanded => Stretch::EXPANDED,
     }
 }
 
-fn fontdb_style(slant: FontSlant) -> Style {
+fn query_style(slant: FontSlant) -> Style {
     match slant {
         FontSlant::Normal => Style::Normal,
         FontSlant::Italic => Style::Italic,

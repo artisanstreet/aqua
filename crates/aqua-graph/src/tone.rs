@@ -66,8 +66,12 @@ impl ToneCurve {
     }
 
     pub fn linear_blend_alpha(&self, coverage: f32, luminance: f32) -> f32 {
-        let toned = self.adjust(coverage, luminance).clamp(0.0, 1.0);
         let backdrop = if luminance > 0.5 { 0.0 } else { 1.0 };
+        self.linear_blend_alpha_over(coverage, luminance, backdrop)
+    }
+
+    pub fn linear_blend_alpha_over(&self, coverage: f32, luminance: f32, backdrop: f32) -> f32 {
+        let toned = self.adjust(coverage, luminance).clamp(0.0, 1.0);
         let encoded = backdrop + (luminance - backdrop) * toned;
         let (text, behind, blended) = (
             srgb_to_linear(luminance),

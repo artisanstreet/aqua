@@ -14,6 +14,7 @@ pub mod residency;
 pub mod runs;
 pub mod selection;
 mod shape;
+pub mod slug;
 pub mod strike;
 pub mod style;
 

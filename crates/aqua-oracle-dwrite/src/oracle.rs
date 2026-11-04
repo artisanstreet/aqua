@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 
+use windows::core::{IUnknown, Interface};
 use windows::Win32::Foundation::{COLORREF, RECT};
 use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Gdi::{
-    DIBSECTION, GetCurrentObject, GetObjectW, HGDIOBJ, OBJ_BITMAP,
+    GetCurrentObject, GetObjectW, DIBSECTION, HGDIOBJ, OBJ_BITMAP,
 };
-use windows::core::{IUnknown, Interface};
 
 #[derive(Debug)]
 pub enum OracleError {
@@ -333,7 +333,7 @@ impl Oracle {
                 section.dsBm.bmBits.cast::<u8>(),
                 stride * size.1 as usize,
             );
-            for pixel in bits.chunks_exact_mut(4) {
+            for pixel in bits.as_chunks_mut::<4>().0.iter_mut() {
                 pixel.copy_from_slice(&[
                     params.background[2],
                     params.background[1],

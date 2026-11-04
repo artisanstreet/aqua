@@ -742,7 +742,7 @@ impl Text {
     /// and routes `TextChanged` back through `write` (`try_set`, infallible).
     pub fn bind(mut self, editable: (ReadSignal<String>, WriteSignal<String>)) -> Self {
         let (read, write) = editable;
-        self.initial = read.try_get().unwrap_or_default();
+        self.initial = aqua_reactive::read_check::unchecked(|| read.try_get().unwrap_or_default());
         self.editable = true;
         self.pending
             .push(ElementBinding::SubscribeEdit { read, write });

@@ -102,6 +102,8 @@ fn script() -> Vec<RuntimeInput> {
         RuntimeInput::Shell(ShellEvent::Clipboard {
             request: RequestId(1),
             text: Some("pasted".to_string()),
+            image: None,
+            paths: Vec::new(),
         }),
         RuntimeInput::Ime(ImeEvent::Replace {
             range: Utf16Range::new(0, 2),
@@ -361,6 +363,8 @@ fn clipboard_shortcuts_become_shell_commands() {
     let pasted = runtime.step(RuntimeInput::Shell(ShellEvent::Clipboard {
         request,
         text: Some("new".to_string()),
+        image: None,
+        paths: Vec::new(),
     }));
     assert!(requested(&pasted).contains(FrameReason::INPUT));
     let document = runtime.step(frame_input(0.2));

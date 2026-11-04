@@ -4,12 +4,11 @@ use std::rc::Rc;
 use aqua_core::{NodeId, Oklch};
 use aqua_layout::edge::EdgeAnimator;
 use aqua_motion::{
-    AppMotion, Binding, MotionCommand, MotionEvent, MotionKind, MotionValue, Property,
-    ReducedMotion, Seconds, TrackId,
+    AppMotion, Binding, MotionEvent, MotionKind, MotionValue, Property, Seconds, TrackId,
 };
 use aqua_style::motion::{AnimatedProperty, MotionRef, MotionSpec, MotionTheme};
 
-use crate::tree::{NodeKind, UiTree};
+use crate::tree::{MotionGroups, NodeKind, UiTree};
 
 struct PropState {
     track: TrackId,
@@ -25,7 +24,6 @@ struct NodeState {
 }
 
 pub struct MotionRuntime {
-    motion: AppMotion,
     theme: MotionTheme,
     edges: EdgeAnimator,
     nodes: HashMap<NodeId, NodeState>,
@@ -34,7 +32,7 @@ pub struct MotionRuntime {
 
 impl Default for MotionRuntime {
     fn default() -> Self {
-        Self::new(MotionTheme::default(), ReducedMotion::Full)
+        Self::new(MotionTheme::default())
     }
 }
 
@@ -79,9 +77,8 @@ fn resolved_value(tree: &UiTree, node: NodeId, property: AnimatedProperty) -> Op
 
 impl MotionRuntime {
     #[must_use]
-    pub fn new(theme: MotionTheme, reduced: ReducedMotion) -> Self {
+    pub fn new(theme: MotionTheme) -> Self {
         Self {
-            motion: AppMotion::new(reduced),
             theme,
             edges: EdgeAnimator::new(),
             nodes: HashMap::new(),
@@ -94,14 +91,83 @@ impl MotionRuntime {
         &self.theme
     }
 
-    #[must_use]
-    pub fn track_count(&self) -> usize {
-        self.motion.len()
+    pub fn seed(&mut self) {
+        self.seeded = true;
     }
 
     #[must_use]
-    pub fn is_idle(&self) -> bool {
-        self.motion.all_settled()
+    pub fn is_active(&self) -> bool {
+        !self.nodes.is_empty()
+    }
+
+    #[must_use]
+    pub fn owns(&self, track: TrackId) -> bool {
+        self.nodes.values().any(|state| {
+            state.props.values().any(|prop| prop.track == track)
+                || state
+                    .exit
+                    .as_ref()
+                    .is_some_and(|tracks| tracks.contains(&track))
+        }) || self
+            .nodes
+            .keys()
+            .any(|node| self.edges.tracks(*node).contains(&track))
+    }
+
+    #[must_use]
+    pub fn bindings(&self) -> Vec<(TrackId, Binding)> {
+        let mut out = Vec::new();
+        for (node, state) in &self.nodes {
+            for (property, prop) in &state.props {
+                if let Some(property) = binding_property(*property) {
+                    out.push((
+                        prop.track,
+                        Binding {
+                            node: *node,
+                            property,
+                        },
+                    ));
+                }
+            }
+            for edge in aqua_layout::edge::EDGES {
+                if let Some(track) = self.edges.track(*node, edge) {
+                    out.push((
+                        track,
+                        Binding {
+                            node: *node,
+                            property: Property::Edge(edge),
+                        },
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    #[must_use]
+    pub fn groups(&self, tree: &UiTree) -> HashMap<NodeId, MotionGroups> {
+        let mut out = HashMap::new();
+        for node in tree.traverse() {
+            let Some(spec) = tree.motion_spec(node) else {
+                continue;
+            };
+            let opacity = spec.presence.enter_motion().is_some()
+                || spec.presence.exit_motion().is_some()
+                || spec
+                    .animate
+                    .properties()
+                    .iter()
+                    .any(|(property, _)| *property == AnimatedProperty::Opacity);
+            let translate = spec
+                .animate
+                .properties()
+                .iter()
+                .any(|(property, _)| *property == AnimatedProperty::Translate);
+            if opacity || translate {
+                out.insert(node, MotionGroups { opacity, translate });
+            }
+        }
+        out
     }
 
     #[must_use]
@@ -125,15 +191,7 @@ impl MotionRuntime {
         &self.edges
     }
 
-    pub fn drain_commands(&mut self) -> Vec<MotionCommand> {
-        self.motion.drain_commands()
-    }
-
-    pub fn set_reduced_motion(&mut self, reduced: ReducedMotion, at: Seconds) {
-        self.motion.set_reduced_motion(reduced, at);
-    }
-
-    pub fn set_theme(&mut self, theme: MotionTheme, at: Seconds) {
+    pub fn set_theme(&mut self, tracks: &mut AppMotion, theme: MotionTheme, at: Seconds) {
         let previous = std::mem::replace(&mut self.theme, theme);
         let changed = |motion: MotionRef, theme: &MotionTheme| {
             matches!(motion, MotionRef::Token(_))
@@ -141,31 +199,29 @@ impl MotionRuntime {
         };
         for (node, state) in &mut self.nodes {
             for prop in state.props.values_mut() {
-                if changed(prop.motion, &self.theme) && !self.motion.is_settled(prop.track) {
+                if changed(prop.motion, &self.theme) && !tracks.is_settled(prop.track) {
                     let kind = self.theme.resolve(prop.motion).kind();
-                    let _ = self
-                        .motion
-                        .set_target_with(prop.track, prop.target, kind, at);
+                    let _ = tracks.set_target_with(prop.track, prop.target, kind, at);
                 }
             }
             if let Some(frame) = state.frame {
                 if changed(frame, &self.theme) {
                     let kind = self.theme.resolve(frame).kind();
-                    self.edges.retime(&mut self.motion, *node, kind, at);
+                    self.edges.retime(tracks, *node, kind, at);
                 }
             }
         }
     }
 
-    pub fn reconcile(&mut self, tree: &UiTree, at: Seconds) {
+    pub fn reconcile(&mut self, tracks: &mut AppMotion, tree: &UiTree, at: Seconds) {
         let mut live: Vec<(NodeId, Rc<MotionSpec>)> = Vec::new();
         for node in tree.traverse() {
-            if let Some(spec) = tree.paint(node).and_then(|paint| paint.motion) {
+            if let Some(spec) = tree.motion_spec(node) {
                 live.push((node, spec));
             }
         }
         for (node, spec) in &live {
-            self.sync_node(tree, *node, spec, at);
+            self.sync_node(tracks, tree, *node, spec, at);
         }
         let gone: Vec<NodeId> = self
             .nodes
@@ -175,37 +231,45 @@ impl MotionRuntime {
             .collect();
         for node in gone {
             self.nodes.remove(&node);
-            self.edges.forget(&mut self.motion, node);
+            self.edges.forget(tracks, node);
         }
         self.seeded = true;
     }
 
-    pub fn handle(&mut self, tree: &mut UiTree, event: MotionEvent) -> Vec<NodeId> {
-        self.motion.handle(event);
-        let finished: Vec<NodeId> =
-            self.nodes
-                .iter()
-                .filter(|(_, state)| {
-                    state.exit.as_ref().is_some_and(|tracks| {
-                        tracks.iter().all(|track| self.motion.is_settled(*track))
-                    })
-                })
-                .map(|(node, _)| *node)
-                .collect();
+    pub fn handle(
+        &mut self,
+        tracks: &mut AppMotion,
+        tree: &mut UiTree,
+        event: MotionEvent,
+    ) -> Vec<NodeId> {
+        tracks.handle(event);
+        let finished: Vec<NodeId> = self
+            .nodes
+            .iter()
+            .filter(|(_, state)| {
+                state
+                    .exit
+                    .as_ref()
+                    .is_some_and(|exit| exit.iter().all(|track| tracks.is_settled(*track)))
+            })
+            .map(|(node, _)| *node)
+            .collect();
         for node in &finished {
             self.nodes.remove(node);
-            self.edges.forget(&mut self.motion, *node);
+            self.edges.forget(tracks, *node);
             tree.finish_exit(*node);
         }
         finished
     }
 
-    fn kind_of(&self, motion: MotionRef) -> MotionKind {
-        self.theme.resolve(motion).kind()
+    fn kind_of(&self, reference: MotionRef) -> MotionKind {
+        self.theme.resolve(reference).kind()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn ensure_prop(
         &mut self,
+        tracks: &mut AppMotion,
         state: &mut NodeState,
         node: NodeId,
         property: AnimatedProperty,
@@ -217,7 +281,7 @@ impl MotionRuntime {
         match state.props.get(&property) {
             Some(prop) => prop.track,
             None => {
-                let track = self.motion.spawn(
+                let track = tracks.spawn(
                     Some(node),
                     binding_property(property).map(|property| Binding { node, property }),
                     initial,
@@ -239,6 +303,7 @@ impl MotionRuntime {
 
     fn retarget(
         &mut self,
+        tracks: &mut AppMotion,
         state: &mut NodeState,
         property: AnimatedProperty,
         to: MotionValue,
@@ -250,12 +315,19 @@ impl MotionRuntime {
         prop.motion = motion;
         if prop.target != to {
             prop.target = to;
-            let _ = self.motion.set_target_with(prop.track, to, kind, at);
+            let _ = tracks.set_target_with(prop.track, to, kind, at);
         }
         Some(prop.track)
     }
 
-    fn sync_node(&mut self, tree: &UiTree, node: NodeId, spec: &MotionSpec, at: Seconds) {
+    fn sync_node(
+        &mut self,
+        tracks: &mut AppMotion,
+        tree: &UiTree,
+        node: NodeId,
+        spec: &MotionSpec,
+        at: Seconds,
+    ) {
         let entered = !self.nodes.contains_key(&node);
         let mut state = self.nodes.remove(&node).unwrap_or_default();
         let opacity = resolved_value(tree, node, AnimatedProperty::Opacity)
@@ -271,6 +343,7 @@ impl MotionRuntime {
                     .get(&AnimatedProperty::Opacity)
                     .map_or(opacity, |prop| prop.target);
                 let track = self.ensure_prop(
+                    tracks,
                     &mut state,
                     node,
                     AnimatedProperty::Opacity,
@@ -283,9 +356,7 @@ impl MotionRuntime {
                     prop.motion = exit;
                 }
                 let kind = self.kind_of(exit);
-                let _ = self
-                    .motion
-                    .set_target_with(track, MotionValue::Scalar(0.0), kind, at);
+                let _ = tracks.set_target_with(track, MotionValue::Scalar(0.0), kind, at);
                 state.exit = Some(vec![track]);
             }
             self.nodes.insert(node, state);
@@ -298,11 +369,19 @@ impl MotionRuntime {
                 .or(spec.animate.motion_of(AnimatedProperty::Opacity))
                 .or(spec.presence.exit_motion())
                 .unwrap_or(MotionRef::Literal(aqua_style::motion::Motion::INSTANT));
-            self.retarget(&mut state, AnimatedProperty::Opacity, opacity, motion, at);
+            self.retarget(
+                tracks,
+                &mut state,
+                AnimatedProperty::Opacity,
+                opacity,
+                motion,
+                at,
+            );
         }
         if entered && self.seeded {
             if let Some(enter) = spec.presence.enter_motion() {
                 self.ensure_prop(
+                    tracks,
                     &mut state,
                     node,
                     AnimatedProperty::Opacity,
@@ -310,7 +389,14 @@ impl MotionRuntime {
                     enter,
                     at,
                 );
-                self.retarget(&mut state, AnimatedProperty::Opacity, opacity, enter, at);
+                self.retarget(
+                    tracks,
+                    &mut state,
+                    AnimatedProperty::Opacity,
+                    opacity,
+                    enter,
+                    at,
+                );
             }
         }
         for (property, motion) in spec.animate.properties() {
@@ -319,20 +405,22 @@ impl MotionRuntime {
                     state.frame = Some(motion);
                     if let Some(rect) = tree.rect(node) {
                         let kind = self.kind_of(motion);
-                        self.edges.observe(&mut self.motion, node, rect, kind, at);
+                        self.edges.observe(tracks, node, rect, kind, at);
                     }
                 }
                 _ => {
                     let slot = (property, resolved_value(tree, node, property));
-                    self.sync_property(&mut state, node, slot, motion, entered, at)
+                    self.sync_property(tracks, &mut state, node, slot, motion, entered, at)
                 }
             }
         }
         self.nodes.insert(node, state);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn sync_property(
         &mut self,
+        tracks: &mut AppMotion,
         state: &mut NodeState,
         node: NodeId,
         (property, current): (AnimatedProperty, Option<MotionValue>),
@@ -346,11 +434,11 @@ impl MotionRuntime {
                     (false, MotionValue::Color(color)) => MotionValue::Color(faded(color)),
                     _ => value,
                 };
-                self.ensure_prop(state, node, property, initial, motion, at);
-                self.retarget(state, property, value, motion, at);
+                self.ensure_prop(tracks, state, node, property, initial, motion, at);
+                self.retarget(tracks, state, property, value, motion, at);
             }
             (true, Some(value)) => {
-                self.retarget(state, property, value, motion, at);
+                self.retarget(tracks, state, property, value, motion, at);
             }
             (true, None) => {
                 let faded_target = match state.props.get(&property).map(|prop| prop.target) {
@@ -358,7 +446,7 @@ impl MotionRuntime {
                     _ => None,
                 };
                 if let Some(target) = faded_target {
-                    self.retarget(state, property, target, motion, at);
+                    self.retarget(tracks, state, property, target, motion, at);
                 }
             }
             (false, None) => {}

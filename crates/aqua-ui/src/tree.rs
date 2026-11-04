@@ -983,6 +983,12 @@ pub struct FrameStats {
 ///
 /// - layout runs headless through Taffy;
 /// - scene emission produces renderer-neutral [`DisplayItem`]s.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MotionGroups {
+    pub opacity: bool,
+    pub translate: bool,
+}
+
 pub struct UiTree {
     interaction: interaction::InteractionStore,
     gpui_paint: bool,
@@ -990,6 +996,9 @@ pub struct UiTree {
     portal_order: Vec<NodeId>,
     follow_caret_queue: Vec<NodeId>,
     exiting: std::collections::HashSet<NodeId>,
+    motion_groups: HashMap<NodeId, MotionGroups>,
+    hoist_guards: Vec<(taffy::NodeId, taffy::NodeId)>,
+    motion_declared: bool,
     pub(crate) control_router: crate::controls::ControlRouter,
     pub(crate) input: crate::input::InputRouter,
     nodes: Arena<NodeRecord>,
@@ -1105,6 +1114,9 @@ impl UiTree {
             follow_caret_queue: Vec::new(),
             portal_order: Vec::new(),
             exiting: std::collections::HashSet::new(),
+            motion_groups: HashMap::new(),
+            hoist_guards: Vec::new(),
+            motion_declared: false,
             control_router: crate::controls::ControlRouter::default(),
             input: crate::input::InputRouter::default(),
             nodes: Arena::new(),
@@ -1717,6 +1729,36 @@ impl UiTree {
         id
     }
 
+    #[must_use]
+    pub fn has_motion_specs(&self) -> bool {
+        self.motion_declared
+    }
+
+    #[must_use]
+    pub fn motion_spec(&self, id: NodeId) -> Option<Rc<aqua_style::motion::MotionSpec>> {
+        self.get(id).and_then(|rec| match &rec.kind {
+            NodeKind::Box(content) => content.paint.motion.clone(),
+            _ => rec.paint.motion.clone(),
+        })
+    }
+
+    pub fn set_hit_test_excluded(&mut self, node: NodeId, excluded: bool) {
+        if let Some(record) = self.nodes.get_mut(node.raw()) {
+            record.hit_test_excluded = excluded;
+        }
+    }
+
+    pub fn set_motion_groups(&mut self, groups: HashMap<NodeId, MotionGroups>) -> bool {
+        match self.motion_groups == groups {
+            true => false,
+            false => {
+                self.motion_groups = groups;
+                self.content_version += 1;
+                true
+            }
+        }
+    }
+
     pub fn is_portal(&self, node: NodeId) -> bool {
         self.portal_roots.contains(&node)
     }
@@ -1875,6 +1917,21 @@ impl UiTree {
                     .children
                     .iter()
                     .copied()
+                    .filter(|child| {
+                        !self.portal_roots.contains(child) && !self.exiting.contains(child)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn retained_children(&self, node: NodeId) -> Vec<NodeId> {
+        self.get(node)
+            .map(|record| {
+                record
+                    .children
+                    .iter()
+                    .copied()
                     .filter(|child| !self.portal_roots.contains(child))
                     .collect()
             })
@@ -1903,7 +1960,7 @@ impl UiTree {
                     .collect()
             })
             .unwrap_or_default();
-        let old = self.content_children(parent);
+        let old = self.retained_children(parent);
         // Index old children by key; unkeyed fall back to positional reuse.
         let mut by_key: HashMap<KeyHash, NodeId> = HashMap::with_capacity(old.len());
         let mut unkeyed: Vec<NodeId> = Vec::new();
@@ -2214,6 +2271,8 @@ impl UiTree {
         let paint = spec.paint;
         let kind = spec.kind;
         let children = spec.children;
+        self.motion_declared |= paint.motion.is_some()
+            || matches!(&kind, NodeKind::Box(content) if content.paint.motion.is_some());
         let focusable = matches!(kind, NodeKind::Text(ref t) if t.is_editable())
             || control.as_deref().is_some_and(|control| {
                 matches!(
@@ -2275,6 +2334,24 @@ impl UiTree {
             self.attach(p, id);
         }
         id
+    }
+
+    fn guard_hoisted_children(&mut self, parent: taffy::NodeId) {
+        let guard = self
+            .taffy
+            .new_leaf_with_context(taffy::Style::default(), LeafCtx { text: None })
+            .expect("taffy leaf insertion is infallible");
+        if self.taffy.add_child(parent, guard).is_ok() {
+            self.hoist_guards.push((parent, guard));
+        } else {
+            let _ = self.taffy.remove(guard);
+        }
+    }
+
+    fn release_hoist_guards(&mut self) {
+        for (_, guard) in std::mem::take(&mut self.hoist_guards) {
+            let _ = self.taffy.remove(guard);
+        }
     }
 
     /// Detach a taffy child only when it is actually attached to `parent`.
@@ -2416,6 +2493,7 @@ impl UiTree {
             return false;
         };
         let focus_fallback = rec.parent;
+        let out_of_flow = rec.style.absolute.is_some();
         let previous_focus = self.focused;
         if self.focused == Some(id) {
             self.focused = focus_fallback;
@@ -2423,6 +2501,9 @@ impl UiTree {
         if let Some(p) = rec.parent {
             if let (Some(&pt), Some(&ct)) = (self.tmap.get(&p.raw()), self.tmap.get(&id.raw())) {
                 self.detach_child(pt, ct);
+                if out_of_flow && self.taffy.children(pt).is_ok_and(|kids| kids.is_empty()) {
+                    self.guard_hoisted_children(pt);
+                }
             }
             self.structure_changed();
             if let Some(prec) = self.nodes.get_mut(p.raw()) {
@@ -2502,6 +2583,7 @@ impl UiTree {
     /// Update appearance without invalidating layout or replacing node identity.
     /// Returns false for a dead node or an unchanged paint value.
     pub fn set_paint(&mut self, id: NodeId, paint: Paint) -> bool {
+        self.motion_declared |= paint.motion.is_some();
         let Some(rec) = self.nodes.get_mut(id.raw()) else {
             return false;
         };
@@ -2990,6 +3072,7 @@ impl UiTree {
                 },
             )
             .map_err(|e| format!("taffy layout failed: {e:?}"))?;
+        self.release_hoist_guards();
         let nodes_measured = measured.get();
         // Commit absolute rects + scroll content extents.
         self.rects.clear();
@@ -3124,7 +3207,12 @@ impl UiTree {
             NodeKind::Box(content) => content.paint.clone(),
             _ => rec.paint.clone(),
         };
-        let transform = paint.transform.map(|transform| {
+        let forced = self.motion_groups.get(&id).copied().unwrap_or_default();
+        let group_transform = paint
+            .transform
+            .or(forced.translate.then_some(Transform2D::IDENTITY));
+        let group_opacity = paint.opacity.or(forced.opacity.then_some(1.0));
+        let transform = group_transform.map(|transform| {
             Transform2D::translate(-rect.x, -rect.y)
                 .then(transform)
                 .then(Transform2D::translate(rect.x, rect.y))
@@ -3190,7 +3278,7 @@ impl UiTree {
         if let Some(shimmer) = paint.gpui_text_shimmer {
             out.push((id, DisplayItem::PushGpuiTextShimmer(shimmer)));
         }
-        if let Some(opacity) = paint.opacity {
+        if let Some(opacity) = group_opacity {
             out.push((id, DisplayItem::PushOpacity(opacity)));
         }
         let corners = paint
@@ -3609,7 +3697,7 @@ impl UiTree {
                 ));
             }
         }
-        if paint.opacity.is_some() {
+        if group_opacity.is_some() {
             out.push((id, DisplayItem::PopOpacity));
         }
         if paint.text_color_map.is_some() {

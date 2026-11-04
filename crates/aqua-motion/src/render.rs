@@ -170,6 +170,7 @@ impl TrackSet {
                 self.active.remove(&track.key());
                 Vec::new()
             }
+            MotionCommand::Bind { .. } | MotionCommand::Unbind { .. } => Vec::new(),
         }
     }
 

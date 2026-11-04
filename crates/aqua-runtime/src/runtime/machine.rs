@@ -71,6 +71,7 @@ pub(super) struct Bridge {
     ime_area: Option<Rect>,
     access: AccessState,
     pastes: HashSet<RequestId>,
+    pub(super) input_consumed: bool,
     dialogs: Vec<(RequestId, DialogOutcome)>,
     queued: Vec<ShellCommand>,
     wake: Option<Instant>,
@@ -95,6 +96,7 @@ impl Bridge {
             ime_area: None,
             access: AccessState::Detached,
             pastes: HashSet::new(),
+            input_consumed: false,
             dialogs: Vec::new(),
             queued: Vec::new(),
             wake: None,
@@ -262,6 +264,7 @@ impl Runtime {
             }
             None => None,
         });
+        self.bridge.input_consumed = consumed;
         let reason = self.input_redraw(consumed);
         self.request_frame(out, reason);
     }
@@ -314,12 +317,23 @@ impl Runtime {
                 self.bridge.preferences = preferences;
                 self.request_frame(out, FrameReason::MATERIAL);
             }
-            ShellEvent::Clipboard { request, text } => {
+            ShellEvent::Clipboard {
+                request,
+                text,
+                image,
+                paths,
+            } => {
                 if self.bridge.pastes.remove(&request) {
                     let redraw = self.paste_clipboard(ClipboardPaste {
                         text: text.map(std::sync::Arc::from),
-                        image: None,
-                        paths: Vec::new().into(),
+                        image: image.and_then(|image| {
+                            aqua_ui::input::PasteImage::new(image.width, image.height, image.rgba)
+                        }),
+                        paths: paths
+                            .into_iter()
+                            .map(std::path::PathBuf::from)
+                            .collect::<Vec<_>>()
+                            .into(),
                     });
                     if redraw {
                         self.request_frame(out, FrameReason::INPUT);
@@ -413,7 +427,9 @@ impl Runtime {
         if matches!(event, RenderEvent::DeviceRecovered) {
             self.request_frame(out, FrameReason::EXPOSE);
         }
-        self.deliver_motion_event(&event);
+        if self.deliver_motion_event(&event) {
+            self.request_frame(out, FrameReason::DAMAGE);
+        }
         self.bridge.render_events.push(event);
     }
 

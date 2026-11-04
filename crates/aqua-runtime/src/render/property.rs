@@ -35,7 +35,9 @@ pub fn apply(item: &mut DisplayItem, property: Property, value: MotionValue) -> 
             _ => false,
         },
         (Property::Edge(edge), MotionValue::Scalar(position)) => match item {
-            DisplayItem::Rect { bounds, .. } | DisplayItem::Quad { bounds, .. } => {
+            DisplayItem::Rect { bounds, .. }
+            | DisplayItem::Quad { bounds, .. }
+            | DisplayItem::Shadow { bounds, .. } => {
                 *bounds = move_edge(*bounds, edge, position);
                 true
             }

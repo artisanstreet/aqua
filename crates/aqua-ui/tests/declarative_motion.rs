@@ -1,7 +1,7 @@
 use aqua_core::{NodeId, Oklch, Size};
 use aqua_motion::{
-    Easing, Edge, MotionCommand, MotionKind, MotionValue, Property, ReducedMotion, SpringParams,
-    TrackSet,
+    AppMotion, Easing, Edge, MotionCommand, MotionKind, MotionValue, Property, ReducedMotion,
+    SpringParams, TrackSet,
 };
 use aqua_style::Paint;
 use aqua_ui::layout::NaiveMeasurer;
@@ -77,6 +77,7 @@ struct Harness {
     tree: UiTree,
     root: NodeId,
     runtime: MotionRuntime,
+    app: AppMotion,
     tracks: TrackSet,
     removed: Vec<NodeId>,
 }
@@ -96,7 +97,8 @@ impl Harness {
         Self {
             tree,
             root,
-            runtime: MotionRuntime::new(theme, ReducedMotion::Full),
+            runtime: MotionRuntime::new(theme),
+            app: AppMotion::new(ReducedMotion::Full),
             tracks: TrackSet::default(),
             removed: Vec::new(),
         }
@@ -108,8 +110,8 @@ impl Harness {
         self.tree
             .compute_layout(Size::new(400.0, 400.0), &NaiveMeasurer)
             .unwrap();
-        self.runtime.reconcile(&self.tree, at);
-        let commands = self.runtime.drain_commands();
+        self.runtime.reconcile(&mut self.app, &self.tree, at);
+        let commands = self.app.drain_commands();
         for command in &commands {
             self.tracks.apply(*command);
         }
@@ -120,7 +122,7 @@ impl Harness {
         let sampled = self.tracks.sample(at);
         for event in sampled.events {
             self.removed
-                .extend(self.runtime.handle(&mut self.tree, event));
+                .extend(self.runtime.handle(&mut self.app, &mut self.tree, event));
         }
     }
 
@@ -158,7 +160,7 @@ fn first_mount_spawns_tracks_without_motion() {
         .all(|c| matches!(c, MotionCommand::Spawn { .. })));
     assert_eq!(set_targets(&commands), 0);
     h.sample(0.0);
-    assert!(h.runtime.is_idle() || h.tracks.is_idle());
+    assert!(h.app.all_settled() || h.tracks.is_idle());
 }
 
 #[test]
@@ -312,7 +314,7 @@ fn exit_keeps_the_node_until_its_tracks_settle() {
         .runtime
         .track_of(leaving, AnimatedProperty::Opacity)
         .is_none());
-    assert_eq!(h.runtime.track_count(), 0);
+    assert_eq!(h.app.len(), 0);
 }
 
 #[test]
@@ -397,8 +399,8 @@ fn theme_token_change_retargets_in_flight_tracks() {
     };
     assert!((before - 0.8).abs() < 1e-4);
 
-    h.runtime.set_theme(fast, 1.2);
-    let commands = h.runtime.drain_commands();
+    h.runtime.set_theme(&mut h.app, fast, 1.2);
+    let commands = h.app.drain_commands();
     assert_eq!(commands.len(), 1);
     let MotionCommand::SetTarget { to, kind, .. } = commands[0] else {
         panic!("retarget")
@@ -431,9 +433,10 @@ fn literal_motions_ignore_theme_changes() {
     h.render(std::slice::from_ref(&row), 0.0);
     row.opacity = Some(0.0);
     h.render(std::slice::from_ref(&row), 1.0);
+    h.app.drain_commands();
     h.runtime
-        .set_theme(MotionTheme::default().with(SLOW, FADE), 1.0);
-    assert!(h.runtime.drain_commands().is_empty());
+        .set_theme(&mut h.app, MotionTheme::default().with(SLOW, FADE), 1.0);
+    assert!(h.app.drain_commands().is_empty());
 }
 
 #[test]

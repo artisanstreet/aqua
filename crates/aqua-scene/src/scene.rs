@@ -187,6 +187,14 @@ impl Scene {
         })
     }
 
+    pub fn item_revision(&self, id: NodeId) -> Option<u64> {
+        let raw = id.raw();
+        self.nodes
+            .get(raw.index as usize)
+            .filter(|n| n.alive && n.generation == raw.generation)
+            .map(|n| n.changed_at)
+    }
+
     pub fn len(&self) -> usize {
         self.order.len()
     }

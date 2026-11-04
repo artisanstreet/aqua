@@ -177,6 +177,22 @@ impl Runtime {
                 stack.extend(record.children.iter().rev().copied());
             }
         }
+        if let Some(enter) = options.presence.enter_motion() {
+            let kind = self.motion_rt.theme().resolve(enter).kind();
+            self.animate_popup(
+                overlay,
+                aqua_ui::overlay_host::PopupMotion {
+                    property: aqua_motion::Property::Opacity,
+                    from: aqua_motion::MotionValue::Scalar(0.0),
+                    to: aqua_motion::MotionValue::Scalar(1.0),
+                    kind,
+                },
+            );
+        }
+        if let Some(exit) = options.presence.exit_motion() {
+            let kind = self.motion_rt.theme().resolve(exit).kind();
+            self.host.set_popup_exit(overlay, kind);
+        }
         let pending = Rc::new(RefCell::new(None));
         if let Some(reactive) = options.reactive {
             reactive.attach(view.scope(), pending.clone());

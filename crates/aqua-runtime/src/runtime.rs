@@ -301,6 +301,10 @@ pub struct Runtime {
     color_profile: aqua_core::ColorProfile,
     interaction: TextInteraction,
     glides: crate::render::scroll::ScrollGlides,
+    motion_rt: aqua_ui::motion::runtime::MotionRuntime,
+    motion_seen: Option<(u64, u64, u32, u32)>,
+    motion_keys: render_motion::MotionKeys,
+    motion_sent: HashMap<aqua_motion::TrackId, Vec<(NodeId, f32)>>,
     tooltip_pending: Option<overlays::PendingTooltip>,
     tooltip_popup: Option<(NodeId, aqua_ui::overlay::OverlayId)>,
     bound_popups: HashMap<aqua_ui::overlay::OverlayId, overlays::BoundPopup>,
@@ -433,6 +437,10 @@ impl Runtime {
             color_profile: aqua_core::ColorProfile::AquaLinear,
             interaction: TextInteraction::default(),
             glides: crate::render::scroll::ScrollGlides::default(),
+            motion_rt: aqua_ui::motion::runtime::MotionRuntime::default(),
+            motion_seen: None,
+            motion_keys: HashMap::new(),
+            motion_sent: HashMap::new(),
             tooltip_pending: None,
             tooltip_popup: None,
             bound_popups: HashMap::new(),
@@ -944,6 +952,11 @@ impl Runtime {
         self.inline_cursor().unwrap_or_else(|| self.tree.cursor())
     }
 
+    #[must_use]
+    pub fn last_input_consumed(&self) -> bool {
+        self.bridge.input_consumed
+    }
+
     pub fn drop_files(&mut self, paths: Vec<std::path::PathBuf>) -> bool {
         self.drop_files_at(paths, None)
     }
@@ -1218,6 +1231,9 @@ impl Runtime {
         self.runtime.flush();
         self.drain_structural()?;
         self.process_control_requests();
+        if self.host.begin_popup_exits(self.clock) {
+            self.cached_version = None;
+        }
         let fonts_revision = self.fonts.lock().font_revision();
         if self
             .cached_version
@@ -1236,6 +1252,7 @@ impl Runtime {
         }
         self.follow_external_text_carets();
         self.host.reanchor_all(&mut self.tree);
+        self.reconcile_motion();
         let version = (
             self.tree.content_version(),
             self.scale.to_bits(),
@@ -1654,6 +1671,7 @@ impl Runtime {
     fn emit_tree_keyed(&mut self) -> Vec<(SceneKey, DisplayItem)> {
         let mut out = Vec::new();
         let mut per_node: HashMap<NodeId, u32> = HashMap::new();
+        self.motion_keys.clear();
         for (node, item) in self.tree.emit_scene() {
             let op = per_node.entry(node).or_insert(0);
             let key = SceneKey::Tree { node, op: *op };
@@ -1695,6 +1713,7 @@ impl Runtime {
                 }
                 other => other,
             };
+            render_motion::note_motion_item(&mut self.motion_keys, node, key, &item);
             let clip_text = self
                 .tree
                 .get(node)
@@ -2397,14 +2416,14 @@ impl Runtime {
             return;
         }
         let live: HashSet<_> = order.iter().copied().collect();
-        self.scene_map.retain(|key, id| {
-            if live.contains(key) {
-                true
-            } else {
-                scene.remove(*id);
-                false
-            }
-        });
+        self.scene_order
+            .iter()
+            .filter(|key| !live.contains(*key))
+            .for_each(|key| {
+                if let Some(id) = self.scene_map.remove(key) {
+                    scene.remove(id);
+                }
+            });
         let mut ids = Vec::with_capacity(items.len());
         for (key, item) in items {
             let id = match self.scene_map.get(&key).copied() {

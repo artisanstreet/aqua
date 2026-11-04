@@ -1,7 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use aqua_core::{DisplayItem, NodeId, Transform2D};
-use aqua_motion::{MotionValue, Property};
+use aqua_motion::{Binding, Edge, MotionCommand, MotionValue, Property, TrackId};
 use aqua_protocol::{RenderCommand, RenderEvent};
 use aqua_ui::{overlay::OverlayId, overlay_host::PopupMotion, tree::NodeKind};
 
@@ -47,7 +47,198 @@ fn opens_clip(item: &DisplayItem) -> bool {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum MotionSlot {
+    Opacity,
+    Translate,
+    Fill,
+    Border,
+    TextColor,
+    Frame,
+}
+
+fn slot_for(property: Property) -> MotionSlot {
+    match property {
+        Property::Opacity => MotionSlot::Opacity,
+        Property::Translate => MotionSlot::Translate,
+        Property::Fill => MotionSlot::Fill,
+        Property::BorderColor => MotionSlot::Border,
+        Property::TextColor => MotionSlot::TextColor,
+        Property::Edge(_) => MotionSlot::Frame,
+    }
+}
+
+pub(super) type MotionKeys = HashMap<(NodeId, MotionSlot), Vec<SceneKey>>;
+
+pub(super) fn note_motion_item(
+    keys: &mut MotionKeys,
+    node: NodeId,
+    key: SceneKey,
+    item: &DisplayItem,
+) {
+    let mut first = |slot: MotionSlot| {
+        let entry = keys.entry((node, slot)).or_default();
+        if entry.is_empty() {
+            entry.push(key);
+        }
+    };
+    let frame =
+        |keys: &mut MotionKeys| keys.entry((node, MotionSlot::Frame)).or_default().push(key);
+    match item {
+        DisplayItem::PushOpacity(_) => first(MotionSlot::Opacity),
+        DisplayItem::PushTransform(_) => first(MotionSlot::Translate),
+        DisplayItem::Text { .. } => first(MotionSlot::TextColor),
+        DisplayItem::Rect {
+            fill,
+            border_width,
+            shadow,
+            ..
+        } => {
+            let carrier = shadow.is_some() && fill.alpha <= 0.0 && *border_width <= 0.0;
+            if !carrier {
+                first(MotionSlot::Fill);
+                if *border_width > 0.0 {
+                    first(MotionSlot::Border);
+                }
+            }
+            frame(keys);
+        }
+        DisplayItem::Quad { border_widths, .. } => {
+            let widest = border_widths
+                .left
+                .max(border_widths.top)
+                .max(border_widths.right)
+                .max(border_widths.bottom);
+            match widest > 0.0 {
+                true => first(MotionSlot::Border),
+                false => first(MotionSlot::Fill),
+            }
+            frame(keys);
+        }
+        DisplayItem::Shadow { .. } => frame(keys),
+        _ => {}
+    }
+}
+
 impl Runtime {
+    pub(super) fn reconcile_motion(&mut self) {
+        let key = (
+            self.tree.content_version(),
+            self.tree.layout_version(),
+            self.viewport.w.to_bits(),
+            self.viewport.h.to_bits(),
+        );
+        if self.motion_seen == Some(key) {
+            return;
+        }
+        if !self.tree.has_motion_specs() && !self.motion_rt.is_active() {
+            self.motion_rt.seed();
+            return;
+        }
+        let now = self.clock;
+        self.motion_rt
+            .reconcile(self.host.tracks_mut(), &self.tree, now);
+        let groups = self.motion_rt.groups(&self.tree);
+        self.tree.set_motion_groups(groups);
+        self.motion_seen = Some((
+            self.tree.content_version(),
+            self.tree.layout_version(),
+            self.viewport.w.to_bits(),
+            self.viewport.h.to_bits(),
+        ));
+    }
+
+    pub fn set_motion_theme(&mut self, theme: aqua_ui::motion::MotionTheme) {
+        let now = self.clock;
+        self.motion_rt.set_theme(self.host.tracks_mut(), theme, now);
+    }
+
+    fn scroll_shift(&self, node: NodeId) -> (f32, f32) {
+        let mut shift = (0.0, 0.0);
+        let mut parent = match self.tree.is_portal(node) {
+            true => None,
+            false => self.tree.get(node).and_then(|record| record.parent),
+        };
+        while let Some(id) = parent {
+            let Some(record) = self.tree.get(id) else {
+                break;
+            };
+            if let NodeKind::Scroll(scroll) = &record.kind {
+                shift.0 -= scroll.offset.x;
+                shift.1 -= scroll.offset.y;
+            }
+            if self.tree.is_portal(id) {
+                break;
+            }
+            parent = record.parent;
+        }
+        shift
+    }
+
+    fn scene_targets(&self, binding: Binding) -> Vec<(NodeId, f32)> {
+        let shift = match binding.property {
+            Property::Edge(Edge::Left | Edge::Right) => self.scroll_shift(binding.node).0,
+            Property::Edge(Edge::Top | Edge::Bottom) => self.scroll_shift(binding.node).1,
+            _ => 0.0,
+        };
+        self.motion_keys
+            .get(&(binding.node, slot_for(binding.property)))
+            .into_iter()
+            .flatten()
+            .filter_map(|key| self.scene_map.get(key).copied())
+            .map(|scene| (scene, shift))
+            .collect()
+    }
+
+    fn route_motion(&mut self, drained: Vec<MotionCommand>) -> Vec<MotionCommand> {
+        let owned: HashMap<TrackId, Binding> = self.motion_rt.bindings().into_iter().collect();
+        let mut out = Vec::with_capacity(drained.len());
+        for command in drained {
+            match command {
+                MotionCommand::Spawn {
+                    track,
+                    binding: Some(_),
+                    initial,
+                    kind,
+                    at,
+                } if owned.contains_key(&track) => out.push(MotionCommand::Spawn {
+                    track,
+                    binding: None,
+                    initial,
+                    kind,
+                    at,
+                }),
+                MotionCommand::Remove { track } => {
+                    self.motion_sent.remove(&track);
+                    out.push(command);
+                }
+                other => out.push(other),
+            }
+        }
+        for (track, binding) in owned {
+            let desired = self.scene_targets(binding);
+            let previous = self.motion_sent.get(&track);
+            if previous == Some(&desired) || (previous.is_none() && desired.is_empty()) {
+                continue;
+            }
+            if previous.is_some_and(|sent| !sent.is_empty()) {
+                out.push(MotionCommand::Unbind { track });
+            }
+            for (scene, shift) in &desired {
+                out.push(MotionCommand::Bind {
+                    track,
+                    binding: Binding {
+                        node: *scene,
+                        property: binding.property,
+                    },
+                    shift: *shift,
+                });
+            }
+            self.motion_sent.insert(track, desired);
+        }
+        out
+    }
+
     pub fn animate_popup(&mut self, overlay: OverlayId, motion: PopupMotion) -> bool {
         let animated = self.host.animate_popup(overlay, motion, self.clock);
         if animated {
@@ -170,17 +361,25 @@ impl Runtime {
             },
             |node| tree.get(node).is_some(),
         );
-        self.host
-            .tracks_mut()
-            .drain_commands()
+        let drained = self.host.tracks_mut().drain_commands();
+        self.route_motion(drained)
             .into_iter()
             .map(RenderCommand::Motion)
             .collect()
     }
 
-    pub(super) fn deliver_motion_event(&mut self, event: &RenderEvent) {
-        if let RenderEvent::Motion(motion) = event {
-            self.host.tracks_mut().handle(*motion);
+    pub(super) fn deliver_motion_event(&mut self, event: &RenderEvent) -> bool {
+        match event {
+            RenderEvent::Motion(motion) => {
+                self.host.tracks_mut().handle(*motion);
+                let rows = !self
+                    .motion_rt
+                    .handle(self.host.tracks_mut(), &mut self.tree, *motion)
+                    .is_empty();
+                let popups = self.host.finish_popup_exits(&mut self.tree);
+                rows || popups
+            }
+            _ => false,
         }
     }
 }

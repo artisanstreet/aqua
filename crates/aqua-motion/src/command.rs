@@ -84,6 +84,14 @@ pub enum MotionCommand {
     Remove {
         track: TrackId,
     },
+    Bind {
+        track: TrackId,
+        binding: Binding,
+        shift: f32,
+    },
+    Unbind {
+        track: TrackId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

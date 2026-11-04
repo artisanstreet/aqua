@@ -7,6 +7,7 @@ use aqua_reactive::{DepTuple, Scope};
 
 use crate::element::Element;
 use crate::overlay::{CloseReason, DismissPolicy, Modality, OverlayKind, Placement};
+use aqua_style::motion::Presence;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopupFocus {
@@ -25,6 +26,7 @@ pub struct PopupOptions {
     pub at: Option<Point>,
     pub on_close: Option<Rc<dyn Fn(CloseReason)>>,
     pub reactive: Option<ReactivePopup>,
+    pub presence: Presence,
 }
 
 impl fmt::Debug for PopupOptions {
@@ -49,6 +51,7 @@ impl PopupOptions {
             at: None,
             on_close: None,
             reactive: None,
+            presence: Presence::new(),
         }
     }
 
@@ -62,6 +65,7 @@ impl PopupOptions {
             at: None,
             on_close: None,
             reactive: None,
+            presence: Presence::new(),
         }
     }
 
@@ -77,6 +81,11 @@ impl PopupOptions {
         self.at = Some(at);
         self.placement.align = crate::overlay::Align::Start;
         self.placement.gap = 0.0;
+        self
+    }
+
+    pub fn presence(mut self, presence: Presence) -> Self {
+        self.presence = presence;
         self
     }
 

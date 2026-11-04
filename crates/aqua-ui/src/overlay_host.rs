@@ -58,6 +58,14 @@ pub struct PopupMotion {
     pub kind: MotionKind,
 }
 
+struct Lingering {
+    overlay: RawId,
+    owner: NodeId,
+    root: NodeId,
+    kind: MotionKind,
+    started: bool,
+}
+
 struct PopupAnimation {
     overlay: RawId,
     owner: NodeId,
@@ -69,6 +77,8 @@ struct PopupAnimation {
 pub struct OverlayHost {
     tracks: AppMotion,
     popup_animations: Vec<PopupAnimation>,
+    exits: HashMap<RawId, MotionKind>,
+    lingering: Vec<Lingering>,
     closed: Vec<ClosedOverlay>,
     pointer_anchors: HashMap<RawId, Point>,
     pointer_tooltips: HashSet<RawId>,
@@ -88,6 +98,8 @@ impl OverlayHost {
             motion: MotionController::new(ReducedMotion::Full),
             tracks: AppMotion::new(ReducedMotion::Full),
             popup_animations: Vec::new(),
+            exits: HashMap::new(),
+            lingering: Vec::new(),
             closed: Vec::new(),
             pointer_anchors: HashMap::new(),
             pointer_tooltips: HashSet::new(),
@@ -779,6 +791,94 @@ impl OverlayHost {
         }
     }
 
+    pub fn set_popup_exit(&mut self, overlay: OverlayId, kind: MotionKind) {
+        self.exits.insert(overlay.raw(), kind);
+    }
+
+    #[must_use]
+    pub fn lingering_popups(&self) -> usize {
+        self.lingering.len()
+    }
+
+    pub fn begin_popup_exits(&mut self, now: Seconds) -> bool {
+        let mut begun = false;
+        for index in 0..self.lingering.len() {
+            if self.lingering[index].started {
+                continue;
+            }
+            let (overlay, owner, root, kind) = {
+                let entry = &self.lingering[index];
+                (entry.overlay, entry.owner, entry.root, entry.kind)
+            };
+            let target = MotionValue::Scalar(0.0);
+            let existing = self.popup_animations.iter_mut().find(|animation| {
+                animation.overlay == overlay && animation.motion.property == Property::Opacity
+            });
+            match existing {
+                Some(animation) => {
+                    animation.motion.to = target;
+                    animation.motion.kind = kind;
+                    if let Some(track) = animation.track {
+                        let _ = self.tracks.set_target_with(track, target, kind, now);
+                    }
+                }
+                None => self.popup_animations.push(PopupAnimation {
+                    overlay,
+                    owner,
+                    root,
+                    motion: PopupMotion {
+                        property: Property::Opacity,
+                        from: MotionValue::Scalar(1.0),
+                        to: target,
+                        kind,
+                    },
+                    track: None,
+                }),
+            }
+            self.lingering[index].started = true;
+            begun = true;
+        }
+        begun
+    }
+
+    pub fn finish_popup_exits(&mut self, tree: &mut UiTree) -> bool {
+        let settled: Vec<RawId> = self
+            .lingering
+            .iter()
+            .filter(|entry| entry.started)
+            .filter(|entry| {
+                self.popup_animations
+                    .iter()
+                    .find(|animation| {
+                        animation.overlay == entry.overlay
+                            && animation.motion.property == Property::Opacity
+                    })
+                    .and_then(|animation| animation.track)
+                    .is_some_and(|track| self.tracks.is_settled(track))
+            })
+            .map(|entry| entry.overlay)
+            .collect();
+        for overlay in &settled {
+            let tracks = &mut self.tracks;
+            self.popup_animations.retain(|animation| {
+                let gone = animation.overlay == *overlay;
+                if let (true, Some(track)) = (gone, animation.track) {
+                    tracks.remove(track);
+                }
+                !gone
+            });
+            if let Some(position) = self
+                .lingering
+                .iter()
+                .position(|entry| entry.overlay == *overlay)
+            {
+                let entry = self.lingering.remove(position);
+                tree.remove(entry.root);
+            }
+        }
+        !settled.is_empty()
+    }
+
     pub fn advance_motion(&mut self, now: Seconds) -> Vec<MotionHandle> {
         self.motion.advance(now)
     }
@@ -801,6 +901,21 @@ impl OverlayHost {
         self.closed.extend_from_slice(closed);
         for entry in closed {
             let raw = entry.id.raw();
+            if let (Some(kind), Some(root)) = (self.exits.remove(&raw), self.mounts.get(&raw)) {
+                tree.set_hit_test_excluded(*root, true);
+                self.lingering.push(Lingering {
+                    overlay: raw,
+                    owner: entry.owner,
+                    root: *root,
+                    kind,
+                    started: false,
+                });
+                self.mounts.remove(&raw);
+                self.pointer_anchors.remove(&raw);
+                self.pointer_tooltips.remove(&raw);
+                self.measured.remove(&raw);
+                continue;
+            }
             let tracks = &mut self.tracks;
             self.popup_animations.retain(|animation| {
                 let gone = animation.overlay == raw;
@@ -816,10 +931,12 @@ impl OverlayHost {
         let mut ancestor = tree.focused();
         let mut removed_focus = false;
         while let Some(node) = ancestor {
-            if closed
-                .iter()
-                .any(|entry| self.mounts.get(&entry.id.raw()) == Some(&node))
-            {
+            if closed.iter().any(|entry| {
+                self.mounts.get(&entry.id.raw()) == Some(&node)
+                    || self.lingering.iter().any(|lingering| {
+                        lingering.overlay == entry.id.raw() && lingering.root == node
+                    })
+            }) {
                 removed_focus = true;
                 break;
             }

@@ -14,6 +14,13 @@ pub mod scroll;
 
 type Overrides = Vec<(Property, MotionValue)>;
 
+fn shifted(property: Property, value: MotionValue, shift: f32) -> MotionValue {
+    match (property, value) {
+        (Property::Edge(_), MotionValue::Scalar(position)) => MotionValue::Scalar(position + shift),
+        _ => value,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 struct Submitted {
     revision: u64,
@@ -25,7 +32,7 @@ pub struct RenderSide {
     local: HashMap<NodeId, NodeId>,
     base: HashMap<NodeId, DisplayItem>,
     overrides: HashMap<NodeId, Overrides>,
-    bindings: HashMap<TrackId, Binding>,
+    bindings: HashMap<TrackId, Vec<(Binding, f32)>>,
     tracks: TrackSet,
     dirty: Vec<NodeId>,
     viewport: Option<(Size, f32)>,
@@ -100,9 +107,7 @@ impl RenderSide {
         }
         let sampled = self.tracks.sample(input.present_at.as_secs_f64());
         for presented in sampled.values {
-            if let Some(binding) = presented.binding {
-                self.set_override(binding, presented.value);
-            }
+            self.present(presented.track, presented.value);
         }
         events.extend(sampled.events.into_iter().map(RenderEvent::Motion));
         self.refresh();
@@ -147,7 +152,7 @@ impl RenderSide {
 
     fn apply_scene(&mut self, diff: SceneDiff) {
         for (node, item) in diff.upserts {
-            match self.base.contains_key(&node) {
+            match self.base.contains_key(&node) || self.overrides.contains_key(&node) {
                 true => {
                     self.base.insert(node, item);
                     self.dirty.push(node);
@@ -196,41 +201,67 @@ impl RenderSide {
                 track,
                 binding: Some(binding),
                 ..
-            } => self.bind(track, binding),
-            MotionCommand::Remove { track } => self.unbind(track),
+            } => self.bind(track, binding, 0.0),
+            MotionCommand::Bind {
+                track,
+                binding,
+                shift,
+            } => self.bind(track, binding, shift),
+            MotionCommand::Remove { track } | MotionCommand::Unbind { track } => self.unbind(track),
             _ => {}
         }
         self.tracks.apply(command)
     }
 
-    fn bind(&mut self, track: TrackId, binding: Binding) {
-        self.bindings.insert(track, binding);
+    fn bind(&mut self, track: TrackId, binding: Binding, shift: f32) {
+        let list = self.bindings.entry(track).or_default();
+        match list.iter_mut().find(|(existing, _)| *existing == binding) {
+            Some(entry) => entry.1 = shift,
+            None => list.push((binding, shift)),
+        }
         if !self.base.contains_key(&binding.node) {
             if let Some(item) = self.presented(binding.node).cloned() {
                 self.base.insert(binding.node, item);
             }
         }
+        if let Some(value) = self.tracks.value(track) {
+            self.set_override(binding, shifted(binding.property, value, shift));
+        }
+    }
+
+    fn present(&mut self, track: TrackId, value: MotionValue) {
+        let Some(list) = self.bindings.get(&track) else {
+            return;
+        };
+        let targets: Vec<(Binding, MotionValue)> = list
+            .iter()
+            .map(|(binding, shift)| (*binding, shifted(binding.property, value, *shift)))
+            .collect();
+        for (binding, value) in targets {
+            self.set_override(binding, value);
+        }
     }
 
     fn unbind(&mut self, track: TrackId) {
-        let Some(binding) = self.bindings.remove(&track) else {
+        let Some(released) = self.bindings.remove(&track) else {
             return;
         };
-        let still_bound = self
-            .bindings
-            .values()
-            .any(|other| other.node == binding.node);
-        match still_bound {
-            true => {
-                if let Some(overrides) = self.overrides.get_mut(&binding.node) {
-                    overrides.retain(|(property, _)| *property != binding.property);
-                }
-                self.dirty.push(binding.node);
+        for (binding, _) in released {
+            if let Some(overrides) = self.overrides.get_mut(&binding.node) {
+                overrides.retain(|(property, _)| *property != binding.property);
             }
-            false => {
-                self.overrides.remove(&binding.node);
-                if let Some(item) = self.base.remove(&binding.node) {
-                    self.write(binding.node, item);
+            let still_bound = self
+                .bindings
+                .values()
+                .flatten()
+                .any(|(other, _)| other.node == binding.node);
+            match still_bound {
+                true => self.dirty.push(binding.node),
+                false => {
+                    self.overrides.remove(&binding.node);
+                    if let Some(item) = self.base.remove(&binding.node) {
+                        self.write(binding.node, item);
+                    }
                 }
             }
         }

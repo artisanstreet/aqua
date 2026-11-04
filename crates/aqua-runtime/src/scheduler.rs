@@ -8,6 +8,21 @@ pub const DEFAULT_MAX_IN_FLIGHT: u32 = 2;
 
 pub const MIN_FRAME_INTERVAL: Duration = Duration::from_micros(1);
 
+pub fn gpui_pulse_interval(
+    refresh_interval: Duration,
+    active: bool,
+    last_invalidating_input: Option<Instant>,
+    now: Instant,
+) -> Duration {
+    let recent = last_invalidating_input
+        .is_some_and(|last| now.saturating_duration_since(last) < Duration::from_secs(1));
+    if active || recent {
+        refresh_interval
+    } else {
+        refresh_interval.max(Duration::from_micros(33_333))
+    }
+}
+
 struct Pending {
     reasons: FrameReason,
     deadline: Option<Instant>,
@@ -26,6 +41,7 @@ pub struct Scheduler {
     window_fps: HashMap<WindowId, Option<NonZeroU32>>,
     max_in_flight: u32,
     pending: HashMap<WindowId, Pending>,
+    pulse_deadlines: HashMap<WindowId, Instant>,
     in_flight: HashMap<WindowId, u32>,
     pacing_gate: HashMap<WindowId, Instant>,
     stats: FrameStats,
@@ -44,6 +60,7 @@ impl Scheduler {
             window_fps: HashMap::new(),
             max_in_flight: DEFAULT_MAX_IN_FLIGHT,
             pending: HashMap::new(),
+            pulse_deadlines: HashMap::new(),
             in_flight: HashMap::new(),
             pacing_gate: HashMap::new(),
             stats: FrameStats::default(),
@@ -139,11 +156,22 @@ impl Scheduler {
     }
 
     pub fn pending_reasons(&self, window: WindowId) -> Option<FrameReason> {
-        self.pending.get(&window).map(|p| p.reasons)
+        let mut reasons = self
+            .pending
+            .get(&window)
+            .map_or(FrameReason::empty(), |p| p.reasons);
+        if self.pulse_deadlines.contains_key(&window) {
+            reasons |= FrameReason::GPUI_PULSE;
+        }
+        (!reasons.is_empty()).then_some(reasons)
     }
 
     pub fn has_pending(&self) -> bool {
-        !self.pending.is_empty()
+        !self.pending.is_empty() || !self.pulse_deadlines.is_empty()
+    }
+
+    pub fn request_gpui_pulse_deadline(&mut self, window: WindowId, deadline: Instant) {
+        self.pulse_deadlines.insert(window, deadline);
     }
 
     fn gate_blocks(&self, id: WindowId, now: Instant) -> bool {
@@ -156,25 +184,41 @@ impl Scheduler {
     pub fn ready_windows(&mut self, now: Instant) -> Vec<(WindowId, FrameReason)> {
         let mut ready = Vec::new();
         let mut deferred = 0u64;
-        let mut ids: Vec<WindowId> = self.pending.keys().copied().collect();
+        let mut ids: Vec<WindowId> = self
+            .pending
+            .keys()
+            .chain(self.pulse_deadlines.keys())
+            .copied()
+            .collect();
         ids.sort();
+        ids.dedup();
         for id in ids {
-            let p = &self.pending[&id];
             if self.gate_blocks(id, now) {
                 continue;
             }
-            if p.reasons == FrameReason::ANIMATION {
-                match p.deadline {
-                    Some(d) if now < d => continue,
-                    _ => {}
-                }
+            let mut reasons = self
+                .pending
+                .get(&id)
+                .filter(|p| {
+                    p.reasons != FrameReason::ANIMATION || p.deadline.is_none_or(|d| now >= d)
+                })
+                .map_or(FrameReason::empty(), |p| p.reasons);
+            if self
+                .pulse_deadlines
+                .get(&id)
+                .is_some_and(|deadline| now >= *deadline)
+            {
+                reasons |= FrameReason::GPUI_PULSE;
+            }
+            if reasons.is_empty() {
+                continue;
             }
             let flying = self.in_flight.get(&id).copied().unwrap_or(0);
             if flying >= self.max_in_flight {
                 deferred += 1;
                 continue;
             }
-            ready.push((id, p.reasons));
+            ready.push((id, reasons));
         }
         self.stats.deferred_backpressure += deferred;
         ready
@@ -183,7 +227,22 @@ impl Scheduler {
     pub fn mark_produced(&mut self, windows: &[WindowId], now: Instant) {
         for id in windows {
             let interval = Self::frame_interval(self.window_fps_target(*id));
-            if self.pending.remove(id).is_some() {
+            let pulse_ready = self
+                .pulse_deadlines
+                .get(id)
+                .is_some_and(|deadline| now >= *deadline);
+            if pulse_ready {
+                self.pulse_deadlines.remove(id);
+            }
+            let normal_ready = self.pending.get(id).is_some_and(|p| {
+                !pulse_ready
+                    || p.reasons != FrameReason::ANIMATION
+                    || p.deadline.is_none_or(|d| now >= d)
+            });
+            if normal_ready {
+                self.pending.remove(id);
+            }
+            if normal_ready || pulse_ready {
                 self.stats.produced += 1;
             }
             *self.in_flight.entry(*id).or_insert(0) += 1;
@@ -235,11 +294,22 @@ impl Scheduler {
                 _ => return Some(now),
             }
         }
+        for (id, deadline) in &self.pulse_deadlines {
+            if self.in_flight.get(id).copied().unwrap_or(0) >= self.max_in_flight {
+                continue;
+            }
+            let mut at = *deadline;
+            if let Some(gate) = self.pacing_gate.get(id) {
+                at = at.max(*gate);
+            }
+            consider(at.max(now));
+        }
         best
     }
 
     pub fn remove_window(&mut self, window: WindowId) {
         self.pending.remove(&window);
+        self.pulse_deadlines.remove(&window);
         self.in_flight.remove(&window);
         self.pacing_gate.remove(&window);
         self.window_fps.remove(&window);

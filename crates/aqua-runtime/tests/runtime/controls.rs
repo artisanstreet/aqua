@@ -246,6 +246,110 @@ fn modal_bound_fields_survive_background_refresh_and_dispose_bindings_on_close()
 }
 
 #[test]
+fn keyed_aligned_reveal_finds_popup_and_rejects_ambiguous_keys() {
+    use aqua_ui::collection::{CollectionRevealAlignment, List};
+    use aqua_ui::element::Element;
+
+    fn collection() -> Element {
+        let mut descriptor = List::new()
+            .items(0..100usize)
+            .key(|index| *index)
+            .row(|index| ui::Text::builder().arg(format!("line-{index}")).build())
+            .style(Style::new().width(px(200.0)).height(px(120.0)))
+            .estimated_row_height(px(24.0))
+            .virtualize()
+            .descriptor();
+        descriptor.fixed_row_height = true;
+        Element::collection(descriptor).with_key("resource-lines")
+    }
+
+    let mut runtime = mounted(
+        ui::Box::new()
+            .style(Style::new().width(px(500.0)).height(px(350.0)))
+            .child(
+                ui::Button::new()
+                    .child(ui::Text::builder().arg("open").build())
+                    .build(),
+            )
+            .build(),
+    );
+    runtime.set_viewport(600.0, 400.0, 1.0);
+    runtime.build_frame().unwrap();
+    let owner = runtime
+        .tree()
+        .get(text_node(&runtime, "open"))
+        .unwrap()
+        .parent
+        .unwrap();
+    let first = runtime
+        .open_popup(owner, collection(), PopupOptions::dialog())
+        .unwrap();
+    assert!(!runtime.reveal_collection_item_aligned(
+        "resource-lines",
+        10,
+        CollectionRevealAlignment::Start
+    ));
+    assert!(runtime
+        .collection_item_target_aligned("resource-lines", 10, CollectionRevealAlignment::Start)
+        .is_none());
+    runtime.build_frame().unwrap();
+    let initial = runtime
+        .tree()
+        .scroll_offset(runtime.host().popup_root(first).unwrap())
+        .unwrap();
+    assert_eq!(
+        runtime
+            .collection_item_target_aligned("resource-lines", 10, CollectionRevealAlignment::Start)
+            .unwrap()
+            .y,
+        240.0
+    );
+    assert_eq!(
+        runtime
+            .tree()
+            .scroll_offset(runtime.host().popup_root(first).unwrap())
+            .unwrap(),
+        initial
+    );
+    assert!(runtime.reveal_collection_item_aligned(
+        "resource-lines",
+        10,
+        CollectionRevealAlignment::Start
+    ));
+    let key = aqua_ui::tree::hash_key(aqua_ui::element::Key::from("resource-lines"));
+    let first_node = runtime.host().popup_root(first).unwrap();
+    assert_eq!(runtime.tree().get(first_node).unwrap().key, Some(key));
+    assert_eq!(runtime.tree().scroll_offset(first_node).unwrap().y, 240.0);
+    let second = runtime
+        .open_popup(owner, collection(), PopupOptions::dialog())
+        .unwrap();
+    runtime.build_frame().unwrap();
+    let before = runtime.tree().scroll_offset(first_node).unwrap();
+    assert!(runtime
+        .collection_item_target_aligned("resource-lines", 20, CollectionRevealAlignment::Start)
+        .is_none());
+    assert!(!runtime.reveal_collection_item_aligned(
+        "resource-lines",
+        20,
+        CollectionRevealAlignment::Start
+    ));
+    assert_eq!(runtime.tree().scroll_offset(first_node).unwrap(), before);
+    assert!(runtime.close_popup(second));
+    assert!(runtime.reveal_collection_item_aligned(
+        "resource-lines",
+        20,
+        CollectionRevealAlignment::Start
+    ));
+    assert_eq!(runtime.tree().scroll_offset(first_node).unwrap().y, 480.0);
+    assert!(runtime.close_popup(first));
+    assert!(!runtime.reveal_collection_item_aligned(
+        "resource-lines",
+        10,
+        CollectionRevealAlignment::Start
+    ));
+}
+
+#[test]
 fn declarative_popup_and_pointer_context_menu_mount_interactive_bound_content() {
     let activated = Rc::new(RefCell::new(0));
     let choices = activated.clone();

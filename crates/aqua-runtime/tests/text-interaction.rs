@@ -11,6 +11,141 @@ use aqua_ui::{
     tree::{NodeKind, TextBacking},
 };
 
+#[test]
+fn native_text_service_uses_live_selection_and_rejects_stale_paint() {
+    use aqua_ui::tree::NativeTextModel;
+    use std::cell::RefCell;
+    use std::ops::Range;
+    use std::rc::Rc;
+
+    struct Model {
+        text: String,
+        selection: Range<usize>,
+        revision: u64,
+        edits: usize,
+    }
+    struct Service(Rc<RefCell<Model>>);
+    impl NativeTextModel for Service {
+        fn paint_revision(&self) -> Option<u64> {
+            Some(self.0.borrow().revision)
+        }
+        fn matches_text(&self, text: &str) -> bool {
+            self.0.borrow().text == text
+        }
+        fn selected_bytes(&self) -> Option<Range<usize>> {
+            Some(self.0.borrow().selection.clone())
+        }
+        fn replace_utf16(&self, text: &str, _: Option<Range<usize>>) {
+            let mut model = self.0.borrow_mut();
+            model.text.push_str(text);
+            model.revision += 1;
+            model.edits += 1;
+        }
+    }
+
+    let model = Rc::new(RefCell::new(Model {
+        text: "abc".into(),
+        selection: 0..0,
+        revision: 0,
+        edits: 0,
+    }));
+    let adapter = Rc::new(Service(model.clone()));
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime
+        .mount(|_| {
+            UiText::new("abc")
+                .editable(true)
+                .external_text_input(true)
+                .native_text_model(adapter)
+                .build()
+        })
+        .unwrap();
+    runtime.set_viewport(300.0, 100.0, 1.0);
+    runtime.build_frame().unwrap();
+    let node = runtime.tree().root().unwrap();
+    runtime.tree_mut().set_focused(Some(node));
+    let service = runtime.native_text_service().unwrap();
+    let first = service.selected_bounds().unwrap();
+    model.borrow_mut().selection = 3..3;
+    assert!(service.selected_bounds().unwrap().x > first.x);
+    service.replace_utf16("x", None);
+    assert_eq!(model.borrow().edits, 1);
+    assert_eq!(model.borrow().text, "abcx");
+    assert_eq!(runtime.tree().editor_snapshot(node).unwrap().text, "abc");
+    assert!(service.selected_bounds().is_none());
+    assert!(runtime
+        .native_text_service()
+        .unwrap()
+        .selected_bounds()
+        .is_none());
+    model.borrow_mut().text = "abc".into();
+    assert!(runtime
+        .native_text_service()
+        .unwrap()
+        .selected_bounds()
+        .is_none());
+}
+
+#[test]
+fn raw_inline_glyph_tracks_shaped_slot_and_replaces_on_command() {
+    use aqua_core::{DisplayItem, GpuiHsla};
+    use aqua_ui::tree::{TextInlinePaint, TextInlinePaintContent, UiCommand};
+    let color = GpuiHsla {
+        h: 0.2,
+        s: 0.7,
+        l: 0.4,
+        a: 0.6,
+    };
+    let make_paint = |tint| TextInlinePaint {
+        bytes: 0..1,
+        content: TextInlinePaintContent::FixedSvg {
+            source: "<svg xmlns=\"http://www.w3.org/2000/svg\"/>".into(),
+            tint,
+            size: 15.0,
+            intrinsic: Some((2.0, 1.0)),
+        },
+    };
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime
+        .mount(|_| {
+            UiText::new("@a")
+                .editable(true)
+                .external_text_input(true)
+                .inline_paints(vec![make_paint(Some(color))])
+                .build()
+        })
+        .unwrap();
+    runtime.set_viewport(300.0, 100.0, 1.0);
+    runtime.build_frame().unwrap();
+    let node = runtime.tree().root().unwrap();
+    let first = runtime
+        .scene()
+        .ordered()
+        .find_map(|(_, item)| match item {
+            DisplayItem::GpuiSvg { bounds, tint, .. } => Some((*bounds, *tint)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(first.1, Some(color));
+    assert!((first.0.w - 15.0).abs() < 0.01 && (first.0.h - 7.5).abs() < 0.01);
+    runtime
+        .tree_mut()
+        .push_command(UiCommand::SetTextInlinePaint {
+            node,
+            paints: vec![make_paint(None)],
+        });
+    runtime.build_frame().unwrap();
+    let tint = runtime
+        .scene()
+        .ordered()
+        .find_map(|(_, item)| match item {
+            DisplayItem::GpuiSvg { tint, .. } => Some(*tint),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(tint, None);
+}
+
 fn fixture(editable: bool, texts: &[&str]) -> (Runtime, Vec<NodeId>, SharedFonts) {
     let fonts = SharedFonts::new();
     let mut runtime = Runtime::new(fonts.clone(), SharedRuns::new());
@@ -973,4 +1108,57 @@ fn multi_click_uses_configured_time_and_spatial_limits_without_losing_single_cli
     down(&mut runtime, moved, 1.8);
     up(&mut runtime, moved);
     assert_eq!(runtime.selected_text().as_deref(), Some("hello   "));
+}
+
+#[test]
+fn selection_surface_can_disable_drag_auto_scroll() {
+    use aqua_ui::element::Scroll;
+
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime
+        .mount(|_| {
+            Scroll::new()
+                .style(Style::new().width(px(220.0)).height(px(100.0)))
+                .child(
+                    UiBox::new()
+                        .style(
+                            Style::new()
+                                .axis(Axis::Column)
+                                .width(px(200.0))
+                                .height(px(1200.0))
+                                .flex_shrink(0.0),
+                        )
+                        .children((0..40).map(|index| {
+                            UiText::builder()
+                                .arg(format!("paragraph {index}"))
+                                .selectable(true)
+                                .selection_auto_scroll(false)
+                                .style(
+                                    Style::new()
+                                        .width(px(200.0))
+                                        .height(px(30.0))
+                                        .flex_shrink(0.0),
+                                )
+                                .build()
+                        }))
+                        .build(),
+                )
+                .build()
+        })
+        .unwrap();
+    runtime.set_viewport(300.0, 200.0, 1.0);
+    runtime.build_frame().unwrap();
+    let root = runtime.tree().root().unwrap();
+    down(&mut runtime, Point::new(5.0, 8.0), 1.0);
+    let edge = Point::new(80.0, 110.0);
+    runtime.handle_input(&InputEvent::PointerMove(pointer(edge, 1)));
+    let before = runtime.tree().scroll_offset(root).unwrap();
+    for frame in 1..12 {
+        runtime
+            .step(aqua_protocol::Input::Frame(Instant::from_secs_f64(
+                1.0 + frame as f64 / 60.0,
+            )))
+            .unwrap();
+    }
+    assert_eq!(runtime.tree().scroll_offset(root), Some(before));
 }

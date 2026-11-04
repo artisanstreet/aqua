@@ -15,6 +15,7 @@ use aqua_text::{
     CaretAffinity, CaretPosition, Selection,
 };
 use aqua_ui::{
+    collection_runtime::{CollectionRowRegistration, SelectionBatchOwner},
     events::hit_test,
     tree::{ActionEvent, ActionKind, NodeKind, TextBacking},
 };
@@ -74,6 +75,8 @@ struct Gesture {
     initial: Range<usize>,
     unit: SelectionUnit,
     editable: bool,
+    external_text_input: bool,
+    selection_auto_scroll: bool,
     dragged: bool,
     pointer: Point,
     advanced_at: f64,
@@ -109,6 +112,7 @@ pub(super) struct TextInteraction {
     selection: Option<DocumentSelection>,
     pub(super) selected_nodes: Vec<NodeId>,
     goal_x: Option<(NodeId, f32)>,
+    external_vertical_revision: Option<(NodeId, u64)>,
     document: Option<Rc<DocumentIndex>>,
     source_document: SelectionDocument,
     source_document_id: SelectionDocumentId,
@@ -118,10 +122,140 @@ pub(super) struct TextInteraction {
     binding_version: Option<u64>,
     source_slices: HashMap<NodeId, SourceSlice>,
     source_owner: Option<NodeId>,
+    committed_batches: HashMap<(SelectionDocumentId, SelectionBatchOwner), CommittedBatch>,
+}
+
+struct CommittedBatch {
+    identity: u64,
+    revision: u64,
+    sources: HashSet<SelectionSourceId>,
+}
+
+impl TextInteraction {
+    pub(super) fn register_collection_sources(
+        &mut self,
+        registration: CollectionRowRegistration,
+    ) -> Result<(), String> {
+        let mut groups: HashMap<SelectionDocumentId, Vec<SelectionSource>> = HashMap::new();
+        for (document, source) in registration.sources {
+            groups.entry(document).or_default().push(source);
+        }
+        let mut pending = HashMap::new();
+        let mut seen = HashMap::new();
+        for batch in registration.batches {
+            let key = (batch.document(), batch.owner());
+            if seen
+                .insert(key, batch.identity())
+                .is_some_and(|identity| identity != batch.identity())
+            {
+                return Err("conflicting selection batches for one owner".into());
+            }
+            if self.committed_batches.get(&key).is_some_and(|existing| {
+                existing.identity == batch.identity() && existing.revision == batch.revision()
+            }) {
+                continue;
+            }
+            if let Some(existing) = pending.get(&key) {
+                let existing: &std::sync::Arc<aqua_ui::collection_runtime::SelectionSourceBatch> =
+                    existing;
+                if existing.identity() != batch.identity() {
+                    return Err("conflicting selection batches for one owner".into());
+                }
+            } else {
+                pending.insert(key, batch);
+            }
+        }
+        let mut ownership = HashMap::new();
+        for batch in pending.values() {
+            for source in batch.sources() {
+                if ownership
+                    .insert((batch.document(), source.id), batch.owner())
+                    .is_some_and(|owner| owner != batch.owner())
+                {
+                    return Err("selection source belongs to multiple batch owners".into());
+                }
+            }
+        }
+        for ((document, source), owner) in &ownership {
+            if groups
+                .get(document)
+                .is_some_and(|sources| sources.iter().any(|item| item.id == *source))
+                || self.committed_batches.iter().any(
+                    |((existing_document, existing_owner), batch)| {
+                        existing_document == document
+                            && existing_owner != owner
+                            && !pending.contains_key(&(*existing_document, *existing_owner))
+                            && batch.sources.contains(source)
+                    },
+                )
+            {
+                return Err("selection source belongs to multiple batch owners".into());
+            }
+        }
+        for batch in pending.values() {
+            groups
+                .entry(batch.document())
+                .or_default()
+                .extend(batch.sources().iter().cloned());
+        }
+        for sources in groups.values() {
+            SelectionDocument::new()
+                .register_many(sources.iter().cloned())
+                .map_err(|error| error.to_string())?;
+        }
+        let invalidated: HashMap<_, HashSet<_>> = groups
+            .iter()
+            .map(|(document, sources)| {
+                (*document, sources.iter().map(|source| source.id).collect())
+            })
+            .collect();
+        for (document, sources) in groups {
+            let target = if document == self.source_document_id {
+                &mut self.source_document
+            } else {
+                self.source_documents.entry(document).or_default()
+            };
+            target
+                .register_many(sources)
+                .map_err(|error| error.to_string())?;
+        }
+        self.committed_batches.retain(|(document, _), batch| {
+            invalidated
+                .get(document)
+                .is_none_or(|changed| batch.sources.is_disjoint(changed))
+        });
+        for (key, batch) in pending {
+            self.committed_batches.insert(
+                key,
+                CommittedBatch {
+                    identity: batch.identity(),
+                    revision: batch.revision(),
+                    sources: batch.sources().iter().map(|source| source.id).collect(),
+                },
+            );
+        }
+        self.binding_version = None;
+        Ok(())
+    }
+
+    fn invalidate_batch_source(
+        &mut self,
+        document: SelectionDocumentId,
+        source: SelectionSourceId,
+    ) {
+        self.committed_batches.retain(|(owner_document, _), batch| {
+            *owner_document != document || !batch.sources.contains(&source)
+        });
+    }
 }
 
 impl Runtime {
+    pub fn drag_snapshot(&self) -> Option<aqua_ui::input::DragSnapshot> {
+        self.tree.drag_snapshot()
+    }
+
     pub fn set_click_settings(&mut self, settings: aqua_core::ClickSettings) {
+        self.tree.set_interaction_click_settings(settings);
         if self.interaction.click_settings != settings {
             self.interaction.click_settings = settings;
             self.interaction.click = None;
@@ -401,7 +535,9 @@ impl Runtime {
         document: SelectionDocumentId,
         source: SelectionSource,
     ) -> Result<(), SelectionSourceError> {
+        let id = source.id;
         self.selection_document_mut(document).register(source)?;
+        self.interaction.invalidate_batch_source(document, id);
         self.interaction.binding_version = None;
         self.paint_source_selection();
         Ok(())
@@ -419,8 +555,13 @@ impl Runtime {
         document: SelectionDocumentId,
         sources: impl IntoIterator<Item = SelectionSource>,
     ) -> Result<(), SelectionSourceError> {
+        let sources: Vec<_> = sources.into_iter().collect();
+        let ids: Vec<_> = sources.iter().map(|source| source.id).collect();
         self.selection_document_mut(document)
             .register_many(sources)?;
+        for id in ids {
+            self.interaction.invalidate_batch_source(document, id);
+        }
         self.interaction.binding_version = None;
         self.paint_source_selection();
         Ok(())
@@ -436,6 +577,7 @@ impl Runtime {
         source: SelectionSourceId,
     ) -> bool {
         let removed = self.selection_document_mut(document).unregister(source);
+        self.interaction.invalidate_batch_source(document, source);
         self.interaction.source_slices.retain(|node, slice| {
             slice.source != source
                 || self
@@ -449,6 +591,16 @@ impl Runtime {
         self.interaction.binding_version = None;
         self.paint_source_selection();
         removed
+    }
+
+    pub fn release_selection_batch_owner(
+        &mut self,
+        document: SelectionDocumentId,
+        owner: SelectionBatchOwner,
+    ) {
+        self.interaction
+            .committed_batches
+            .remove(&(document, owner));
     }
 
     fn valid_source_binding(
@@ -506,6 +658,7 @@ impl Runtime {
         self.clear_document_selection();
         self.interaction.source_document.clear();
         self.interaction.source_documents.clear();
+        self.interaction.committed_batches.clear();
         self.interaction.source_slices.clear();
         self.interaction.source_scopes.clear();
         self.interaction.descriptor_bindings.clear();
@@ -662,6 +815,97 @@ impl Runtime {
         deleted
     }
 
+    pub(super) fn follow_external_text_carets(&mut self) {
+        let pending: Vec<_> = self
+            .tree
+            .traverse()
+            .into_iter()
+            .filter_map(|node| {
+                let record = self.tree.get(node)?;
+                let NodeKind::Text(text) = &record.kind else {
+                    return None;
+                };
+                if !text.external_text_input
+                    || !text.follow_text_caret
+                    || text.viewport_scroll_max.is_none()
+                {
+                    return None;
+                }
+                let TextBacking::Editable(editor) = &text.backing else {
+                    return None;
+                };
+                let mut parent = record.parent;
+                while let Some(id) = parent {
+                    let ancestor = self.tree.get(id)?;
+                    if matches!(ancestor.kind, NodeKind::Scroll(_)) {
+                        return Some((node, id, editor.selection().caret));
+                    }
+                    parent = ancestor.parent;
+                }
+                None
+            })
+            .collect();
+        for (node, scroll, byte) in pending {
+            if let Some(record) = self.tree.get_mut(node) {
+                if let NodeKind::Text(text) = &mut record.kind {
+                    text.follow_text_caret = false;
+                }
+            }
+            let Some(caret) = self.text_position_rect(node, byte) else {
+                continue;
+            };
+            let Some(viewport) = self.tree.visual_rect(scroll) else {
+                continue;
+            };
+            let Some(mut offset) = self.tree.scroll_offset(scroll) else {
+                continue;
+            };
+            let top = viewport.y + 8.0;
+            let bottom = viewport.bottom() - 8.0;
+            if caret.y < top {
+                offset.y -= top - caret.y;
+            } else if caret.bottom() > bottom {
+                offset.y += caret.bottom() - bottom;
+            } else {
+                continue;
+            }
+            self.tree.scroll_to(scroll, offset);
+        }
+    }
+
+    pub fn text_position_rect(&mut self, node: NodeId, byte: usize) -> Option<Rect> {
+        let record = self.tree.get(node)?;
+        let NodeKind::Text(text) = &record.kind else {
+            return None;
+        };
+        if text.password
+            || byte > text.display_text().len()
+            || !text.display_text().is_char_boundary(byte)
+        {
+            return None;
+        }
+        self.sync_text_runs_for(Some(node));
+        let transform = self.tree.visual_transform(node)?;
+        let record = self.tree.get(node)?;
+        let entry = self.text_runs.get(&node)?;
+        let guard = self.runs.lock();
+        let handle = guard.resolve(entry.run)?;
+        let caret = handle.layout.caret_position(CaretPosition {
+            byte,
+            affinity: CaretAffinity::Downstream,
+        })?;
+        let padding = record.style.padding;
+        let start = transform.apply(Point::new(
+            padding.left - entry.scroll_x + caret.x / self.scale,
+            padding.top + caret.y_top / self.scale,
+        ));
+        let end = transform.apply(Point::new(
+            padding.left - entry.scroll_x + caret.x / self.scale,
+            padding.top + (caret.y_top + caret.height) / self.scale,
+        ));
+        Some(Rect::from_edges(start.x, start.y, end.x, end.y))
+    }
+
     pub fn text_range_rects(&mut self, node: NodeId, range: Range<usize>) -> Vec<Rect> {
         let valid = self.tree.get(node).is_some_and(|record| matches!(&record.kind,
             NodeKind::Text(text) if !text.password && range.start <= range.end && range.end <= text.text().len()
@@ -702,8 +946,33 @@ impl Runtime {
             .collect()
     }
 
+    pub fn cut_external_selection(&mut self) -> Option<bool> {
+        let node = self.tree.focused()?;
+        let external = self.tree.get(node).is_some_and(|record| {
+            matches!(
+                &record.kind, NodeKind::Text(text) if text.external_text_input
+            )
+        });
+        if !external {
+            return None;
+        }
+        let host = &self.host;
+        let outcome = aqua_ui::input::route_clipboard_cut(&mut self.tree, node, |tree, target| {
+            host.input_allowed(tree, target)
+        });
+        self.tree.drain_commands();
+        Some(outcome.handled || outcome.default_prevented)
+    }
+
     pub fn paste_clipboard(&mut self, content: aqua_ui::input::ClipboardPaste) -> bool {
-        if aqua_ui::events::text_is_composing(&self.tree) {
+        let external = self
+            .tree
+            .focused()
+            .and_then(|node| self.tree.get(node))
+            .is_some_and(
+                |record| matches!(&record.kind, NodeKind::Text(text) if text.external_text_input),
+            );
+        if aqua_ui::events::text_is_composing(&self.tree) && !external {
             return false;
         }
         let text = content.text.clone();
@@ -763,6 +1032,7 @@ impl Runtime {
             _ => None,
         });
         self.tree.fire_action(ActionEvent {
+            source: None,
             node,
             kind: ActionKind::TextChanged,
             text,
@@ -782,6 +1052,32 @@ impl Runtime {
             }
         }
         match event {
+            InputEvent::PointerDown(pointer, PointerButton::Secondary) => {
+                let Some(node) = hit_test(&self.tree, pointer.position) else {
+                    return false;
+                };
+                if !self.text_node_allowed(node)
+                    || !self
+                        .tree
+                        .get(node)
+                        .is_some_and(|record| matches!(&record.kind, NodeKind::Text(_)))
+                {
+                    return false;
+                }
+                let Some(position) = self.hit_text_position(node, pointer.position) else {
+                    return false;
+                };
+                let host = &self.host;
+                let result = aqua_ui::input::route_text_context(
+                    &mut self.tree,
+                    node,
+                    *pointer,
+                    position.byte,
+                    |tree, target| host.input_allowed(tree, target),
+                );
+                self.tree.drain_commands();
+                result.handled || result.default_prevented
+            }
             InputEvent::ModifiersChanged(modifiers) => {
                 self.interaction.modifiers = *modifiers;
                 false
@@ -789,7 +1085,13 @@ impl Runtime {
             InputEvent::KeyDown(key) => {
                 self.interaction.modifiers = key.modifiers;
                 self.interaction.gesture = None;
-                if aqua_ui::events::text_is_composing(&self.tree) && self.text_input_allowed() {
+                let external = self.tree.focused().and_then(|node| self.tree.get(node)).is_some_and(
+                    |record| matches!(&record.kind, NodeKind::Text(text) if text.external_text_input),
+                );
+                if !external
+                    && aqua_ui::events::text_is_composing(&self.tree)
+                    && self.text_input_allowed()
+                {
                     return true;
                 }
                 if self.navigate_text(key) {
@@ -823,6 +1125,16 @@ impl Runtime {
                 gesture.dragged |= distance >= 3.0;
                 gesture.pointer = pointer.position;
                 gesture.advanced_at = self.clock;
+                if gesture.external_text_input {
+                    self.route_external_pointer(
+                        gesture.anchor.node,
+                        *pointer,
+                        aqua_ui::input::TextPointerPhase::Drag,
+                        gesture.unit,
+                    );
+                    self.interaction.gesture = Some(gesture);
+                    return true;
+                }
                 if gesture.dragged {
                     self.tree.take_press(pointer.contact);
                     self.extend_pointer_selection(&gesture, pointer.position);
@@ -840,6 +1152,15 @@ impl Runtime {
                     return false;
                 };
                 self.interaction.gesture = None;
+                if gesture.external_text_input {
+                    self.route_external_pointer(
+                        gesture.anchor.node,
+                        *pointer,
+                        aqua_ui::input::TextPointerPhase::Up,
+                        gesture.unit,
+                    );
+                    return true;
+                }
                 if gesture.dragged {
                     self.tree.take_press(pointer.contact);
                     self.extend_pointer_selection(&gesture, pointer.position);
@@ -924,6 +1245,7 @@ impl Runtime {
             return false;
         };
         let editable = text.is_editable();
+        let external_text_input = text.external_text_input;
         let initial = unit.range_at(text.text(), byte);
         let shift = self.interaction.modifiers.contains(Modifiers::SHIFT);
         let anchor_byte = match &text.backing {
@@ -965,7 +1287,7 @@ impl Runtime {
             node: anchor.node,
             byte: initial.end,
         });
-        if editable {
+        if editable && !external_text_input {
             self.clear_document_selection();
             self.tree.set_focused(Some(node));
             self.tree
@@ -983,7 +1305,7 @@ impl Runtime {
                     editor.move_caret_position(target, true);
                 }
             });
-        } else {
+        } else if !editable {
             self.tree.set_focused(None);
             self.set_document_selection(DocumentSelection { anchor, focus });
             if let (Some(anchor), Some(focus)) =
@@ -1002,6 +1324,10 @@ impl Runtime {
             initial,
             unit,
             editable,
+            external_text_input,
+            selection_auto_scroll: self.tree.get(node).is_none_or(
+                |record| !matches!(&record.kind, NodeKind::Text(text) if !text.selection_auto_scroll),
+            ),
             dragged: false,
             pointer: pointer.position,
             advanced_at: self.clock,
@@ -1012,7 +1338,57 @@ impl Runtime {
             source_anchor,
             source_anchor_end,
         });
+        if external_text_input {
+            self.clear_document_selection();
+            self.tree.set_focused(Some(node));
+            self.route_external_pointer(
+                node,
+                *pointer,
+                aqua_ui::input::TextPointerPhase::Down {
+                    click_count: count,
+                    shift,
+                },
+                unit,
+            );
+        }
         true
+    }
+
+    fn route_external_pointer(
+        &mut self,
+        node: NodeId,
+        pointer: aqua_core::PointerEvent,
+        phase: aqua_ui::input::TextPointerPhase,
+        unit: SelectionUnit,
+    ) {
+        let Some(bounds) = self.text_world_rect(node) else {
+            return;
+        };
+        let at = Point::new(
+            pointer
+                .position
+                .x
+                .clamp(bounds.x, (bounds.right() - 0.1).max(bounds.x)),
+            pointer
+                .position
+                .y
+                .clamp(bounds.y, (bounds.bottom() - 0.1).max(bounds.y)),
+        );
+        let Some(position) = self.hit_text_position(node, at) else {
+            return;
+        };
+        let byte = position.byte;
+        let _ = unit;
+        let host = &self.host;
+        aqua_ui::input::route_text_pointer(
+            &mut self.tree,
+            node,
+            pointer,
+            byte,
+            phase,
+            |tree, target| host.input_allowed(tree, target),
+        );
+        self.tree.drain_commands();
     }
 
     fn selectable(&self, node: NodeId) -> bool {
@@ -1350,6 +1726,9 @@ impl Runtime {
         if !gesture.dragged || !self.gesture_allowed(gesture) {
             return None;
         }
+        if !gesture.selection_auto_scroll {
+            return None;
+        }
         let node = gesture.scroll?;
         let bounds = self.tree.rect(node)?;
         let padding = self.tree.get(node)?.style.padding;
@@ -1463,14 +1842,30 @@ impl Runtime {
         let Some(NodeKind::Text(text)) = self.tree.get(node).map(|record| &record.kind) else {
             return false;
         };
+        let external_text_input = text.external_text_input;
         let TextBacking::Editable(editor) = &text.backing else {
             return false;
         };
-        if editor.is_composing() {
+        if external_text_input && (!matches!(named, NamedKey::Up | NamedKey::Down) || paragraph) {
             return false;
         }
+        if editor.is_composing() && !external_text_input {
+            return false;
+        }
+        if external_text_input
+            && self.interaction.external_vertical_revision != Some((node, editor.revision()))
+        {
+            self.interaction.goal_x = None;
+        }
         let selection = editor.selection();
-        let position = editor.caret_position();
+        let position = if external_text_input && editor.is_composing() {
+            CaretPosition {
+                byte: editor.ime_caret(),
+                affinity: CaretAffinity::Downstream,
+            }
+        } else {
+            editor.caret_position()
+        };
         if matches!(named, NamedKey::Left | NamedKey::Right)
             && !selection.is_caret()
             && !key.modifiers.contains(Modifiers::SHIFT)
@@ -1517,6 +1912,24 @@ impl Runtime {
             return false;
         };
         let extend = key.modifiers.contains(Modifiers::SHIFT);
+        if external_text_input {
+            self.interaction.goal_x = Some((node, goal_x));
+            let host = &self.host;
+            aqua_ui::input::route_text_vertical(
+                &mut self.tree,
+                node,
+                up,
+                extend,
+                target.byte,
+                |tree, target| host.input_allowed(tree, target),
+            );
+            self.tree.drain_commands();
+            self.interaction.external_vertical_revision = self
+                .tree
+                .editor_snapshot(node)
+                .map(|snapshot| (node, snapshot.revision));
+            return true;
+        }
         self.tree.set_text_selection(
             node,
             Some(Selection::new(

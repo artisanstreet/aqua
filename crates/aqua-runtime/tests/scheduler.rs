@@ -4,6 +4,62 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 #[test]
+fn gpui_pulse_cadence_uses_active_state_and_invalidating_input_grace() {
+    use aqua_runtime::scheduler::gpui_pulse_interval;
+    let refresh = Duration::from_micros(16_667);
+    let slow = Duration::from_micros(33_333);
+    let start = Instant::from_secs_f64(10.0);
+    assert_eq!(gpui_pulse_interval(refresh, true, None, start), refresh);
+    assert_eq!(gpui_pulse_interval(refresh, false, None, start), slow);
+    assert_eq!(
+        gpui_pulse_interval(
+            refresh,
+            false,
+            Some(start),
+            start + Duration::from_millis(999)
+        ),
+        refresh
+    );
+    assert_eq!(
+        gpui_pulse_interval(refresh, false, Some(start), start + Duration::from_secs(1)),
+        slow
+    );
+    assert_eq!(
+        gpui_pulse_interval(Duration::from_millis(40), false, None, start),
+        Duration::from_millis(40)
+    );
+}
+
+#[test]
+fn pulse_deadlines_do_not_consume_future_application_animation() {
+    let window = WindowId::new(1).unwrap();
+    let now = Instant::ZERO;
+    let mut scheduler = Scheduler::new();
+    scheduler.request_animation_deadline(window, now + Duration::from_millis(40));
+    scheduler.request_gpui_pulse_deadline(window, now + Duration::from_millis(16));
+    assert_eq!(
+        scheduler.next_wakeup(now),
+        Some(now + Duration::from_millis(16))
+    );
+    let first = now + Duration::from_millis(16);
+    assert_eq!(
+        scheduler.ready_windows(first),
+        [(window, FrameReason::GPUI_PULSE)]
+    );
+    scheduler.mark_produced(&[window], first);
+    scheduler.mark_presented(window);
+    assert_eq!(
+        scheduler.next_wakeup(first),
+        Some(now + Duration::from_millis(40))
+    );
+    scheduler.request_gpui_pulse_deadline(window, now + Duration::from_millis(40));
+    assert_eq!(
+        scheduler.ready_windows(now + Duration::from_millis(40)),
+        [(window, FrameReason::GPUI_PULSE | FrameReason::ANIMATION)]
+    );
+}
+
+#[test]
 fn live_window_rate_changes_release_only_their_own_pacing_gate() {
     let first = WindowId::new(1).unwrap();
     let second = WindowId::new(2).unwrap();

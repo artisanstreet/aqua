@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 mod access;
 mod interaction;
+mod keyed_focus;
 mod overlays;
 pub use overlays::{PopupError, PopupFocus, PopupOptions};
 
@@ -28,11 +29,17 @@ use aqua_ui::{
     binding::{MountError, View},
     element::Element,
     events,
-    layout::CosmicMeasurer,
+    layout::ProfiledCosmicMeasurer,
     motion::{ReducedMotion, Seconds},
     overlay_host::OverlayHost,
     tree::{ActionEvent, ActionKind, NodeKind, TextBacking, TextContent, UiTree},
 };
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputDispatchOutcome {
+    pub consumed: bool,
+    pub output: Output,
+}
 
 fn text_caret_position(text: &TextContent) -> Option<CaretPosition> {
     match &text.backing {
@@ -73,6 +80,9 @@ impl std::error::Error for RuntimeError {}
 enum SceneKey {
     Tree { node: NodeId, op: u32 },
     TextDecoration { node: NodeId, index: u32 },
+    TextBackground { node: NodeId, index: u32, part: u32 },
+    TextInlineGlyph { node: NodeId, index: u32 },
+    TextInlinePaint { node: NodeId, index: u32, part: u8 },
     Caret { node: NodeId },
     Selection { node: NodeId, index: u32 },
     ImeUnderline { node: NodeId, index: u32 },
@@ -89,6 +99,9 @@ impl SceneKey {
         match self {
             Self::Tree { node, .. }
             | Self::TextDecoration { node, .. }
+            | Self::TextBackground { node, .. }
+            | Self::TextInlineGlyph { node, .. }
+            | Self::TextInlinePaint { node, .. }
             | Self::Caret { node }
             | Self::Selection { node, .. }
             | Self::ImeUnderline { node, .. }
@@ -111,6 +124,7 @@ struct TextJob {
     wrap: bool,
     multiline: bool,
     masked: bool,
+    overflow: Option<aqua_text::overflow::OverflowMode>,
     width: f32,
     paint_revision: u64,
 }
@@ -125,11 +139,72 @@ struct TextEntry {
     paint_revision: u64,
     width_bits: u32,
     scale_bits: u32,
+    gpui_wrap: bool,
     size_bits: u32,
     wrap: bool,
     line_multi: bool,
     masked: bool,
+    overflow: Option<aqua_text::overflow::OverflowMode>,
     scroll_x: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextFrontier {
+    pub content_origin: Point,
+    pub line_bottom: f32,
+    pub block_height: f32,
+}
+
+pub struct NativeTextService {
+    model: Rc<dyn aqua_ui::tree::NativeTextModel>,
+    revision: Option<u64>,
+    runs: SharedRuns,
+    run: aqua_text::RunId,
+    run_revision: u64,
+    transform: aqua_core::Transform2D,
+    padding: aqua_core::Insets,
+    scroll_x: f32,
+    scale: f32,
+}
+
+impl NativeTextService {
+    pub fn selected_bounds(&self) -> Option<Rect> {
+        if Some(self.model.paint_revision()?) != self.revision {
+            return None;
+        }
+        let range = self.model.selected_bytes()?;
+        let guard = self.runs.lock();
+        let handle = guard.resolve(self.run)?;
+        if handle.revision != self.run_revision {
+            return None;
+        }
+        let start = handle.layout.caret_position(CaretPosition {
+            byte: range.start,
+            affinity: CaretAffinity::Downstream,
+        })?;
+        let end = handle.layout.caret_position(CaretPosition {
+            byte: range.end,
+            affinity: CaretAffinity::Upstream,
+        })?;
+        let top = self.transform.apply(Point::new(
+            self.padding.left - self.scroll_x + start.x / self.scale,
+            self.padding.top + start.y_top / self.scale,
+        ));
+        let bottom = self.transform.apply(Point::new(
+            self.padding.left - self.scroll_x + end.x / self.scale,
+            self.padding.top + (start.y_top + start.height) / self.scale,
+        ));
+        Some(Rect::from_edges(
+            top.x,
+            top.y,
+            bottom.x.max(top.x + 1.0),
+            bottom.y,
+        ))
+    }
+
+    pub fn replace_utf16(&self, text: &str, selected: Option<std::ops::Range<usize>>) {
+        self.model.replace_utf16(text, selected);
+    }
 }
 
 fn shaping_source(t: &TextContent) -> (String, bool) {
@@ -154,6 +229,7 @@ pub struct FrameWork {
 }
 
 pub struct Runtime {
+    color_profile: aqua_core::ColorProfile,
     interaction: TextInteraction,
     tooltip_pending: Option<overlays::PendingTooltip>,
     tooltip_popup: Option<(NodeId, aqua_ui::overlay::OverlayId)>,
@@ -179,17 +255,108 @@ pub struct Runtime {
     clock: Seconds,
     cached_scene: Vec<(SceneKey, DisplayItem)>,
     cached_text_nodes: HashSet<NodeId>,
+    native_paint_revisions: HashMap<NodeId, u64>,
     dynamic_order: Vec<SceneKey>,
     cached_version: Option<(u64, u32, u32, u32, u64)>,
     frame_work: FrameWork,
 }
 
 impl Runtime {
+    pub fn text_frontier(
+        &self,
+        node: NodeId,
+        byte: usize,
+        affinity: CaretAffinity,
+    ) -> Option<TextFrontier> {
+        if self.disposed || self.runtime.pending() != 0 || !self.tree.command_sink().is_empty() {
+            return None;
+        }
+        let fonts_revision = self.fonts.lock().font_revision();
+        if self.cached_version
+            != Some((
+                self.tree.content_version(),
+                self.scale.to_bits(),
+                self.viewport.w.to_bits(),
+                self.viewport.h.to_bits(),
+                fonts_revision,
+            ))
+        {
+            return None;
+        }
+        let record = self.tree.get(node)?;
+        let NodeKind::Text(text) = &record.kind else {
+            return None;
+        };
+        let source = text.text();
+        if text.is_placeholder() || byte > source.len() || !source.is_char_boundary(byte) {
+            return None;
+        }
+        let entry = self.text_runs.get(&node)?;
+        if entry.paint_revision != record.paint_rev
+            || entry.scale_bits != self.scale.to_bits()
+            || entry.gpui_wrap
+                != (self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded)
+            || entry.fonts_revision != fonts_revision
+        {
+            return None;
+        }
+        let runs = self.runs.lock();
+        let layout = runs
+            .resolve_expected(entry.run, entry.registry_rev)
+            .ok()?
+            .layout;
+        if byte > layout.source_len() {
+            return None;
+        }
+        let caret = layout.caret_position(CaretPosition { byte, affinity })?;
+        let height = layout.laid_out()?.size.1 / self.scale;
+        let padding = record.style.padding;
+        let origin = self
+            .tree
+            .visual_transform(node)?
+            .apply(Point::new(padding.left, padding.top));
+        Some(TextFrontier {
+            content_origin: origin,
+            line_bottom: (caret.y_top + caret.height) / self.scale,
+            block_height: height,
+        })
+    }
+
+    pub fn native_text_service(&self) -> Option<NativeTextService> {
+        let node = self.tree.focused()?;
+        if !self.cached_text_nodes.contains(&node) {
+            return None;
+        }
+        let record = self.tree.get(node)?;
+        let NodeKind::Text(text) = &record.kind else {
+            return None;
+        };
+        let model = text.native_text_model.clone()?;
+        model.paint_revision()?;
+        let revision = if model.matches_text(text.text()) {
+            self.native_paint_revisions.get(&node).copied()
+        } else {
+            None
+        };
+        let entry = self.text_runs.get(&node)?;
+        Some(NativeTextService {
+            model,
+            revision,
+            runs: self.runs.clone(),
+            run: entry.run,
+            run_revision: entry.registry_rev,
+            transform: self.tree.visual_transform(node)?,
+            padding: record.style.padding,
+            scroll_x: entry.scroll_x,
+            scale: self.scale,
+        })
+    }
     #[must_use]
     pub fn new(fonts: SharedFonts, runs: SharedRuns) -> Self {
         let runtime = ReactiveRuntime::new();
         let scope = runtime.create_scope();
         Self {
+            color_profile: aqua_core::ColorProfile::AquaLinear,
             interaction: TextInteraction::default(),
             tooltip_pending: None,
             tooltip_popup: None,
@@ -215,10 +382,39 @@ impl Runtime {
             clock: 0.0,
             cached_scene: Vec::new(),
             cached_text_nodes: HashSet::new(),
+            native_paint_revisions: HashMap::new(),
             dynamic_order: Vec::new(),
             cached_version: None,
             frame_work: FrameWork::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_color_profile(mut self, profile: aqua_core::ColorProfile) -> Self {
+        if self.color_profile != profile {
+            self.color_profile = profile;
+            self.tree
+                .set_gpui_paint(profile == aqua_core::ColorProfile::GpuiWindowsEncoded);
+            let text_nodes: Vec<_> = self
+                .tree
+                .traverse()
+                .into_iter()
+                .filter(|node| {
+                    self.tree
+                        .get(*node)
+                        .is_some_and(|record| matches!(record.kind, NodeKind::Text(_)))
+                })
+                .collect();
+            for node in text_nodes {
+                self.tree.mark_layout_dirty(node);
+            }
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn color_profile(&self) -> aqua_core::ColorProfile {
+        self.color_profile
     }
 
     pub fn dispose(&mut self) {
@@ -275,6 +471,203 @@ impl Runtime {
 
     pub fn tree_mut(&mut self) -> &mut UiTree {
         &mut self.tree
+    }
+
+    pub fn scroll_collection_to(
+        &mut self,
+        key: impl Into<aqua_ui::element::Key>,
+        offset: Point,
+    ) -> bool {
+        let Some((owner, node)) = self.unique_collection_for_key(&key.into()) else {
+            return false;
+        };
+        match owner {
+            None => self
+                .view
+                .as_mut()
+                .is_some_and(|view| view.scroll_collection_to(&mut self.tree, node, offset)),
+            Some(overlay) => self.bound_popups.get_mut(&overlay).is_some_and(|popup| {
+                popup
+                    .view
+                    .scroll_collection_to(&mut self.tree, node, offset)
+            }),
+        }
+    }
+
+    pub fn collection_follow_state(
+        &self,
+        key: impl Into<aqua_ui::element::Key>,
+    ) -> Option<aqua_ui::collection::FollowState> {
+        let (owner, node) = self.unique_collection_for_key(&key.into())?;
+        match owner {
+            None => self.view.as_ref()?.collection_follow_state(node),
+            Some(overlay) => self
+                .bound_popups
+                .get(&overlay)?
+                .view
+                .collection_follow_state(node),
+        }
+    }
+
+    pub fn is_collection_following_tail(
+        &self,
+        key: impl Into<aqua_ui::element::Key>,
+    ) -> Option<bool> {
+        self.collection_follow_state(key).map(|state| {
+            matches!(
+                state,
+                aqua_ui::collection::FollowState::Tail { is_following: true }
+            )
+        })
+    }
+
+    pub fn set_collection_follow_mode(
+        &mut self,
+        key: impl Into<aqua_ui::element::Key>,
+        mode: aqua_ui::collection::FollowMode,
+    ) -> bool {
+        let Some((owner, node)) = self.unique_collection_for_key(&key.into()) else {
+            return false;
+        };
+        match owner {
+            None => self
+                .view
+                .as_mut()
+                .is_some_and(|view| view.set_collection_follow_mode(&mut self.tree, node, mode)),
+            Some(overlay) => self.bound_popups.get_mut(&overlay).is_some_and(|popup| {
+                popup
+                    .view
+                    .set_collection_follow_mode(&mut self.tree, node, mode)
+            }),
+        }
+    }
+
+    pub fn pause_collection_following_tail(
+        &mut self,
+        key: impl Into<aqua_ui::element::Key>,
+    ) -> bool {
+        let Some((owner, node)) = self.unique_collection_for_key(&key.into()) else {
+            return false;
+        };
+        match owner {
+            None => self
+                .view
+                .as_mut()
+                .is_some_and(|view| view.pause_collection_following_tail(&mut self.tree, node)),
+            Some(overlay) => self.bound_popups.get_mut(&overlay).is_some_and(|popup| {
+                popup
+                    .view
+                    .pause_collection_following_tail(&mut self.tree, node)
+            }),
+        }
+    }
+
+    pub fn update_collection_item_height(
+        &mut self,
+        collection_key: impl Into<aqua_ui::element::Key>,
+        index: usize,
+        height: f32,
+    ) -> bool {
+        self.view.as_mut().is_some_and(|view| {
+            view.update_collection_item_height(&mut self.tree, collection_key, index, height)
+        })
+    }
+
+    pub fn reveal_collection_item(
+        &mut self,
+        collection_key: impl Into<aqua_ui::element::Key>,
+        index: usize,
+    ) -> bool {
+        self.reveal_collection_item_aligned(
+            collection_key,
+            index,
+            aqua_ui::collection::CollectionRevealAlignment::Nearest,
+        )
+    }
+
+    pub fn reveal_collection_item_aligned(
+        &mut self,
+        collection_key: impl Into<aqua_ui::element::Key>,
+        index: usize,
+        alignment: aqua_ui::collection::CollectionRevealAlignment,
+    ) -> bool {
+        let Some((owner, node)) = self.unique_collection_for_key(&collection_key.into()) else {
+            return false;
+        };
+        match owner {
+            None => self.view.as_mut().is_some_and(|view| {
+                view.reveal_collection_index_aligned(&mut self.tree, node, index, alignment)
+            }),
+            Some(overlay) => self.bound_popups.get_mut(&overlay).is_some_and(|popup| {
+                popup
+                    .view
+                    .reveal_collection_index_aligned(&mut self.tree, node, index, alignment)
+            }),
+        }
+    }
+
+    fn unique_collection_for_key(
+        &self,
+        key: &aqua_ui::element::Key,
+    ) -> Option<(Option<aqua_ui::overlay::OverlayId>, NodeId)> {
+        let mut matches = Vec::new();
+        if let Some(view) = &self.view {
+            matches.extend(
+                view.collection_nodes_for_key(&self.tree, key)
+                    .into_iter()
+                    .map(|node| (None, node)),
+            );
+        }
+        for (overlay, popup) in &self.bound_popups {
+            matches.extend(
+                popup
+                    .view
+                    .collection_nodes_for_key(&self.tree, key)
+                    .into_iter()
+                    .map(|node| (Some(*overlay), node)),
+            );
+        }
+        let [(owner, node)] = matches.as_slice() else {
+            return None;
+        };
+        Some((*owner, *node))
+    }
+
+    pub fn collection_item_target_aligned(
+        &self,
+        collection_key: impl Into<aqua_ui::element::Key>,
+        index: usize,
+        alignment: aqua_ui::collection::CollectionRevealAlignment,
+    ) -> Option<Point> {
+        let (owner, node) = self.unique_collection_for_key(&collection_key.into())?;
+        match owner {
+            None => self
+                .view
+                .as_ref()?
+                .collection_index_target_aligned(&self.tree, node, index, alignment),
+            Some(overlay) => self
+                .bound_popups
+                .get(&overlay)?
+                .view
+                .collection_index_target_aligned(&self.tree, node, index, alignment),
+        }
+    }
+
+    pub fn reveal_collection_index(&mut self, container: NodeId, index: usize) -> bool {
+        self.view
+            .as_mut()
+            .is_some_and(|view| view.reveal_collection_index(&mut self.tree, container, index))
+    }
+
+    pub fn reveal_collection_index_aligned(
+        &mut self,
+        container: NodeId,
+        index: usize,
+        alignment: aqua_ui::collection::CollectionRevealAlignment,
+    ) -> bool {
+        self.view.as_mut().is_some_and(|view| {
+            view.reveal_collection_index_aligned(&mut self.tree, container, index, alignment)
+        })
     }
 
     #[must_use]
@@ -343,9 +736,9 @@ impl Runtime {
         }
         let sink = self.tree.command_sink();
         let view_scope = self.runtime.create_scope();
-        self.view = Some(View::new(view_scope, sink));
+        self.view = Some(View::new(view_scope.clone(), sink));
         let pending = Rc::clone(&self.structural);
-        self.scope.effect(deps, move |values| {
+        view_scope.effect(deps, move |values| {
             *pending.borrow_mut() = Some(render(values));
         });
         self.runtime.flush();
@@ -383,21 +776,67 @@ impl Runtime {
     }
 
     pub fn layout(&mut self) -> Result<(), String> {
+        let viewport_caps: Vec<_> = self
+            .tree
+            .traverse()
+            .into_iter()
+            .filter_map(|node| {
+                let record = self.tree.get(node)?;
+                let NodeKind::Text(text) = &record.kind else {
+                    return None;
+                };
+                let (share, minimum) = text.viewport_scroll_max?;
+                if !share.is_finite() || !minimum.is_finite() || share < 0.0 || minimum < 0.0 {
+                    return None;
+                }
+                let mut parent = record.parent;
+                while let Some(id) = parent {
+                    let ancestor = self.tree.get(id)?;
+                    if matches!(ancestor.kind, NodeKind::Scroll(_)) {
+                        return Some((id, (self.viewport.h * share).max(minimum)));
+                    }
+                    parent = ancestor.parent;
+                }
+                None
+            })
+            .collect();
+        for (node, max_height) in viewport_caps {
+            if let Some(record) = self.tree.get(node) {
+                let mut style = record.style.clone();
+                let next = aqua_ui::style::Length::Px(max_height);
+                if style.max_height != next {
+                    style.max_height = next;
+                    self.tree.set_style(node, style);
+                }
+            }
+        }
         self.refresh_reactive_popups()?;
-        let measurer = CosmicMeasurer {
+        let measurer = ProfiledCosmicMeasurer {
             fonts: self.fonts.clone(),
             scale: self.scale,
+            gpui_line_height: self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded,
+            gpui_wrap: self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded,
         };
         let viewport = Size::new(self.viewport.w, self.viewport.h);
         if let Some(view) = self.view.as_mut() {
-            view.compute_layout(&mut self.tree, viewport, &measurer)?
+            let interaction = &mut self.interaction;
+            view.compute_layout_with_row_registration(
+                &mut self.tree,
+                viewport,
+                &measurer,
+                &mut |sources| interaction.register_collection_sources(sources),
+            )?
         } else {
             self.tree.compute_layout(viewport, &measurer)?
         }
         for popup in self.bound_popups.values_mut() {
-            popup
-                .view
-                .compute_layout(&mut self.tree, viewport, &measurer)?;
+            let interaction = &mut self.interaction;
+            popup.view.compute_layout_with_row_registration(
+                &mut self.tree,
+                viewport,
+                &measurer,
+                &mut |sources| interaction.register_collection_sources(sources),
+            )?;
         }
         Ok(())
     }
@@ -423,6 +862,21 @@ impl Runtime {
         routed.handled || routed.default_prevented
     }
 
+    pub fn external_file_drag(&mut self, event: aqua_ui::input::ExternalFileDragEvent) -> bool {
+        if self.disposed {
+            return false;
+        }
+        let before = self.tree.content_version();
+        let host = &self.host;
+        let result =
+            aqua_ui::input::route_external_file_drag(&mut self.tree, event, |tree, node| {
+                host.input_allowed(tree, node)
+            });
+        self.tree.drain_commands();
+        self.host.sync_lifecycle(&mut self.tree);
+        result.handled || result.default_prevented || self.tree.content_version() != before
+    }
+
     pub fn handle_input(&mut self, event: &CoreInputEvent) -> bool {
         self.handle_input_with_default(event, |_| None)
     }
@@ -432,14 +886,46 @@ impl Runtime {
         event: &CoreInputEvent,
         default: impl FnOnce(&mut Self) -> Option<bool>,
     ) -> Output {
-        let consumed = self.handle_input_with_default(event, default);
-        Output {
-            redraw: self.input_redraw(consumed),
-            ..Output::IDLE
+        self.step_input_with_default_outcome(event, default).output
+    }
+
+    pub fn step_input_with_default_outcome(
+        &mut self,
+        event: &CoreInputEvent,
+        default: impl FnOnce(&mut Self) -> Option<bool>,
+    ) -> InputDispatchOutcome {
+        let mut default_redraw = None;
+        let consumed = self.handle_input_with_default(event, |runtime| {
+            default(runtime).map(|redraw| {
+                default_redraw = Some(redraw);
+                true
+            })
+        });
+        InputDispatchOutcome {
+            consumed,
+            output: Output {
+                redraw: self.input_redraw(consumed && default_redraw.unwrap_or(true)),
+                ..Output::IDLE
+            },
         }
     }
 
     pub fn handle_input_with_default(
+        &mut self,
+        event: &CoreInputEvent,
+        default: impl FnOnce(&mut Self) -> Option<bool>,
+    ) -> bool {
+        let consumed = self.handle_input_with_default_inner(event, default);
+        if let Some(view) = self.view.as_mut() {
+            view.observe_collection_scrolls(&self.tree);
+        }
+        for popup in self.bound_popups.values_mut() {
+            popup.view.observe_collection_scrolls(&self.tree);
+        }
+        consumed
+    }
+
+    fn handle_input_with_default_inner(
         &mut self,
         event: &CoreInputEvent,
         default: impl FnOnce(&mut Self) -> Option<bool>,
@@ -555,7 +1041,17 @@ impl Runtime {
         if !t.is_editable() {
             return None;
         }
-        let caret_position = text_caret_position(t)?;
+        let caret_position = if t.external_text_input {
+            let TextBacking::Editable(editor) = &t.backing else {
+                return None;
+            };
+            CaretPosition {
+                byte: editor.selection().range().start,
+                affinity: CaretAffinity::Downstream,
+            }
+        } else {
+            text_caret_position(t)?
+        };
         let padding = rec.style.padding;
         let scroll_x = self
             .text_runs
@@ -571,8 +1067,20 @@ impl Runtime {
             padding.left - scroll_x + caret.x / self.scale,
             padding.top + caret.y_top / self.scale,
         ));
+        let width = if t.external_text_input {
+            let TextBacking::Editable(editor) = &t.backing else {
+                return None;
+            };
+            let end = layout.caret_position(CaretPosition {
+                byte: editor.selection().range().end,
+                affinity: CaretAffinity::Upstream,
+            })?;
+            (end.x - caret.x).max(self.scale)
+        } else {
+            2.0
+        };
         let end = transform.apply(Point::new(
-            padding.left - scroll_x + (caret.x + 2.0) / self.scale,
+            padding.left - scroll_x + (caret.x + width) / self.scale,
             padding.top + (caret.y_top + caret.height) / self.scale,
         ));
         Some(Rect::from_edges(start.x, start.y, end.x, end.y))
@@ -605,6 +1113,7 @@ impl Runtime {
         if self.advance_text_selection() {
             self.layout().map_err(RuntimeError::Build)?;
         }
+        self.follow_external_text_carets();
         self.host.reanchor_all(&mut self.tree);
         let version = (
             self.tree.content_version(),
@@ -637,13 +1146,30 @@ impl Runtime {
                     matches!(item, DisplayItem::Text { .. }).then_some(key.node())
                 })
                 .collect();
+            self.native_paint_revisions = self
+                .cached_text_nodes
+                .iter()
+                .filter_map(|node| {
+                    let record = self.tree.get(*node)?;
+                    let NodeKind::Text(text) = &record.kind else {
+                        return None;
+                    };
+                    let model = text.native_text_model.as_ref()?;
+                    if !model.matches_text(text.text()) {
+                        return None;
+                    }
+                    Some((*node, model.paint_revision()?))
+                })
+                .collect();
             self.frame_work.tree_scene_ops_emitted = self.cached_scene.len();
             self.cached_version = Some(version);
         } else {
             self.frame_work.tree_scene_reused = true;
         }
-        let dynamic: Vec<_> = self
-            .caret_selection_items()
+        let selection_items = self.caret_selection_items();
+        let mut dynamic = self.text_background_items(&selection_items)?;
+        dynamic.extend(selection_items);
+        let dynamic: Vec<_> = dynamic
             .into_iter()
             .filter(|(key, _)| {
                 self.cached_text_nodes.contains(&key.node())
@@ -681,6 +1207,7 @@ impl Runtime {
         }
         let now = self.clock;
         self.host.advance_motion(now);
+        self.tree.run_deferred_canvas_actions();
         Ok([
             self.host.motion_deadline(now),
             self.selection_deadline(),
@@ -829,8 +1356,11 @@ impl Runtime {
                     && entry.wrap == (t.wrap || multiline)
                     && entry.line_multi == multiline
                     && entry.masked == (t.password && !t.is_placeholder())
+                    && entry.overflow == t.overflow
                     && entry.width_bits == width.to_bits()
                     && entry.scale_bits == self.scale.to_bits()
+                    && entry.gpui_wrap
+                        == (self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded)
             }) {
                 continue;
             }
@@ -845,6 +1375,7 @@ impl Runtime {
                 wrap: t.wrap || multiline,
                 multiline,
                 masked,
+                overflow: t.overflow,
                 width,
                 paint_revision: rec.paint_rev,
             });
@@ -858,6 +1389,7 @@ impl Runtime {
             wrap,
             multiline,
             masked,
+            overflow,
             width,
             paint_revision,
         } in jobs
@@ -870,10 +1402,13 @@ impl Runtime {
                         || e.text != text
                         || e.width_bits != width.to_bits()
                         || e.scale_bits != self.scale.to_bits()
+                        || e.gpui_wrap
+                            != (self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded)
                         || e.size_bits != style.size_px.to_bits()
                         || e.wrap != wrap
                         || e.line_multi != multiline
                         || e.masked != masked
+                        || e.overflow != overflow
                 }
                 None => true,
             };
@@ -886,6 +1421,12 @@ impl Runtime {
             self.frame_work.text_runs_shaped += 1;
             let build = || {
                 let mut layout = TextLayout::new();
+                layout.set_gpui_line_height(
+                    self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded,
+                );
+                layout.set_gpui_wrap(
+                    self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded,
+                );
                 match spans.is_empty() {
                     true => layout.set_text(&text, &style),
                     false => layout.set_spans(spans.clone()),
@@ -899,7 +1440,15 @@ impl Runtime {
                 layout.set_max_width(if wrap { Some(width.max(0.0)) } else { None });
                 layout.set_scale(self.scale);
                 layout.set_mask(masked.then_some('\u{2022}'));
-                layout.layout(&mut self.fonts.lock());
+                if let Some(mode) = overflow.filter(|_| !multiline && !masked) {
+                    layout.layout_single_line_overflow(
+                        &mut self.fonts.lock(),
+                        width.max(0.0),
+                        mode,
+                    );
+                } else {
+                    layout.layout(&mut self.fonts.lock());
+                }
                 layout
             };
             let updated = self
@@ -930,10 +1479,13 @@ impl Runtime {
                             paint_revision,
                             width_bits: width.to_bits(),
                             scale_bits: self.scale.to_bits(),
+                            gpui_wrap: self.color_profile
+                                == aqua_core::ColorProfile::GpuiWindowsEncoded,
                             size_bits: style.size_px.to_bits(),
                             wrap,
                             line_multi: multiline,
                             masked,
+                            overflow,
                             scroll_x: 0.0,
                         },
                     );
@@ -949,10 +1501,12 @@ impl Runtime {
                 entry.paint_revision = paint_revision;
                 entry.width_bits = width.to_bits();
                 entry.scale_bits = self.scale.to_bits();
+                entry.gpui_wrap = self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded;
                 entry.size_bits = style.size_px.to_bits();
                 entry.wrap = wrap;
                 entry.line_multi = multiline;
                 entry.masked = masked;
+                entry.overflow = overflow;
             }
         }
         if target.is_some() {
@@ -987,17 +1541,19 @@ impl Runtime {
                 } => {
                     let (run_id, rev) = self.ensure_run_for(node);
                     let _ = run;
-                    let color =
-                        if self.tree.get(node).is_some_and(
-                            |r| matches!(&r.kind, NodeKind::Text(t) if t.is_placeholder()),
-                        ) {
-                            Oklch {
-                                alpha: color.alpha * 0.45,
-                                ..color
+                    let color = self
+                        .tree
+                        .get(node)
+                        .and_then(|record| match &record.kind {
+                            NodeKind::Text(text) if text.is_placeholder() => {
+                                Some(text.placeholder_color.unwrap_or(Oklch {
+                                    alpha: color.alpha * 0.45,
+                                    ..color
+                                }))
                             }
-                        } else {
-                            color
-                        };
+                            _ => None,
+                        })
+                        .unwrap_or(color);
                     if let Some(entry) = self.text_runs.get(&node) {
                         at[0] -= entry.scroll_x;
                     }
@@ -1013,11 +1569,11 @@ impl Runtime {
                 }
                 other => other,
             };
-            let editable = self
+            let clip_text = self
                 .tree
                 .get(node)
-                .is_some_and(|rec| matches!(&rec.kind, NodeKind::Text(t) if t.is_editable()));
-            let clip = if editable && matches!(item, DisplayItem::Text { .. }) {
+                .is_some_and(|rec| matches!(&rec.kind, NodeKind::Text(t) if t.is_editable() || t.overflow.is_some()));
+            let clip = if clip_text && matches!(item, DisplayItem::Text { .. }) {
                 self.text_rect(node)
             } else {
                 None
@@ -1025,9 +1581,13 @@ impl Runtime {
             if let Some(bounds) = clip {
                 out.push((
                     SceneKey::TextClipStart { node },
-                    DisplayItem::PushClip {
-                        bounds,
-                        radius: 0.0,
+                    if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        DisplayItem::PushGpuiContentMask { bounds }
+                    } else {
+                        DisplayItem::PushClip {
+                            bounds,
+                            radius: 0.0,
+                        }
                     },
                 ));
             }
@@ -1074,9 +1634,192 @@ impl Runtime {
                 }),
                 _ => None,
             };
+            let glyphs = match &item {
+                DisplayItem::Text { at, opacity, .. } => self.tree.get(node).and_then(|record| {
+                    let NodeKind::Text(text) = &record.kind else {
+                        return None;
+                    };
+                    if text.is_placeholder() || text.password || text.shaping_spans().is_empty() {
+                        return None;
+                    }
+                    let entry = self.text_runs.get(&node)?;
+                    let guard = self.runs.lock();
+                    let layout = guard.resolve(entry.run)?.layout;
+                    Some(
+                        text.inline_glyphs
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, glyph)| {
+                                let caret = layout.caret_position(CaretPosition {
+                                    byte: glyph.byte,
+                                    affinity: CaretAffinity::Downstream,
+                                })?;
+                                let left = at[0] + caret.x / self.scale;
+                                let top = at[1]
+                                    + caret.y_top / self.scale
+                                    + (caret.height / self.scale - glyph.size) / 2.0;
+                                let (width, height) = match glyph.intrinsic {
+                                    Some((width, height))
+                                        if width > 0.0 && height > 0.0 && width > height =>
+                                    {
+                                        (glyph.size, glyph.size * height / width)
+                                    }
+                                    Some((width, height)) if width > 0.0 && height > 0.0 => {
+                                        (glyph.size * width / height, glyph.size)
+                                    }
+                                    _ => (glyph.size, glyph.size),
+                                };
+                                let bounds = Rect::from_edges(
+                                    left + (glyph.size - width) / 2.0,
+                                    top + (glyph.size - height) / 2.0,
+                                    left + (glyph.size + width) / 2.0,
+                                    top + (glyph.size + height) / 2.0,
+                                );
+                                Some((
+                                    SceneKey::TextInlineGlyph {
+                                        node,
+                                        index: index as u32,
+                                    },
+                                    DisplayItem::Vector {
+                                        bounds,
+                                        source: glyph.source.clone(),
+                                        opacity: *opacity,
+                                    },
+                                ))
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }),
+                _ => None,
+            };
+            let inline_paints = match &item {
+                DisplayItem::Text { at, opacity, .. } => self.tree.get(node).and_then(|record| {
+                    let NodeKind::Text(text) = &record.kind else {
+                        return None;
+                    };
+                    if text.is_placeholder() || text.password {
+                        return None;
+                    }
+                    let entry = self.text_runs.get(&node)?;
+                    let guard = self.runs.lock();
+                    let layout = guard.resolve(entry.run)?.layout;
+                    let mut items = Vec::new();
+                    for (index, paint) in text.inline_paints.iter().enumerate() {
+                        let Some(start) = layout.caret_position(CaretPosition {
+                            byte: paint.bytes.start,
+                            affinity: CaretAffinity::Downstream,
+                        }) else {
+                            continue;
+                        };
+                        let Some(end) = layout.caret_position(CaretPosition {
+                            byte: paint.bytes.end,
+                            affinity: CaretAffinity::Upstream,
+                        }) else {
+                            continue;
+                        };
+                        let side = (end.x - start.x) / self.scale;
+                        if side <= 0.0 {
+                            continue;
+                        }
+                        let line_height = start.height / self.scale;
+                        let left = at[0] + start.x / self.scale;
+                        let line_top = at[1] + start.y_top / self.scale;
+                        let key = |part| SceneKey::TextInlinePaint {
+                            node,
+                            index: index as u32,
+                            part,
+                        };
+                        match &paint.content {
+                            aqua_ui::tree::TextInlinePaintContent::Svg { source, tint } => {
+                                let y = line_top + (line_height - side) / 2.0;
+                                items.push((
+                                    key(0),
+                                    DisplayItem::GpuiSvg {
+                                        bounds: Rect::from_edges(left, y, left + side, y + side),
+                                        source: source.clone(),
+                                        tint: *tint,
+                                        opacity: *opacity,
+                                    },
+                                ));
+                            }
+                            aqua_ui::tree::TextInlinePaintContent::FixedSvg {
+                                source,
+                                tint,
+                                size,
+                                intrinsic,
+                            } => {
+                                let (width, height) = match intrinsic {
+                                    Some((width, height))
+                                        if *width > 0.0 && *height > 0.0 && width > height =>
+                                    {
+                                        (*size, *size * height / width)
+                                    }
+                                    Some((width, height)) if *width > 0.0 && *height > 0.0 => {
+                                        (*size * width / height, *size)
+                                    }
+                                    _ => (*size, *size),
+                                };
+                                let x = left + (*size - width) / 2.0;
+                                let y =
+                                    line_top + (line_height - *size) / 2.0 + (*size - height) / 2.0;
+                                items.push((
+                                    key(0),
+                                    DisplayItem::GpuiSvg {
+                                        bounds: Rect::from_edges(x, y, x + width, y + height),
+                                        source: source.clone(),
+                                        tint: *tint,
+                                        opacity: *opacity,
+                                    },
+                                ));
+                            }
+                            aqua_ui::tree::TextInlinePaintContent::Swatch {
+                                fill,
+                                edge,
+                                centered,
+                            } => {
+                                let size = (side * 0.78).min(line_height * 0.62);
+                                let x = left + if *centered { (side - size) / 2.0 } else { 0.0 };
+                                let y = line_top + (line_height - size) / 2.0;
+                                let bounds = Rect::from_edges(x, y, x + size, y + size);
+                                let corners = aqua_core::CornerRadii::uniform(size * 0.22);
+                                let mut fill = *fill;
+                                let mut edge = *edge;
+                                fill.a *= *opacity;
+                                edge.a *= *opacity;
+                                items.push((
+                                    key(0),
+                                    DisplayItem::GpuiBackground {
+                                        bounds,
+                                        corners,
+                                        background: aqua_core::GpuiBackground::Solid(fill),
+                                    },
+                                ));
+                                items.push((
+                                    key(1),
+                                    DisplayItem::GpuiBorder {
+                                        bounds,
+                                        corners,
+                                        widths: aqua_core::Insets::uniform(1.0),
+                                        color: edge,
+                                        dashed: false,
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                    Some(items)
+                }),
+                _ => None,
+            };
             out.push((key, item));
             if let Some(decorations) = decorations {
                 out.extend(decorations);
+            }
+            if let Some(glyphs) = glyphs {
+                out.extend(glyphs);
+            }
+            if let Some(paints) = inline_paints {
+                out.extend(paints);
             }
             if clip.is_some() {
                 out.push((SceneKey::TextClipEnd { node }, DisplayItem::PopClip));
@@ -1089,29 +1832,44 @@ impl Runtime {
         if let Some(e) = self.text_runs.get(&node) {
             return (e.run, e.registry_rev);
         }
-        let (text, style, source_style, spans, wrap, multiline, masked, width, paint_revision) =
-            match self.tree.get(node).and_then(|r| match &r.kind {
-                NodeKind::Text(t) => {
-                    let style = t.effective_text_style();
-                    let (display, masked) = shaping_source(t);
-                    Some((
-                        display,
-                        style,
-                        t.text_style.clone(),
-                        t.shaping_spans().to_vec(),
-                        t.wrap || t.multiline(),
-                        t.multiline(),
-                        masked,
-                        self.text_rect(node).map(|r| r.w).unwrap_or(0.0),
-                        r.paint_rev,
-                    ))
-                }
-                _ => None,
-            }) {
-                Some(v) => v,
-                None => return (aqua_text::RunId(0), 0),
-            };
+        let (
+            text,
+            style,
+            source_style,
+            spans,
+            wrap,
+            multiline,
+            masked,
+            overflow,
+            width,
+            paint_revision,
+        ) = match self.tree.get(node).and_then(|r| match &r.kind {
+            NodeKind::Text(t) => {
+                let style = t.effective_text_style();
+                let (display, masked) = shaping_source(t);
+                Some((
+                    display,
+                    style,
+                    t.text_style.clone(),
+                    t.shaping_spans().to_vec(),
+                    t.wrap || t.multiline(),
+                    t.multiline(),
+                    masked,
+                    t.overflow,
+                    self.text_rect(node).map(|r| r.w).unwrap_or(0.0),
+                    r.paint_rev,
+                ))
+            }
+            _ => None,
+        }) {
+            Some(v) => v,
+            None => return (aqua_text::RunId(0), 0),
+        };
         let mut layout = TextLayout::new();
+        layout.set_gpui_line_height(
+            self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded,
+        );
+        layout.set_gpui_wrap(self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded);
         match spans.is_empty() {
             true => layout.set_text(&text, &style),
             false => layout.set_spans(spans.clone()),
@@ -1125,7 +1883,11 @@ impl Runtime {
         layout.set_max_width(if wrap { Some(width.max(0.0)) } else { None });
         layout.set_scale(self.scale);
         layout.set_mask(masked.then_some('\u{2022}'));
-        layout.layout(&mut self.fonts.lock());
+        if let Some(mode) = overflow.filter(|_| !multiline && !masked) {
+            layout.layout_single_line_overflow(&mut self.fonts.lock(), width.max(0.0), mode);
+        } else {
+            layout.layout(&mut self.fonts.lock());
+        }
         let (run, r) = self.runs.lock().insert(layout);
         self.text_runs.insert(
             node,
@@ -1139,14 +1901,136 @@ impl Runtime {
                 paint_revision,
                 width_bits: width.to_bits(),
                 scale_bits: self.scale.to_bits(),
+                gpui_wrap: self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded,
                 size_bits: style.size_px.to_bits(),
                 wrap,
                 line_multi: multiline,
                 masked,
+                overflow,
                 scroll_x: 0.0,
             },
         );
         (run, r)
+    }
+
+    fn text_background_items(
+        &self,
+        selection_items: &[(SceneKey, DisplayItem)],
+    ) -> Result<Vec<(SceneKey, DisplayItem)>, RuntimeError> {
+        let mut output = Vec::new();
+        let runs = self.runs.lock();
+        for &node in &self.cached_text_nodes {
+            let Some(entry) = self.text_runs.get(&node) else {
+                continue;
+            };
+            if !entry
+                .spans
+                .iter()
+                .any(|span| span.background_hsla.is_some())
+            {
+                continue;
+            }
+            let Some(origin) = self.text_origin(node) else {
+                continue;
+            };
+            let Some(handle) = runs.resolve(entry.run) else {
+                continue;
+            };
+            let backgrounds = handle
+                .layout
+                .gpui_backgrounds()
+                .map_err(|error| RuntimeError::Build(error.into()))?;
+            if !backgrounds.is_empty()
+                && self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded
+            {
+                return Err(RuntimeError::Build(
+                    "GPUI text backgrounds require the encoded color profile".into(),
+                ));
+            }
+            let selections: Vec<Rect> = selection_items
+                .iter()
+                .filter_map(|(key, item)| match key {
+                    SceneKey::Selection { node: selected, .. } if *selected == node => {
+                        item.bounds()
+                    }
+                    _ => None,
+                })
+                .collect();
+            for (index, background) in backgrounds.into_iter().enumerate() {
+                let r = background.bounds;
+                let bounds = Rect::from_edges(
+                    origin.x + r.x / self.scale,
+                    origin.y + r.y / self.scale,
+                    origin.x + (r.x + r.w) / self.scale,
+                    origin.y + (r.y + r.h) / self.scale,
+                );
+                let mut remaining = vec![bounds];
+                for selection in &selections {
+                    let mut next = Vec::new();
+                    for part in remaining {
+                        let overlap = part.intersect(*selection);
+                        if overlap.is_empty() {
+                            next.push(part);
+                        } else {
+                            if overlap.x > part.x {
+                                next.push(Rect::from_edges(
+                                    part.x,
+                                    part.y,
+                                    overlap.x,
+                                    part.bottom(),
+                                ));
+                            }
+                            if overlap.right() < part.right() {
+                                next.push(Rect::from_edges(
+                                    overlap.right(),
+                                    part.y,
+                                    part.right(),
+                                    part.bottom(),
+                                ));
+                            }
+                            if overlap.y > part.y {
+                                next.push(Rect::from_edges(
+                                    overlap.x,
+                                    part.y,
+                                    overlap.right(),
+                                    overlap.y,
+                                ));
+                            }
+                            if overlap.bottom() < part.bottom() {
+                                next.push(Rect::from_edges(
+                                    overlap.x,
+                                    overlap.bottom(),
+                                    overlap.right(),
+                                    part.bottom(),
+                                ));
+                            }
+                        }
+                    }
+                    remaining = next;
+                }
+                let [h, s, l, a] = background.color_hsla;
+                for (part, bounds) in remaining.into_iter().enumerate() {
+                    output.push((
+                        SceneKey::TextBackground {
+                            node,
+                            index: index as u32,
+                            part: part as u32,
+                        },
+                        DisplayItem::GpuiBackground {
+                            bounds,
+                            corners: aqua_core::CornerRadii::uniform(0.0),
+                            background: aqua_core::GpuiBackground::Solid(aqua_core::GpuiHsla {
+                                h,
+                                s,
+                                l,
+                                a,
+                            }),
+                        },
+                    ));
+                }
+            }
+        }
+        Ok(output)
     }
 
     fn caret_selection_items(&self) -> Vec<(SceneKey, DisplayItem)> {
@@ -1215,7 +2099,23 @@ impl Runtime {
                 }
                 None => return Vec::new(),
             };
-        let _ = text;
+        let appearance = text.text_appearance;
+        let gpui_appearance = text.gpui_text_appearance;
+        let paint = |bounds, fill, source| match source {
+            Some(color) => DisplayItem::GpuiBackground {
+                bounds,
+                corners: aqua_core::CornerRadii::uniform(0.0),
+                background: aqua_core::GpuiBackground::Solid(color),
+            },
+            None => DisplayItem::Rect {
+                bounds,
+                radius: 0.0,
+                fill,
+                border_width: 0.0,
+                border_color: Oklch::TRANSPARENT,
+                shadow: None,
+            },
+        };
         let Some(entry) = self.text_runs.get(&focused) else {
             return Vec::new();
         };
@@ -1227,13 +2127,17 @@ impl Runtime {
         let mut out = Vec::new();
         if let Some(sel @ Selection { .. }) = selection {
             let (a, b) = (sel.anchor.min(sel.caret), sel.anchor.max(sel.caret));
-            let fill = Oklch::from_hex("#2f6feb")
-                .map(|c| Oklch { alpha: 0.35, ..c })
-                .unwrap_or(Oklch {
-                    l: 0.55,
-                    c: 0.12,
-                    h: 260.0,
-                    alpha: 0.35,
+            let fill = appearance
+                .map(|appearance| appearance.selection)
+                .unwrap_or_else(|| {
+                    Oklch::from_hex("#2f6feb")
+                        .map(|c| Oklch { alpha: 0.35, ..c })
+                        .unwrap_or(Oklch {
+                            l: 0.55,
+                            c: 0.12,
+                            h: 260.0,
+                            alpha: 0.35,
+                        })
                 });
             for (i, r) in layout.selection_rects(a..b).into_iter().enumerate() {
                 out.push((
@@ -1241,43 +2145,47 @@ impl Runtime {
                         node: focused,
                         index: i as u32,
                     },
-                    DisplayItem::Rect {
-                        bounds: Rect::from_edges(
+                    paint(
+                        Rect::from_edges(
                             origin.x + r.x / self.scale,
                             origin.y + r.y / self.scale,
                             origin.x + (r.x + r.w) / self.scale,
                             origin.y + (r.y + r.h) / self.scale,
                         ),
-                        radius: 0.0,
                         fill,
-                        border_width: 0.0,
-                        border_color: Oklch::TRANSPARENT,
-                        shadow: None,
-                    },
+                        gpui_appearance.map(|appearance| appearance.selection),
+                    ),
                 ));
             }
         }
         if let Some(range) = composition {
-            let underline = Oklch::oklch(0.72, 0.14, 95.0, 1.0);
+            let underline = appearance.map_or(Oklch::oklch(0.72, 0.14, 95.0, 1.0), |appearance| {
+                appearance.ime_underline
+            });
+            let width = gpui_appearance.map_or_else(
+                || {
+                    appearance.map_or(2.0, |appearance| {
+                        appearance.ime_underline_width * self.scale
+                    })
+                },
+                |appearance| appearance.ime_underline_width * self.scale,
+            );
             for (i, r) in layout.selection_rects(range).into_iter().enumerate() {
                 out.push((
                     SceneKey::ImeUnderline {
                         node: focused,
                         index: i as u32,
                     },
-                    DisplayItem::Rect {
-                        bounds: Rect::from_edges(
+                    paint(
+                        Rect::from_edges(
                             origin.x + r.x / self.scale,
-                            origin.y + (r.y + r.h - 2.0) / self.scale,
+                            origin.y + (r.y + r.h - width) / self.scale,
                             origin.x + (r.x + r.w) / self.scale,
                             origin.y + (r.y + r.h) / self.scale,
                         ),
-                        radius: 0.0,
-                        fill: underline,
-                        border_width: 0.0,
-                        border_color: Oklch::TRANSPARENT,
-                        shadow: None,
-                    },
+                        underline,
+                        gpui_appearance.map(|appearance| appearance.ime_underline),
+                    ),
                 ));
             }
         }
@@ -1286,19 +2194,26 @@ impl Runtime {
                 if let Some(c) = layout.caret_position(position) {
                     out.push((
                         SceneKey::Caret { node: focused },
-                        DisplayItem::Rect {
-                            bounds: Rect::from_edges(
+                        paint(
+                            Rect::from_edges(
                                 origin.x + c.x / self.scale,
                                 origin.y + c.y_top / self.scale,
-                                origin.x + (c.x + 1.5) / self.scale,
+                                origin.x
+                                    + (c.x
+                                        + gpui_appearance.map_or_else(
+                                            || {
+                                                appearance.map_or(1.5, |appearance| {
+                                                    appearance.caret_width * self.scale
+                                                })
+                                            },
+                                            |appearance| appearance.caret_width * self.scale,
+                                        ))
+                                        / self.scale,
                                 origin.y + (c.y_top + c.height) / self.scale,
                             ),
-                            radius: 0.0,
-                            fill: Oklch::WHITE,
-                            border_width: 0.0,
-                            border_color: Oklch::TRANSPARENT,
-                            shadow: None,
-                        },
+                            appearance.map_or(Oklch::WHITE, |appearance| appearance.caret),
+                            gpui_appearance.map(|appearance| appearance.caret),
+                        ),
                     ));
                 }
             }
@@ -1309,9 +2224,13 @@ impl Runtime {
                     0,
                     (
                         SceneKey::CaretClipStart { node: focused },
-                        DisplayItem::PushClip {
-                            bounds,
-                            radius: 0.0,
+                        if gpui_appearance.is_some() {
+                            DisplayItem::PushGpuiContentMask { bounds }
+                        } else {
+                            DisplayItem::PushClip {
+                                bounds,
+                                radius: 0.0,
+                            }
                         },
                     ),
                 );
@@ -1521,9 +2440,18 @@ impl Runtime {
             }
             A11yAction::Press if !self.tree.is_disabled(request.node) => {
                 let _ = self.tree.set_focused(Some(request.node));
+                let kind = if self
+                    .tree
+                    .has_action(request.node, ActionKind::AccessibilityActivate)
+                {
+                    ActionKind::AccessibilityActivate
+                } else {
+                    ActionKind::Activate
+                };
                 self.tree.fire_action(ActionEvent {
+                    source: None,
                     node: request.node,
-                    kind: ActionKind::Activate,
+                    kind,
                     text: None,
                     focused: None,
                 });
@@ -1570,6 +2498,7 @@ impl Runtime {
                                     _ => None,
                                 });
                         self.tree.fire_action(ActionEvent {
+                            source: None,
                             node: request.node,
                             kind: ActionKind::TextChanged,
                             text,

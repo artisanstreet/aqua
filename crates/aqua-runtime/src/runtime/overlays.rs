@@ -50,13 +50,49 @@ pub(super) struct BoundPopup {
 }
 
 impl Runtime {
+    pub fn set_popup_uncontained(
+        &mut self,
+        overlay: OverlayId,
+        uncontained: bool,
+    ) -> Option<aqua_core::Rect> {
+        self.host
+            .set_popup_uncontained(&mut self.tree, overlay, uncontained)
+    }
+
+    pub fn set_popup_placement(
+        &mut self,
+        overlay: OverlayId,
+        placement: aqua_ui::overlay::Placement,
+    ) -> Option<aqua_core::Rect> {
+        self.host
+            .set_popup_placement(&mut self.tree, overlay, placement)
+    }
+
+    pub fn set_popup_pointer_anchor(
+        &mut self,
+        overlay: OverlayId,
+        point: aqua_core::Point,
+    ) -> Option<aqua_core::Rect> {
+        self.host
+            .set_popup_pointer_anchor(&mut self.tree, overlay, point)
+    }
+
     pub fn open_popup(
         &mut self,
         owner: NodeId,
         content: Element,
         options: PopupOptions,
     ) -> Result<OverlayId, PopupError> {
-        self.open_bound_popup(owner, content, options, None)
+        self.open_bound_popup(owner, content, options, None, false)
+    }
+
+    pub fn open_popup_measured(
+        &mut self,
+        owner: NodeId,
+        content: Element,
+        options: PopupOptions,
+    ) -> Result<OverlayId, PopupError> {
+        self.open_bound_popup(owner, content, options, None, true)
     }
 
     fn open_bound_popup(
@@ -65,6 +101,7 @@ impl Runtime {
         content: Element,
         options: PopupOptions,
         control_owner: Option<NodeId>,
+        measure_content: bool,
     ) -> Result<OverlayId, PopupError> {
         if self.disposed {
             return Err(PopupError::Disposed);
@@ -87,24 +124,30 @@ impl Runtime {
             spec.control = Some(Box::new(Control::SelectPopup(owner)));
         }
         let parent = self.overlay_for_node(owner);
-        let overlay = self
-            .host
-            .open_popup_at(
-                &mut self.tree,
-                PopupRequest {
-                    owner,
-                    parent,
-                    kind: options.kind,
-                    modality: options.modality,
-                    dismiss: options.dismiss,
-                    content: spec,
-                    placement: options.placement,
-                    autofocus: None,
-                    focus_root: options.focus != PopupFocus::Preserve,
-                },
-                options.at,
-            )
-            .map_err(PopupError::Host)?;
+        let request = PopupRequest {
+            owner,
+            parent,
+            kind: options.kind,
+            modality: options.modality,
+            dismiss: options.dismiss,
+            content: spec,
+            placement: options.placement,
+            autofocus: None,
+            focus_root: options.focus != PopupFocus::Preserve,
+        };
+        let overlay = if measure_content {
+            let measurer = aqua_ui::layout::ProfiledCosmicMeasurer {
+                fonts: self.fonts.clone(),
+                scale: self.scale,
+                gpui_line_height: self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded,
+                gpui_wrap: self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded,
+            };
+            self.host
+                .open_popup_measured(&mut self.tree, request, options.at, &measurer)
+        } else {
+            self.host.open_popup_at(&mut self.tree, request, options.at)
+        }
+        .map_err(PopupError::Host)?;
         let root = self.host.popup_root(overlay).unwrap();
         let mut view = View::new(self.runtime.create_scope(), self.tree.command_sink());
         if let Err(error) = view.bind_existing(&mut self.tree, root, content) {
@@ -181,6 +224,7 @@ impl Runtime {
             .view
             .set_content(&mut self.tree, vec![content])
             .map_err(|error| PopupError::Content(error.to_string()))?;
+        self.tree.drain_commands();
         self.host.reanchor_popup(&mut self.tree, overlay);
         Ok(())
     }
@@ -368,7 +412,13 @@ impl Runtime {
                         .children(items)
                         .build()
                         .role(Role::Menu);
-                    match self.open_bound_popup(owner, content, PopupOptions::menu(), Some(owner)) {
+                    match self.open_bound_popup(
+                        owner,
+                        content,
+                        PopupOptions::menu(),
+                        Some(owner),
+                        false,
+                    ) {
                         Ok(overlay) => {
                             self.select_popups.insert(owner, overlay);
                             if let Some(index) = highlighted {
@@ -412,11 +462,29 @@ impl Runtime {
                 && !self.tree.is_disabled(pending.owner)
                 && self.host.input_allowed(&self.tree, pending.owner)
             {
-                match self.open_popup(
-                    pending.owner,
-                    (pending.tooltip.content)(),
-                    PopupOptions::tooltip(),
-                ) {
+                let pointer = pending
+                    .tooltip
+                    .pointer_anchored
+                    .then(|| self.tree.pointer_position())
+                    .flatten();
+                let result = if let Some(pointer) = pointer {
+                    self.open_popup_measured(
+                        pending.owner,
+                        (pending.tooltip.content)(),
+                        PopupOptions::tooltip().at(pointer),
+                    )
+                } else {
+                    self.open_popup(
+                        pending.owner,
+                        (pending.tooltip.content)(),
+                        PopupOptions::tooltip(),
+                    )
+                };
+                match result {
+                    Ok(overlay) if pointer.is_some() => {
+                        self.host.set_pointer_tooltip(&mut self.tree, overlay);
+                        self.tooltip_popup = Some((pending.owner, overlay));
+                    }
                     Ok(overlay) => self.tooltip_popup = Some((pending.owner, overlay)),
                     Err(error) => self.last_build_error = Some(error.to_string()),
                 }

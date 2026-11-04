@@ -158,7 +158,8 @@ impl MotionRuntime {
                     .properties()
                     .iter()
                     .any(|(property, _)| *property == AnimatedProperty::Opacity);
-            let translate = spec
+            let translate = spec.presence.slide_offset().is_some()
+                || spec
                 .animate
                 .properties()
                 .iter()
@@ -262,6 +263,20 @@ impl MotionRuntime {
         finished
     }
 
+    fn resting_translate(tree: &UiTree, node: NodeId) -> (f32, f32) {
+        match resolved_value(tree, node, AnimatedProperty::Translate) {
+            Some(MotionValue::Pair(x, y)) => (x, y),
+            _ => (0.0, 0.0),
+        }
+    }
+
+    fn rest_translate(state: &NodeState, tree: &UiTree, node: NodeId) -> (f32, f32) {
+        match state.props.get(&AnimatedProperty::Translate).map(|prop| prop.target) {
+            Some(MotionValue::Pair(x, y)) => (x, y),
+            _ => Self::resting_translate(tree, node),
+        }
+    }
+
     fn kind_of(&self, reference: MotionRef) -> MotionKind {
         self.theme.resolve(reference).kind()
     }
@@ -357,7 +372,27 @@ impl MotionRuntime {
                 }
                 let kind = self.kind_of(exit);
                 let _ = tracks.set_target_with(track, MotionValue::Scalar(0.0), kind, at);
-                state.exit = Some(vec![track]);
+                let mut exit_tracks = vec![track];
+                if let Some((dx, dy)) = spec.presence.slide_offset() {
+                    let rest = Self::rest_translate(&state, tree, node);
+                    let away = MotionValue::Pair(rest.0 + dx, rest.1 + dy);
+                    let slide = self.ensure_prop(
+                        tracks,
+                        &mut state,
+                        node,
+                        AnimatedProperty::Translate,
+                        MotionValue::Pair(rest.0, rest.1),
+                        exit,
+                        at,
+                    );
+                    if let Some(prop) = state.props.get_mut(&AnimatedProperty::Translate) {
+                        prop.target = away;
+                        prop.motion = exit;
+                    }
+                    let _ = tracks.set_target_with(slide, away, kind, at);
+                    exit_tracks.push(slide);
+                }
+                state.exit = Some(exit_tracks);
             }
             self.nodes.insert(node, state);
             return;
@@ -377,6 +412,17 @@ impl MotionRuntime {
                 motion,
                 at,
             );
+            if spec.presence.slide_offset().is_some() {
+                let rest = Self::resting_translate(tree, node);
+                self.retarget(
+                    tracks,
+                    &mut state,
+                    AnimatedProperty::Translate,
+                    MotionValue::Pair(rest.0, rest.1),
+                    motion,
+                    at,
+                );
+            }
         }
         if entered && self.seeded {
             if let Some(enter) = spec.presence.enter_motion() {
@@ -397,6 +443,26 @@ impl MotionRuntime {
                     enter,
                     at,
                 );
+                if let Some((dx, dy)) = spec.presence.slide_offset() {
+                    let rest = Self::resting_translate(tree, node);
+                    self.ensure_prop(
+                        tracks,
+                        &mut state,
+                        node,
+                        AnimatedProperty::Translate,
+                        MotionValue::Pair(rest.0 + dx, rest.1 + dy),
+                        enter,
+                        at,
+                    );
+                    self.retarget(
+                        tracks,
+                        &mut state,
+                        AnimatedProperty::Translate,
+                        MotionValue::Pair(rest.0, rest.1),
+                        enter,
+                        at,
+                    );
+                }
             }
         }
         for (property, motion) in spec.animate.properties() {

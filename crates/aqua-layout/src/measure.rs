@@ -173,14 +173,62 @@ pub struct ProfiledCosmicMeasurer {
     pub gpui_wrap: bool,
 }
 
-const MEASURE_CACHE_LIMIT: usize = 16_384;
+const MEASURE_CACHE_LIMIT: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct MeasureKey(u64, u64);
 
+struct MeasureCache {
+    limit: usize,
+    current: std::collections::HashMap<MeasureKey, Size>,
+    previous: std::collections::HashMap<MeasureKey, Size>,
+}
+
+impl MeasureCache {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit: limit.max(1),
+            current: std::collections::HashMap::new(),
+            previous: std::collections::HashMap::new(),
+        }
+    }
+
+    fn get(&mut self, key: MeasureKey) -> Option<Size> {
+        match self.current.get(&key) {
+            Some(size) => Some(*size),
+            None => {
+                let size = self.previous.remove(&key)?;
+                self.insert(key, size);
+                Some(size)
+            }
+        }
+    }
+
+    fn insert(&mut self, key: MeasureKey, size: Size) {
+        if self.current.len() >= self.limit {
+            self.previous = std::mem::take(&mut self.current);
+            self.current.shrink_to(self.limit);
+        }
+        self.current.insert(key, size);
+    }
+
+    fn len(&self) -> usize {
+        self.current.len() + self.previous.len()
+    }
+
+    fn clear(&mut self) {
+        self.current = std::collections::HashMap::new();
+        self.previous = std::collections::HashMap::new();
+    }
+}
+
 thread_local! {
-    static MEASURE_CACHE: std::cell::RefCell<std::collections::HashMap<MeasureKey, Size>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static MEASURE_CACHE: std::cell::RefCell<MeasureCache> =
+        std::cell::RefCell::new(MeasureCache::new(MEASURE_CACHE_LIMIT));
+}
+
+pub fn trim_measure_cache() {
+    MEASURE_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
 fn hash_style(hasher: &mut impl std::hash::Hasher, style: &TextStyle) {
@@ -240,17 +288,11 @@ impl ProfiledCosmicMeasurer {
     }
 
     fn cached(&self, key: MeasureKey, measure: impl FnOnce() -> Size) -> Size {
-        if let Some(size) = MEASURE_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
+        if let Some(size) = MEASURE_CACHE.with(|cache| cache.borrow_mut().get(key)) {
             return size;
         }
         let size = measure();
-        MEASURE_CACHE.with(|cache| {
-            let mut cache = cache.borrow_mut();
-            if cache.len() >= MEASURE_CACHE_LIMIT {
-                cache.clear();
-            }
-            cache.insert(key, size);
-        });
+        MEASURE_CACHE.with(|cache| cache.borrow_mut().insert(key, size));
         size
     }
 }
@@ -320,5 +362,57 @@ impl TextMeasurer for ProfiledCosmicMeasurer {
             let laid = layout.layout(&mut self.fonts.lock());
             self.logical_size(laid.size)
         })
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    fn key(n: u64) -> MeasureKey {
+        MeasureKey(n, !n)
+    }
+
+    #[test]
+    fn size_never_exceeds_twice_the_limit() {
+        let mut cache = MeasureCache::new(8);
+        (0..1000).for_each(|n| cache.insert(key(n), Size::new(n as f32, 1.0)));
+        assert!(cache.len() <= 16, "{}", cache.len());
+    }
+
+    #[test]
+    fn recent_entries_survive_a_rotation() {
+        let mut cache = MeasureCache::new(4);
+        (0..4).for_each(|n| cache.insert(key(n), Size::new(n as f32, 1.0)));
+        cache.insert(key(4), Size::new(4.0, 1.0));
+        assert_eq!(cache.get(key(1)), Some(Size::new(1.0, 1.0)));
+        assert_eq!(cache.get(key(4)), Some(Size::new(4.0, 1.0)));
+    }
+
+    #[test]
+    fn entries_untouched_for_two_generations_are_dropped() {
+        let mut cache = MeasureCache::new(4);
+        (0..4).for_each(|n| cache.insert(key(n), Size::new(n as f32, 1.0)));
+        (4..12).for_each(|n| cache.insert(key(n), Size::new(n as f32, 1.0)));
+        assert_eq!(cache.get(key(0)), None);
+        assert!(cache.get(key(11)).is_some());
+    }
+
+    #[test]
+    fn promoted_entries_stay_through_the_next_rotation() {
+        let mut cache = MeasureCache::new(4);
+        (0..4).for_each(|n| cache.insert(key(n), Size::new(n as f32, 1.0)));
+        cache.insert(key(4), Size::new(4.0, 1.0));
+        assert!(cache.get(key(0)).is_some());
+        (5..8).for_each(|n| cache.insert(key(n), Size::new(n as f32, 1.0)));
+        assert!(cache.get(key(0)).is_some());
+    }
+
+    #[test]
+    fn clear_empties_both_generations() {
+        let mut cache = MeasureCache::new(2);
+        (0..3).for_each(|n| cache.insert(key(n), Size::new(1.0, 1.0)));
+        cache.clear();
+        assert_eq!(cache.len(), 0);
     }
 }

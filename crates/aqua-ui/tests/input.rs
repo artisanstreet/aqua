@@ -695,3 +695,38 @@ fn nested_scroll_chains_at_edges_and_portals_keep_wheel_inside_their_scope() {
     assert!(!dispatch_scroll(&mut tree, at, wheel));
     assert_eq!(tree.scroll_offset(root).unwrap().y, 0.0);
 }
+
+#[test]
+fn rotated_and_skewed_subtrees_hit_test_exactly_and_report_the_bounding_box() {
+    use aqua_core::{Rect, Transform2D};
+    use aqua_ui::input::{local_position, visual_bounds};
+    let (mut tree, root, child) = fixture();
+    let layout = tree.rect(root).unwrap();
+    let (sin, cos) = 0.5f32.sin_cos();
+    let transform = Transform2D {
+        a: cos,
+        b: sin,
+        c: -sin + 0.25,
+        d: cos,
+        tx: 30.0,
+        ty: 12.0,
+    };
+    let mut paint = tree.paint(root).unwrap();
+    paint.transform = Some(transform);
+    tree.set_paint(root, paint);
+    let anchored = Transform2D::translate(-layout.x, -layout.y)
+        .then(transform)
+        .then(Transform2D::translate(layout.x, layout.y));
+    let expected = Rect::from_edges(0.0, 0.0, layout.w, layout.h)
+        .transform(Transform2D::translate(layout.x, layout.y).then(anchored));
+    let bounds = visual_bounds(&tree, root).unwrap();
+    assert!((bounds.x - expected.x).abs() < 1e-3 && (bounds.w - expected.w).abs() < 1e-3);
+    assert!((bounds.y - expected.y).abs() < 1e-3 && (bounds.h - expected.h).abs() < 1e-3);
+    let local = Point::new(layout.w * 0.3, layout.h * 0.4);
+    let world = Transform2D::translate(layout.x, layout.y)
+        .then(anchored)
+        .apply(local);
+    let back = local_position(&tree, root, world).unwrap();
+    assert!((back.x - local.x).abs() < 1e-3 && (back.y - local.y).abs() < 1e-3);
+    let _ = child;
+}

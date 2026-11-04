@@ -3056,7 +3056,7 @@ impl std::fmt::Display for LowerError {
         match self {
             LowerError::InvalidTransform => write!(
                 f,
-                "subtree transform requires finite positive uniform scale and translation"
+                "subtree transform requires finite components and a nonzero determinant"
             ),
             LowerError::InvalidFocusRing => {
                 write!(f, "focus ring requires a finite nonnegative width")
@@ -3129,10 +3129,7 @@ fn check_paint(paint: &Paint) -> Result<(), LowerError> {
         ]
         .into_iter()
         .all(f32::is_finite)
-            || transform.a <= 0.0
-            || transform.a != transform.d
-            || transform.b != 0.0
-            || transform.c != 0.0
+            || (transform.a * transform.d - transform.b * transform.c).abs() <= f32::EPSILON
         {
             return Err(LowerError::InvalidTransform);
         }

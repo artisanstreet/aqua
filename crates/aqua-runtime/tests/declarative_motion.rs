@@ -493,3 +493,112 @@ fn rows_with_presence_fade_in_even_when_the_first_frame_had_none() {
     rig.render_only(3.0);
     assert!(rig.opacities().iter().all(|o| *o == 1.0));
 }
+
+fn sliding_list_runtime() -> (Runtime, aqua_reactive::WriteSignal<Vec<u32>>) {
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime.set_viewport(300.0, 200.0, 1.0);
+    let (rows, set_rows) = runtime.scope().signal(vec![1u32, 2, 3]);
+    runtime
+        .mount_reactive((rows,), |(rows,)| {
+            UiBox::new()
+                .style(
+                    Style::new()
+                        .axis(Axis::Column)
+                        .width(px(300.0))
+                        .height(px(200.0)),
+                )
+                .children(rows.iter().map(|id| {
+                    UiBox::new()
+                        .style(Style::new().width(px(100.0)).height(px(20.0)))
+                        .fill(red())
+                        .presence(Presence::new().enter(FADE).exit(FADE).slide(40.0, 0.0))
+                        .build()
+                        .with_key(*id)
+                }))
+                .build()
+        })
+        .unwrap();
+    (runtime, set_rows)
+}
+
+fn translations(rig: &Rig) -> Vec<f32> {
+    rig.render
+        .scene()
+        .ordered()
+        .filter_map(|(_, item)| match item {
+            DisplayItem::PushTransform(t) => Some(t.tx),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn arriving_keyed_rows_slide_in_from_their_offset_and_first_mount_does_not() {
+    let (runtime, set_rows) = sliding_list_runtime();
+    let mut rig = Rig::new(runtime);
+    rig.app_frame(0.0);
+    rig.app_frame(0.016);
+    assert!(translations(&rig).iter().all(|tx| *tx == 0.0));
+
+    set_rows.set(vec![1, 2, 3, 4]);
+    rig.app_frame(1.0);
+    rig.render_only(1.5);
+    let mid: Vec<f32> = translations(&rig)
+        .into_iter()
+        .filter(|tx| *tx != 0.0)
+        .collect();
+    assert_eq!(mid.len(), 1);
+    assert!(mid[0] > 5.0 && mid[0] < 35.0, "{mid:?}");
+    rig.render_only(3.0);
+    assert!(translations(&rig).iter().all(|tx| *tx == 0.0));
+}
+
+#[test]
+fn exiting_keyed_rows_slide_out_and_leave_only_after_both_tracks_settle() {
+    let (runtime, set_rows) = sliding_list_runtime();
+    let mut rig = Rig::new(runtime);
+    rig.app_frame(0.0);
+    rig.app_frame(0.016);
+
+    set_rows.set(vec![1, 3]);
+    rig.app_frame(1.0);
+    rig.render_only(1.5);
+    let mid: Vec<f32> = translations(&rig)
+        .into_iter()
+        .filter(|tx| *tx != 0.0)
+        .collect();
+    assert_eq!(mid.len(), 1);
+    assert!(mid[0] > 5.0 && mid[0] < 35.0, "{mid:?}");
+    assert_eq!(rig.rect_widths().len(), 3);
+
+    rig.render_only(3.0);
+    rig.app_frame(3.1);
+    rig.app_frame(3.2);
+    assert_eq!(rig.rect_widths().len(), 2);
+    assert!(rig.runtime.tree().exiting_nodes().is_empty());
+}
+
+#[test]
+fn a_returning_key_slides_back_from_where_it_was_presented() {
+    let (runtime, set_rows) = sliding_list_runtime();
+    let mut rig = Rig::new(runtime);
+    rig.app_frame(0.0);
+    rig.app_frame(0.016);
+
+    set_rows.set(vec![1, 3]);
+    rig.app_frame(1.0);
+    rig.render_only(1.5);
+    set_rows.set(vec![1, 2, 3]);
+    rig.app_frame(1.5);
+    rig.render_only(1.6);
+    let near: Vec<f32> = translations(&rig)
+        .into_iter()
+        .filter(|tx| *tx != 0.0)
+        .collect();
+    assert_eq!(near.len(), 1);
+    assert!(near[0] > 5.0 && near[0] < 35.0, "{near:?}");
+    rig.render_only(4.0);
+    rig.app_frame(4.1);
+    assert!(translations(&rig).iter().all(|tx| *tx == 0.0));
+    assert_eq!(rig.rect_widths().len(), 3);
+}

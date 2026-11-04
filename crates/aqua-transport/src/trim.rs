@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 const TRIM_INTERVAL_FRAMES: u64 = 300;
-const UNUSED_FRAMES: u64 = 1800;
+const UNUSED_FRAMES: u64 = 600;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrimInput {

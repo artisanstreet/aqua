@@ -480,7 +480,10 @@ fn seek(tree: &mut UiTree, node: NodeId, pointer: Point, capture: Capture) {
                     Axis::Column => (pointer.y - capture.origin.y) as f64,
                 } / tree
                     .visual_transform(node)
-                    .map_or(1.0, |transform| transform.a as f64),
+                    .map_or(1.0, |transform| match transform.a.abs() > f32::EPSILON {
+                        true => transform.a as f64,
+                        false => 1.0,
+                    }),
         ),
         _ => None,
     };

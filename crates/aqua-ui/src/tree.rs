@@ -1924,14 +1924,7 @@ impl UiTree {
     pub fn visual_rect(&self, node: NodeId) -> Option<Rect> {
         let rect = self.rect(node)?;
         let transform = self.visual_transform(node)?;
-        let start = transform.apply(Point::ZERO);
-        let end = transform.apply(Point::new(rect.w, rect.h));
-        Some(Rect::from_edges(
-            start.x.min(end.x),
-            start.y.min(end.y),
-            start.x.max(end.x),
-            start.y.max(end.y),
-        ))
+        Some(Rect::from_edges(0.0, 0.0, rect.w, rect.h).transform(transform))
     }
 
     pub fn portal_roots_in_paint_order(&self) -> &[NodeId] {
@@ -3259,9 +3252,7 @@ impl UiTree {
         let world = transform.map_or(inherited_transform, |transform| {
             transform.then(inherited_transform)
         });
-        let start = world.apply(rect.origin());
-        let end = world.apply(Point::new(rect.right(), rect.bottom()));
-        let visual_rect = Rect::from_edges(start.x, start.y, end.x, end.y);
+        let visual_rect = rect.transform(world);
         let footprint = paint
             .shadows
             .iter()
@@ -3280,9 +3271,7 @@ impl UiTree {
         } else {
             footprint
         };
-        let start = world.apply(footprint.origin());
-        let end = world.apply(Point::new(footprint.right(), footprint.bottom()));
-        let visual_footprint = Rect::from_edges(start.x, start.y, end.x, end.y);
+        let visual_footprint = footprint.transform(world);
         if clip.is_some_and(|clip| clip.intersect(visual_footprint).is_empty())
             && Some(id) != self.root
             && !paint.shadows.iter().any(|layer| !layer.inset)

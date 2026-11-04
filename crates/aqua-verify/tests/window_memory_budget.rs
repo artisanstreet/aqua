@@ -59,8 +59,7 @@ fn run(preference: AdapterPreference, high_performance: bool, budget: Option<Mem
     let mut backend = match WindowBackend::new(options) {
         Ok(backend) => backend,
         Err(error) => {
-            eprintln!("SKIP-NO-ADAPTER {preference:?}: {error}");
-            return;
+            panic!("no adapter {preference:?}: {error}");
         }
     };
     stages.push(stage("device and renderer", high_performance));

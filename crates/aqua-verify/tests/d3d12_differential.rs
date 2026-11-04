@@ -33,17 +33,9 @@ fn count() -> usize {
         .unwrap_or(400)
 }
 
-fn backend(preference: AdapterPreference, limit: TierLimit) -> Option<OffscreenBackend> {
-    match OffscreenBackend::with_tiers(preference, SurfaceFormat::Rgba16Float, limit) {
-        Ok(backend) => Some(backend),
-        Err(error) => match preference {
-            AdapterPreference::Warp => panic!("WARP must always be available: {error}"),
-            _ => {
-                eprintln!("SKIP-NO-ADAPTER {preference:?}: {error}");
-                None
-            }
-        },
-    }
+fn backend(preference: AdapterPreference, limit: TierLimit) -> OffscreenBackend {
+    OffscreenBackend::with_tiers(preference, SurfaceFormat::Rgba16Float, limit)
+        .unwrap_or_else(|error| panic!("no adapter {preference:?}: {error}"))
 }
 
 fn summary(name: &str, comparison: &aqua_gpu_ref::conformance::Comparison) -> String {
@@ -58,9 +50,7 @@ fn against_reference(preference: AdapterPreference) {
     let mut expected_session = Session::new(&mut reference);
     let mut failures = Vec::new();
     for (tier_name, limit) in TIERS {
-        let Some(mut device) = backend(preference, limit) else {
-            return;
-        };
+        let mut device = backend(preference, limit);
         let mut actual_session = Session::new(&mut device);
         let mut worst = (0u8, 0u8, 0u8);
         let mut runs = 0;
@@ -103,15 +93,11 @@ fn against_reference(preference: AdapterPreference) {
 }
 
 fn tiers_agree(preference: AdapterPreference) {
-    let Some(mut baseline) = backend(preference, TierLimit::BASELINE) else {
-        return;
-    };
+    let mut baseline = backend(preference, TierLimit::BASELINE);
     let mut baseline_session = Session::new(&mut baseline);
     let mut failures = Vec::new();
     for (tier_name, limit) in TIERS.into_iter().skip(1) {
-        let Some(mut other) = backend(preference, limit) else {
-            return;
-        };
+        let mut other = backend(preference, limit);
         let mut other_session = Session::new(&mut other);
         for scene in scenes(SEED ^ 3, count()) {
             let case = variant_case(&scene, VARIANTS[0]).unwrap();
@@ -167,12 +153,8 @@ fn integrated_tiers_agree_with_each_other() {
 
 #[test]
 fn integrated_and_hardware_agree_with_each_other() {
-    let (Some(mut integrated), Some(mut hardware)) = (
-        backend(AdapterPreference::MinimumPower, TierLimit::MAX),
-        backend(AdapterPreference::HighPerformance, TierLimit::MAX),
-    ) else {
-        return;
-    };
+    let mut integrated = backend(AdapterPreference::MinimumPower, TierLimit::MAX);
+    let mut hardware = backend(AdapterPreference::HighPerformance, TierLimit::MAX);
     let mut integrated_session = Session::new(&mut integrated);
     let mut hardware_session = Session::new(&mut hardware);
     let failures: Vec<String> = scenes(SEED ^ 11, count())
@@ -212,12 +194,8 @@ fn the_fuzz_corpus_is_exactly_as_large_as_requested_and_never_repeats() {
 
 #[test]
 fn hardware_and_warp_agree_with_each_other() {
-    let (Some(mut hardware), Some(mut warp)) = (
-        backend(AdapterPreference::HighPerformance, TierLimit::MAX),
-        backend(AdapterPreference::Warp, TierLimit::MAX),
-    ) else {
-        return;
-    };
+    let mut hardware = backend(AdapterPreference::HighPerformance, TierLimit::MAX);
+    let mut warp = backend(AdapterPreference::Warp, TierLimit::MAX);
     let mut hardware_session = Session::new(&mut hardware);
     let mut warp_session = Session::new(&mut warp);
     let mut failures = Vec::new();

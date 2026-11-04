@@ -129,8 +129,7 @@ fn run(preference: AdapterPreference, high_performance: bool) -> Option<Outcome>
     let deadline = WallInstant::now() + Duration::from_secs(30);
     while aqua.presented_frames(id).unwrap_or(0) == 0 {
         if WallInstant::now() > deadline {
-            eprintln!("SKIP-NO-ADAPTER {preference:?}: nothing presented");
-            return None;
+            panic!("no adapter {preference:?}: nothing presented");
         }
         pump(&mut aqua, &mut app, id, &window);
         std::thread::sleep(Duration::from_millis(2));

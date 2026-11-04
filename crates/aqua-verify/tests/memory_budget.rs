@@ -46,8 +46,7 @@ fn run(preference: AdapterPreference, high_performance: bool, budget: Option<Mem
     let mut backend = match OffscreenBackend::with_format(preference, SurfaceFormat::Bgra8Unorm) {
         Ok(backend) => backend,
         Err(error) => {
-            eprintln!("SKIP-NO-ADAPTER {preference:?}: {error}");
-            return;
+            panic!("no adapter {preference:?}: {error}");
         }
     };
     stages.push(stage("device and renderer", high_performance));

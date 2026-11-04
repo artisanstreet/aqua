@@ -23,8 +23,7 @@ fn steady_frame_heap_events(preference: AdapterPreference) -> Option<(u64, u64)>
     let mut backend = match OffscreenBackend::with_format(preference, SurfaceFormat::Bgra8Unorm) {
         Ok(backend) => backend,
         Err(error) => {
-            eprintln!("SKIP-NO-ADAPTER {preference:?}: {error}");
-            return None;
+            panic!("no adapter {preference:?}: {error}");
         }
     };
     let surface = backend

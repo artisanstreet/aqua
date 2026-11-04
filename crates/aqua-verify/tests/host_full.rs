@@ -33,6 +33,7 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 480;
+const NOTCH_UNITS: f32 = 16.0;
 const PROBE_COLUMN: usize = 600;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -292,13 +293,7 @@ fn adapters() -> Vec<Kind> {
 fn open_or_skip(kind: Kind) -> Option<Host> {
     match (open(kind), kind) {
         (Some(host), _) => Some(host),
-        (None, Kind::Reference | Kind::D3d12(AdapterPreference::Warp)) => {
-            panic!("{kind:?} must always present")
-        }
-        (None, _) => {
-            eprintln!("SKIP-NO-ADAPTER {kind:?}");
-            None
-        }
+        (None, _) => panic!("{kind:?} must present"),
     }
 }
 
@@ -380,26 +375,19 @@ fn transition(column: &[[u8; 4]]) -> Option<usize> {
 }
 
 fn glide_steps(frames: &[Capture]) -> Vec<f32> {
-    let period = ROW;
     let positions: Vec<f32> = frames
         .iter()
         .filter_map(|frame| transition(&frame.column).map(|y| y as f32))
         .collect();
     positions
         .windows(2)
-        .map(|pair| {
-            let raw = (pair[0] - pair[1]).rem_euclid(period);
-            match raw > period / 2.0 {
-                true => raw - period,
-                false => raw,
-            }
-        })
+        .map(|pair| (pair[0] - pair[1]).rem_euclid(ROW))
         .collect()
 }
 
 #[test]
 fn scroll_glide_on_the_full_host_advances_monotonically_without_jumps() {
-    for kind in adapters().into_iter().skip(1) {
+    for kind in adapters() {
         let Some(mut host) = open_or_skip(kind) else {
             continue;
         };
@@ -409,31 +397,51 @@ fn scroll_glide_on_the_full_host_advances_monotonically_without_jumps() {
             host.aqua.preferences().reduce_motion,
             transition(&host.last().column)
         );
-        host.wheel(120.0);
+        let counted_from = host
+            .aqua
+            .render_stats(host.id)
+            .unwrap()
+            .frames
+            .load(Ordering::Relaxed);
+        host.wheel(NOTCH_UNITS);
         assert!(host.settle(Duration::from_secs(20)));
         let frames = host.since(from);
+        let counted = host
+            .aqua
+            .render_stats(host.id)
+            .unwrap()
+            .frames
+            .load(Ordering::Relaxed)
+            - counted_from;
+        assert_eq!(counted, frames.len() as u64, "{kind:?}: frame counters disagree");
+        let paced = kind != Kind::Reference;
+        assert!(
+            !paced || (5..=30).contains(&frames.len()),
+            "{kind:?}: one notch took {} frames",
+            frames.len()
+        );
         eprintln!("after transition {:?}", transition(&host.last().column));
         let steps: Vec<f32> = glide_steps(&frames)
             .into_iter()
             .filter(|step| step.abs() > 0.0)
             .collect();
         let total: f32 = steps.iter().sum();
+        assert!(
+            (total - aqua_runtime::glide::NOTCH_PIXELS).abs() <= 3.0,
+            "{kind:?}: one notch moved {total} px: {steps:?}"
+        );
         eprintln!(
             "glide {kind:?}: {} presented frames, {} moving steps, total {total:.1} px, steps {steps:?}",
             frames.len(),
             steps.len()
         );
         assert!(
-            steps.len() >= 4,
+            !paced || steps.len() >= 4,
             "{kind:?}: the glide was not animated: {steps:?}"
-        );
-        assert!(
-            steps.iter().all(|step| *step * total >= 0.0),
-            "{kind:?}: the glide reversed: {steps:?}"
         );
         let largest = steps.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(
-            largest <= total.abs() * 0.6,
+            !paced || largest <= total.abs() * 0.6,
             "{kind:?}: a single frame jumped {largest} of {total}: {steps:?}"
         );
     }

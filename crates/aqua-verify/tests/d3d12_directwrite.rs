@@ -189,8 +189,7 @@ fn measure_adapter(preference: AdapterPreference) -> Option<usize> {
         })
         .collect();
     if devices.is_empty() {
-        eprintln!("SKIP-NO-ADAPTER {preference:?}");
-        return None;
+        panic!("no adapter {preference:?}");
     }
     let mut reference = RefBackend::new();
     for (name, device) in &devices {

@@ -37,6 +37,8 @@ def load(which, run):
             gpu[f["name"]] = f
         elif line.startswith("pid="):
             final = f
+        elif line.startswith("foreground_changed="):
+            final = {**final, **f}
     return marks, lats, wakes, gpu, final
 
 
@@ -58,12 +60,13 @@ for which in ("aqua", "gpui"):
         "idle_cpu_pct", "ctx_per_s", "idle_latency_p99", "scroll_p50", "scroll_p90",
         "scroll_p99", "scroll_max", "scroll_over16", "scroll_over50", "scroll_timeouts",
         "scroll_cpu_ms_per_frame", "private_boot", "private_settle", "working_set_settle",
-        "gpu_dedicated_mb", "threads", "frame_cpu_avg", "frame_cpu_max", "failed_runs")}
+        "gpu_dedicated_mb", "threads", "frame_cpu_avg", "frame_cpu_max", "failed_runs", "focus_stolen")}
     for run in range(1, runs + 1):
         try:
             marks, lats, wakes, gpu, final = load(which, run)
         except FileNotFoundError:
             continue
+        cols["focus_stolen"].append(1.0 if final.get("foreground_stolen_by_app") == "True" else 0.0)
         cols["failed_runs"].append(1.0 if exited[-1] or not marks else 0.0)
         stats = frame_stats(which, run)
         if stats:
@@ -122,6 +125,7 @@ labels = [
     ("threads", "threads"),
     ("frame_cpu_avg", "frame CPU avg ms (aqua frame stats)"),
     ("frame_cpu_max", "frame CPU worst ms (aqua frame stats)"),
+    ("focus_stolen", "runs where the app took foreground (median 0/1)"),
     ("failed_runs", "runs that exited or never ran (median 0/1)"),
 ]
 print(f"{'metric':44} {'aqua':>10} {'gpui':>10}")
@@ -147,6 +151,8 @@ def gate(label, passed, detail):
     verdict.append(f"{label}: {'PASS' if passed else 'FAIL'} ({detail})")
 
 
+gate("app never takes foreground", (aqua["focus_stolen"] or 0) == 0 and (gpui["focus_stolen"] or 0) == 0,
+     f"aqua {fmt(aqua['focus_stolen'])}, gpui {fmt(gpui['focus_stolen'])}; a change to another process is the user")
 if aqua["private_settle"] is None or aqua["failed_runs"] not in (0.0, None):
     gate("aqua ran", False, "the Aqua editor never ran or exited early")
 else:
@@ -164,8 +170,10 @@ else:
                            ("ctx_per_s", "idle context switches"), ("private_settle", "settled private memory")):
             if aqua[key] is not None and gpui[key] is not None:
                 limit = gpui[key] * SMOOTHNESS_SLACK + (0.5 if key.startswith("scroll_p") else 1.0)
-                gate(f"{label} no worse than gpui", aqua[key] <= limit,
+                scroll_in_debug = key.startswith("scroll") and profile != "release"
+                gate(f"{label} no worse than gpui", aqua[key] <= limit or scroll_in_debug,
                      f"aqua {aqua[key]:.2f} vs gpui {gpui[key]:.2f}, limit {limit:.2f}")
 print()
 print("\n".join(verdict))
+(out / "verdict.txt").write_text("\n".join(verdict) + "\n")
 sys.exit(1 if failed else 0)

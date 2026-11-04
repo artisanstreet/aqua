@@ -143,3 +143,36 @@ fn editor_port_manifest_declares_no_banned_crate() {
         .collect();
     assert!(found.is_empty(), "editor-aqua declares {found:?}");
 }
+
+#[test]
+fn editor_port_closure_reaches_no_banned_crate() {
+    let port = workspace_root().join("..").join("editor-aqua-port");
+    if !port.join("Cargo.toml").exists() {
+        return;
+    }
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let found: Vec<String> = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-gnu"]
+        .iter()
+        .flat_map(|target| {
+            let output = std::process::Command::new(&cargo)
+                .args(["tree", "--offline", "-p", "editor-aqua", "-e", "normal,build"])
+                .args(["--prefix", "none", "--format", "{p}", "--target", target])
+                .arg("--manifest-path")
+                .arg(port.join("Cargo.toml"))
+                .output()
+                .unwrap_or_else(|error| panic!("cargo tree did not start: {error}"));
+            assert!(
+                output.status.success(),
+                "cargo tree failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| line.split_whitespace().next())
+                .filter(|name| BANNED_EVERYWHERE.contains(name))
+                .map(|name| format!("{target}: {name}"))
+                .collect::<BTreeSet<_>>()
+        })
+        .collect();
+    assert!(found.is_empty(), "editor-aqua closure:\n{}", found.join("\n"));
+}

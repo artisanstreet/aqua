@@ -204,3 +204,43 @@ fn a_paused_timeline_over_the_host_runtime_freezes_until_stepped() {
     line.advance(Duration::from_millis(16), &[aqua_protocol::WindowId::new(1).unwrap()]);
     assert_eq!(line.now(), frozen + Duration::from_millis(16));
 }
+
+#[test]
+fn slow_motion_and_stepping_a_host_session_are_deterministic_and_scale_time() {
+    let (host, log) = recorded(Kind::Reference);
+    let fonts = host.aqua.fonts().clone();
+    let inputs: Vec<RuntimeInput> = log.iter().map(|entry| entry.input.clone()).collect();
+    let run = |rate: f64| {
+        let mut line = Timeline::new({
+            let fonts = fonts.clone();
+            move || fresh_runtime(fonts.clone())
+        });
+        line.slow(rate);
+        inputs.iter().for_each(|input| {
+            line.step(input.clone());
+        });
+        line
+    };
+    let full = run(1.0);
+    let half_a = run(0.5);
+    let half_b = run(0.5);
+    assert_eq!(scene_hash(half_a.machine()), scene_hash(half_b.machine()));
+    assert_eq!(half_a.now(), half_b.now());
+    let full_ns = full.now().as_nanos() as f64;
+    let half_ns = half_a.now().as_nanos() as f64;
+    assert!(half_ns < full_ns * 0.75 && half_ns > full_ns * 0.25);
+
+    let window = [aqua_protocol::WindowId::new(1).unwrap()];
+    let step_frames = || {
+        let mut line = timeline_over(&fonts, inputs.iter().cloned());
+        line.pause();
+        (0..30).for_each(|_| {
+            line.advance(Duration::from_millis(16), &window);
+        });
+        line
+    };
+    let first = step_frames();
+    let second = step_frames();
+    assert_eq!(scene_hash(first.machine()), scene_hash(second.machine()));
+    assert_eq!(first.cursor(), second.cursor());
+}

@@ -118,3 +118,24 @@ fn an_allowed_edge_is_not_followed() {
         .is_empty()
     );
 }
+
+#[test]
+fn root_items_follow_multiline_use_groups_and_skip_nested_items() {
+    use aqua_verify::policy::root_public_items;
+    let source = "pub mod a;\n// pub mod hidden;\npub use x::{\n    B,\n    c as D,\n};\n#[cfg(windows)]\npub struct S;\nimpl S {\n    pub fn nested() {}\n}\npub use y;\n";
+    assert_eq!(root_public_items(source), vec!["a", "B", "D", "S", "y"]);
+}
+
+#[test]
+fn architecture_roles_follow_the_section_four_block() {
+    use aqua_verify::policy::architecture_crate_roles;
+    let document = "## 4. Crate structure\n\n```\nPure (x)\n  aqua-core   ids\nAdapters\n  aqua-gpu-ref  oracle\nHost\n  aqua   api\n```\n\n### Enforcement\n  aqua-late\n";
+    assert_eq!(
+        architecture_crate_roles(document),
+        vec![
+            ("Pure".to_string(), "aqua-core".to_string()),
+            ("Adapters".to_string(), "aqua-gpu-ref".to_string()),
+            ("Host".to_string(), "aqua".to_string()),
+        ]
+    );
+}

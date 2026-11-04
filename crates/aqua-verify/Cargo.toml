@@ -20,6 +20,7 @@ windows = { version = "0.62.2", features = [
 ] }
 
 [dev-dependencies]
+aqua = { path = "../aqua" }
 aqua-core = { path = "../aqua-core" }
 aqua-kernels = { path = "../aqua-kernels" }
 aqua-motion = { path = "../aqua-motion" }
@@ -31,4 +32,6 @@ aqua-ui = { path = "../aqua-ui" }
 
 [target.'cfg(windows)'.dev-dependencies]
 aqua-gpu-d3d12 = { path = "../aqua-gpu-d3d12" }
-windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging"] }
+aqua-oracle-dwrite = { path = "../aqua-oracle-dwrite" }
+aqua-media = { path = "../aqua-media" }
+windows = { version = "0.62.2", features = ["Win32_Graphics_Dxgi", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }

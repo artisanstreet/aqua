@@ -30,7 +30,7 @@ fn count() -> usize {
     std::env::var("AQUA_DIFFERENTIAL_FUZZ")
         .ok()
         .and_then(|value| value.parse().ok())
-        .unwrap_or(120)
+        .unwrap_or(400)
 }
 
 fn backend(preference: AdapterPreference, limit: TierLimit) -> Option<OffscreenBackend> {
@@ -141,6 +141,11 @@ fn warp_matches_the_oracle_on_every_tier_and_plan_variant() {
 }
 
 #[test]
+fn integrated_matches_the_oracle_on_every_tier_and_plan_variant() {
+    against_reference(AdapterPreference::MinimumPower);
+}
+
+#[test]
 fn hardware_matches_the_oracle_on_every_tier_and_plan_variant() {
     against_reference(AdapterPreference::HighPerformance);
 }
@@ -153,6 +158,56 @@ fn warp_tiers_agree_with_each_other() {
 #[test]
 fn hardware_tiers_agree_with_each_other() {
     tiers_agree(AdapterPreference::HighPerformance);
+}
+
+#[test]
+fn integrated_tiers_agree_with_each_other() {
+    tiers_agree(AdapterPreference::MinimumPower);
+}
+
+#[test]
+fn integrated_and_hardware_agree_with_each_other() {
+    let (Some(mut integrated), Some(mut hardware)) = (
+        backend(AdapterPreference::MinimumPower, TierLimit::MAX),
+        backend(AdapterPreference::HighPerformance, TierLimit::MAX),
+    ) else {
+        return;
+    };
+    let mut integrated_session = Session::new(&mut integrated);
+    let mut hardware_session = Session::new(&mut hardware);
+    let failures: Vec<String> = scenes(SEED ^ 11, count())
+        .iter()
+        .filter_map(|scene| {
+            let case = variant_case(scene, VARIANTS[1]).unwrap();
+            let a = integrated_session.render_case(&case).unwrap();
+            let b = hardware_session.render_case(&case).unwrap();
+            let comparison = compare(&case.plan, &a, &b, Tolerance::default());
+            (!comparison.passed()).then(|| summary(&case.name, &comparison))
+        })
+        .collect();
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn the_fuzz_corpus_is_exactly_as_large_as_requested_and_never_repeats() {
+    [64usize, 400, 1000].into_iter().for_each(|requested| {
+        let corpus = scenes(SEED, requested);
+        assert_eq!(corpus.len(), requested);
+        let distinct: std::collections::HashSet<String> = corpus
+            .iter()
+            .map(|scene| format!("{:?}{:?}{:?}", scene.extent, scene.clear, scene.commands))
+            .collect();
+        assert!(
+            distinct.len() * 100 >= requested * 98,
+            "{} distinct of {requested}",
+            distinct.len()
+        );
+    });
 }
 
 #[test]

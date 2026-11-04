@@ -16,6 +16,11 @@ pub const RENDERER_WINDOWED: MemoryBudget = MemoryBudget {
     vram_total: 64 * MIB,
 };
 
+pub const HOST_WINDOWED: MemoryBudget = MemoryBudget {
+    framework_heap: 16 * MIB,
+    ..RENDERER_WINDOWED
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemoryBudget {
     pub private_total: u64,

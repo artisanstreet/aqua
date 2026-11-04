@@ -15,13 +15,11 @@ use aqua_verify::heap::{live_bytes, CountingAllocator};
 use aqua_verify::process::{sample, video_memory};
 use aqua_verify::stats::{intervals, jank, Distribution};
 use aqua_verify::workload::editor_workload;
-use windows::core::w;
-use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, DispatchMessageW, GetClientRect, PeekMessageW, SetWindowPos,
-    ShowWindow, TranslateMessage, HWND_BOTTOM, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE, WS_POPUP,
-};
+
+#[path = "support/window.rs"]
+mod window;
+
+use window::Window;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -30,74 +28,9 @@ const SURFACE: Extent = Extent {
     width: 2560,
     height: 1440,
 };
+const RELEASE_FRAME_P99_MS: f64 = 4.0;
 const WARMUP_FRAMES: usize = 60;
 const STEADY_FRAMES: usize = 600;
-
-struct Window(HWND);
-
-impl Window {
-    fn open(extent: Extent) -> Self {
-        let hwnd = unsafe {
-            CreateWindowExW(
-                WS_EX_NOACTIVATE,
-                w!("STATIC"),
-                w!("aqua-window-budget"),
-                WS_POPUP,
-                0,
-                0,
-                extent.width as i32,
-                extent.height as i32,
-                None,
-                None,
-                None,
-                None,
-            )
-        }
-        .expect("window");
-        unsafe {
-            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_BOTTOM),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-        }
-        let window = Self(hwnd);
-        window.pump();
-        window
-    }
-
-    fn client(&self) -> Extent {
-        let mut rect = RECT::default();
-        unsafe { GetClientRect(self.0, &mut rect).expect("client rect") };
-        Extent {
-            width: (rect.right - rect.left) as u32,
-            height: (rect.bottom - rect.top) as u32,
-        }
-    }
-
-    fn pump(&self) {
-        let mut message = MSG::default();
-        while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
-            unsafe {
-                let _ = TranslateMessage(&message);
-                DispatchMessageW(&message);
-            }
-        }
-    }
-}
-
-impl Drop for Window {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = DestroyWindow(self.0);
-        }
-    }
-}
 
 struct Stage {
     name: &'static str,
@@ -193,6 +126,14 @@ fn run(preference: AdapterPreference, high_performance: bool, budget: Option<Mem
     if let Some(pacing) = Distribution::from_samples(&intervals(&stamps)) {
         eprintln!("  present interval ms {pacing}");
     }
+    if cfg!(not(debug_assertions)) && budget.is_some() {
+        assert!(
+            distribution.p99 <= RELEASE_FRAME_P99_MS,
+            "release frame cpu p99 {:.3} ms over {RELEASE_FRAME_P99_MS} ms",
+            distribution.p99
+        );
+        assert_eq!(janky.over_budget, 0, "release frames over 16.7 ms");
+    }
 
     let baseline = &stages[0];
     let warm = &stages[stages.len() - 2];
@@ -241,4 +182,9 @@ fn hardware_swapchain_stays_inside_windowed_budget() {
 #[test]
 fn warp_swapchain_steady_state_does_not_grow() {
     run(AdapterPreference::Warp, false, None);
+}
+
+#[test]
+fn integrated_swapchain_steady_state_does_not_grow() {
+    run(AdapterPreference::MinimumPower, false, None);
 }

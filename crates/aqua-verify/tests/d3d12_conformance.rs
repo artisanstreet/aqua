@@ -1,19 +1,16 @@
 #![cfg(windows)]
 
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend};
+use aqua_gpu_ref::conformance::{run_suite, SuiteConfig};
 use aqua_gpu_ref::RefBackend;
-use aqua_gpu_ref::conformance::{SuiteConfig, run_suite};
 
 fn config() -> SuiteConfig {
     let fuzz_count = std::env::var("AQUA_CONFORMANCE_FUZZ")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(SuiteConfig::default().fuzz_count);
-    let tolerate_unsupported =
-        std::env::var("AQUA_CONFORMANCE_TOLERATE_UNSUPPORTED").is_ok_and(|value| value == "1");
     SuiteConfig {
         fuzz_count,
-        tolerate_unsupported,
         ..SuiteConfig::default()
     }
 }
@@ -21,17 +18,7 @@ fn config() -> SuiteConfig {
 fn run(preference: AdapterPreference) {
     let mut backend = match OffscreenBackend::new(preference) {
         Ok(backend) => backend,
-        Err(error) => match (
-            preference,
-            std::env::var("AQUA_REQUIRE_GPU").is_ok_and(|value| value == "1"),
-        ) {
-            (AdapterPreference::Warp, _) => panic!("WARP must always be available: {error}"),
-            (_, true) => panic!("adapter {preference:?} required but unavailable: {error}"),
-            _ => {
-                eprintln!("SKIP-NO-ADAPTER {preference:?}: {error}");
-                return;
-            }
-        },
+        Err(error) => panic!("adapter {preference:?} required but unavailable: {error}"),
     };
     let mut reference = RefBackend::new();
     let report = run_suite(&mut reference, &mut backend, &config());
@@ -40,7 +27,12 @@ fn run(preference: AdapterPreference) {
         backend.is_software(),
         backend.is_unified_memory()
     );
-    assert!(report.passed(), "{}", report.failures().join("\n"));
+    assert_eq!(report.skipped(), 0, "{report}");
+    assert!(
+        report.passed_without_skips(),
+        "{}",
+        report.failures().join("\n")
+    );
 }
 
 #[test]

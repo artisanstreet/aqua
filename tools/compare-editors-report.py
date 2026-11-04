@@ -129,23 +129,43 @@ for key, label in labels:
     print(f"{label:44} {fmt(rows['aqua'][key]):>10} {fmt(rows['gpui'][key]):>10}")
 
 
-WINDOWED_PRIVATE_MIB = 142.0
-WINDOWED_GPU_MIB = 64.0
+import os
+
+WINDOWED_PRIVATE_MIB = float(os.environ.get("AQUA_GATE_PRIVATE_MIB", "142"))
+WINDOWED_GPU_MIB = float(os.environ.get("AQUA_GATE_GPU_MIB", "64"))
+SMOOTHNESS_SLACK = float(os.environ.get("AQUA_GATE_SMOOTHNESS_SLACK", "1.10"))
+profile = os.environ.get("AQUA_COMPARE_PROFILE", "release")
 verdict = []
+failed = False
 aqua = rows["aqua"]
-if aqua["private_settle"] is None:
-    verdict.append("windowed memory gate: NOT MEASURED (aqua never ran)")
+gpui = rows["gpui"]
+
+
+def gate(label, passed, detail):
+    global failed
+    failed = failed or not passed
+    verdict.append(f"{label}: {'PASS' if passed else 'FAIL'} ({detail})")
+
+
+if aqua["private_settle"] is None or aqua["failed_runs"] not in (0.0, None):
+    gate("aqua ran", False, "the Aqua editor never ran or exited early")
 else:
-    verdict.append(
-        f"windowed private memory gate ({WINDOWED_PRIVATE_MIB:.0f} MiB): "
-        f"{'PASS' if aqua['private_settle'] <= WINDOWED_PRIVATE_MIB else 'FAIL'} ({aqua['private_settle']:.1f})")
+    gate(f"windowed private memory ({WINDOWED_PRIVATE_MIB:.0f} MiB, {profile})",
+         aqua["private_settle"] <= WINDOWED_PRIVATE_MIB, f"{aqua['private_settle']:.1f}")
     if aqua["gpu_dedicated_mb"] is not None:
-        verdict.append(
-            f"windowed GPU dedicated gate ({WINDOWED_GPU_MIB:.0f} MiB): "
-            f"{'PASS' if aqua['gpu_dedicated_mb'] <= WINDOWED_GPU_MIB else 'FAIL'} ({aqua['gpu_dedicated_mb']:.1f})")
-    gpui = rows["gpui"]
-    for key, label in (("scroll_p99", "scroll p99"), ("scroll_over16", "scroll samples over 16.7 ms"), ("idle_cpu_pct", "idle CPU")):
-        if aqua[key] is not None and gpui[key] is not None:
-            verdict.append(f"{label}: aqua {'no worse than' if aqua[key] <= gpui[key] else 'WORSE than'} gpui ({aqua[key]:.2f} vs {gpui[key]:.2f})")
+        gate(f"windowed GPU dedicated ({WINDOWED_GPU_MIB:.0f} MiB)",
+             aqua["gpu_dedicated_mb"] <= WINDOWED_GPU_MIB, f"{aqua['gpu_dedicated_mb']:.1f}")
+    gate("scroll probe timeouts", (aqua["scroll_timeouts"] or 0) == 0, f"{aqua['scroll_timeouts']}")
+    if gpui["failed_runs"] not in (0.0, None) or gpui["private_settle"] is None:
+        gate("gpui ran", False, "the GPUI editor never ran or exited early")
+    else:
+        for key, label in (("scroll_p50", "scroll p50"), ("scroll_p99", "scroll p99"),
+                           ("scroll_over16", "scroll samples over 16.7 ms"), ("idle_cpu_pct", "idle CPU"),
+                           ("ctx_per_s", "idle context switches"), ("private_settle", "settled private memory")):
+            if aqua[key] is not None and gpui[key] is not None:
+                limit = gpui[key] * SMOOTHNESS_SLACK + (0.5 if key.startswith("scroll_p") else 1.0)
+                gate(f"{label} no worse than gpui", aqua[key] <= limit,
+                     f"aqua {aqua[key]:.2f} vs gpui {gpui[key]:.2f}, limit {limit:.2f}")
 print()
 print("\n".join(verdict))
+sys.exit(1 if failed else 0)

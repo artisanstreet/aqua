@@ -125,3 +125,21 @@ fn no_source_names_a_banned_crate() {
     }
     assert!(found.is_empty(), "banned sources:\n{}", found.join("\n"));
 }
+
+#[test]
+fn editor_port_manifest_declares_no_banned_crate() {
+    let manifest = workspace_root()
+        .join("..")
+        .join("editor-aqua-port")
+        .join("crates")
+        .join("editor-aqua")
+        .join("Cargo.toml");
+    let Ok(text) = std::fs::read_to_string(&manifest) else {
+        return;
+    };
+    let found: Vec<&&str> = BANNED_EVERYWHERE
+        .iter()
+        .filter(|name| declares_dependency(&text, name))
+        .collect();
+    assert!(found.is_empty(), "editor-aqua declares {found:?}");
+}

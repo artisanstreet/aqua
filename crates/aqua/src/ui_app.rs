@@ -3,8 +3,8 @@ use std::ops::{Deref, DerefMut};
 
 use aqua_core::{InputEvent as CoreInputEvent, Key, Modifiers, NamedKey};
 use aqua_protocol::{
-    A11yActionRequest, AquaWindowId, Instant, Machine, ObservedWindowState, PixelSize,
-    RuntimeInput, RuntimeOutput, ShellEvent, WindowEvent,
+    A11yActionRequest, AquaWindowId, Instant, Machine, ObservedWindowState, PixelSize, Recorded,
+    RuntimeInput, RuntimeOutput, ShellEvent, WindowEvent, WindowSpec,
 };
 use aqua_reactive::{DepTuple, Runtime as ReactiveRuntime, Scope};
 use aqua_runtime::Runtime;
@@ -20,6 +20,7 @@ pub type WindowFactory = Box<dyn FnMut(AquaWindowId) -> Result<Runtime, UiAppErr
 struct Slot {
     runtime: Runtime,
     pending: RuntimeOutput,
+    log: Option<Vec<Recorded<RuntimeInput, RuntimeOutput>>>,
 }
 
 impl Slot {
@@ -27,12 +28,22 @@ impl Slot {
         Self {
             runtime,
             pending: RuntimeOutput::default(),
+            log: None,
         }
     }
 
-    fn drive(&mut self, input: RuntimeInput) {
+    fn drive(&mut self, input: RuntimeInput) -> Option<Instant> {
+        let recorded = self.log.is_some().then(|| input.clone());
         let output = self.runtime.step(input);
+        let wake = output.wake_at;
+        if let (Some(log), Some(input)) = (self.log.as_mut(), recorded) {
+            log.push(Recorded {
+                input,
+                output: output.clone(),
+            });
+        }
         self.pending.merge(output);
+        wake
     }
 }
 
@@ -70,6 +81,18 @@ impl UiApp {
     ) -> Self {
         self.factory = Some(Box::new(factory));
         self
+    }
+
+    pub fn record_session(&mut self, id: AquaWindowId) -> bool {
+        self.claim(id)
+            .map(|slot| slot.log.get_or_insert_with(Vec::new))
+            .is_some()
+    }
+
+    pub fn recorded_session(&self, id: AquaWindowId) -> &[Recorded<RuntimeInput, RuntimeOutput>] {
+        self.slot(id)
+            .and_then(|slot| slot.log.as_deref())
+            .unwrap_or_default()
     }
 
     pub fn into_runtime(self) -> Runtime {
@@ -184,6 +207,25 @@ impl UiApp {
 
     pub fn cursor(&self) -> aqua_core::CursorIcon {
         self.root.runtime.cursor()
+    }
+
+    pub fn is_root_window(&self, id: AquaWindowId) -> bool {
+        match self.binding {
+            RootBinding::Unbound => true,
+            RootBinding::Bound(root) => root == id,
+            RootBinding::Retired => false,
+        }
+    }
+
+    pub fn flush_scene_for(&mut self, id: AquaWindowId) {
+        if let Some(slot) = self.slot_mut(id) {
+            let diff = aqua_runtime::emit_scene_diff(slot.runtime.scene_mut());
+            if !diff.is_empty() {
+                slot.pending
+                    .render
+                    .push(aqua_protocol::RenderCommand::Scene(diff));
+            }
+        }
     }
 
     pub fn flush_scene(&mut self) {
@@ -334,6 +376,22 @@ impl Application for UiApp {
         self.root.runtime.color_profile()
     }
 
+    fn color_profile_for(&self, id: AquaWindowId) -> aqua_core::ColorProfile {
+        self.slot(id)
+            .map_or_else(|| self.color_profile(), |slot| slot.runtime.color_profile())
+    }
+
+    fn cursor_for(&self, id: AquaWindowId) -> Option<aqua_core::CursorIcon> {
+        self.slot(id).map(|slot| slot.runtime.cursor())
+    }
+
+    fn a11y_nodes_for(
+        &self,
+        id: AquaWindowId,
+    ) -> Option<(aqua_core::NodeId, aqua_core::NodeId, Vec<aqua_protocol::A11yNode>)> {
+        self.slot(id).and_then(|slot| slot.runtime.a11y_nodes())
+    }
+
     fn on_click_settings(&mut self, settings: aqua_core::ClickSettings) {
         self.root.runtime.set_click_settings(settings);
         self.extra
@@ -423,12 +481,10 @@ impl Application for UiApp {
     fn build_scene(&mut self, window: &ObservedWindowState, now: Instant) -> Option<Instant> {
         let slot = self.claim(window.id)?;
         slot.drive(RuntimeInput::Tick(now));
-        let output = slot.runtime.step(RuntimeInput::Shell(ShellEvent::Frame {
+        let wake = slot.drive(RuntimeInput::Shell(ShellEvent::Frame {
             window: window.id,
             presentation: now,
         }));
-        let wake = output.wake_at;
-        slot.pending.merge(output);
         slot.runtime
             .take_diagnostics()
             .iter()
@@ -461,12 +517,24 @@ impl Aqua {
         factory: impl FnOnce(&Scope) -> Element,
         windows: impl FnMut(AquaWindowId) -> Result<Runtime, UiAppError> + 'static,
     ) -> Result<(), String> {
+        self.run_ui_windows_opening(Vec::new(), factory, windows)
+    }
+
+    pub fn run_ui_windows_opening(
+        self,
+        opening: impl IntoIterator<Item = WindowSpec>,
+        factory: impl FnOnce(&Scope) -> Element,
+        windows: impl FnMut(AquaWindowId) -> Result<Runtime, UiAppError> + 'static,
+    ) -> Result<(), String> {
         let mut app =
             UiApp::new(self.fonts().clone(), self.runs().clone()).with_window_factory(windows);
         app.apply_startup_motion_policy(self.motion_reduced());
         app.set_frame_stats(std::env::var_os("AQUA_FRAME_STATS").is_some_and(|value| value == "1"));
         app.mount(factory)
             .map_err(|e| format!("ui mount failed: {e}"))?;
+        opening.into_iter().for_each(|spec| {
+            app.open_window(spec);
+        });
         self.run(app)
     }
 

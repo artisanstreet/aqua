@@ -88,7 +88,7 @@ impl DecodedAnimation {
                 complete: true,
             };
         }
-        let duration = *self.ends.last().unwrap_or(&1);
+        let duration = (*self.ends.last().unwrap_or(&1)).max(1);
         let now = elapsed.as_nanos();
         if let AnimationLoops::Count(count) = self.loops {
             if now / duration >= u128::from(count.get()) {
@@ -118,6 +118,48 @@ impl DecodedAnimation {
             complete: false,
         }
     }
+}
+
+pub fn decode_preview_gif(bytes: &[u8], max_bytes: u64) -> Result<DecodedAnimation, MediaError> {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DIM);
+    limits.max_image_height = Some(MAX_IMAGE_DIM);
+    limits.max_alloc = Some(max_bytes.min(64 * 1024 * 1024));
+    let mut decoder =
+        image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(decode_error)?;
+    decoder.set_limits(limits).map_err(decode_error)?;
+    let mut frames = Vec::new();
+    let mut ends = Vec::new();
+    let mut retained = 0u64;
+    let mut elapsed = Duration::ZERO;
+    for frame in decoder.into_frames() {
+        if frames.len() == 120 {
+            return Err(MediaError::OverBudget);
+        }
+        let frame = frame.map_err(decode_error)?;
+        let delay = Duration::from(frame.delay());
+        let buffer = frame.into_buffer();
+        retained = retained
+            .checked_add(buffer.as_raw().len() as u64)
+            .ok_or(MediaError::OverBudget)?;
+        if retained > max_bytes.min(64 * 1024 * 1024) {
+            return Err(MediaError::OverBudget);
+        }
+        elapsed = elapsed.checked_add(delay).ok_or(MediaError::OverBudget)?;
+        ends.push(elapsed.as_nanos());
+        frames.push(AnimationFrame {
+            image: DecodedImage::from_rgba(buffer.width(), buffer.height(), buffer.into_raw())?,
+            delay,
+        });
+    }
+    if frames.is_empty() {
+        return Err(MediaError::Decode("animation has no frames".into()));
+    }
+    Ok(DecodedAnimation {
+        frames,
+        ends,
+        loops: AnimationLoops::Infinite,
+    })
 }
 
 pub fn decode_animation(

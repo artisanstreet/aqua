@@ -233,11 +233,212 @@ impl DecodedImage {
 // Decode (mature codec + header limits)
 // ---------------------------------------------------------------------------
 
-/// Decode any enabled format (png, bmp, jpeg, gif) into normal form.
-///
-/// Limits are enforced from the header *before* the pixel buffer is
-/// allocated: oversized dimensions fail without a large allocation, and
-/// malformed bytes fail as [`MediaError::Decode`], never a panic.
+pub fn is_svg(bytes: &[u8]) -> bool {
+    let head = &bytes[..bytes.len().min(1024)];
+    let text = match std::str::from_utf8(head) {
+        Ok(text) => text,
+        Err(error) => std::str::from_utf8(&head[..error.valid_up_to()]).unwrap_or_default(),
+    };
+    let text = text.trim_start_matches('\u{feff}').trim_start();
+    text.starts_with('<') && text.contains("<svg")
+}
+
+pub fn is_gif(bytes: &[u8]) -> bool {
+    matches!(image::guess_format(bytes), Ok(image::ImageFormat::Gif))
+}
+
+#[cfg(target_os = "macos")]
+const EMOJI_FONTS: &[&str] = &["Apple Color Emoji", ".AppleColorEmojiUI"];
+#[cfg(target_os = "windows")]
+const EMOJI_FONTS: &[&str] = &["Segoe UI Emoji", "Segoe UI Symbol"];
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+const EMOJI_FONTS: &[&str] = &[
+    "Noto Color Emoji",
+    "Emoji One",
+    "Twitter Color Emoji",
+    "JoyPixels",
+];
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "linux",
+    target_os = "freebsd"
+)))]
+const EMOJI_FONTS: &[&str] = &[];
+
+fn svg_options() -> resvg::usvg::Options<'static> {
+    use resvg::usvg::{fontdb, FontResolver};
+    use skrifa::{FontRef, MetadataProvider};
+    use std::sync::{Arc, OnceLock};
+    static FONTS: OnceLock<Arc<fontdb::Database>> = OnceLock::new();
+    static EMOJI: OnceLock<regex::Regex> = OnceLock::new();
+    let select = FontResolver::default_font_selector();
+    let fallback = FontResolver::default_fallback_selector();
+    let select_font = Box::new(
+        move |font: &resvg::usvg::Font, db: &mut Arc<fontdb::Database>| {
+            if db.is_empty() {
+                *db = FONTS
+                    .get_or_init(|| {
+                        let mut fonts = fontdb::Database::new();
+                        fonts.load_system_fonts();
+                        for family in [
+                            fontdb::Family::SansSerif,
+                            fontdb::Family::Serif,
+                            fontdb::Family::Monospace,
+                            fontdb::Family::Cursive,
+                            fontdb::Family::Fantasy,
+                        ] {
+                            if fonts
+                                .query(&fontdb::Query {
+                                    families: &[family],
+                                    ..Default::default()
+                                })
+                                .is_none()
+                            {
+                                match family {
+                                    fontdb::Family::SansSerif => {
+                                        fonts.set_sans_serif_family("IBM Plex Sans")
+                                    }
+                                    fontdb::Family::Serif => {
+                                        fonts.set_serif_family("IBM Plex Sans")
+                                    }
+                                    fontdb::Family::Monospace => {
+                                        fonts.set_monospace_family("Lilex")
+                                    }
+                                    fontdb::Family::Cursive => {
+                                        fonts.set_cursive_family("IBM Plex Sans")
+                                    }
+                                    fontdb::Family::Fantasy => {
+                                        fonts.set_fantasy_family("IBM Plex Sans")
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        Arc::new(fonts)
+                    })
+                    .clone();
+            }
+            select(font, db).or_else(|| {
+                db.query(&fontdb::Query {
+                    families: &[fontdb::Family::SansSerif],
+                    ..Default::default()
+                })
+                .or_else(|| db.faces().next().map(|face| face.id))
+            })
+        },
+    );
+    let select_fallback = Box::new(
+        move |ch: char, fonts: &[fontdb::ID], db: &mut Arc<fontdb::Database>| {
+            let mut encoded = [0u8; 4];
+            if EMOJI
+                .get_or_init(|| regex::Regex::new("\\p{Emoji_Presentation}").unwrap())
+                .is_match(ch.encode_utf8(&mut encoded))
+            {
+                for family in EMOJI_FONTS {
+                    let query = fontdb::Query {
+                        families: &[fontdb::Family::Name(family)],
+                        weight: fontdb::Weight(400),
+                        stretch: fontdb::Stretch::Normal,
+                        style: fontdb::Style::Normal,
+                    };
+                    if let Some(id) = db.query(&query) {
+                        let has_char = db
+                            .with_face_data(id, |data, index| {
+                                FontRef::from_index(data, index)
+                                    .ok()
+                                    .and_then(|face| face.charmap().map(ch))
+                                    .is_some()
+                            })
+                            .unwrap_or(false);
+                        if !fonts.contains(&id) && has_char {
+                            return Some(id);
+                        }
+                    }
+                }
+            }
+            fallback(ch, fonts, db)
+        },
+    );
+    resvg::usvg::Options {
+        font_resolver: FontResolver {
+            select_font,
+            select_fallback,
+        },
+        ..Default::default()
+    }
+}
+
+pub fn decode_svg(bytes: &[u8], max_bytes: u64) -> Result<DecodedImage, MediaError> {
+    if bytes.len() > 32 * 1024 * 1024 {
+        return Err(MediaError::OverBudget);
+    }
+    let options = svg_options();
+    let tree = resvg::usvg::Tree::from_data(bytes, &options)
+        .map_err(|error| MediaError::Decode(error.to_string()))?;
+    let width = tree.size().width() * 2.0;
+    let height = tree.size().height() * 2.0;
+    if !width.is_finite()
+        || !height.is_finite()
+        || width.ceil() > MAX_IMAGE_DIM as f32
+        || height.ceil() > MAX_IMAGE_DIM as f32
+        || width.ceil() as u64 * height.ceil() as u64 * 4 > max_bytes.min(64 * 1024 * 1024)
+    {
+        return Err(MediaError::OverBudget);
+    }
+    let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32)
+        .ok_or_else(|| MediaError::Decode("zero-sized image".into()))?;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(2.0, 2.0),
+        &mut pixmap.as_mut(),
+    );
+    let (width, height) = (pixmap.width(), pixmap.height());
+    let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+    for pixel in pixmap.pixels() {
+        let alpha = pixel.alpha();
+        let straight = |channel: u8| {
+            if alpha == 0 {
+                channel
+            } else {
+                (f32::from(channel) / (f32::from(alpha) / 255.0)) as u8
+            }
+        };
+        pixels.extend_from_slice(&[
+            straight(pixel.red()),
+            straight(pixel.green()),
+            straight(pixel.blue()),
+            alpha,
+        ]);
+    }
+    DecodedImage::from_rgba(width, height, pixels)
+}
+
+pub fn decode_preview_still(bytes: &[u8], max_bytes: u64) -> Result<DecodedImage, MediaError> {
+    if bytes.len() > 32 * 1024 * 1024 {
+        return Err(MediaError::OverBudget);
+    }
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|error| MediaError::Decode(error.to_string()))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
+    limits.max_alloc = Some(max_bytes.min(64 * 1024 * 1024));
+    reader.limits(limits);
+    let mut image = reader
+        .decode()
+        .map_err(|error| MediaError::Decode(error.to_string()))?;
+    if image.width() > 1920 || image.height() > 1440 {
+        image = image.resize(1920, 1440, image::imageops::FilterType::CatmullRom);
+    }
+    let image = image.into_rgba8();
+    if image.as_raw().len() as u64 > max_bytes.min(64 * 1024 * 1024) {
+        return Err(MediaError::OverBudget);
+    }
+    DecodedImage::from_rgba(image.width(), image.height(), image.into_raw())
+}
+
 pub fn decode_bytes(bytes: &[u8]) -> Result<DecodedImage, MediaError> {
     if bytes.is_empty() {
         return Err(MediaError::Empty);
@@ -596,6 +797,7 @@ pub enum ImagePrecision {
     /// Premultiplied linear `Rgba8Unorm`. Default; bands on gradients.
     #[default]
     Linear8,
+    Encoded8,
     /// Premultiplied linear `Rgba16Float`. 2x bytes, no banding.
     Float16,
 }
@@ -604,7 +806,7 @@ impl ImagePrecision {
     /// wgpu format for this precision.
     pub fn format(self) -> wgpu::TextureFormat {
         match self {
-            ImagePrecision::Linear8 => wgpu::TextureFormat::Rgba8Unorm,
+            ImagePrecision::Linear8 | ImagePrecision::Encoded8 => wgpu::TextureFormat::Rgba8Unorm,
             ImagePrecision::Float16 => wgpu::TextureFormat::Rgba16Float,
         }
     }
@@ -612,7 +814,7 @@ impl ImagePrecision {
     /// Bytes per pixel.
     pub fn bytes_per_pixel(self) -> u32 {
         match self {
-            ImagePrecision::Linear8 => 4,
+            ImagePrecision::Linear8 | ImagePrecision::Encoded8 => 4,
             ImagePrecision::Float16 => 8,
         }
     }
@@ -704,6 +906,7 @@ impl GpuImageCache {
         let bpp = precision.bytes_per_pixel();
         let pixels: Vec<u8> = match precision {
             ImagePrecision::Linear8 => image.to_premultiplied_linear_rgba(),
+            ImagePrecision::Encoded8 => image.pixels.clone(),
             ImagePrecision::Float16 => image.to_premultiplied_linear_f16(),
         };
         let stride = align256(w * bpp);

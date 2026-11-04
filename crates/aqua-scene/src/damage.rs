@@ -198,7 +198,15 @@ impl DamageTracker {
             h: r.h * s,
         };
         match new_item {
-            DisplayItem::Shadow { .. }
+            DisplayItem::GpuiPath { .. }
+            | DisplayItem::GpuiMesh { .. }
+            | DisplayItem::GpuiSvg { .. }
+            | DisplayItem::GpuiTransformedSvg { .. }
+            | DisplayItem::GpuiShadow { .. }
+            | DisplayItem::GpuiBorder { .. }
+            | DisplayItem::GpuiBackground { .. }
+            | DisplayItem::Quad { .. }
+            | DisplayItem::Shadow { .. }
             | DisplayItem::Image { .. }
             | DisplayItem::Vector { .. }
             | DisplayItem::Rect { .. }
@@ -210,7 +218,7 @@ impl DamageTracker {
                 let _ = (to_phys, old_effect_bounds);
                 self.invalidate_full(reason_of(new_item));
             }
-            DisplayItem::BackdropBlur { .. } => {
+            DisplayItem::BackdropBlur { .. } | DisplayItem::BackdropBlurRounded { .. } => {
                 self.invalidate_full(reason_of(new_item));
             }
             DisplayItem::Text { .. } => {
@@ -220,9 +228,22 @@ impl DamageTracker {
             }
             DisplayItem::PushTextColorMap(_)
             | DisplayItem::PopTextColorMap
+            | DisplayItem::PushGpuiTextColorMap(_)
+            | DisplayItem::PushGpuiTextShimmer(_)
+            | DisplayItem::PopGpuiTextColorMap
+            | DisplayItem::PushGpuiTextColor(_)
+            | DisplayItem::PopGpuiTextColor
+            | DisplayItem::PushGpuiTextOpacity(_)
+            | DisplayItem::PopGpuiTextOpacity
+            | DisplayItem::PushGpuiSourceTextColor(_)
+            | DisplayItem::PopGpuiSourceTextColor
+            | DisplayItem::PushGpuiQuadPulse(_)
+            | DisplayItem::PopGpuiQuadPulse
             | DisplayItem::PushContentBlur { .. }
             | DisplayItem::PopContentBlur
+            | DisplayItem::PushRoundedClip { .. }
             | DisplayItem::PushClip { .. }
+            | DisplayItem::PushGpuiContentMask { .. }
             | DisplayItem::PushOpacity(_)
             | DisplayItem::PopClip
             | DisplayItem::PopOpacity
@@ -340,12 +361,27 @@ impl DamageTracker {
 
 fn reason_of(item: &DisplayItem) -> InvalidationReason {
     match item {
-        DisplayItem::BackdropBlur { .. } => InvalidationReason::EffectParamChanged,
+        DisplayItem::BackdropBlur { .. } | DisplayItem::BackdropBlurRounded { .. } => {
+            InvalidationReason::EffectParamChanged
+        }
         DisplayItem::PushTextColorMap(_)
         | DisplayItem::PopTextColorMap
+        | DisplayItem::PushGpuiTextColorMap(_)
+        | DisplayItem::PushGpuiTextShimmer(_)
+        | DisplayItem::PopGpuiTextColorMap
+        | DisplayItem::PushGpuiTextColor(_)
+        | DisplayItem::PopGpuiTextColor
+        | DisplayItem::PushGpuiTextOpacity(_)
+        | DisplayItem::PopGpuiTextOpacity
+        | DisplayItem::PushGpuiSourceTextColor(_)
+        | DisplayItem::PopGpuiSourceTextColor
+        | DisplayItem::PushGpuiQuadPulse(_)
+        | DisplayItem::PopGpuiQuadPulse
         | DisplayItem::PushContentBlur { .. }
         | DisplayItem::PopContentBlur
+        | DisplayItem::PushRoundedClip { .. }
         | DisplayItem::PushClip { .. }
+        | DisplayItem::PushGpuiContentMask { .. }
         | DisplayItem::PushOpacity(_)
         | DisplayItem::PopClip
         | DisplayItem::PopOpacity

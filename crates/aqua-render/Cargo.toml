@@ -5,6 +5,9 @@ edition = "2021"
 description = "Aqua shared wgpu 2D renderer: retained scene, damage tracking, effects, bounded resources"
 license = "BSD-3-Clause"
 
+[features]
+gpui-diagnostics = []
+
 [dependencies]
 aqua-core = { path = "../aqua-core" }
 aqua-scene = { path = "../aqua-scene" }
@@ -13,12 +16,19 @@ wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }
 glyphon = "0.12"
 cosmic-text = "0.19"
+swash = "=0.2.10"
+etagere = "0.3.0"
+gpui-etagere = { package = "etagere", version = "=0.2.15" }
 fontdb = "0.23"
+regex = "1"
+palette = { version = "=0.7.7", features = ["serializing"] }
+skrifa = "0.46.2"
 pollster = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif", "webp"] }
 
 resvg = "0.48.1"
 kurbo = "0.13"
+lyon = "=1.0.19"
 roxmltree = "0.21"
 tiny-skia = "0.12"
 

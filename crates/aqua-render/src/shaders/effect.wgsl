@@ -28,6 +28,20 @@ fn linear(rgb: vec3<f32>) -> vec3<f32> {
 }
 @fragment fn fs_main(in: Output) -> @location(0) vec4<f32> {
     let value = textureSample(current, smp, in.uv);
+    if u.mode == 2u {
+        let old = textureLoad(previous, vec2<i32>(in.pos.xy), 0);
+        let t = (in.pos.x / u.viewport.x + in.pos.y / u.viewport.y) * 0.5;
+        let edge = -u.band + u.progress * (1.0 + 2.0 * u.band);
+        let mask = smoothstep(edge - 0.008, edge + 0.008, t);
+        var strength = 0.0;
+        if u.band > 0.0 {
+            let offset = (t - edge) / u.band + 0.5;
+            strength = clamp(min(offset, 1.0 - offset) / 0.4, 0.0, 1.0);
+        }
+        strength = strength * strength * (3.0 - 2.0 * strength);
+        let alpha = u.tint.a * strength;
+        return old * mask * (1.0 - alpha) + vec4<f32>(u.tint.rgb * alpha, alpha) + value * (1.0 - mask) * (1.0 - alpha);
+    }
     if u.mode == 1u {
         let offset = (in.uv.x * u.viewport.x - u.progress) / max(u.band - u.progress, 0.0001);
         let amount = clamp(min(offset / 0.4, (1.0 - offset) / 0.4), 0.0, 1.0) * u.tint.a;

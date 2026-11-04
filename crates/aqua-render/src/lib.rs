@@ -1,5 +1,6 @@
 pub use aqua_scene::damage;
 pub mod effects;
+pub mod gpui_atlas;
 pub mod media;
 pub mod renderer;
 pub mod resource;

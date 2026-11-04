@@ -19,8 +19,14 @@ use crate::effects::{BlurParams, CustomPass};
 use crate::resource::{RenderDiagnostics, ResourceBudget, TextureDesc};
 use crate::scene::{DisplayItem, Rect, Scene};
 use crate::text::{
-    resolve_scene_text, GlyphonProvider, ShapedRun, TextBackend, TextFrame, TextProvider,
+    resolve_gpui_scene_text, resolve_scene_text, GlyphonProvider, ShapedRun, TextBackend,
+    TextFrame, TextProvider,
 };
+
+mod gpui_blur;
+mod gpui_mesh;
+mod gpui_path;
+mod gpui_svg;
 
 #[derive(Debug)]
 pub enum RenderError {
@@ -53,7 +59,6 @@ impl std::error::Error for RenderError {}
 // GPU instance layouts (must match shaders/rect.wgsl, shaders/compose.wgsl)
 // ---------------------------------------------------------------------------
 
-/// 8 x vec4<f32> = 128 bytes. Field order matches rect.wgsl VsIn 1..8.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct RectInstance {
@@ -65,6 +70,7 @@ struct RectInstance {
     shadow_color: [f32; 4],
     clip: [f32; 4], // x, y, w, h; w < 0 disables
     misc: [f32; 4], // clip_radius, opacity, 0, 0
+    pulse: [u32; 4],
 }
 
 /// 3 x vec4<f32> = 48 bytes. Matches compose.wgsl VsIn 0,1,3.
@@ -80,7 +86,8 @@ struct ComposeInstance {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct RectUniforms {
     viewport: [f32; 2],
-    _pad: [f32; 2],
+    pulse_clock_ms: u32,
+    _pad: u32,
 }
 
 #[repr(C)]
@@ -109,27 +116,76 @@ struct ComposeUniforms {
     _pad: [f32; 2],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClipMode {
+    Legacy,
+    Rounded,
+    ContentMask,
+}
+
+#[derive(Clone, Copy)]
+enum GpuiTextBase {
+    Normalized(aqua_core::GpuiHsla),
+    Source(aqua_core::GpuiTextColor),
+}
+
+type ClipShape = (Rect, aqua_core::CornerRadii, ClipMode);
+
 // ---------------------------------------------------------------------------
 // Frame plan
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct GroupOp {
     text_maps: Vec<aqua_core::scene::TextColorMap>,
     filter: Option<(Rect, f32)>,
-    clips: Vec<(Rect, f32)>,
+    clips: Vec<ClipShape>,
     bounds: Rect,
     opacity: f32,
     instances: Vec<RectInstance>,
     commands: Vec<GroupCommand>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum GroupCommand {
     Rects { start: u32, count: u32 },
     Text(ShapedRun),
     Group(GroupOp),
     Surface(SurfaceOp),
+    Path(PathOp),
+    Svg(SvgOp),
+    Mesh(MeshOp),
+}
+
+#[derive(Clone, Debug)]
+struct MeshOp {
+    index: usize,
+    bounds: [f32; 4],
+    clip: [f32; 4],
+    corners: [f32; 4],
+    opacity: f32,
+    mesh: std::sync::Arc<aqua_core::GpuiMesh>,
+    style: aqua_core::GpuiMeshStyle,
+    clips: Vec<ClipShape>,
+}
+
+#[derive(Clone, Debug)]
+struct SvgOp {
+    source: std::sync::Arc<str>,
+    bounds: Rect,
+    untransformed_bounds: Rect,
+    element_scale: f32,
+    tint: Option<aqua_core::GpuiHsla>,
+    opacity: f32,
+    clips: Vec<ClipShape>,
+    clip_index: u32,
+    sprite_transform: aqua_core::scene::GpuiSvgTransform,
+}
+
+#[derive(Clone, Debug)]
+struct PathOp {
+    vertices: Vec<[f32; 2]>,
+    instance: RectInstance,
 }
 
 /// Cached per-node paint context from the last slow-path walk: physical
@@ -143,7 +199,7 @@ struct NodeCtx {
     in_group: bool,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Op {
     Rects {
         start: u32,
@@ -155,33 +211,42 @@ enum Op {
     Blur {
         bounds: Rect,
         params: BlurParams,
+        opacity: f32,
+        clips: Vec<ClipShape>,
     }, // physical px
     Group(GroupOp),
     Surface(SurfaceOp),
+    Path(PathOp),
+    Svg(SvgOp),
+    Mesh(MeshOp),
     /// Text runs in painter position. Drawn via the text provider into
     /// whatever target is current (base or group scratch).
     Texts(Vec<ShapedRun>),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct SurfaceOp {
     pixel_scale: f32,
     bounds: Rect,
     source: SurfaceSource,
     opacity: f32,
-    clips: Vec<(Rect, f32)>,
+    clips: Vec<ClipShape>,
     placement: Option<(aqua_core::image::ImageFit, aqua_core::Point, Rect)>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum SurfaceSource {
     External(u64),
     Vector(aqua_core::vector::VectorSource),
 }
 
 /// CPU-side plan for one presented frame.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct FramePlan {
+    mesh_count: usize,
+    pulse_active: bool,
+    shimmer_active: bool,
+    pulse_bounds: Vec<Rect>,
     validation_error: Option<&'static str>,
     ops: Vec<Op>,
     instances: Vec<RectInstance>,
@@ -345,10 +410,26 @@ struct SnapshotState {
     previous: usize,
     output: usize,
     settings: crate::effects::SnapshotTransition,
+    gpui_shimmer: Option<[f32; 4]>,
     elapsed: std::time::Duration,
 }
 
+struct ShimmerClock {
+    since: std::time::Instant,
+    duration: std::time::Duration,
+    delay: std::time::Duration,
+    waiting: bool,
+}
+
 pub struct Renderer {
+    shimmer_clocks: HashMap<u64, ShimmerClock>,
+    shimmer_now: Option<std::time::Instant>,
+    pulse_plan: Option<FramePlan>,
+    pulse_clock_override: Option<u32>,
+    gpui_window_opaque: Option<bool>,
+    text_raster_mode: aqua_core::scene::TextRasterMode,
+    gpui_mesh_renderer: Option<gpui_mesh::GpuiMeshRenderer>,
+    color_profile: aqua_core::ColorProfile,
     effect_compositor: crate::effects::compositor::EffectCompositor,
     snapshot: Option<SnapshotState>,
     device: wgpu::Device,
@@ -359,21 +440,23 @@ pub struct Renderer {
     scale: f32,
 
     rect_pipeline: wgpu::RenderPipeline,
+    gpui_rect_pipeline: wgpu::RenderPipeline,
     /// Same rect shader with REPLACE blending: scissored region clears for
     /// partial repaint (premultiplied-over of transparent cannot clear).
     clear_pipeline: wgpu::RenderPipeline,
     blur_pipeline: wgpu::RenderPipeline,
-    compose_pipes: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    compose_pipes: HashMap<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
     rect_uniform_buf: wgpu::Buffer,
     rect_uniform_bind: wgpu::BindGroup,
     rect_bind_layout: wgpu::BindGroupLayout,
     clip_buffer: wgpu::Buffer,
     clip_capacity: usize,
-    clip_nodes: Vec<[f32; 8]>,
+    clip_nodes: Vec<[f32; 12]>,
     clip_dirty: bool,
     blur_bind_layout: wgpu::BindGroupLayout,
     compose_bind_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    gpui_atlas_sampler: wgpu::Sampler,
     quad_vb: wgpu::Buffer,
     quad_ib: wgpu::Buffer,
 
@@ -401,6 +484,8 @@ pub struct Renderer {
     vectors: crate::vector::VectorCache,
     external: HashMap<u64, wgpu::TextureView>,
     external_size: HashMap<u64, (u32, u32)>,
+    gpui_atlas: crate::gpui_atlas::SharedGpuiAtlas,
+    gpui_images: HashMap<u64, GpuiImageSource>,
     /// Layers with new content since the last prepare. Registration IS the
     /// invalidation signal: hosts must register only on demand (new frame),
     /// and every registration dirties the layer's bounds even when the
@@ -422,6 +507,12 @@ pub struct Renderer {
     /// damage when text moves/changes/is removed).
     text_ink: HashMap<u64, Rect>,
     diagnostics: RenderDiagnostics,
+}
+
+struct GpuiImageSource {
+    asset: u64,
+    frame: usize,
+    rgba: std::sync::Arc<[u8]>,
 }
 
 impl Renderer {
@@ -449,6 +540,15 @@ impl Renderer {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
+        let gpui_atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("gpui-polychrome-atlas-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            ..Default::default()
+        });
 
         let rect_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("aqua-rect-bind"),
@@ -465,7 +565,7 @@ impl Renderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -483,7 +583,7 @@ impl Renderer {
         });
         let clip_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("aqua-clip-tree"),
-            size: 32,
+            size: 48,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -531,43 +631,62 @@ impl Renderer {
         let rect_instance_attrs = wgpu::vertex_attr_array![
             1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4,
             5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4,
+            9 => Uint32x4,
         ];
-        let rect_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("aqua-rect-pipeline"),
-            layout: Some(&rect_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &rect_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[
-                    Some(wgpu::VertexBufferLayout {
-                        array_stride: 8,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &rect_attrs,
-                    }),
-                    Some(wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<RectInstance>() as u64,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &rect_instance_attrs,
-                    }),
-                ],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &rect_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: blend_premult,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
+        let make_rect_pipeline = |entry, blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("aqua-rect-pipeline"),
+                layout: Some(&rect_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &rect_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[
+                        Some(wgpu::VertexBufferLayout {
+                            array_stride: 8,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &rect_attrs,
+                        }),
+                        Some(wgpu::VertexBufferLayout {
+                            array_stride: std::mem::size_of::<RectInstance>() as u64,
+                            step_mode: wgpu::VertexStepMode::Instance,
+                            attributes: &rect_instance_attrs,
+                        }),
+                    ],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &rect_shader,
+                    entry_point: Some(entry),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let rect_pipeline = make_rect_pipeline("fs_main", blend_premult);
+        let gpui_rect_pipeline = make_rect_pipeline(
+            "fs_gpui",
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::SrcAlpha,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
             }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        );
 
         // Region-clear pipeline: identical vertex/fragment layout to the
         // rect pipeline, but REPLACE blending so a transparent quad actually
@@ -707,8 +826,8 @@ impl Renderer {
         // may differ); seed with the base working format.
         let mut compose_pipes = HashMap::new();
         compose_pipes.insert(
-            format,
-            make_compose_pipeline(&device, &compose_bind_layout, format),
+            (format, false),
+            make_compose_pipeline(&device, &compose_bind_layout, format, false),
         );
 
         // Unit quad corners + indices, shared by rect and compose passes.
@@ -740,10 +859,22 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        let text: Box<dyn TextProvider> =
+        let mut text: Box<dyn TextProvider> =
             Box::new(GlyphonProvider::new(&device, &queue, format, backend));
+        let gpui_atlas = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::gpui_atlas::GpuiPolychromeAtlas::default(),
+        ));
+        text.set_gpui_polychrome_atlas(gpui_atlas.clone());
 
         Self {
+            shimmer_clocks: HashMap::new(),
+            shimmer_now: None,
+            pulse_plan: None,
+            pulse_clock_override: None,
+            gpui_window_opaque: None,
+            text_raster_mode: aqua_core::scene::TextRasterMode::default(),
+            gpui_mesh_renderer: None,
+            color_profile: aqua_core::ColorProfile::AquaLinear,
             effect_compositor: crate::effects::compositor::EffectCompositor::new(&device, format),
             snapshot: None,
             device,
@@ -753,6 +884,7 @@ impl Renderer {
             height: 0,
             scale: 1.0,
             rect_pipeline,
+            gpui_rect_pipeline,
             clear_pipeline,
             blur_pipeline,
             compose_pipes,
@@ -766,6 +898,7 @@ impl Renderer {
             blur_bind_layout,
             compose_bind_layout,
             sampler,
+            gpui_atlas_sampler,
             quad_vb,
             quad_ib,
             instance_buf,
@@ -783,6 +916,8 @@ impl Renderer {
             vectors: crate::vector::VectorCache::default(),
             external: HashMap::new(),
             external_size: HashMap::new(),
+            gpui_atlas,
+            gpui_images: HashMap::new(),
             external_dirty: Vec::new(),
             layer_bounds: HashMap::new(),
             unconsumed_passes: 0,
@@ -853,6 +988,7 @@ impl Renderer {
             return Ok(());
         }
         self.cancel_snapshot_transition();
+        self.pulse_plan = None;
         self.width = w;
         self.height = h;
         self.scale = scale.max(0.01);
@@ -875,7 +1011,8 @@ impl Renderer {
             0,
             bytemuck::cast_slice(&[RectUniforms {
                 viewport: [w as f32, h as f32],
-                _pad: [0.0; 2],
+                pulse_clock_ms: aqua_core::scene::gpui_pulse_clock_ms(),
+                _pad: 0,
             }]),
         );
         let base = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -915,6 +1052,7 @@ impl Renderer {
     }
 
     pub fn unregister_external(&mut self, layer: u64) -> bool {
+        self.gpui_images.remove(&layer);
         let had = self.external.remove(&layer).is_some();
         self.external_size.remove(&layer);
         let bounds = self.layer_bounds.remove(&layer);
@@ -928,6 +1066,22 @@ impl Renderer {
             }
         }
         had
+    }
+
+    pub fn register_gpui_image(
+        &mut self,
+        layer: u64,
+        asset: u64,
+        frame: usize,
+        rgba: std::sync::Arc<[u8]>,
+    ) {
+        self.gpui_images
+            .insert(layer, GpuiImageSource { asset, frame, rgba });
+    }
+
+    pub fn release_gpui_image(&mut self, asset: u64) {
+        self.gpui_atlas.lock().unwrap().remove_asset(asset);
+        self.gpui_images.retain(|_, source| source.asset != asset);
     }
 
     pub fn add_custom_pass(&mut self, pass: Box<dyn CustomPass>) {
@@ -950,9 +1104,6 @@ impl Renderer {
         &self.diagnostics
     }
 
-    /// Swap the text provider (facade wiring for the shared text backend).
-    /// The provider must be built for the same device/format; see
-    /// [`GlyphonProvider::new`].
     pub fn set_text_raster_mode(
         &mut self,
         mode: aqua_core::scene::TextRasterMode,
@@ -960,20 +1111,129 @@ impl Renderer {
         self.text
             .set_raster_mode(&self.device, &self.queue, self.format, mode)
             .map_err(RenderError::Gpu)?;
+        self.text_raster_mode = mode;
         self.base_valid = false;
         self.tracker
             .invalidate_full(InvalidationReason::ContentChanged);
         Ok(())
     }
 
-    pub fn set_text_provider(&mut self, provider: Box<dyn TextProvider>) {
+    pub fn set_text_provider(&mut self, mut provider: Box<dyn TextProvider>) {
+        assert_eq!(self.color_profile, aqua_core::ColorProfile::AquaLinear);
+        provider.set_gpui_polychrome_atlas(self.gpui_atlas.clone());
         self.text = provider;
     }
 
     /// Builder-style provider swap.
     pub fn with_text_provider(mut self, provider: Box<dyn TextProvider>) -> Self {
-        self.text = provider;
+        self.set_text_provider(provider);
         self
+    }
+
+    pub fn set_color_profile(
+        &mut self,
+        profile: aqua_core::ColorProfile,
+    ) -> Result<(), RenderError> {
+        if profile == aqua_core::ColorProfile::GpuiWindowsEncoded
+            && !matches!(
+                self.format,
+                wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm
+            )
+        {
+            return Err(RenderError::Gpu(
+                "GPUI encoded color requires an unorm target".into(),
+            ));
+        }
+        self.text
+            .set_color_profile(&self.device, &self.queue, self.format, profile)
+            .map_err(RenderError::Gpu)?;
+        if profile == aqua_core::ColorProfile::GpuiWindowsEncoded
+            && self.gpui_mesh_renderer.is_none()
+        {
+            let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let mesh = gpui_mesh::GpuiMeshRenderer::new(&self.device, self.format);
+            if pollster::block_on(scope.pop()).is_none() {
+                self.gpui_mesh_renderer = Some(mesh);
+            }
+        }
+        if self.color_profile != profile {
+            self.color_profile = profile;
+            self.base_valid = false;
+            self.slots_ready = false;
+            self.tracker
+                .invalidate_full(InvalidationReason::StructuralChanged);
+        }
+        Ok(())
+    }
+
+    pub fn supports_gpui_meshes(&self) -> bool {
+        self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded
+            && self.gpui_mesh_renderer.is_some()
+    }
+
+    pub fn has_gpui_quad_pulse(&self) -> bool {
+        self.pulse_plan
+            .as_ref()
+            .is_some_and(|plan| plan.pulse_active)
+    }
+
+    pub fn set_gpui_shimmer_time(&mut self, now: Option<std::time::Instant>) {
+        self.shimmer_now = now;
+    }
+
+    pub fn wake_gpui_shimmers(&mut self) -> bool {
+        let now = self.shimmer_now.unwrap_or_else(std::time::Instant::now);
+        let mut awakened = false;
+        for clock in self.shimmer_clocks.values_mut() {
+            if clock.waiting && now.saturating_duration_since(clock.since) >= clock.delay {
+                clock.waiting = false;
+                clock.since = now;
+                awakened = true;
+            }
+        }
+        awakened
+    }
+
+    pub fn gpui_shimmer_wake_delay(&self) -> Option<std::time::Duration> {
+        let now = self.shimmer_now.unwrap_or_else(std::time::Instant::now);
+        self.shimmer_clocks
+            .values()
+            .filter(|clock| clock.waiting)
+            .map(|clock| {
+                clock
+                    .delay
+                    .saturating_sub(now.saturating_duration_since(clock.since))
+            })
+            .min()
+    }
+
+    pub fn gpui_shimmer_delay(&self) -> Option<std::time::Duration> {
+        let now = self.shimmer_now.unwrap_or_else(std::time::Instant::now);
+        self.shimmer_clocks
+            .values()
+            .map(|clock| {
+                if clock.waiting {
+                    clock
+                        .delay
+                        .saturating_sub(now.saturating_duration_since(clock.since))
+                } else {
+                    std::time::Duration::ZERO
+                }
+            })
+            .min()
+    }
+
+    pub fn set_gpui_pulse_clock_ms(&mut self, clock: Option<u32>) {
+        self.pulse_clock_override = clock;
+    }
+
+    pub fn set_gpui_window_opaque(&mut self, opaque: bool) {
+        if self.gpui_window_opaque != Some(opaque) {
+            self.gpui_window_opaque = Some(opaque);
+            self.pulse_plan = None;
+            self.tracker
+                .invalidate_full(InvalidationReason::ContentChanged);
+        }
     }
 
     // -- prepare ---------------------------------------------------------------
@@ -992,6 +1252,40 @@ impl Renderer {
         let removed = scene.drain_removed();
         let structure_changed = scene.take_structure_changed();
         plan.nodes_updated = changes.len() + removed.len();
+        if changes.is_empty()
+            && removed.is_empty()
+            && !structure_changed
+            && self.external_dirty.is_empty()
+            && self.unconsumed_passes == 0
+            && self.base_valid
+        {
+            if let Some(mut retained) = self.pulse_plan.clone() {
+                if retained.shimmer_active || self.has_complex || !self.custom_passes.is_empty() {
+                    self.tracker
+                        .invalidate_full(InvalidationReason::ContentChanged);
+                } else {
+                    for bounds in &retained.pulse_bounds {
+                        self.tracker.record_rect_change(
+                            Rect {
+                                x: bounds.x / self.scale,
+                                y: bounds.y / self.scale,
+                                w: bounds.w / self.scale,
+                                h: bounds.h / self.scale,
+                            },
+                            None,
+                        );
+                    }
+                }
+                retained.damage = self.tracker.take();
+                retained.nodes_updated = 0;
+                retained.nodes_traversed = 0;
+                retained.raster_area_px = damage_area(&retained.damage);
+                retained.partial = !retained.damage.full && !retained.damage.is_clean();
+                retained.full_upload = false;
+                self.update_shimmers(&mut retained);
+                return retained;
+            }
+        }
 
         // Damage from removals: repaint old effect-inclusive footprints.
         for item in &removed {
@@ -1038,11 +1332,24 @@ impl Renderer {
                     }
                     self.last_bounds.remove(&id.raw().index);
                 }
-                DisplayItem::PushClip { .. }
+                DisplayItem::PushRoundedClip { .. }
+                | DisplayItem::PushClip { .. }
+                | DisplayItem::PushGpuiContentMask { .. }
                 | DisplayItem::PushOpacity(_)
                 | DisplayItem::PopClip
                 | DisplayItem::PushTextColorMap(_)
                 | DisplayItem::PopTextColorMap
+                | DisplayItem::PushGpuiTextColorMap(_)
+                | DisplayItem::PushGpuiTextShimmer(_)
+                | DisplayItem::PopGpuiTextColorMap
+                | DisplayItem::PushGpuiTextColor(_)
+                | DisplayItem::PopGpuiTextColor
+                | DisplayItem::PushGpuiTextOpacity(_)
+                | DisplayItem::PopGpuiTextOpacity
+                | DisplayItem::PushGpuiSourceTextColor(_)
+                | DisplayItem::PopGpuiSourceTextColor
+                | DisplayItem::PushGpuiQuadPulse(_)
+                | DisplayItem::PopGpuiQuadPulse
                 | DisplayItem::PushContentBlur { .. }
                 | DisplayItem::PopContentBlur
                 | DisplayItem::PushTransform(_)
@@ -1102,6 +1409,7 @@ impl Renderer {
         // complex content anywhere, and every change a top-level plain Rect
         // with cached context. Anything else takes the slow path below.
         let fast = self.slots_ready
+            && self.color_profile == aqua_core::ColorProfile::AquaLinear
             && !structure_changed
             && removed.is_empty()
             && !self.has_complex
@@ -1180,7 +1488,8 @@ impl Renderer {
         self.clip_nodes.clear();
         self.clip_dirty = true;
         let mut clip_indices = Vec::<u32>::new();
-        let mut clip_stack: Vec<(Rect, f32)> = Vec::new(); // physical px
+        let mut clip_stack: Vec<ClipShape> = Vec::new(); // physical px
+        let mut gpui_mask_stack: Vec<Rect> = Vec::new();
         let mut group_stack: Vec<GroupOp> = Vec::new();
         let mut blur_regions: Vec<(Rect, Rect)> = Vec::new(); // (logical, phys)
         let mut top_start = 0u32;
@@ -1192,6 +1501,14 @@ impl Renderer {
         let mut transforms = vec![aqua_core::Transform2D::IDENTITY];
         let mut has_transform = false;
         let mut text_maps = Vec::<aqua_core::scene::TextColorMap>::new();
+        let mut gpui_text_maps = Vec::<(
+            aqua_core::scene::GpuiTextColorMap,
+            Option<aqua_core::scene::GpuiTextShimmer>,
+        )>::new();
+        let mut gpui_text_colors = Vec::new();
+        let mut gpui_text_opacities = Vec::new();
+        let mut quad_pulses = Vec::<aqua_core::scene::GpuiQuadPulse>::new();
+        let mut primitive_opacities = vec![1.0_f32];
 
         for (id, item) in scene.ordered() {
             match item {
@@ -1231,8 +1548,13 @@ impl Renderer {
             let transform = *transforms.last().unwrap();
             let transformed = transform_item(item, transform);
             let item = &transformed;
+            let primitive_opacity = *primitive_opacities.last().unwrap();
             match item {
                 DisplayItem::PushTextColorMap(map) => {
+                    if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        plan.validation_error =
+                            Some("legacy text color mapping is not supported in GPUI profile");
+                    }
                     has_transform = true;
                     if ![map.start, map.end, map.strength]
                         .iter()
@@ -1250,8 +1572,404 @@ impl Renderer {
                         plan.validation_error = Some("unbalanced text color map");
                     }
                 }
+                DisplayItem::PushGpuiQuadPulse(pulse) => {
+                    quad_pulses.push(*pulse);
+                }
+                DisplayItem::PopGpuiQuadPulse => {
+                    if quad_pulses.pop().is_none() {
+                        plan.validation_error = Some("unbalanced GPUI quad pulse");
+                    }
+                }
+                DisplayItem::PushGpuiTextColor(color) => {
+                    if self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        plan.validation_error = Some("GPUI encoded color profile is not available");
+                    }
+                    gpui_text_colors.push(GpuiTextBase::Normalized(*color));
+                }
+                DisplayItem::PushGpuiTextOpacity(ranges) => {
+                    if self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        plan.validation_error = Some("GPUI encoded color profile is not available");
+                    }
+                    gpui_text_opacities.push(ranges.clone());
+                }
+                DisplayItem::PopGpuiTextOpacity => {
+                    if gpui_text_opacities.pop().is_none() {
+                        plan.validation_error = Some("unbalanced GPUI text opacity");
+                    }
+                }
+                DisplayItem::PopGpuiTextColor => {
+                    if !matches!(gpui_text_colors.pop(), Some(GpuiTextBase::Normalized(_))) {
+                        plan.validation_error = Some("unbalanced GPUI text color");
+                    }
+                }
+                DisplayItem::PushGpuiSourceTextColor(color) => {
+                    if self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        plan.validation_error = Some("GPUI encoded color profile is not available");
+                    }
+                    gpui_text_colors.push(GpuiTextBase::Source(*color));
+                }
+                DisplayItem::PopGpuiSourceTextColor => {
+                    if !matches!(gpui_text_colors.pop(), Some(GpuiTextBase::Source(_))) {
+                        plan.validation_error = Some("unbalanced GPUI source text color");
+                    }
+                }
+                DisplayItem::PushGpuiTextColorMap(map) => {
+                    if self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        plan.validation_error = Some("GPUI encoded color profile is not available");
+                    }
+                    gpui_text_maps.push((*map, None));
+                }
+                DisplayItem::PushGpuiTextShimmer(shimmer) => {
+                    if self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded
+                        || shimmer.duration.is_zero()
+                    {
+                        plan.validation_error = Some("invalid GPUI text shimmer");
+                    }
+                    gpui_text_maps.push((shimmer.map, Some(*shimmer)));
+                }
+                DisplayItem::PopGpuiTextColorMap => {
+                    if gpui_text_maps.pop().is_none() {
+                        plan.validation_error = Some("unbalanced GPUI text color map");
+                    }
+                }
 
                 DisplayItem::PushTransform(_) | DisplayItem::PopTransform => unreachable!(),
+                DisplayItem::GpuiMesh {
+                    bounds,
+                    corners,
+                    mesh,
+                    style,
+                } => {
+                    if !self.supports_gpui_meshes() {
+                        plan.validation_error = Some("GPUI mesh renderer is unavailable");
+                    }
+                    if bounds.w > 0.0 && bounds.h > 0.0 && !mesh.vertices().is_empty() {
+                        let snap = aqua_core::geometry::snap_device_pixel;
+                        let left = snap(bounds.x, s);
+                        let top = snap(bounds.y, s);
+                        let right = snap(bounds.right(), s).max(left);
+                        let bottom = snap(bounds.bottom(), s).max(top);
+                        let viewport =
+                            Rect::from_edges(0.0, 0.0, self.width as f32, self.height as f32);
+                        let clip = clip_stack
+                            .iter()
+                            .fold(viewport, |bounds, (clip, _, _)| bounds.intersect(*clip));
+                        let maximum = bounds.w.min(bounds.h) * 0.5;
+                        let radii = [
+                            corners.top_left,
+                            corners.top_right,
+                            corners.bottom_right,
+                            corners.bottom_left,
+                        ]
+                        .map(|radius| radius.min(maximum) * s);
+                        let op = MeshOp {
+                            index: plan.mesh_count,
+                            bounds: [left, top, right - left, bottom - top],
+                            clip: [clip.x, clip.y, clip.w, clip.h],
+                            corners: radii,
+                            opacity: primitive_opacity,
+                            mesh: mesh.clone(),
+                            style: *style,
+                            clips: clip_stack.clone(),
+                        };
+                        plan.mesh_count += 1;
+                        self.has_complex = true;
+                        if let Some(group) = group_stack.last_mut() {
+                            group.bounds = if group.commands.is_empty() {
+                                *bounds
+                            } else {
+                                group.bounds.union(*bounds)
+                            };
+                            group.commands.push(GroupCommand::Mesh(op));
+                        } else {
+                            flush_rect_run(&mut plan.ops, &plan.instances, &mut top_start);
+                            flush_texts(&mut plan.ops, &mut pending_texts);
+                            plan.ops.push(Op::Mesh(op));
+                            top_start = plan.instances.len() as u32;
+                        }
+                    }
+                }
+                DisplayItem::GpuiSvg { .. } | DisplayItem::GpuiTransformedSvg { .. } => {
+                    let (bounds, source, tint, opacity, sprite_transform) = match item {
+                        DisplayItem::GpuiSvg {
+                            bounds,
+                            source,
+                            tint,
+                            opacity,
+                        } => (
+                            *bounds,
+                            source,
+                            *tint,
+                            *opacity,
+                            aqua_core::scene::GpuiSvgTransform::default(),
+                        ),
+                        DisplayItem::GpuiTransformedSvg {
+                            bounds,
+                            source,
+                            tint,
+                            opacity,
+                            transform,
+                        } => (*bounds, source, Some(*tint), *opacity, *transform),
+                        _ => unreachable!(),
+                    };
+                    if self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        plan.validation_error = Some("GPUI encoded color profile is not available");
+                    }
+                    if ![
+                        sprite_transform.scale.x,
+                        sprite_transform.scale.y,
+                        sprite_transform.translation.x,
+                        sprite_transform.translation.y,
+                        sprite_transform.rotation_radians,
+                    ]
+                    .iter()
+                    .all(|value| value.is_finite())
+                    {
+                        plan.validation_error = Some("invalid GPUI SVG transformation");
+                    }
+                    {
+                        let untransformed_bounds = Rect::from_edges(
+                            (bounds.x - transform.tx) / transform.a,
+                            (bounds.y - transform.ty) / transform.d,
+                            (bounds.right() - transform.tx) / transform.a,
+                            (bounds.bottom() - transform.ty) / transform.d,
+                        );
+                        let op = SvgOp {
+                            source: source.clone(),
+                            bounds,
+                            untransformed_bounds,
+                            element_scale: transform.a,
+                            tint,
+                            opacity: opacity * primitive_opacity,
+                            clips: clip_stack.clone(),
+                            clip_index: clip_indices.last().copied().unwrap_or(0),
+                            sprite_transform,
+                        };
+                        if let Some(group) = group_stack.last_mut() {
+                            let viewport = Rect::from_edges(
+                                0.0,
+                                0.0,
+                                self.width as f32 / s,
+                                self.height as f32 / s,
+                            );
+                            group.bounds = if group.commands.is_empty() {
+                                viewport
+                            } else {
+                                group.bounds.union(viewport)
+                            };
+                            group.commands.push(GroupCommand::Svg(op));
+                        } else {
+                            flush_rect_run(&mut plan.ops, &plan.instances, &mut top_start);
+                            flush_texts(&mut plan.ops, &mut pending_texts);
+                            plan.ops.push(Op::Svg(op));
+                            top_start = plan.instances.len() as u32;
+                        }
+                    }
+                }
+                DisplayItem::GpuiPath {
+                    path,
+                    transformed_window_logical_bounds,
+                } => {
+                    if self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        plan.validation_error = Some("GPUI encoded color profile is not available");
+                    }
+                    self.has_complex = true;
+                    match gpui_path::tessellate(path, s) {
+                        Ok(vertices) if !vertices.is_empty() => {
+                            let b = *transformed_window_logical_bounds;
+                            let first = vertices[0];
+                            let (left, top, right, bottom) = vertices.iter().skip(1).fold(
+                                (first[0], first[1], first[0], first[1]),
+                                |(left, top, right, bottom), vertex| {
+                                    (
+                                        left.min(vertex[0]),
+                                        top.min(vertex[1]),
+                                        right.max(vertex[0]),
+                                        bottom.max(vertex[1]),
+                                    )
+                                },
+                            );
+                            let bounds = Rect::from_edges(left, top, right, bottom);
+                            let viewport =
+                                Rect::from_edges(0.0, 0.0, self.width as f32, self.height as f32);
+                            let bounds = bounds
+                                .intersect(gpui_mask_stack.last().copied().unwrap_or(viewport));
+                            let clip = clip_stack
+                                .iter()
+                                .fold(bounds, |bounds, (clip, _, _)| bounds.intersect(*clip));
+                            let mut instance = build_gpui_background_instance(
+                                b,
+                                aqua_core::CornerRadii::uniform(0.0),
+                                path.background,
+                                s,
+                            );
+                            instance.fill[3] *= primitive_opacity;
+                            instance.border[3] *= primitive_opacity;
+                            instance.rect = [clip.x, clip.y, clip.w, clip.h];
+                            instance.clip = instance.rect;
+                            instance.misc[2] = clip_indices.last().copied().unwrap_or(0) as f32;
+                            let op = PathOp { vertices, instance };
+                            if let Some(group) = group_stack.last_mut() {
+                                group.bounds = if group.commands.is_empty() {
+                                    b
+                                } else {
+                                    group.bounds.union(b)
+                                };
+                                group.commands.push(GroupCommand::Path(op));
+                            } else {
+                                flush_rect_run(&mut plan.ops, &plan.instances, &mut top_start);
+                                flush_texts(&mut plan.ops, &mut pending_texts);
+                                plan.ops.push(Op::Path(op));
+                                top_start = plan.instances.len() as u32;
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(_) => plan.validation_error = Some("invalid GPUI path geometry"),
+                    }
+                }
+                DisplayItem::GpuiBorder {
+                    bounds,
+                    corners,
+                    widths,
+                    color,
+                    dashed,
+                } => {
+                    if self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        plan.validation_error = Some("GPUI encoded color profile is not available");
+                    }
+                    self.has_shadows = true;
+                    if group_stack.is_empty() && !pending_texts.is_empty() {
+                        flush_texts(&mut plan.ops, &mut pending_texts);
+                        top_start = plan.instances.len() as u32;
+                    }
+                    let mut inst = build_quad_instance(
+                        *bounds,
+                        *corners,
+                        Oklch::TRANSPARENT,
+                        *widths,
+                        Oklch::TRANSPARENT,
+                        *dashed,
+                        s,
+                    );
+                    inst.rb_pack[2] = 4.0;
+                    inst.border = [color.h, color.s, color.l, color.a * primitive_opacity];
+                    inst.misc[2] = clip_indices.last().copied().unwrap_or(0) as f32;
+                    set_quad_pulse(
+                        &mut inst,
+                        quad_pulses.last().copied(),
+                        &mut plan.pulse_bounds,
+                    );
+                    emit_rect_instance(&mut plan, &mut group_stack, s, inst);
+                }
+                DisplayItem::GpuiBackground {
+                    bounds,
+                    corners,
+                    background,
+                } => {
+                    if self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        plan.validation_error = Some("GPUI encoded color profile is not available");
+                    }
+                    self.has_shadows = true;
+                    if group_stack.is_empty() && !pending_texts.is_empty() {
+                        flush_texts(&mut plan.ops, &mut pending_texts);
+                        top_start = plan.instances.len() as u32;
+                    }
+                    let mut inst =
+                        build_gpui_background_instance(*bounds, *corners, *background, s);
+                    inst.fill[3] *= primitive_opacity;
+                    inst.border[3] *= primitive_opacity;
+                    inst.misc[2] = clip_indices.last().copied().unwrap_or(0) as f32;
+                    set_quad_pulse(
+                        &mut inst,
+                        quad_pulses.last().copied(),
+                        &mut plan.pulse_bounds,
+                    );
+                    emit_rect_instance(&mut plan, &mut group_stack, s, inst);
+                }
+                DisplayItem::Quad {
+                    bounds,
+                    corners,
+                    fill,
+                    border_widths,
+                    border_color,
+                    dashed,
+                } => {
+                    self.has_shadows = true;
+                    if group_stack.is_empty() && !pending_texts.is_empty() {
+                        flush_texts(&mut plan.ops, &mut pending_texts);
+                        top_start = plan.instances.len() as u32;
+                    }
+                    let mut inst = build_quad_instance(
+                        *bounds,
+                        *corners,
+                        *fill,
+                        *border_widths,
+                        *border_color,
+                        *dashed,
+                        s,
+                    );
+                    if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        inst.fill = encoded_oklch(*fill, false);
+                        inst.border = encoded_oklch(*border_color, false);
+                    }
+                    inst.fill[3] *= primitive_opacity;
+                    inst.border[3] *= primitive_opacity;
+                    inst.misc[2] = clip_indices.last().copied().unwrap_or(0) as f32;
+                    set_quad_pulse(
+                        &mut inst,
+                        quad_pulses.last().copied(),
+                        &mut plan.pulse_bounds,
+                    );
+                    emit_rect_instance(&mut plan, &mut group_stack, s, inst);
+                }
+                DisplayItem::GpuiShadow {
+                    bounds,
+                    corners,
+                    layer,
+                } => {
+                    if self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        plan.validation_error = Some("GPUI encoded color profile is not available");
+                    }
+                    self.has_shadows = true;
+                    if group_stack.is_empty() && !pending_texts.is_empty() {
+                        flush_texts(&mut plan.ops, &mut pending_texts);
+                        top_start = plan.instances.len() as u32;
+                    }
+                    let (clip, clip_corners, _) = clip_stack.last().copied().unwrap_or((
+                        Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            w: -1.0,
+                            h: 0.0,
+                        },
+                        aqua_core::CornerRadii::uniform(0.0),
+                        ClipMode::Legacy,
+                    ));
+                    let geometry = aqua_core::scene::ShadowLayer {
+                        dx: layer.dx,
+                        dy: layer.dy,
+                        blur: layer.blur,
+                        spread: layer.spread,
+                        inset: layer.inset,
+                        color: Oklch::TRANSPARENT,
+                    };
+                    let mut inst = build_shadow_instance(
+                        *bounds,
+                        *corners,
+                        geometry,
+                        (clip, clip_corners.top_left),
+                        s,
+                    );
+                    inst.rb_pack[2] = 5.0;
+                    inst.shadow_color = [
+                        layer.color.h,
+                        layer.color.s,
+                        layer.color.l,
+                        layer.color.a * primitive_opacity,
+                    ];
+                    inst.misc[2] = clip_indices.last().copied().unwrap_or(0) as f32;
+                    emit_rect_instance(&mut plan, &mut group_stack, s, inst);
+                }
                 DisplayItem::Shadow {
                     bounds,
                     corners,
@@ -1262,17 +1980,23 @@ impl Renderer {
                         flush_texts(&mut plan.ops, &mut pending_texts);
                         top_start = plan.instances.len() as u32;
                     }
-                    let (clip, clip_r) = clip_stack.last().copied().unwrap_or((
+                    let (clip, clip_corners, _) = clip_stack.last().copied().unwrap_or((
                         Rect {
                             x: 0.0,
                             y: 0.0,
                             w: -1.0,
                             h: 0.0,
                         },
-                        0.0,
+                        aqua_core::CornerRadii::uniform(0.0),
+                        ClipMode::Legacy,
                     ));
+                    let clip_r = clip_corners.top_left;
                     let mut inst =
                         build_shadow_instance(*bounds, *corners, *layer, (clip, clip_r), s);
+                    if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        inst.shadow_color = encoded_oklch(layer.color, false);
+                    }
+                    inst.shadow_color[3] *= primitive_opacity;
                     inst.misc[2] = clip_indices.last().copied().unwrap_or(0) as f32;
                     emit_rect_instance(&mut plan, &mut group_stack, s, inst);
                 }
@@ -1294,15 +2018,17 @@ impl Renderer {
                         w: bounds.w * s,
                         h: bounds.h * s,
                     };
-                    let (clip, clip_r) = clip_stack.last().copied().unwrap_or((
+                    let (clip, clip_corners, _) = clip_stack.last().copied().unwrap_or((
                         Rect {
                             x: 0.0,
                             y: 0.0,
                             w: -1.0,
                             h: 0.0,
                         },
-                        0.0,
+                        aqua_core::CornerRadii::uniform(0.0),
+                        ClipMode::Legacy,
                     ));
+                    let clip_r = clip_corners.top_left;
                     let (sox, soy, _, _) = shadow
                         .map(|(x, y, b, _)| (x * s, y * s, b * s, 1.0))
                         .unwrap_or((0.0, 0.0, 0.0, 0.0));
@@ -1316,6 +2042,16 @@ impl Renderer {
                         (clip, clip_r),
                         s,
                     );
+                    if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        inst.fill = encoded_oklch(*fill, *border_width <= 0.001);
+                        inst.border = encoded_oklch(*border_color, false);
+                        inst.shadow_color = shadow
+                            .map(|(_, _, _, color)| encoded_oklch(color, false))
+                            .unwrap_or([0.0; 4]);
+                    }
+                    inst.fill[3] *= primitive_opacity;
+                    inst.border[3] *= primitive_opacity;
+                    inst.shadow_color[3] *= primitive_opacity;
                     inst.misc[2] = clip_indices.last().copied().unwrap_or(0) as f32;
                     // NOTE: shader centers the shadow at instance-quad center
                     // + shadow.xy, so store the offset relative to the quad
@@ -1357,34 +2093,108 @@ impl Renderer {
                         );
                     }
                 }
-                DisplayItem::PushClip { bounds, radius } => {
+                DisplayItem::PushGpuiContentMask { bounds } => {
                     let parent = clip_indices.last().copied().unwrap_or(0);
+                    let raw = Rect {
+                        x: bounds.x * s,
+                        y: bounds.y * s,
+                        w: bounds.w * s,
+                        h: bounds.h * s,
+                    };
+                    let viewport =
+                        Rect::from_edges(0.0, 0.0, self.width as f32, self.height as f32);
+                    let intersection =
+                        raw.intersect(gpui_mask_stack.last().copied().unwrap_or(viewport));
+                    gpui_mask_stack.push(intersection);
+                    let physical = Rect::from_edges(
+                        intersection.x.floor(),
+                        intersection.y.floor(),
+                        intersection.right().ceil(),
+                        intersection.bottom().ceil(),
+                    );
+                    let corners = aqua_core::CornerRadii::uniform(0.0);
                     self.clip_nodes.push([
-                        bounds.x * s,
-                        bounds.y * s,
-                        bounds.w * s,
-                        bounds.h * s,
-                        *radius * s,
+                        physical.x,
+                        physical.y,
+                        physical.w,
+                        physical.h,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
                         parent as f32,
+                        2.0,
                         0.0,
                         0.0,
                     ]);
                     clip_indices.push(self.clip_nodes.len() as u32);
-                    clip_stack.push((
-                        Rect {
-                            x: bounds.x * s,
-                            y: bounds.y * s,
-                            w: bounds.w * s,
-                            h: bounds.h * s,
-                        },
-                        *radius * s,
-                    ));
+                    clip_stack.push((physical, corners, ClipMode::ContentMask));
+                }
+                DisplayItem::PushClip { bounds, radius } => {
+                    let corners = aqua_core::CornerRadii::uniform(*radius);
+                    let parent = clip_indices.last().copied().unwrap_or(0);
+                    let corners = scale_corners(corners, s);
+                    let physical = Rect {
+                        x: bounds.x * s,
+                        y: bounds.y * s,
+                        w: bounds.w * s,
+                        h: bounds.h * s,
+                    };
+                    self.clip_nodes.push([
+                        physical.x,
+                        physical.y,
+                        physical.w,
+                        physical.h,
+                        corners.top_left,
+                        corners.top_right,
+                        corners.bottom_right,
+                        corners.bottom_left,
+                        parent as f32,
+                        0.0,
+                        0.0,
+                        0.0,
+                    ]);
+                    clip_indices.push(self.clip_nodes.len() as u32);
+                    clip_stack.push((physical, corners, ClipMode::Legacy));
+                }
+                DisplayItem::PushRoundedClip { bounds, corners } => {
+                    let parent = clip_indices.last().copied().unwrap_or(0);
+                    let corners = scale_corners(*corners, s);
+                    let physical = Rect {
+                        x: bounds.x * s,
+                        y: bounds.y * s,
+                        w: bounds.w * s,
+                        h: bounds.h * s,
+                    };
+                    self.clip_nodes.push([
+                        physical.x,
+                        physical.y,
+                        physical.w,
+                        physical.h,
+                        corners.top_left,
+                        corners.top_right,
+                        corners.bottom_right,
+                        corners.bottom_left,
+                        parent as f32,
+                        1.0,
+                        0.0,
+                        0.0,
+                    ]);
+                    clip_indices.push(self.clip_nodes.len() as u32);
+                    clip_stack.push((physical, corners, ClipMode::Rounded));
                 }
                 DisplayItem::PopClip => {
                     clip_indices.pop();
-                    clip_stack.pop();
+                    if matches!(clip_stack.pop(), Some((_, _, ClipMode::ContentMask))) {
+                        gpui_mask_stack.pop();
+                    }
                 }
                 DisplayItem::PushOpacity(o) => {
+                    if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        has_transform = true;
+                        primitive_opacities.push(primitive_opacity * o);
+                        continue;
+                    }
                     group_stack.push(GroupOp {
                         text_maps: Vec::new(),
                         filter: None,
@@ -1416,6 +2226,16 @@ impl Renderer {
                     });
                 }
                 DisplayItem::PopOpacity | DisplayItem::PopContentBlur => {
+                    if matches!(item, DisplayItem::PopOpacity)
+                        && self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded
+                    {
+                        if primitive_opacities.len() == 1 {
+                            plan.validation_error = Some("unbalanced opacity stack");
+                        } else {
+                            primitive_opacities.pop();
+                        }
+                        continue;
+                    }
                     if let Some(g) = group_stack.pop() {
                         // True group isolation: bounds in physical px.
                         if matches!(item, DisplayItem::PopContentBlur) != g.filter.is_some() {
@@ -1424,7 +2244,12 @@ impl Renderer {
                         let logical = match g.filter {
                             Some((bounds, radius)) => crate::scene::inflate(
                                 bounds,
-                                BlurParams::for_radius(radius * s).padding() / s,
+                                if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded
+                                {
+                                    3.0 * radius
+                                } else {
+                                    BlurParams::for_radius(radius * s).padding() / s
+                                },
                             ),
                             None => g.bounds,
                         };
@@ -1462,7 +2287,11 @@ impl Renderer {
                     flush_rect_run(&mut plan.ops, &plan.instances, &mut top_start);
                     flush_texts(&mut plan.ops, &mut pending_texts);
                     let params = BlurParams::for_radius(*radius * s);
-                    let pad = params.padding();
+                    let pad = if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        3.0 * params.radius_px
+                    } else {
+                        params.padding()
+                    };
                     let phys = crate::scene::inflate(
                         Rect {
                             x: bounds.x * s,
@@ -1473,9 +2302,54 @@ impl Renderer {
                         pad,
                     );
                     blur_regions.push((*bounds, phys));
+                    let output_bounds =
+                        if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                            let snap = aqua_core::geometry::snap_device_pixel;
+                            Rect::from_edges(
+                                snap(bounds.x, s),
+                                snap(bounds.y, s),
+                                snap(bounds.right(), s),
+                                snap(bounds.bottom(), s),
+                            )
+                        } else {
+                            phys
+                        };
                     plan.ops.push(Op::Blur {
-                        bounds: phys,
+                        bounds: output_bounds,
                         params,
+                        opacity: primitive_opacity,
+                        clips: clip_stack.clone(),
+                    });
+                    top_start = plan.instances.len() as u32;
+                }
+                DisplayItem::BackdropBlurRounded {
+                    bounds,
+                    radius,
+                    corners,
+                } => {
+                    flush_rect_run(&mut plan.ops, &plan.instances, &mut top_start);
+                    flush_texts(&mut plan.ops, &mut pending_texts);
+                    let params = BlurParams::for_radius(*radius * s);
+                    let snap = aqua_core::geometry::snap_device_pixel;
+                    let left = snap(bounds.x, s);
+                    let top = snap(bounds.y, s);
+                    let right = snap(bounds.right(), s).max(left);
+                    let bottom = snap(bounds.bottom(), s).max(top);
+                    let physical = Rect::from_edges(left, top, right, bottom);
+                    let mut clips = clip_stack.clone();
+                    clips.push((physical, scale_corners(*corners, s), ClipMode::Rounded));
+                    let padding =
+                        if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                            3.0 * params.radius_px
+                        } else {
+                            params.padding()
+                        };
+                    blur_regions.push((*bounds, crate::scene::inflate(physical, padding)));
+                    plan.ops.push(Op::Blur {
+                        bounds: physical,
+                        params,
+                        opacity: primitive_opacity,
+                        clips,
                     });
                     top_start = plan.instances.len() as u32;
                 }
@@ -1490,7 +2364,7 @@ impl Renderer {
                     }
                     // Painter-order clip in logical px (clip_stack is
                     // physical). w < 0 means "no clip" by stack convention.
-                    let clip_logical = clip_stack.last().and_then(|(c, _)| {
+                    let clip_logical = clip_stack.last().and_then(|(c, _, _)| {
                         if c.w < 0.0 {
                             None
                         } else {
@@ -1502,9 +2376,38 @@ impl Renderer {
                             })
                         }
                     });
-                    let text_opacity = (color.alpha * opacity).clamp(0.0, 1.0);
-                    let mut shaped =
-                        resolve_scene_text(run, *at, color.with_alpha(1.0), 1.0, clip_logical, s);
+                    let text_opacity =
+                        if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                            (*opacity).clamp(0.0, 1.0)
+                        } else {
+                            (color.alpha * opacity).clamp(0.0, 1.0)
+                        };
+                    let mut shaped = match gpui_text_colors.last() {
+                        Some(GpuiTextBase::Normalized(color)) => {
+                            resolve_gpui_scene_text(run, *at, *color, 1.0, clip_logical, s)
+                        }
+                        Some(GpuiTextBase::Source(_)) | None => resolve_scene_text(
+                            run,
+                            *at,
+                            color.with_alpha(1.0),
+                            1.0,
+                            clip_logical,
+                            s,
+                        ),
+                    };
+                    if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        shaped.gpui_opacity = text_opacity * primitive_opacity;
+                    }
+                    shaped.gpui_subpixel = self.gpui_window_opaque;
+                    shaped.gpui_source_color = match gpui_text_colors.last() {
+                        Some(GpuiTextBase::Source(color)) => Some(*color),
+                        _ => None,
+                    };
+                    shaped.gpui_text_color_map = gpui_text_maps.last().map(|(map, _)| *map);
+                    shaped.gpui_text_opacity = gpui_text_opacities.last().cloned();
+                    shaped.gpui_text_shimmer =
+                        gpui_text_maps.last().and_then(|(_, shimmer)| *shimmer);
+                    shaped.gpui_window_scale = s;
                     shaped.scale = transform.a;
                     let bounds = Rect {
                         x: 0.0,
@@ -1512,17 +2415,30 @@ impl Renderer {
                         w: self.width as f32,
                         h: self.height as f32,
                     };
-                    let isolated = match text_opacity < 1.0
+                    let isolated = match (text_opacity < 1.0
+                        && self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded)
                         || !text_maps.is_empty()
-                        || clip_stack.len() > 1
-                        || clip_stack.iter().any(|(_, radius)| *radius > 0.0)
+                        || (clip_stack.len() > 1
+                            && (self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded
+                                || clip_stack
+                                    .iter()
+                                    .any(|(_, _, mode)| *mode != ClipMode::ContentMask)))
+                        || clip_stack
+                            .iter()
+                            .any(|(_, radius, _)| *radius != aqua_core::CornerRadii::uniform(0.0))
                     {
                         true => Some(GroupOp {
                             text_maps: text_maps.clone(),
                             filter: None,
                             clips: clip_stack.clone(),
                             bounds,
-                            opacity: text_opacity,
+                            opacity: if self.color_profile
+                                == aqua_core::ColorProfile::GpuiWindowsEncoded
+                            {
+                                1.0
+                            } else {
+                                text_opacity
+                            },
                             instances: Vec::new(),
                             commands: vec![GroupCommand::Text(shaped.clone())],
                         }),
@@ -1572,12 +2488,16 @@ impl Renderer {
                         h: bounds.h * s,
                     };
                     let mut clips = clip_stack.clone();
-                    clips.push((physical, *rounded_clip * s));
+                    clips.push((
+                        physical,
+                        aqua_core::CornerRadii::uniform(*rounded_clip * s),
+                        ClipMode::Legacy,
+                    ));
                     let op = SurfaceOp {
                         pixel_scale: s * transform.a,
                         bounds: physical,
                         source: SurfaceSource::External(*layer),
-                        opacity: *opacity,
+                        opacity: *opacity * primitive_opacity,
                         clips,
                         placement: Some((*fit, *position, *source)),
                     };
@@ -1595,6 +2515,10 @@ impl Renderer {
                     source,
                     opacity,
                 } => {
+                    if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        plan.validation_error =
+                            Some("legacy vector rendering does not support GPUI encoded color");
+                    }
                     let op = SurfaceOp {
                         pixel_scale: s * transform.a,
                         bounds: Rect {
@@ -1604,7 +2528,7 @@ impl Renderer {
                             h: bounds.h * s,
                         },
                         source: SurfaceSource::Vector(source.clone()),
-                        opacity: *opacity,
+                        opacity: *opacity * primitive_opacity,
                         clips: clip_stack.clone(),
                         placement: None,
                     };
@@ -1633,13 +2557,17 @@ impl Renderer {
                     };
                     let mut clips = clip_stack.clone();
                     if *rounded_clip > 0.0 {
-                        clips.push((physical, *rounded_clip * s));
+                        clips.push((
+                            physical,
+                            aqua_core::CornerRadii::uniform(*rounded_clip * s),
+                            ClipMode::Legacy,
+                        ));
                     }
                     let op = SurfaceOp {
                         pixel_scale: s * transform.a,
                         bounds: physical,
                         source: SurfaceSource::External(*layer),
-                        opacity: *opacity,
+                        opacity: *opacity * primitive_opacity,
                         clips,
                         placement: None,
                     };
@@ -1677,6 +2605,18 @@ impl Renderer {
         if !text_maps.is_empty() {
             plan.validation_error = Some("unbalanced text color map");
         }
+        if !gpui_text_maps.is_empty() {
+            plan.validation_error = Some("unbalanced GPUI text color map");
+        }
+        if !gpui_text_colors.is_empty() {
+            plan.validation_error = Some("unbalanced GPUI text color");
+        }
+        if primitive_opacities.len() != 1 {
+            plan.validation_error = Some("unbalanced opacity stack");
+        }
+        if !quad_pulses.is_empty() {
+            plan.validation_error = Some("unbalanced GPUI quad pulse");
+        }
         if !group_stack.is_empty() {
             plan.validation_error = Some("unbalanced content group stack");
         }
@@ -1701,7 +2641,87 @@ impl Renderer {
 
         // Diff instance mirror -> bounded upload ranges.
         plan.full_upload = self.mirror.len() != plan.instances.len();
+        plan.pulse_active = !plan.pulse_bounds.is_empty();
+        self.update_shimmers(&mut plan);
+        self.pulse_plan = (plan.pulse_active || plan.shimmer_active).then(|| plan.clone());
         plan
+    }
+
+    fn update_shimmers(&mut self, plan: &mut FramePlan) {
+        let now = self.shimmer_now.unwrap_or_else(std::time::Instant::now);
+        let mut phases = HashMap::new();
+        let mut keys = HashSet::new();
+        fn update_run(
+            run: &mut ShapedRun,
+            clocks: &mut HashMap<u64, ShimmerClock>,
+            phases: &mut HashMap<u64, f32>,
+            keys: &mut HashSet<u64>,
+            now: std::time::Instant,
+        ) {
+            let Some(shimmer) = run.gpui_text_shimmer else {
+                return;
+            };
+            keys.insert(shimmer.key);
+            let phase = *phases.entry(shimmer.key).or_insert_with(|| {
+                let clock = clocks.entry(shimmer.key).or_insert_with(|| ShimmerClock {
+                    since: now,
+                    duration: shimmer.duration,
+                    delay: shimmer.delay,
+                    waiting: !shimmer.delay.is_zero(),
+                });
+                clock.duration = shimmer.duration;
+                clock.delay = shimmer.delay;
+                if clock.waiting && now.saturating_duration_since(clock.since) >= clock.delay {
+                    clock.waiting = false;
+                    clock.since = now;
+                } else if !clock.waiting
+                    && now.saturating_duration_since(clock.since) >= clock.duration
+                {
+                    clock.since = now;
+                    clock.waiting = !clock.delay.is_zero();
+                }
+                if clock.waiting || clock.duration.is_zero() {
+                    0.0
+                } else {
+                    (now.saturating_duration_since(clock.since).as_secs_f32()
+                        / clock.duration.as_secs_f32())
+                    .min(1.0)
+                }
+            });
+            if let Some(map) = &mut run.gpui_text_color_map {
+                map.phase = phase;
+            }
+        }
+        fn update_group(
+            group: &mut GroupOp,
+            clocks: &mut HashMap<u64, ShimmerClock>,
+            phases: &mut HashMap<u64, f32>,
+            keys: &mut HashSet<u64>,
+            now: std::time::Instant,
+        ) {
+            for command in &mut group.commands {
+                match command {
+                    GroupCommand::Text(run) => update_run(run, clocks, phases, keys, now),
+                    GroupCommand::Group(group) => update_group(group, clocks, phases, keys, now),
+                    _ => {}
+                }
+            }
+        }
+        for op in &mut plan.ops {
+            match op {
+                Op::Texts(runs) => {
+                    for run in runs {
+                        update_run(run, &mut self.shimmer_clocks, &mut phases, &mut keys, now);
+                    }
+                }
+                Op::Group(group) => {
+                    update_group(group, &mut self.shimmer_clocks, &mut phases, &mut keys, now)
+                }
+                _ => {}
+            }
+        }
+        self.shimmer_clocks.retain(|key, _| keys.contains(key));
+        plan.shimmer_active = !keys.is_empty();
     }
 
     // -- draw ------------------------------------------------------------------
@@ -1715,6 +2735,17 @@ impl Renderer {
         }
         let t0 = std::time::Instant::now();
         let (w, h) = (self.width, self.height);
+        self.queue.write_buffer(
+            &self.rect_uniform_buf,
+            0,
+            bytemuck::bytes_of(&RectUniforms {
+                viewport: [w as f32, h as f32],
+                pulse_clock_ms: self
+                    .pulse_clock_override
+                    .unwrap_or_else(aqua_core::scene::gpui_pulse_clock_ms),
+                _pad: 0,
+            }),
+        );
         // Clone the base view up front: draw helpers take &mut self, so no
         // borrow of self.base may be live across those calls.
         let base_view = self
@@ -1722,6 +2753,20 @@ impl Renderer {
             .as_ref()
             .map(|(_, v)| v.clone())
             .ok_or_else(|| RenderError::Gpu("no base target; call set_size".into()))?;
+
+        let base_texture = self.base.as_ref().unwrap().0.clone();
+        let backdrop_size = plan
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Blur { bounds, params, .. } => {
+                    gpui_blur::region(*bounds, params.radius_px, w, h)
+                }
+                _ => None,
+            })
+            .map(|[x0, y0, x1, y1]| [x1 - x0, y1 - y0])
+            .reduce(|a, b| [a[0].max(b[0]), a[1].max(b[1])])
+            .unwrap_or([1, 1]);
 
         // Clean plan over a valid base: no work at all. (The facade never
         // calls draw on clean plans; direct calls are explicit no-ops.)
@@ -1748,6 +2793,9 @@ impl Renderer {
         // conflicts between the op list walk and &mut self methods.
         let device = self.device.clone();
         let queue = self.queue.clone();
+        if let Some(mesh) = self.gpui_mesh_renderer.as_mut() {
+            mesh.begin_frame(plan.mesh_count);
+        }
         let mut passes: u32;
         if plan.partial && self.base_valid {
             // Partial repaint over the retained base (scissored regions).
@@ -1798,7 +2846,13 @@ impl Renderer {
                             occlusion_query_set: None,
                             multiview_mask: None,
                         });
-                        pass.set_pipeline(&self.rect_pipeline);
+                        pass.set_pipeline(
+                            if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                                &self.gpui_rect_pipeline
+                            } else {
+                                &self.rect_pipeline
+                            },
+                        );
                         pass.set_bind_group(0, &self.rect_uniform_bind, &[]);
                         pass.set_vertex_buffer(0, self.quad_vb.slice(..));
                         pass.set_index_buffer(self.quad_ib.slice(..), wgpu::IndexFormat::Uint32);
@@ -1806,14 +2860,19 @@ impl Renderer {
                         pass.draw_indexed(0..6, 0, *start..(*start + *count));
                         passes += 1;
                     }
-                    Op::Blur { bounds, params } => {
+                    Op::Blur {
+                        bounds,
+                        params,
+                        opacity,
+                        clips,
+                    } => {
                         self.apply_blur(
                             &device,
                             &queue,
                             &mut encoder,
-                            &base_view,
+                            (&base_view, &base_texture, backdrop_size),
                             *bounds,
-                            (*params, false),
+                            (*params, false, clips, *opacity),
                         )?;
                         passes += 3; // H + V + composite
                     }
@@ -1822,6 +2881,18 @@ impl Renderer {
                     }
                     Op::Surface(surface) => {
                         passes += self.draw_surface(&device, &mut encoder, &base_view, surface)?;
+                    }
+                    Op::Path(path) => {
+                        gpui_path::draw(self, &mut encoder, &base_view, path);
+                        passes += 2;
+                    }
+                    Op::Svg(svg) => {
+                        gpui_svg::draw(self, &mut encoder, &base_view, svg)?;
+                        passes += 1;
+                    }
+                    Op::Mesh(mesh) => {
+                        self.draw_gpui_mesh(&device, &mut encoder, &base_view, mesh)?;
+                        passes += 2;
                     }
                     Op::Texts(runs) => {
                         for run in runs.clone() {
@@ -1905,6 +2976,9 @@ impl Renderer {
             }
         } // end else (full repaint)
 
+        if let Some(mesh) = self.gpui_mesh_renderer.as_mut() {
+            mesh.finish_prepare();
+        }
         self.queue.submit([encoder.finish()]);
         // Atlas trim only after the final submit, never between encode and
         // submit (text-agent protocol).
@@ -1991,6 +3065,117 @@ impl Renderer {
             previous,
             output,
             settings,
+            gpui_shimmer: None,
+            elapsed: std::time::Duration::ZERO,
+        });
+        Ok(())
+    }
+
+    pub fn start_gpui_snapshot_transition(
+        &mut self,
+        settings: aqua_core::scene::GpuiSnapshotTransition,
+    ) -> Result<(), RenderError> {
+        self.start_gpui_snapshot(
+            settings.duration,
+            settings.band,
+            settings.shimmer.to_srgba(),
+        )
+    }
+
+    pub fn start_gpui_source_snapshot_transition(
+        &mut self,
+        settings: aqua_core::scene::GpuiSourceSnapshotTransition,
+    ) -> Result<(), RenderError> {
+        use palette::IntoColor;
+        let color = settings.shimmer;
+        let rgba: palette::rgb::Rgba = palette::Hsla::new(
+            color.hue_degrees,
+            color.saturation,
+            color.lightness,
+            color.alpha,
+        )
+        .into_color();
+        self.start_gpui_snapshot(
+            settings.duration,
+            settings.band,
+            [rgba.red, rgba.green, rgba.blue, rgba.alpha],
+        )
+    }
+
+    fn start_gpui_snapshot(
+        &mut self,
+        duration: std::time::Duration,
+        band: f32,
+        shimmer: [f32; 4],
+    ) -> Result<(), RenderError> {
+        if self.color_profile != aqua_core::ColorProfile::GpuiWindowsEncoded
+            || !shimmer.iter().all(|v| v.is_finite())
+            || !band.is_finite()
+        {
+            return Err(RenderError::Gpu(
+                "GPUI snapshot requires a valid encoded color profile".into(),
+            ));
+        }
+        if duration.is_zero() {
+            self.cancel_snapshot_transition();
+            return Ok(());
+        }
+        if !self.base_valid {
+            return Err(RenderError::Gpu(
+                "snapshot transition requires a rendered frame".into(),
+            ));
+        }
+        let previous = if self.snapshot.is_some() {
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("aqua-gpui-snapshot-restart"),
+                });
+            self.composed_presentation(&mut encoder);
+            self.queue.submit([encoder.finish()]);
+            let old = self.snapshot.take().expect("active snapshot");
+            self.pool.release(old.previous);
+            old.output
+        } else {
+            let previous = self
+                .pool
+                .acquire(&self.device, self.width, self.height, self.format)?;
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("aqua-gpui-snapshot"),
+                });
+            encoder.copy_texture_to_texture(
+                self.base.as_ref().unwrap().0.as_image_copy(),
+                self.pool.entries[previous].texture.as_image_copy(),
+                wgpu::Extent3d {
+                    width: self.width,
+                    height: self.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.queue.submit([encoder.finish()]);
+            previous
+        };
+        let output = match self
+            .pool
+            .acquire(&self.device, self.width, self.height, self.format)
+        {
+            Ok(output) => output,
+            Err(error) => {
+                self.pool.release(previous);
+                return Err(error);
+            }
+        };
+        self.snapshot = Some(SnapshotState {
+            previous,
+            output,
+            settings: crate::effects::SnapshotTransition {
+                duration,
+                band: band.max(0.0),
+                shimmer: Oklch::TRANSPARENT,
+            },
+            gpui_shimmer: Some(shimmer),
             elapsed: std::time::Duration::ZERO,
         });
         Ok(())
@@ -2034,11 +3219,23 @@ impl Renderer {
             [base, &previous.view, &output.view],
             crate::effects::compositor::EffectUniforms {
                 viewport: [self.width as f32, self.height as f32],
-                progress: (snapshot.elapsed.as_secs_f64()
-                    / snapshot.settings.duration.as_secs_f64()) as f32,
+                progress: if snapshot.gpui_shimmer.is_some() {
+                    gpui_snapshot_ease(
+                        snapshot.elapsed.as_secs_f32() / snapshot.settings.duration.as_secs_f32(),
+                    )
+                } else {
+                    (snapshot.elapsed.as_secs_f64() / snapshot.settings.duration.as_secs_f64())
+                        as f32
+                },
                 band: snapshot.settings.band,
-                target: snapshot.settings.shimmer.to_linear(),
-                mode: 0,
+                target: snapshot
+                    .gpui_shimmer
+                    .unwrap_or_else(|| snapshot.settings.shimmer.to_linear()),
+                mode: if snapshot.gpui_shimmer.is_some() {
+                    2
+                } else {
+                    0
+                },
                 padding: [0; 3],
             },
         );
@@ -2074,7 +3271,11 @@ impl Renderer {
             1.0,
             [0.0, 0.0, -1.0, 0.0],
             0.0,
-            output_gamma,
+            if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                0.0
+            } else {
+                output_gamma
+            },
             1.0, // base working target is premultiplied
         )?;
         self.queue.submit([encoder.finish()]);
@@ -2142,6 +3343,14 @@ impl Renderer {
             for y in 0..h as usize {
                 out[y * row_bytes..(y + 1) * row_bytes]
                     .copy_from_slice(&mapped[y * stride..y * stride + row_bytes]);
+            }
+            if matches!(
+                self.format,
+                wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+            ) {
+                for pixel in out.as_chunks_mut::<4>().0 {
+                    pixel.swap(0, 2);
+                }
             }
             out
         };
@@ -2253,6 +3462,7 @@ impl Renderer {
                 shadow_color: [0.0; 4],
                 clip: [0.0, 0.0, -1.0, 0.0],
                 misc: [0.0; 4],
+                pulse: [0; 4],
             };
             let clear_buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("aqua-region-clear"),
@@ -2306,7 +3516,13 @@ impl Renderer {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                pass.set_pipeline(&self.rect_pipeline);
+                pass.set_pipeline(
+                    if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                        &self.gpui_rect_pipeline
+                    } else {
+                        &self.rect_pipeline
+                    },
+                );
                 pass.set_bind_group(0, &self.rect_uniform_bind, &[]);
                 pass.set_vertex_buffer(0, self.quad_vb.slice(..));
                 pass.set_index_buffer(self.quad_ib.slice(..), wgpu::IndexFormat::Uint32);
@@ -2427,11 +3643,15 @@ impl Renderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        base_view: &wgpu::TextureView,
+        target: (&wgpu::TextureView, &wgpu::Texture, [u32; 2]),
         bounds: Rect,
-        filter: (BlurParams, bool),
+        filter: (BlurParams, bool, &[ClipShape], f32),
     ) -> Result<(), RenderError> {
-        let (params, replace) = filter;
+        if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+            return gpui_blur::draw(self, encoder, target, bounds, filter);
+        }
+        let base_view = target.0;
+        let (params, replace, clips, _) = filter;
         let (w, h) = (self.width, self.height);
         let ds = params.downsample.max(1);
         let (sw, sh) = ((w / ds).max(1), (h / ds).max(1));
@@ -2534,7 +3754,7 @@ impl Renderer {
         let by0 = (bounds.y / h as f32).clamp(0.0, 1.0);
         let bx1 = ((bounds.x + bounds.w) / w as f32).clamp(0.0, 1.0);
         let by1 = ((bounds.y + bounds.h) / h as f32).clamp(0.0, 1.0);
-        self.blit(
+        self.blit_clipped(
             device,
             encoder,
             &src_view,
@@ -2547,11 +3767,13 @@ impl Renderer {
                 h: (by1 - by0) * h as f32,
             },
             [bx0, by0, bx1 - bx0, by1 - by0],
+            false,
             1.0,
             [0.0, 0.0, -1.0, 0.0],
             0.0,
             0.0,
-            1.0, // blur scratch is premultiplied working space
+            1.0,
+            clips,
         )?;
 
         self.pool.release(ia);
@@ -2564,7 +3786,7 @@ impl Renderer {
             return Ok(());
         }
         let count = self.clip_nodes.len().max(1);
-        let bytes = (count * 32) as u64;
+        let bytes = (count * 48) as u64;
         if bytes > self.device.limits().max_storage_buffer_binding_size {
             return Err(RenderError::BudgetExceeded("rectangle clip tree"));
         }
@@ -2594,7 +3816,7 @@ impl Renderer {
         match self.clip_nodes.is_empty() {
             true => {
                 self.queue
-                    .write_buffer(&self.clip_buffer, 0, bytemuck::cast_slice(&[[0.0f32; 8]]))
+                    .write_buffer(&self.clip_buffer, 0, bytemuck::cast_slice(&[[0.0f32; 12]]))
             }
             false => self.queue.write_buffer(
                 &self.clip_buffer,
@@ -2634,9 +3856,44 @@ impl Renderer {
         {
             return Ok(0);
         }
+        let mut atlas_placement = None;
+        if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded
+            && op.placement.is_some()
+        {
+            if let SurfaceSource::External(layer) = &op.source {
+                if let Some(source) = self.gpui_images.get(layer) {
+                    let Some(&(width, height)) = self.external_size.get(layer) else {
+                        return Ok(0);
+                    };
+                    let key = crate::gpui_atlas::AtlasKey::Image {
+                        asset: source.asset,
+                        frame: source.frame,
+                    };
+                    let mut atlas = self.gpui_atlas.lock().unwrap();
+                    atlas_placement = Some(match atlas.get(key) {
+                        Some(placement) => placement,
+                        None => {
+                            let mut bgra = source.rgba.to_vec();
+                            for pixel in bgra.as_chunks_mut::<4>().0 {
+                                pixel.swap(0, 2);
+                            }
+                            atlas
+                                .insert(device, &self.queue, key, [width, height], [0, 0], &bgra)
+                                .map_err(RenderError::Gpu)?
+                        }
+                    });
+                } else if self.external.contains_key(layer) {
+                    return Err(RenderError::Gpu(
+                        "GPUI image atlas source is unavailable".into(),
+                    ));
+                }
+            }
+        }
         let view = match &op.source {
             SurfaceSource::External(layer) => match self.external.get(layer).cloned() {
-                Some(view) => view,
+                Some(view) => atlas_placement
+                    .as_ref()
+                    .map_or(view, |placement| placement.view.clone()),
                 None => return Ok(0),
             },
             SurfaceSource::Vector(source) => self
@@ -2650,7 +3907,7 @@ impl Renderer {
                 )
                 .map_err(RenderError::Vector)?,
         };
-        let placement = match (&op.source, op.placement) {
+        let mut placement = match (&op.source, op.placement) {
             (SurfaceSource::External(layer), Some((fit, position, source))) => {
                 let (width, height) = self
                     .external_size
@@ -2679,7 +3936,60 @@ impl Renderer {
                 },
             },
         };
-        let uv = placement.source;
+        let mut clips = op.clips.clone();
+        if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+            if let (SurfaceSource::External(layer), Some(_)) = (&op.source, op.placement) {
+                let visible = placement.destination.intersect(bounds);
+                if visible.w <= 0.0 || visible.h <= 0.0 {
+                    return Ok(0);
+                }
+                let (width, height) = self.external_size[layer];
+                let source = placement.source;
+                let fitted = placement.destination;
+                let x = source.x + source.w * (visible.x - fitted.x) / fitted.w;
+                let y = source.y + source.h * (visible.y - fitted.y) / fitted.h;
+                let w = source.w * visible.w / fitted.w;
+                let h = source.h * visible.h / fitted.h;
+                let tex_width = width as f32;
+                let tex_height = height as f32;
+                let left = (x * tex_width).round().clamp(0.0, tex_width);
+                let top = (y * tex_height).round().clamp(0.0, tex_height);
+                let crop_width = (w * tex_width).round().clamp(0.0, tex_width - left);
+                let crop_height = (h * tex_height).round().clamp(0.0, tex_height - top);
+                placement.source = Rect::from_edges(
+                    left / tex_width,
+                    top / tex_height,
+                    (left + crop_width) / tex_width,
+                    (top + crop_height) / tex_height,
+                );
+                let snap = aqua_core::geometry::snap_device_pixel;
+                placement.destination = Rect::from_edges(
+                    snap(visible.x, 1.0),
+                    snap(visible.y, 1.0),
+                    snap(visible.right(), 1.0),
+                    snap(visible.bottom(), 1.0),
+                );
+                if let Some(clip) = clips.last_mut() {
+                    let radius = clip.1.top_left.min(visible.w.min(visible.h) * 0.5);
+                    *clip = (
+                        placement.destination,
+                        aqua_core::CornerRadii::uniform(radius),
+                        ClipMode::Rounded,
+                    );
+                }
+            }
+        }
+        let mut uv = placement.source;
+        if let Some(atlas) = &atlas_placement {
+            let [x, y, w, h] = atlas.tile.map(|value| value as f32);
+            let [page_w, page_h] = atlas.page_size.map(|value| value as f32);
+            uv = Rect {
+                x: (x + uv.x * w) / page_w,
+                y: (y + uv.y * h) / page_h,
+                w: uv.w * w / page_w,
+                h: uv.h * h / page_h,
+            };
+        }
         self.blit_clipped(
             device,
             encoder,
@@ -2688,14 +3998,51 @@ impl Renderer {
             self.format,
             placement.destination,
             [uv.x, uv.y, uv.w, uv.h],
+            atlas_placement.is_some(),
             op.opacity,
             [0.0, 0.0, -1.0, 0.0],
             0.0,
             0.0,
-            1.0,
-            &op.clips,
+            if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded
+                && op.placement.is_some()
+            {
+                0.0
+            } else {
+                1.0
+            },
+            &clips,
         )?;
         Ok(1)
+    }
+
+    fn draw_gpui_mesh(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        op: &MeshOp,
+    ) -> Result<(), RenderError> {
+        let mesh = self
+            .gpui_mesh_renderer
+            .as_mut()
+            .ok_or_else(|| RenderError::Gpu("GPUI mesh renderer is unavailable".into()))?;
+        mesh.prepare(device, encoder, op.index, op.bounds, &op.mesh, op.style)
+            .map_err(RenderError::Gpu)?;
+        mesh.composite(
+            device,
+            encoder,
+            gpui_mesh::CompositeDraw {
+                target,
+                index: op.index,
+                bounds: op.bounds,
+                clip: op.clip,
+                corners: op.corners,
+                opacity: op.opacity,
+                viewport: [self.width, self.height],
+                clips: &op.clips,
+            },
+        )
+        .map_err(RenderError::Gpu)
     }
 
     fn draw_group(
@@ -2756,7 +4103,13 @@ impl Renderer {
                             occlusion_query_set: None,
                             multiview_mask: None,
                         });
-                        pass.set_pipeline(&self.rect_pipeline);
+                        pass.set_pipeline(
+                            if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                                &self.gpui_rect_pipeline
+                            } else {
+                                &self.rect_pipeline
+                            },
+                        );
                         pass.set_bind_group(0, &self.rect_uniform_bind, &[]);
                         pass.set_vertex_buffer(0, self.quad_vb.slice(..));
                         pass.set_index_buffer(self.quad_ib.slice(..), wgpu::IndexFormat::Uint32);
@@ -2787,6 +4140,18 @@ impl Renderer {
                     }
                     GroupCommand::Surface(surface) => {
                         passes += self.draw_surface(device, encoder, &view, surface)?;
+                    }
+                    GroupCommand::Path(path) => {
+                        gpui_path::draw(self, encoder, &view, path);
+                        passes += 2;
+                    }
+                    GroupCommand::Svg(svg) => {
+                        gpui_svg::draw(self, encoder, &view, svg)?;
+                        passes += 1;
+                    }
+                    GroupCommand::Mesh(mesh) => {
+                        self.draw_gpui_mesh(device, encoder, &view, mesh)?;
+                        passes += 2;
                     }
                 }
             }
@@ -2830,14 +4195,25 @@ impl Renderer {
             filtered_view = output_view;
             passes += 1;
         }
-        if let Some((_, radius)) = group.filter {
+        if let Some((filter_bounds, radius)) = group.filter {
+            let blur_bounds = if self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded {
+                Rect {
+                    x: filter_bounds.x * self.scale,
+                    y: filter_bounds.y * self.scale,
+                    w: filter_bounds.w * self.scale,
+                    h: filter_bounds.h * self.scale,
+                }
+            } else {
+                group.bounds
+            };
+            let blur_texture = self.pool.entries[scratch].texture.clone();
             if let Err(error) = self.apply_blur(
                 device,
                 queue,
                 encoder,
-                &view,
-                group.bounds,
-                (BlurParams::for_radius(radius * self.scale), true),
+                (&view, &blur_texture, [1, 1]),
+                blur_bounds,
+                (BlurParams::for_radius(radius * self.scale), true, &[], 1.0),
             ) {
                 self.pool.release(scratch);
                 return Err(error);
@@ -2871,6 +4247,7 @@ impl Renderer {
                 b.w.min(bw) / bw,
                 b.h.min(bh) / bh,
             ],
+            false,
             group.opacity,
             [0.0, 0.0, -1.0, 0.0],
             0.0,
@@ -2892,15 +4269,16 @@ impl Renderer {
         &mut self,
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
+        straight: bool,
     ) -> Result<wgpu::RenderPipeline, RenderError> {
-        if let Some(pipe) = self.compose_pipes.get(&format) {
+        if let Some(pipe) = self.compose_pipes.get(&(format, straight)) {
             return Ok(pipe.clone());
         }
-        if self.compose_pipes.len() >= MAX_COMPOSE_PIPES {
+        if self.compose_pipes.len() >= MAX_COMPOSE_PIPES * 2 {
             return Err(RenderError::BudgetExceeded("compose pipeline variants"));
         }
-        let pipe = make_compose_pipeline(device, &self.compose_bind_layout, format);
-        self.compose_pipes.insert(format, pipe.clone());
+        let pipe = make_compose_pipeline(device, &self.compose_bind_layout, format, straight);
+        self.compose_pipes.insert((format, straight), pipe.clone());
         Ok(pipe)
     }
 
@@ -2934,6 +4312,7 @@ impl Renderer {
             target_format,
             dst,
             src_uv,
+            false,
             opacity,
             clip,
             clip_radius,
@@ -2953,12 +4332,13 @@ impl Renderer {
         target_format: wgpu::TextureFormat,
         dst: Rect,
         src_uv: [f32; 4],
+        repeat: bool,
         opacity: f32,
         clip: [f32; 4],
         clip_radius: f32,
         output_gamma: f32,
         premultiplied: f32,
-        clips: &[(Rect, f32)],
+        clips: &[ClipShape],
     ) -> Result<(), RenderError> {
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("aqua-compose-u"),
@@ -2980,14 +4360,29 @@ impl Renderer {
                 _pad: [clips.len() as f32, 0.0],
             }]),
         );
-        let mut clip_data = Vec::<[f32; 8]>::with_capacity(clips.len().max(1));
-        for (bounds, radius) in clips {
+        let mut clip_data = Vec::<[f32; 12]>::with_capacity(clips.len().max(1));
+        for (bounds, radius, exact) in clips {
             clip_data.push([
-                bounds.x, bounds.y, bounds.w, bounds.h, *radius, 0.0, 0.0, 0.0,
+                bounds.x,
+                bounds.y,
+                bounds.w,
+                bounds.h,
+                radius.top_left,
+                radius.top_right,
+                radius.bottom_right,
+                radius.bottom_left,
+                match exact {
+                    ClipMode::Legacy => 0.0,
+                    ClipMode::Rounded => 1.0,
+                    ClipMode::ContentMask => 2.0,
+                },
+                0.0,
+                0.0,
+                0.0,
             ]);
         }
         if clip_data.is_empty() {
-            clip_data.push([0.0; 8]);
+            clip_data.push([0.0; 12]);
         }
         let clip_bytes = bytemuck::cast_slice(&clip_data);
         if clip_bytes.len() as u64 > device.limits().max_storage_buffer_binding_size {
@@ -3014,7 +4409,11 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    resource: wgpu::BindingResource::Sampler(if repeat {
+                        &self.gpui_atlas_sampler
+                    } else {
+                        &self.sampler
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -3037,7 +4436,7 @@ impl Renderer {
                 clip,
             }]),
         );
-        let pipe = self.compose_pipe_for(device, target_format)?;
+        let pipe = self.compose_pipe_for(device, target_format, repeat)?;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("aqua-blit"),
@@ -3138,6 +4537,159 @@ fn coalesce_ranges(ranges: &mut Vec<(usize, usize)>) {
     *ranges = out;
 }
 
+fn scale_corners(corners: aqua_core::CornerRadii, scale: f32) -> aqua_core::CornerRadii {
+    aqua_core::CornerRadii {
+        top_left: corners.top_left * scale,
+        top_right: corners.top_right * scale,
+        bottom_right: corners.bottom_right * scale,
+        bottom_left: corners.bottom_left * scale,
+    }
+}
+
+fn encoded_oklch(color: Oklch, premultiply: bool) -> [f32; 4] {
+    let [r, g, b, a] = color.to_linear();
+    let encode = |v: f32| {
+        let v = v.clamp(0.0, 1.0);
+        if v <= 0.0031308 {
+            v * 12.92
+        } else {
+            1.055 * v.powf(1.0 / 2.4) - 0.055
+        }
+    };
+    let factor = if premultiply { a } else { 1.0 };
+    [
+        encode(r) * factor,
+        encode(g) * factor,
+        encode(b) * factor,
+        a,
+    ]
+}
+
+fn gpui_snapshot_ease(value: f32) -> f32 {
+    if value <= 0.0 {
+        return 0.0;
+    }
+    if value >= 1.0 {
+        return 1.0;
+    }
+    let bezier = |s: f32, first: f32, second: f32| {
+        let u = 1.0 - s;
+        3.0 * u * u * s * first + 3.0 * u * s * s * second + s * s * s
+    };
+    let (mut low, mut high) = (0.0_f32, 1.0_f32);
+    for _ in 0..24 {
+        let mid = (low + high) * 0.5;
+        if bezier(mid, 0.65, 0.35) < value {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    bezier((low + high) * 0.5, 0.0, 1.0)
+}
+
+fn set_quad_pulse(
+    instance: &mut RectInstance,
+    pulse: Option<aqua_core::scene::GpuiQuadPulse>,
+    bounds: &mut Vec<Rect>,
+) {
+    if let Some(pulse) = pulse.filter(|pulse| pulse.period_ms != 0) {
+        instance.pulse = [
+            pulse.start_ms,
+            pulse.period_ms,
+            pulse.min_opacity.clamp(0.0, 1.0).to_bits(),
+            0,
+        ];
+        bounds.push(Rect {
+            x: instance.rect[0],
+            y: instance.rect[1],
+            w: instance.rect[2],
+            h: instance.rect[3],
+        });
+    }
+}
+
+fn build_quad_instance(
+    bounds: Rect,
+    corners: aqua_core::CornerRadii,
+    fill: Oklch,
+    widths: aqua_core::Insets,
+    border: Oklch,
+    dashed: bool,
+    scale: f32,
+) -> RectInstance {
+    let snap = aqua_core::geometry::snap_device_pixel;
+    let stroke = aqua_core::geometry::snap_device_stroke;
+    let left = snap(bounds.x, scale);
+    let top = snap(bounds.y, scale);
+    let right = snap(bounds.right(), scale).max(left);
+    let bottom = snap(bounds.bottom(), scale).max(top);
+    RectInstance {
+        rect: [left, top, right - left, bottom - top],
+        rb_pack: [0.0, 0.0, 2.0, if dashed { 1.0 } else { 0.0 }],
+        fill: fill.to_gpu(),
+        border: border.to_gpu(),
+        shadow: [
+            corners.top_left * scale,
+            corners.top_right * scale,
+            corners.bottom_right * scale,
+            corners.bottom_left * scale,
+        ],
+        shadow_color: [
+            stroke(widths.top, scale),
+            stroke(widths.right, scale),
+            stroke(widths.bottom, scale),
+            stroke(widths.left, scale),
+        ],
+        clip: [0.0; 4],
+        misc: [0.0, 1.0, 0.0, 0.0],
+        pulse: [0; 4],
+    }
+}
+
+fn build_gpui_background_instance(
+    bounds: Rect,
+    corners: aqua_core::CornerRadii,
+    background: aqua_core::GpuiBackground,
+    scale: f32,
+) -> RectInstance {
+    use aqua_core::{GpuiBackground, GpuiGradientColorSpace};
+    let mut inst = build_quad_instance(
+        bounds,
+        corners,
+        Oklch::TRANSPARENT,
+        aqua_core::Insets::uniform(0.0),
+        Oklch::TRANSPARENT,
+        false,
+        scale,
+    );
+    inst.rb_pack[2] = 3.0;
+    let to_array = |c: aqua_core::GpuiHsla| [c.h, c.s, c.l, c.a];
+    match background {
+        GpuiBackground::Solid(color) => {
+            inst.fill = to_array(color);
+            inst.rb_pack[3] = 0.0;
+        }
+        GpuiBackground::LinearGradient {
+            angle,
+            color_space,
+            stops,
+        } => {
+            inst.fill = to_array(stops[0].color);
+            inst.border = to_array(stops[1].color);
+            inst.rb_pack[0] = angle;
+            inst.rb_pack[1] = if color_space == GpuiGradientColorSpace::Oklab {
+                1.0
+            } else {
+                0.0
+            };
+            inst.rb_pack[3] = 1.0;
+            inst.shadow_color = [stops[0].percentage, stops[1].percentage, 0.0, 0.0];
+        }
+    }
+    inst
+}
+
 fn build_shadow_instance(
     bounds: Rect,
     corners: aqua_core::geometry::CornerRadii,
@@ -3195,6 +4747,7 @@ fn build_shadow_instance(
         shadow_color: layer.color.to_gpu(),
         clip: [clip.0.x, clip.0.y, clip.0.w, clip.0.h],
         misc: [clip.1, 1.0, 0.0, 0.0],
+        pulse: [0; 4],
     }
 }
 
@@ -3241,6 +4794,7 @@ fn build_rect_instance(
         shadow_color,
         clip: [clip_rect.x, clip_rect.y, clip_rect.w, clip_rect.h],
         misc: [clip_r, 1.0, 0.0, 0.0],
+        pulse: [0; 4],
     };
     // NOTE: shader centers the shadow at instance-quad center + shadow.xy,
     // so store the offset relative to the quad center (quad covers rect +
@@ -3364,9 +4918,13 @@ fn flush_texts(ops: &mut Vec<Op>, pending: &mut Vec<ShapedRun>) {
 /// for backdrop blur and rounded-clip expansion on external layers.
 fn item_bounds(item: &DisplayItem, scale: f32) -> Option<Rect> {
     match item {
-        DisplayItem::Shadow { .. } => item.bounds().map(|bounds| bounds.inflate(1.0 / scale)),
-        DisplayItem::BackdropBlur { bounds, radius } => {
-            Some(crate::scene::inflate(*bounds, *radius * 2.0))
+        DisplayItem::GpuiSvg { .. } | DisplayItem::GpuiTransformedSvg { .. } => None,
+        DisplayItem::GpuiShadow { .. } | DisplayItem::Shadow { .. } | DisplayItem::Quad { .. } => {
+            item.bounds().map(|bounds| bounds.inflate(1.0 / scale))
+        }
+        DisplayItem::BackdropBlur { bounds, radius }
+        | DisplayItem::BackdropBlurRounded { bounds, radius, .. } => {
+            Some(crate::scene::inflate(*bounds, *radius * 3.0))
         }
         DisplayItem::External {
             bounds,
@@ -3382,6 +4940,7 @@ fn make_compose_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
+    straight: bool,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("aqua-compose"),
@@ -3395,7 +4954,11 @@ fn make_compose_pipeline(
     ];
     let blend_premult = Some(wgpu::BlendState {
         color: wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
+            src_factor: if straight {
+                wgpu::BlendFactor::SrcAlpha
+            } else {
+                wgpu::BlendFactor::One
+            },
             dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
             operation: wgpu::BlendOperation::Add,
         },
@@ -3433,7 +4996,7 @@ fn make_compose_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(if straight { "fs_gpui_image" } else { "fs_main" }),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
                 blend: blend_premult,
@@ -3461,6 +5024,85 @@ fn transform_item(item: &DisplayItem, transform: aqua_core::Transform2D) -> Disp
         DisplayItem::PushTextColorMap(map) => {
             map.start = map.start * transform.a + transform.tx;
             map.end = map.end * transform.a + transform.tx;
+        }
+        DisplayItem::PushGpuiTextColorMap(map) => {
+            map.bounds = bounds(map.bounds);
+        }
+        DisplayItem::PushGpuiTextShimmer(shimmer) => {
+            shimmer.map.bounds = bounds(shimmer.map.bounds);
+        }
+        DisplayItem::GpuiSvg { bounds: r, .. }
+        | DisplayItem::GpuiTransformedSvg { bounds: r, .. }
+        | DisplayItem::PushGpuiContentMask { bounds: r } => *r = bounds(*r),
+        DisplayItem::GpuiPath {
+            transformed_window_logical_bounds: r,
+            path,
+        } => {
+            *r = bounds(*r);
+            std::sync::Arc::make_mut(path).apply_element_transform(transform);
+        }
+        DisplayItem::GpuiMesh {
+            bounds: r, corners, ..
+        } => {
+            *r = bounds(*r);
+            *corners = scale_corners(*corners, transform.a);
+        }
+        DisplayItem::GpuiBorder {
+            bounds: r,
+            corners,
+            widths,
+            ..
+        } => {
+            *r = bounds(*r);
+            *corners = scale_corners(*corners, transform.a);
+            widths.top *= transform.a;
+            widths.right *= transform.a;
+            widths.bottom *= transform.a;
+            widths.left *= transform.a;
+        }
+        DisplayItem::GpuiBackground {
+            bounds: r, corners, ..
+        } => {
+            *r = bounds(*r);
+            *corners = scale_corners(*corners, transform.a);
+        }
+        DisplayItem::Quad {
+            bounds: r,
+            corners,
+            border_widths,
+            ..
+        } => {
+            *r = bounds(*r);
+            *corners = scale_corners(*corners, transform.a);
+            border_widths.left *= transform.a;
+            border_widths.top *= transform.a;
+            border_widths.right *= transform.a;
+            border_widths.bottom *= transform.a;
+        }
+        DisplayItem::BackdropBlurRounded {
+            bounds: r,
+            corners,
+            radius,
+        } => {
+            *r = bounds(*r);
+            *corners = scale_corners(*corners, transform.a);
+            *radius *= transform.a;
+        }
+        DisplayItem::PushRoundedClip { bounds: r, corners } => {
+            *r = bounds(*r);
+            *corners = scale_corners(*corners, transform.a);
+        }
+        DisplayItem::GpuiShadow {
+            bounds: r,
+            corners,
+            layer,
+        } => {
+            *r = bounds(*r);
+            *corners = scale_corners(*corners, transform.a);
+            layer.dx *= transform.a;
+            layer.dy *= transform.d;
+            layer.blur *= transform.a;
+            layer.spread *= transform.a;
         }
         DisplayItem::Shadow {
             bounds: r,
@@ -3545,8 +5187,8 @@ mod tests {
     }
 
     #[test]
-    fn rect_instance_is_128b() {
-        assert_eq!(std::mem::size_of::<RectInstance>(), 128);
+    fn rect_instance_is_144b() {
+        assert_eq!(std::mem::size_of::<RectInstance>(), 144);
     }
 
     #[test]

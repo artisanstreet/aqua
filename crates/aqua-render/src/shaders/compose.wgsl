@@ -10,7 +10,7 @@ struct ComposeUniforms {
 @group(0) @binding(0) var<uniform> u: ComposeUniforms;
 @group(0) @binding(1) var src_tex: texture_2d<f32>;
 @group(0) @binding(2) var src_smp: sampler;
-struct Clip { bounds: vec4<f32>, radius: vec4<f32> }
+struct Clip { bounds: vec4<f32>, radius: vec4<f32>, state: vec4<f32> }
 @group(0) @binding(3) var<storage, read> clips: array<Clip>;
 
 struct VsIn {
@@ -46,8 +46,7 @@ fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
     return length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
-@fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+fn clip_coverage(in: VsOut) -> f32 {
     var clip_cover = 1.0;
     if (in.clip.z >= 0.0) {
         let cc = in.clip.xy + in.clip.zw * 0.5;
@@ -59,10 +58,23 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     for (var index = 0u; index < u32(u.pad.x); index += 1u) {
         let clip = clips[index];
         let center = clip.bounds.xy + clip.bounds.zw * 0.5;
-        let distance = sd_round_box(in.px - center, clip.bounds.zw * 0.5, clip.radius.x);
+        let relative = in.px - center;
+        var radius = clip.radius.z;
+        if (relative.x < 0.0) { radius = select(clip.radius.w, clip.radius.x, relative.y < 0.0); }
+        else { radius = select(clip.radius.z, clip.radius.y, relative.y < 0.0); }
+        let distance = sd_round_box(relative, clip.bounds.zw * 0.5, radius);
         let aa = fwidth(distance) * 1.5 + 1e-4;
-        clip_cover *= 1.0 - smoothstep(-aa, aa, distance);
+        let legacy_coverage = 1.0 - smoothstep(-aa, aa, distance);
+        let exact_coverage = clamp(0.5 - distance, 0.0, 1.0);
+        let coverage = select(legacy_coverage, exact_coverage, clip.state.x > 0.5);
+        clip_cover *= select(coverage, select(0.0, 1.0, distance <= 0.0), clip.state.x > 1.5);
     }
+    return clip_cover;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let clip_cover = clip_coverage(in);
     if (clip_cover <= 0.001) { discard; }
     let c = textureSample(src_tex, src_smp, in.uv);
     var rgb = c.rgb;
@@ -87,4 +99,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(premultiplied, a * coverage);
     }
     return vec4<f32>(rgb * coverage, a * coverage);
+}
+
+@fragment
+fn fs_gpui_image(in: VsOut) -> @location(0) vec4<f32> {
+    let coverage = clip_coverage(in);
+    if (coverage <= 0.001) { discard; }
+    let color = textureSample(src_tex, src_smp, in.uv);
+    return vec4<f32>(color.rgb, color.a * u.opacity * coverage);
 }

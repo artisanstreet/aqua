@@ -37,6 +37,7 @@
 //! group opacity applies once at composite; top-level text alpha is
 //! premultiplied by the item opacity at resolve time.
 
+pub mod gpui;
 mod raster;
 
 use aqua_core::geometry::Rect;
@@ -88,6 +89,14 @@ pub struct ShapedRun {
     /// multiplied by the item opacity for top-level text. Group text keeps
     /// full alpha: the group composite applies opacity once.
     pub color_glyphon: glyphon::Color,
+    pub gpui_color: Option<aqua_core::GpuiHsla>,
+    pub gpui_opacity: f32,
+    pub gpui_subpixel: Option<bool>,
+    pub gpui_text_color_map: Option<aqua_core::scene::GpuiTextColorMap>,
+    pub gpui_text_opacity: Option<std::sync::Arc<[aqua_core::scene::GpuiTextOpacityRange]>>,
+    pub gpui_text_shimmer: Option<aqua_core::scene::GpuiTextShimmer>,
+    pub gpui_source_color: Option<aqua_core::GpuiTextColor>,
+    pub gpui_window_scale: f32,
     /// Painter-order clip in physical px. `None` = unclipped.
     pub clip_physical: Option<[f32; 4]>,
 }
@@ -125,6 +134,22 @@ pub struct TextStats {
 }
 
 pub trait TextProvider: Send + Sync {
+    fn set_gpui_polychrome_atlas(&mut self, _atlas: crate::gpui_atlas::SharedGpuiAtlas) {}
+    fn set_color_profile(
+        &mut self,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _format: wgpu::TextureFormat,
+        profile: aqua_core::ColorProfile,
+    ) -> Result<(), String> {
+        match profile {
+            aqua_core::ColorProfile::AquaLinear => Ok(()),
+            aqua_core::ColorProfile::GpuiWindowsEncoded => {
+                Err("GPUI float glyph renderer is unavailable".into())
+            }
+        }
+    }
+
     fn begin_frame(&mut self) {}
     fn set_raster_mode(
         &mut self,
@@ -187,6 +212,8 @@ pub struct GlyphonProvider {
     renderer_cursor: usize,
     pending: Vec<ShapedRun>,
     last_stats: TextStats,
+    gpui: Option<gpui::Provider>,
+    gpui_polychrome_atlas: crate::gpui_atlas::SharedGpuiAtlas,
 }
 
 impl GlyphonProvider {
@@ -216,6 +243,10 @@ impl GlyphonProvider {
             renderer_cursor: 0,
             pending: Vec::new(),
             last_stats: TextStats::default(),
+            gpui: None,
+            gpui_polychrome_atlas: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::gpui_atlas::GpuiPolychromeAtlas::default(),
+            )),
         }
     }
 
@@ -244,6 +275,38 @@ impl GlyphonProvider {
 }
 
 impl TextProvider for GlyphonProvider {
+    fn set_gpui_polychrome_atlas(&mut self, atlas: crate::gpui_atlas::SharedGpuiAtlas) {
+        self.gpui_polychrome_atlas = atlas.clone();
+        if let Some(provider) = self.gpui.as_mut() {
+            provider.set_polychrome_atlas(atlas);
+        }
+    }
+    fn set_color_profile(
+        &mut self,
+        device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        profile: aqua_core::ColorProfile,
+    ) -> Result<(), String> {
+        match profile {
+            aqua_core::ColorProfile::AquaLinear => {
+                self.gpui = None;
+                Ok(())
+            }
+            aqua_core::ColorProfile::GpuiWindowsEncoded => {
+                let mut provider = gpui::Provider::new(
+                    device,
+                    format,
+                    self.backend.clone(),
+                    self.gpui_polychrome_atlas.clone(),
+                )?;
+                provider.set_mode(device, self.raster_cache.mode)?;
+                self.gpui = Some(provider);
+                Ok(())
+            }
+        }
+    }
+
     fn begin_frame(&mut self) {
         self.renderer_cursor = 0;
     }
@@ -254,6 +317,9 @@ impl TextProvider for GlyphonProvider {
         format: wgpu::TextureFormat,
         mode: aqua_core::scene::TextRasterMode,
     ) -> Result<(), String> {
+        if let Some(provider) = self.gpui.as_mut() {
+            provider.set_mode(device, mode)?;
+        }
         if self.raster_cache.mode != mode {
             self.raster_cache.mode = mode;
             self.raster_cache.clear();
@@ -268,6 +334,20 @@ impl TextProvider for GlyphonProvider {
 
     fn encode_queued(&mut self, frame: TextFrame<'_>) -> TextStats {
         let runs = std::mem::take(&mut self.pending);
+        if let Some(provider) = self.gpui.as_mut() {
+            let stats = match provider.encode(frame, &runs) {
+                Ok(stats) => stats,
+                Err(error) => {
+                    eprintln!("aqua-render: GPUI text failed: {error}");
+                    TextStats {
+                        raster_failures: 1,
+                        ..TextStats::default()
+                    }
+                }
+            };
+            self.last_stats = stats;
+            return stats;
+        }
         let mut stats = TextStats::default();
         if runs.is_empty() {
             self.last_stats = stats;
@@ -314,6 +394,11 @@ impl TextProvider for GlyphonProvider {
                     continue;
                 }
             };
+            if run.gpui_color.is_some() || handle.layout.has_gpui_colors() {
+                stats.raster_failures += 1;
+                self.last_stats = stats;
+                return stats;
+            }
             let Some(buffer) = handle.layout.buffer() else {
                 stats.stale_skipped += 1;
                 continue;
@@ -508,7 +593,48 @@ pub fn resolve_scene_text(
         revision: run.revision,
         at_physical: [at_logical[0] * scale, at_logical[1] * scale],
         color_glyphon: glyphon::Color::rgba(r, g, b, a),
+        gpui_color: None,
+        gpui_opacity: 1.0,
+        gpui_subpixel: None,
+        gpui_text_color_map: None,
+        gpui_text_opacity: None,
+        gpui_text_shimmer: None,
+        gpui_source_color: None,
+        gpui_window_scale: scale,
         clip_physical: clip_logical.map(|c| [c.x * scale, c.y * scale, c.w * scale, c.h * scale]),
+    }
+}
+
+pub fn resolve_gpui_scene_text(
+    run: &crate::scene::TextRun,
+    at_logical: [f32; 2],
+    color: aqua_core::GpuiHsla,
+    opacity: f32,
+    clip_logical: Option<Rect>,
+    scale: f32,
+) -> ShapedRun {
+    ShapedRun {
+        scale: 1.0,
+        id: run.id,
+        revision: run.revision,
+        at_physical: [at_logical[0] * scale, at_logical[1] * scale],
+        color_glyphon: glyphon::Color::rgba(0, 0, 0, 0),
+        gpui_color: Some(color),
+        gpui_opacity: opacity,
+        gpui_subpixel: None,
+        gpui_text_color_map: None,
+        gpui_text_opacity: None,
+        gpui_text_shimmer: None,
+        gpui_source_color: None,
+        gpui_window_scale: scale,
+        clip_physical: clip_logical.map(|clip| {
+            [
+                clip.x * scale,
+                clip.y * scale,
+                clip.w * scale,
+                clip.h * scale,
+            ]
+        }),
     }
 }
 
@@ -532,6 +658,14 @@ mod tests {
             revision,
             at_physical: [0.0, 0.0],
             color_glyphon: glyphon::Color::rgba(255, 255, 255, 255),
+            gpui_color: None,
+            gpui_opacity: 1.0,
+            gpui_subpixel: None,
+            gpui_text_color_map: None,
+            gpui_text_opacity: None,
+            gpui_text_shimmer: None,
+            gpui_source_color: None,
+            gpui_window_scale: 1.0,
             clip_physical: None,
         }
     }

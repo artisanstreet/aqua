@@ -1,0 +1,17 @@
+[package]
+name = "bench-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "=1.0.104"
+artisan-api = { path = "/home/sander/projects/artisanstreet/editor/crates/artisan-api", features = ["tls"] }
+forge-http = { path = "/home/sander/projects/artisanstreet/editor/crates/forge-http" }
+forge-store = { path = "/home/sander/projects/artisanstreet/editor/crates/forge-store" }
+serde = { version = "=1.0.229", default-features = false, features = ["derive", "std", "rc"] }
+serde_json = { version = "=1.0.151", features = ["preserve_order"] }
+tokio = { version = "=1.53.1", default-features = false, features = ["rt-multi-thread", "macros", "time", "signal", "fs"] }
+webp = { version = "=0.3.1", default-features = false }
+
+[workspace]

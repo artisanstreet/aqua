@@ -125,6 +125,8 @@ pub enum WindowRequest {
     SetOuterPosition(AquaWindowId, crate::geometry::PhysicalPosition),
     Center(AquaWindowId),
     BeginSnapshotTransition(AquaWindowId, aqua_core::scene::SnapshotTransition),
+    BeginGpuiSnapshotTransition(AquaWindowId, aqua_core::scene::GpuiSnapshotTransition),
+    BeginGpuiSourceSnapshotTransition(AquaWindowId, aqua_core::scene::GpuiSourceSnapshotTransition),
     SetTextRasterMode(AquaWindowId, aqua_core::scene::TextRasterMode),
 }
 
@@ -142,6 +144,7 @@ pub struct ObservedWindowState {
     pub focused: bool,
     pub visible: bool,
     pub occluded: bool,
+    pub maximized: bool,
 }
 
 impl ObservedWindowState {
@@ -154,6 +157,7 @@ impl ObservedWindowState {
             focused: false,
             visible: true,
             occluded: false,
+            maximized: false,
         }
     }
 }

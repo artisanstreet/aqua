@@ -24,7 +24,7 @@ use crate::window::{Titlebar, WindowOptions};
 /// use this one path on every target.
 #[cfg(windows)]
 pub use crate::chrome_winit::WindowsChrome;
-pub use aqua_protocol::DragRegions;
+pub use aqua_protocol::{CaptionControl, CaptionRegion, DragRegions};
 
 /// Chrome failures. All are honest runtime results, never panics.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +97,7 @@ pub struct DragRects {
     pub draggable: Vec<RectI>,
     /// `HTCLIENT` holes inside caption regions (buttons, text fields).
     pub no_drag: Vec<RectI>,
+    pub caption_controls: Vec<(CaptionControl, RectI)>,
 }
 
 /// Input to the pure hit tester. All coordinates physical pixels.
@@ -112,10 +113,6 @@ pub struct HitInput<'a> {
     pub client_origin: (i32, i32),
     /// Resize border thickness in px (DPI-aware frame metrics; 0 disables).
     pub border: u32,
-    /// DWM caption-button strip in screen space
-    /// (`DWMWA_CAPTION_BUTTON_BOUNDS`), if the OS reports one. Reserved:
-    /// points inside resolve to `HTCLIENT`, never to guessed button cells
-    /// (only `DwmDefWindowProc` may authoritatively return 8/9/20).
     pub buttons: Option<RectI>,
     /// Drag-band height in px (converted `titlebar_height`).
     pub drag_band: u32,
@@ -123,6 +120,7 @@ pub struct HitInput<'a> {
     /// `IsZoomed` state: no resize frame, keeps caption behavior.
     pub maximized: bool,
     pub resizable: bool,
+    pub minimizable: bool,
 }
 
 /// `HT*` codes returned by [`hit_test_chrome`] (same values as Win32).
@@ -145,25 +143,6 @@ pub mod ht {
 
 /// Pure CPU hit test shared by the live subclass proc and regression tests.
 ///
-/// Order (matches the MS `HitTestNCA` grid, extended for the overlay):
-/// 1. Resize borders/corners first (skipped when maximized or unresizable).
-/// 2. Reported DWM button strip -> `HTCLIENT` (reserved, non-draggable).
-///    Only `DwmDefWindowProc` authoritatively returns 8/9/20; when it
-///    declines, the strip must NOT be subdivided into guessed cells
-///    (disabled buttons, DPI/theme widths, and RTL make equal thirds
-///    unreliable) and must NOT become `HTCAPTION` either — dragging from a
-///    disabled button cell would be wrong. Reserved CLIENT keeps input
-///    with the app without dispatching guesses.
-/// 3. Drag band + explicit `draggable` rects -> `HTCAPTION`, except
-///    `no_drag` holes -> `HTCLIENT`.
-/// 4. Everything else -> `HTCLIENT` (never `HTNOWHERE`: swallowing input
-///    breaks the app; unknown regions stay client).
-///
-/// Native behavior (hover, snap layouts, double-click maximize, dragging)
-/// comes from `HT*` codes processed by `DefWindowProc`/`DwmDefWindowProc` —
-/// the live proc calls DWM first, and this fallback only covers
-/// DWM-declined regions. Async AT clicks likewise arrive as action
-/// requests, never mouse input.
 pub fn hit_test_chrome(input: &HitInput<'_>) -> i32 {
     let (x, y) = input.point;
     let w = input.window;
@@ -209,13 +188,22 @@ pub fn hit_test_chrome(input: &HitInput<'_>) -> i32 {
         // Top edge: the overlay's drag band owns the top strip
         // (drag/double-click/snap). Pure-top resize applies only when the
         // drag band is 0.
-        if top && input.drag_band == 0 {
+        if top && (input.drag_band == 0 || !input.drag.caption_controls.is_empty()) {
             return ht::TOP;
         }
     }
 
-    // (2) Reported DWM strip is reserved CLIENT. Never subdivided, never
-    // caption: only DWM authoritatively returns 8/9/20.
+    for (control, rect) in &input.drag.caption_controls {
+        if rect.contains(cx, cy) {
+            return match control {
+                CaptionControl::Minimize if input.minimizable => ht::MINBUTTON,
+                CaptionControl::Maximize if input.resizable => ht::MAXBUTTON,
+                CaptionControl::Close => ht::CLOSE,
+                CaptionControl::Minimize | CaptionControl::Maximize => ht::CAPTION,
+            };
+        }
+    }
+
     if let Some(strip) = input.buttons {
         if strip.contains(x, y) {
             return ht::CLIENT;
@@ -340,6 +328,7 @@ mod tests {
             drag,
             maximized: false,
             resizable: true,
+            minimizable: true,
         }
     }
 
@@ -409,6 +398,7 @@ mod tests {
                 right: 100,
                 bottom: 40,
             }],
+            caption_controls: vec![],
         };
         // Drag band (below the 8px top resize sliver).
         assert_eq!(
@@ -478,6 +468,7 @@ mod tests {
                 bottom: 440,
             }],
             no_drag: vec![],
+            caption_controls: vec![],
         };
         // Screen (150, 520) = client-local (50, 420).
         assert_eq!(
@@ -499,6 +490,7 @@ mod tests {
                 right: 100,
                 bottom: 40,
             }],
+            caption_controls: vec![],
         };
         let mut i = input((150, 120), &drag, None);
         i.maximized = true;

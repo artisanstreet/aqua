@@ -254,6 +254,16 @@ pub fn set_ime_cursor_area<W: ImeAreaWindow>(window: &W, area: ImeCursorArea) ->
     true
 }
 
+pub fn gpui_ime_position(area: ImeCursorArea, scale: f64) -> Option<(i32, i32)> {
+    if !area.is_valid() || !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    Some((
+        (area.origin.x * scale) as i32,
+        (area.origin.y * scale) as i32 + (area.size.height * scale) as i32 / 2,
+    ))
+}
+
 #[derive(Debug, Default)]
 pub struct InProcessDnD {
     offered: HashMap<String, Vec<u8>>,

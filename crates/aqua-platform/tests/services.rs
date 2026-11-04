@@ -93,6 +93,19 @@ fn ime_area_rejects_non_finite_values_without_forwarding() {
 }
 
 #[test]
+fn gpui_ime_position_uses_scaled_selection_origin_and_half_height() {
+    let area = ImeCursorArea {
+        origin: LogicalPosition { x: 12.75, y: 7.75 },
+        size: LogicalSize::new(45.0, 11.0),
+    };
+    assert_eq!(
+        aqua_platform::services::gpui_ime_position(area, 1.5),
+        Some((19, 19))
+    );
+    assert_eq!(aqua_platform::services::gpui_ime_position(area, 0.0), None);
+}
+
+#[test]
 fn in_process_payload_replacement_is_per_format() {
     let mut dnd = InProcessDnD::default();
     dnd.offer("text/plain", b"first".to_vec());

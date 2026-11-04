@@ -24,5 +24,6 @@ bitflags::bitflags! {
         const RESIZE     = 0b0000_0010_0000;
         const MATERIAL   = 0b0000_0100_0000;
         const EXPLICIT   = 0b0000_1000_0000;
+        const GPUI_PULSE = 0b0001_0000_0000;
     }
 }

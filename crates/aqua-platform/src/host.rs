@@ -69,6 +69,21 @@ pub fn window_attributes(options: &WindowOptions) -> winit::window::WindowAttrib
     attrs
 }
 
+#[cfg(windows)]
+pub fn native_file_drag_attributes(
+    attrs: winit::window::WindowAttributes,
+) -> winit::window::WindowAttributes {
+    use winit::platform::windows::WindowAttributesExtWindows;
+    attrs.with_drag_and_drop(false)
+}
+
+#[cfg(not(windows))]
+pub fn native_file_drag_attributes(
+    attrs: winit::window::WindowAttributes,
+) -> winit::window::WindowAttributes {
+    attrs
+}
+
 pub fn to_winit_cursor(icon: CursorIcon) -> winit::window::CursorIcon {
     use winit::window::CursorIcon as W;
     match icon {
@@ -155,6 +170,54 @@ impl ImeAreaWindow for winit::window::Window {
             LS::new(size.0.max(1.0), size.1.max(1.0)),
         );
     }
+}
+
+#[cfg(windows)]
+pub fn set_gpui_ime_position(
+    window: &winit::window::Window,
+    area: crate::services::ImeCursorArea,
+) -> bool {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::{HWND, POINT};
+    use windows::Win32::UI::Input::Ime::{
+        ImmGetContext, ImmReleaseContext, ImmSetCandidateWindow, ImmSetCompositionWindow,
+        CANDIDATEFORM, CFS_CANDIDATEPOS, CFS_POINT, COMPOSITIONFORM,
+    };
+    let Some((x, y)) = crate::services::gpui_ime_position(area, window.scale_factor()) else {
+        return false;
+    };
+    let Some(RawWindowHandle::Win32(handle)) =
+        window.window_handle().ok().map(|handle| handle.as_raw())
+    else {
+        return false;
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut _);
+    unsafe {
+        let context = ImmGetContext(hwnd);
+        if context.0.is_null() {
+            return false;
+        }
+        let point = POINT { x, y };
+        let composition = COMPOSITIONFORM {
+            dwStyle: CFS_POINT,
+            ptCurrentPos: point,
+            ..Default::default()
+        };
+        let candidate = CANDIDATEFORM {
+            dwStyle: CFS_CANDIDATEPOS,
+            ptCurrentPos: point,
+            ..Default::default()
+        };
+        let composition_ok = ImmSetCompositionWindow(context, &composition).as_bool();
+        let candidate_ok = ImmSetCandidateWindow(context, &candidate).as_bool();
+        let _ = ImmReleaseContext(hwnd, context);
+        composition_ok && candidate_ok
+    }
+}
+
+#[cfg(not(windows))]
+pub fn set_gpui_ime_position(_: &winit::window::Window, _: crate::services::ImeCursorArea) -> bool {
+    false
 }
 
 /// Translate one `winit` window event into a framework [`WindowEvent`].

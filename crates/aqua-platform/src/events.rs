@@ -460,6 +460,21 @@ pub enum FileDrop {
     Dropped(std::path::PathBuf),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExternalFileDrag {
+    Enter {
+        paths: Vec<std::path::PathBuf>,
+        position: aqua_core::Point,
+    },
+    Move {
+        position: aqua_core::Point,
+    },
+    Submit {
+        position: aqua_core::Point,
+    },
+    Exit,
+}
+
 /// Map the file-drag `winit` variants; `None` for everything else.
 pub fn translate_file_event(event: &winit::event::WindowEvent) -> Option<FileDrop> {
     use winit::event::WindowEvent as W;

@@ -12,9 +12,6 @@
 //! DWM" (`windows/win32/dwm/customframe`), adapted to a chained proc:
 //! - `WM_NCCALCSIZE` (`wParam == TRUE`) -> full client, return 0. Initial
 //!   frame applied with `SetWindowPos(..., SWP_FRAMECHANGED)` at install.
-//! - **Every** message goes to `DwmDefWindowProc` FIRST; only when it
-//!   returns FALSE does the overlay handle it (native buttons incl.
-//!   hover/snap, `WM_NCMOUSELEAVE` stay alive).
 //! - Unhandled messages chain to the PREVIOUS proc via `CallWindowProcW`
 //!   (normally winit's) — never `DefWindowProcW` directly, except as a
 //!   last-resort fallback when no previous proc is known.
@@ -67,18 +64,23 @@ use windows::Win32::Graphics::Dwm::{
     DWMWA_CAPTION_BUTTON_BOUNDS,
 };
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    ClientToScreen, GetMonitorInfoW, MonitorFromWindow, ScreenToClient, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, DefWindowProcW, GetPropW, GetSystemMenu, GetSystemMetrics, GetWindowLongPtrW,
-    GetWindowRect, GetWindowThreadProcessId, IsZoomed, RemovePropW, SetPropW, SetWindowLongPtrW,
-    SetWindowPos, TrackPopupMenu, GWLP_WNDPROC, MINMAXINFO, NCCALCSIZE_PARAMS, SM_CXFRAME,
-    SM_CXPADDEDBORDER, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SYSTEM_METRICS_INDEX, TPM_LEFTBUTTON, TPM_RIGHTBUTTON, TRACK_POPUP_MENU_FLAGS, WM_ACTIVATE,
-    WM_DPICHANGED, WM_GETMINMAXINFO, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST, WNDPROC,
+    CallWindowProcW, DefWindowProcW, GetCursorPos, GetPropW, GetSystemMenu, GetSystemMetrics,
+    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsZoomed, PostMessageW,
+    RemovePropW, SetPropW, SetWindowLongPtrW, SetWindowPos, TrackPopupMenu, GWLP_WNDPROC,
+    MINMAXINFO, NCCALCSIZE_PARAMS, SM_CXFRAME, SM_CXPADDEDBORDER, SWP_FRAMECHANGED, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SYSTEM_METRICS_INDEX, TPM_LEFTBUTTON, TPM_RIGHTBUTTON,
+    TRACK_POPUP_MENU_FLAGS, WM_ACTIVATE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOUSEMOVE,
+    WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WNDPROC,
 };
 
 use crate::chrome::{
@@ -127,6 +129,7 @@ struct ChromeShared {
     drag_band_px: Cell<u32>,
     drag: RefCell<DragRects>,
     resizable: bool,
+    minimizable: bool,
     min_size: Option<(f64, f64)>,
     max_size: Option<(f64, f64)>,
     extend_top_px: Cell<i32>,
@@ -248,6 +251,7 @@ impl WindowsChrome {
             drag_band_px: Cell::new(drag_band_px),
             drag: RefCell::new(DragRects::default()),
             resizable: opts.resizable,
+            minimizable: opts.minimizable,
             min_size: opts.min_size.map(|size| (size.width, size.height)),
             max_size: opts.max_size.map(|size| (size.width, size.height)),
             extend_top_px: Cell::new(drag_band_px as i32),
@@ -328,6 +332,17 @@ impl WindowsChrome {
         no_drag: &[(f64, f64, f64, f64)],
         scale: f64,
     ) -> Result<(), ChromeError> {
+        self.set_drag_regions(
+            &DragRegions {
+                draggable: draggable.to_vec(),
+                no_drag: no_drag.to_vec(),
+                caption_controls: Vec::new(),
+            },
+            scale,
+        )
+    }
+
+    pub fn set_drag_regions(&self, regions: &DragRegions, scale: f64) -> Result<(), ChromeError> {
         let st = self.live()?;
         let s = if scale.is_finite() && scale > 0.0 {
             scale
@@ -340,19 +355,16 @@ impl WindowsChrome {
             right: (r.2 * s).round() as i32,
             bottom: (r.3 * s).round() as i32,
         };
-        // Short borrow, released before return: no OS calls under it.
         *st.drag.borrow_mut() = DragRects {
-            draggable: draggable.iter().map(conv).collect(),
-            no_drag: no_drag.iter().map(conv).collect(),
+            draggable: regions.draggable.iter().map(conv).collect(),
+            no_drag: regions.no_drag.iter().map(conv).collect(),
+            caption_controls: regions
+                .caption_controls
+                .iter()
+                .map(|region| (region.control, conv(&region.bounds)))
+                .collect(),
         };
         Ok(())
-    }
-
-    /// Canonical [`DragRegions`] (logical px) entry point for the runtime
-    /// hook: converts with `scale` and applies via [`Self::set_drag_rects`].
-    /// Same signature on the stub guard.
-    pub fn set_drag_regions(&self, regions: &DragRegions, scale: f64) -> Result<(), ChromeError> {
-        self.set_drag_rects(&regions.draggable, &regions.no_drag, scale)
     }
 
     /// Show the native window system menu at a screen point. Selection
@@ -705,8 +717,6 @@ unsafe extern "system" fn chrome_wndproc(
 /// snapshotted out of `Cell`s and drag rects cloned out of a short borrow
 /// before the first syscall below.
 fn chrome_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    // (0) DWM FIRST for every message (MS recipe). Handled DWM hits
-    // (caption buttons incl. hover/snap, NCMOUSELEAVE) return here untouched.
     let mut dwm_result = LRESULT(0);
     let dwm_handled =
         unsafe { DwmDefWindowProc(hwnd, msg, wparam, lparam, &mut dwm_result).as_bool() };
@@ -737,7 +747,57 @@ fn chrome_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESU
         return chain(msg, wparam, lparam);
     };
 
-    if dwm_handled {
+    if !st.detached.get()
+        && matches!(msg, WM_NCMOUSEMOVE | WM_NCMOUSELEAVE)
+        && !st.drag.borrow().caption_controls.is_empty()
+    {
+        let mut point = if msg == WM_NCMOUSEMOVE {
+            POINT {
+                x: ((lparam.0 as u32) & 0xFFFF) as u16 as i16 as i32,
+                y: (((lparam.0 as u32) >> 16) & 0xFFFF) as u16 as i16 as i32,
+            }
+        } else {
+            let mut point = POINT { x: 0, y: 0 };
+            if unsafe { GetCursorPos(&mut point) }.is_err() {
+                return if dwm_handled {
+                    dwm_result
+                } else {
+                    chain(msg, wparam, lparam)
+                };
+            }
+            point
+        };
+        unsafe {
+            let _ = ScreenToClient(hwnd, &mut point);
+            let packed = (point.x as u16 as u32) | ((point.y as u16 as u32) << 16);
+            let _ = PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), LPARAM(packed as isize));
+            if msg == WM_NCMOUSEMOVE {
+                let _ = TrackMouseEvent(&mut TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE | TME_NONCLIENT,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                });
+            }
+        }
+    }
+
+    let authored_caption = if msg == WM_NCHITTEST && !st.detached.get() {
+        let x = ((lparam.0 as u32) & 0xFFFF) as u16 as i16 as i32;
+        let y = (((lparam.0 as u32) >> 16) & 0xFFFF) as u16 as i16 as i32;
+        let mut origin = POINT { x: 0, y: 0 };
+        unsafe {
+            let _ = ClientToScreen(hwnd, &mut origin);
+        }
+        st.drag
+            .borrow()
+            .caption_controls
+            .iter()
+            .any(|(_, rect)| rect.contains(x - origin.x, y - origin.y))
+    } else {
+        false
+    };
+    if dwm_handled && !authored_caption {
         if msg == WM_NCHITTEST {
             let n = st.stats.dwm_handled.get();
             st.stats.dwm_handled.set(n + 1);
@@ -849,6 +909,7 @@ fn chrome_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESU
                     drag: &drag,
                     maximized: maximized_now,
                     resizable: resizable_now,
+                    minimizable: st.minimizable,
                 })
             };
             let n = st.stats.nc_hit_test.get();

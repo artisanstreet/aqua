@@ -133,3 +133,61 @@ fn inactive_snapshots_are_staged_once_and_activation_requests_refreshes() {
     deactivation.deactivate_accessibility();
     assert!(!bridge.needs_snapshot());
 }
+
+#[test]
+fn accessible_description_stays_distinct_from_label_in_projection() {
+    let node = owner(11);
+    let mut semantic = SemanticNode::new(node, Role::Button);
+    semantic.label = "Search".into();
+    semantic.description = Some("Find extensions".into());
+    let update = aqua_platform::a11y::build_tree_update(
+        node,
+        node,
+        &[A11yNode {
+            semantic,
+            bounds: None,
+            children: vec![],
+            text: None,
+        }],
+    );
+    let projected = &update.nodes[0].1;
+    assert_eq!(projected.label(), Some("Search"));
+    assert_eq!(projected.description(), Some("Find extensions"));
+}
+
+#[test]
+fn tree_items_project_level_and_expansion_to_accessibility() {
+    use aqua_core::{Role, SemanticNode};
+    use aqua_platform::a11y::A11yNode;
+
+    let root = owner(80);
+    let child = owner(81);
+    let mut tree = SemanticNode::new(root, Role::Tree);
+    tree.label = "Changed files".into();
+    let mut item = SemanticNode::new(child, Role::TreeItem);
+    item.label = "src".into();
+    item.level = Some(2);
+    item.expanded = Some(true);
+    let update = aqua_platform::a11y::build_tree_update(
+        root,
+        child,
+        &[
+            A11yNode {
+                semantic: tree,
+                bounds: None,
+                children: vec![child],
+                text: None,
+            },
+            A11yNode {
+                semantic: item,
+                bounds: None,
+                children: vec![],
+                text: None,
+            },
+        ],
+    );
+    assert_eq!(update.nodes[0].1.role(), accesskit::Role::Tree);
+    assert_eq!(update.nodes[1].1.role(), accesskit::Role::TreeItem);
+    assert_eq!(update.nodes[1].1.level(), Some(2));
+    assert_eq!(update.nodes[1].1.is_expanded(), Some(true));
+}

@@ -59,15 +59,22 @@ pub fn map_role(role: &CoreRole) -> AkRole {
         CoreRole::Group => AkRole::Group,
         CoreRole::Button => AkRole::Button,
         CoreRole::Checkbox => AkRole::CheckBox,
+        CoreRole::Switch => AkRole::Switch,
+        CoreRole::RadioButton => AkRole::RadioButton,
         CoreRole::TextField => AkRole::TextInput,
         CoreRole::Heading(_) => AkRole::Heading,
         CoreRole::List => AkRole::List,
+        CoreRole::ListBox => AkRole::ListBox,
+        CoreRole::RadioGroup => AkRole::RadioGroup,
         CoreRole::ListItem => AkRole::ListItem,
+        CoreRole::Tree => AkRole::Tree,
+        CoreRole::TreeItem => AkRole::TreeItem,
         CoreRole::Table => AkRole::Table,
         CoreRole::Row => AkRole::Row,
         CoreRole::ColumnHeader => AkRole::ColumnHeader,
         CoreRole::Cell => AkRole::Cell,
         CoreRole::Slider => AkRole::Slider,
+        CoreRole::ProgressIndicator => AkRole::ProgressIndicator,
         CoreRole::TabList => AkRole::TabList,
         CoreRole::Tab => AkRole::Tab,
         CoreRole::Image => AkRole::Image,
@@ -105,9 +112,12 @@ pub(crate) fn build_base_tree_update(
             match item.semantic.role {
                 CoreRole::Button
                 | CoreRole::Checkbox
+                | CoreRole::Switch
+                | CoreRole::RadioButton
                 | CoreRole::Tab
                 | CoreRole::MenuItem
-                | CoreRole::Option => {
+                | CoreRole::Option
+                | CoreRole::TreeItem => {
                     node.add_action(Action::Click);
                     node.add_action(Action::Focus);
                 }
@@ -134,11 +144,21 @@ pub(crate) fn build_base_tree_update(
         if !item.semantic.label.is_empty() {
             node.set_label(item.semantic.label.clone());
         }
+        if let Some(description) = &item.semantic.description {
+            node.set_description(description.clone());
+        }
         if item.semantic.disabled {
             node.set_disabled();
         }
-        if item.semantic.selected {
+        if let Some(checked) = item.semantic.checked {
+            node.set_toggled(checked.into());
+        } else if matches!(item.semantic.role, CoreRole::Switch | CoreRole::RadioButton) {
+            node.set_toggled(item.semantic.selected.into());
+        } else if item.semantic.selected {
             node.set_selected(true);
+        }
+        if let Some(level) = item.semantic.level {
+            node.set_level(level);
         }
         if let Some(expanded) = item.semantic.expanded {
             node.set_expanded(expanded);

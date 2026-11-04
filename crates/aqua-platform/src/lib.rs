@@ -11,8 +11,15 @@ pub mod chrome;
 pub mod chrome_winit;
 pub mod dialogs;
 pub mod events;
+#[cfg(windows)]
+pub mod file_drag_windows;
 pub mod geometry;
 pub mod host;
+pub mod ime;
+#[cfg(windows)]
+pub mod ime_windows;
+#[cfg(windows)]
+pub mod local_time;
 pub mod material;
 pub mod monitor;
 pub mod notifications;

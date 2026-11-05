@@ -156,10 +156,16 @@ unsafe impl Sync for Shared<'_> {}
 struct Built {
     state: ID3D12PipelineState,
     used: bool,
+    first_frame: bool,
+    _token: crate::ledger::Token,
 }
 
 fn label(kind: Kind, format: i32) -> String {
     format!("{kind:?}/{format}")
+}
+
+fn first_frame_label(kind: Kind, format: i32) -> String {
+    format!("+{kind:?}/{format}")
 }
 
 pub struct Pipelines {
@@ -167,6 +173,7 @@ pub struct Pipelines {
     library: Option<ID3D12PipelineLibrary>,
     stats: PipelineStats,
     warmed: bool,
+    startup_open: bool,
     late: Vec<(Kind, i32)>,
     binding: Binding,
     pub root_signature: ID3D12RootSignature,
@@ -315,6 +322,7 @@ impl Pipelines {
             library: open_library(device, library),
             stats: PipelineStats::default(),
             warmed: false,
+            startup_open: true,
             late: Vec::new(),
             binding,
             root_signature: match binding {
@@ -348,6 +356,7 @@ impl Pipelines {
     pub fn get(&mut self, kind: Kind, format: DXGI_FORMAT) -> Result<ID3D12PipelineState, Error> {
         if let Some(found) = self.built.get_mut(&(kind, format.0)) {
             found.used = true;
+            found.first_frame |= self.startup_open;
             return Ok(found.state.clone());
         }
         let (state, loaded) = self.compile(kind, format)?;
@@ -364,6 +373,8 @@ impl Pipelines {
             Built {
                 state: state.clone(),
                 used: true,
+                first_frame: self.startup_open,
+                _token: crate::ledger::record("pipeline_state", crate::ledger::Kind::Pipeline, 0),
             },
         );
         Ok(state)
@@ -438,12 +449,27 @@ impl Pipelines {
     }
 
     pub fn warm(&mut self, formats: &[DXGI_FORMAT]) -> Result<(), Error> {
+        self.warm_selected(formats, false)
+    }
+
+    pub fn warm_first_frame(&mut self, formats: &[DXGI_FORMAT]) -> Result<(), Error> {
+        self.warm_selected(formats, true)
+    }
+
+    fn warm_selected(
+        &mut self,
+        formats: &[DXGI_FORMAT],
+        first_frame_only: bool,
+    ) -> Result<(), Error> {
         let mut unique = std::collections::HashSet::new();
         let wanted: Vec<(Kind, DXGI_FORMAT)> = formats
             .iter()
             .flat_map(|format| Kind::ALL.into_iter().map(move |kind| (kind, *format)))
             .filter(|(kind, format)| !self.built.contains_key(&(*kind, format.0)))
-            .filter(|(kind, format)| self.wanted_at_startup(*kind, *format))
+            .filter(|(kind, format)| match first_frame_only {
+                true => self.wanted_at_startup(*kind, *format),
+                false => self.hinted(*kind, *format),
+            })
             .filter(|(kind, format)| unique.insert((*kind, format.0)))
             .collect();
         let configured = std::env::var("AQUA_WARM_LANES")
@@ -462,7 +488,9 @@ impl Pipelines {
                 let Some((kind, format)) = wanted.get(index) else {
                     break Handoff(done);
                 };
+                let stages = crate::stages::StageClock::from_env();
                 done.push((index, shared.pipelines().compile(*kind, *format)));
+                stages.mark(&format!("      pso {kind:?}-{}", format.0));
             }
         };
         let results: Vec<Handoff<Compiled>> = std::thread::scope(|scope| {
@@ -483,30 +511,94 @@ impl Pipelines {
                 true => self.stats.loaded += 1,
                 false => self.stats.compiled += 1,
             }
-            self.built
-                .insert((kind, format.0), Built { state, used: false });
+            self.built.insert(
+                (kind, format.0),
+                Built {
+                    state,
+                    used: false,
+                    first_frame: false,
+                    _token: crate::ledger::record(
+                        "pipeline_state",
+                        crate::ledger::Kind::Pipeline,
+                        0,
+                    ),
+                },
+            );
         }
         self.warmed = true;
         Ok(())
     }
 
     fn wanted_at_startup(&self, kind: Kind, format: DXGI_FORMAT) -> bool {
-        self.hint
-            .as_ref()
-            .is_none_or(|hint| kind == Kind::Quad || hint.contains(&label(kind, format.0)))
+        self.hint.as_ref().is_none_or(|hint| {
+            kind == Kind::Quad || hint.contains(&first_frame_label(kind, format.0))
+        })
+    }
+
+    fn hinted(&self, kind: Kind, format: DXGI_FORMAT) -> bool {
+        self.hint.as_ref().is_none_or(|hint| {
+            hint.contains(&label(kind, format.0))
+                || hint.contains(&first_frame_label(kind, format.0))
+        })
+    }
+
+    pub fn close_startup(&mut self) {
+        self.startup_open = false;
+    }
+
+    pub fn deferred(&self, formats: &[DXGI_FORMAT]) -> Vec<(Kind, DXGI_FORMAT)> {
+        formats
+            .iter()
+            .flat_map(|format| Kind::ALL.into_iter().map(move |kind| (kind, *format)))
+            .filter(|(kind, format)| !self.built.contains_key(&(*kind, format.0)))
+            .filter(|(kind, format)| self.hinted(*kind, *format))
+            .collect()
+    }
+
+    pub fn warm_one(&mut self, kind: Kind, format: DXGI_FORMAT) -> Result<(), Error> {
+        if self.built.contains_key(&(kind, format.0)) {
+            return Ok(());
+        }
+        let (state, loaded) = self.compile(kind, format)?;
+        match loaded {
+            true => self.stats.loaded += 1,
+            false => self.stats.compiled += 1,
+        }
+        self.built.insert(
+            (kind, format.0),
+            Built {
+                state,
+                used: false,
+                first_frame: false,
+                _token: crate::ledger::record("pipeline_state", crate::ledger::Kind::Pipeline, 0),
+            },
+        );
+        Ok(())
     }
 
     fn used_labels(&self) -> std::collections::BTreeSet<String> {
+        let mut merged: std::collections::BTreeMap<String, bool> =
+            std::collections::BTreeMap::new();
+        let mut note = |name: String, first: bool| {
+            *merged.entry(name).or_insert(false) |= first;
+        };
         self.hint
             .iter()
             .flatten()
-            .cloned()
-            .chain(
-                self.built
-                    .iter()
-                    .filter(|(_, built)| built.used)
-                    .map(|((kind, format), _)| label(*kind, *format)),
-            )
+            .for_each(|name| match name.strip_prefix('+') {
+                Some(bare) => note(bare.to_owned(), true),
+                None => note(name.clone(), false),
+            });
+        self.built
+            .iter()
+            .filter(|(_, built)| built.used)
+            .for_each(|((kind, format), built)| note(label(*kind, *format), built.first_frame));
+        merged
+            .into_iter()
+            .map(|(name, first)| match first {
+                true => format!("+{name}"),
+                false => name,
+            })
             .collect()
     }
 

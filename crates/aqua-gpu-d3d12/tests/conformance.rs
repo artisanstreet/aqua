@@ -3,8 +3,8 @@
 mod support;
 
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
-use aqua_gpu_ref::conformance::{run_suite, SuiteConfig, Tolerance};
 use aqua_gpu_ref::RefBackend;
+use aqua_gpu_ref::conformance::{SuiteConfig, Tolerance, run_suite};
 
 fn run(preference: AdapterPreference, format: SurfaceFormat, tolerance: Tolerance) {
     let mut backend = match OffscreenBackend::with_format(preference, format) {
@@ -40,13 +40,6 @@ const EIGHT_BIT: Tolerance = Tolerance {
     edge: 64,
     edge_band: 2,
 };
-const SRGB_ENCODED: Tolerance = Tolerance {
-    interior: 12,
-    soft: 24,
-    edge: 96,
-    edge_band: 2,
-};
-
 #[test]
 fn warp_float_surface_matches_reference() {
     let _software = support::software();
@@ -84,25 +77,5 @@ fn hardware_unorm_surface_matches_reference() {
         AdapterPreference::HighPerformance,
         SurfaceFormat::Bgra8Unorm,
         EIGHT_BIT,
-    );
-}
-
-#[test]
-fn warp_srgb_surface_matches_reference() {
-    let _software = support::software();
-    run(
-        AdapterPreference::Warp,
-        SurfaceFormat::Bgra8UnormSrgb,
-        SRGB_ENCODED,
-    );
-}
-
-#[test]
-fn hardware_srgb_surface_matches_reference() {
-    let _software = support::software();
-    run(
-        AdapterPreference::HighPerformance,
-        SurfaceFormat::Bgra8UnormSrgb,
-        SRGB_ENCODED,
     );
 }

@@ -1,6 +1,6 @@
-use windows::core::w;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::w;
 
 pub struct TestWindow {
     pub hwnd: HWND,
@@ -29,7 +29,7 @@ impl TestWindow {
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             let _ = SetWindowPos(
                 hwnd,
-                Some(HWND_BOTTOM),
+                Some(HWND_TOPMOST),
                 0,
                 0,
                 0,

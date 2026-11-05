@@ -11,6 +11,7 @@ use crate::plan::{
     TransientTexture,
 };
 use crate::slug::SlugInstance;
+use crate::tone::ToneCurve;
 use crate::validate::{PlanError, validate};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,7 +45,6 @@ pub struct RenderGraph {
     passes: Vec<Pass>,
     extents: Vec<Option<Rect>>,
     merged: usize,
-    glyph_scratch: Vec<GlyphInstance>,
     slug_scratch: Vec<SlugInstance>,
 }
 
@@ -65,7 +65,6 @@ impl RenderGraph {
             passes: Vec::new(),
             extents: Vec::new(),
             merged: 0,
-            glyph_scratch: Vec::new(),
             slug_scratch: Vec::new(),
         }
     }
@@ -136,17 +135,14 @@ impl RenderGraph {
         &mut self,
         target: TextureRef,
         atlas: TextureHandle,
-        glyphs: impl Iterator<Item = GlyphInstance>,
+        glyphs: impl Iterator<Item = GlyphInstance> + Clone,
     ) {
-        let mut scratch = std::mem::take(&mut self.glyph_scratch);
-        scratch.clear();
-        scratch.extend(glyphs);
-        let extent = fold_extent(scratch.iter().map(|g| clip_to(g.bounds, g.clip))).flatten();
+        let extent = fold_extent(glyphs.clone().map(|g| clip_to(g.bounds, g.clip))).flatten();
         let found = self.find_batch(target, Tag::Glyphs(atlas), extent);
         match found {
             Some(index) => {
                 if let PassKind::Glyphs { instances, .. } = &mut self.passes[index].kind {
-                    instances.extend_from_slice(&scratch);
+                    instances.extend(glyphs);
                 }
                 self.merged += 1;
                 self.extents[index] = grown(self.extents[index], extent);
@@ -154,14 +150,13 @@ impl RenderGraph {
             None => self.start_batch(
                 PassKind::Glyphs {
                     atlas,
-                    instances: scratch.clone(),
+                    instances: glyphs.collect(),
                 },
                 vec![TextureRef::Persistent(atlas)],
                 target,
                 extent,
             ),
         }
-        self.glyph_scratch = scratch;
     }
 
     pub fn draw_slug(
@@ -272,6 +267,7 @@ impl RenderGraph {
             passes,
             heap_bytes,
             final_barriers,
+            text_tone: ToneCurve::default(),
         };
         validate(&plan)?;
         Ok((plan, stats))
@@ -687,12 +683,17 @@ fn derive_barriers(
     let overlaps = |a: &TransientTexture, b: &TransientTexture| {
         a.heap_offset < b.heap_offset + b.bytes() && b.heap_offset < a.heap_offset + a.bytes()
     };
+    let mut starting: Vec<Vec<&TransientTexture>> = vec![Vec::new(); passes.len()];
+    for texture in textures {
+        if let Some(life) = lives.get(&texture.id) {
+            if let Some(slot) = starting.get_mut(life.first) {
+                slot.push(texture);
+            }
+        }
+    }
     for (index, pass) in passes.iter_mut().enumerate() {
         let mut barriers = Vec::new();
-        for texture in textures {
-            if lives.get(&texture.id).map(|l| l.first) != Some(index) {
-                continue;
-            }
+        for texture in starting[index].iter().copied() {
             let predecessor = textures
                 .iter()
                 .filter(|other| other.id != texture.id && overlaps(texture, other))

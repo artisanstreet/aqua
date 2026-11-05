@@ -21,15 +21,17 @@ use crate::hal::budget::{Trim, Visibility};
 use crate::hal::{
     self, BudgetStatus, Core, DeviceOptions, PresentMode, PresentStatus, RENDER_FORMAT, Swapchain,
 };
-use crate::half::bgra8_srgb_rows_to_linear_rgba8;
+use crate::half::bgra8_rows_to_rgba8;
 use crate::scene::util::{footprint_location, texture_location};
 use crate::scene::{
-    PassTime, PersistentStats, PersistentTextures, PipelineStats, SceneRenderer, SceneTarget,
+    PassTime, PersistentStats, PersistentTextures, PipelineKind as Kind, PipelineStats,
+    SceneRenderer, SceneTarget,
 };
 
 const FRAME_WAIT_MS: u32 = 1000;
 const AMD_VENDOR: u32 = 0x1002;
 const AMD_TRACKER_FRAMES: u32 = 160;
+const AMD_TRACKER_CHUNK: u32 = 16;
 const AMD_TRACKER_EXTENT: Extent = Extent {
     width: 64,
     height: 64,
@@ -153,8 +155,22 @@ struct Gpu {
     textures: PersistentTextures,
 }
 
+enum StartupStep {
+    Pipeline(Kind, DXGI_FORMAT),
+    TrackerOpen,
+    TrackerFrames(u32),
+    TrackerClose,
+}
+
+struct Tracker {
+    plan: FramePlan,
+    surface: SurfaceId,
+}
+
 pub struct WindowBackend {
     startup_deferred: bool,
+    startup: std::collections::VecDeque<StartupStep>,
+    tracker: Option<Tracker>,
     options: WindowOptions,
     capabilities: GpuCapabilities,
     surfaces: HashMap<SurfaceId, WindowSurface>,
@@ -180,7 +196,7 @@ fn build_gpu(
     let mut renderer = SceneRenderer::with_pipeline_cache(core.device(), slots, cache)?;
     stages.mark("  renderer_new");
     match deferred_layers {
-        true => renderer.warm(&[RENDER_FORMAT])?,
+        true => renderer.warm_first_frame(&[RENDER_FORMAT])?,
         false => renderer.warm(&[DXGI_FORMAT_R16G16B16A16_FLOAT, RENDER_FORMAT])?,
     }
     stages.mark("  warm");
@@ -360,13 +376,93 @@ impl WindowBackend {
         if !std::mem::take(&mut self.startup_deferred) {
             return;
         }
-        let stages = crate::stages::StageClock::from_env();
-        if let Some(gpu) = self.gpu.as_mut() {
-            let _ = gpu.renderer.warm(&[DXGI_FORMAT_R16G16B16A16_FLOAT]);
-            stages.mark("warm_layers_deferred");
+        let amd = self.core.as_ref().is_some_and(runs_amd_frame_tracker);
+        let Some(gpu) = self.gpu.as_mut() else {
+            return;
+        };
+        gpu.renderer.close_startup();
+        let pipelines = gpu
+            .renderer
+            .deferred_pipelines(&[RENDER_FORMAT, DXGI_FORMAT_R16G16B16A16_FLOAT]);
+        self.startup.extend(
+            pipelines
+                .into_iter()
+                .map(|(kind, format)| StartupStep::Pipeline(kind, format)),
+        );
+        if amd {
+            self.startup.push_back(StartupStep::TrackerOpen);
+            let chunks = AMD_TRACKER_FRAMES.div_ceil(AMD_TRACKER_CHUNK);
+            (0..chunks).for_each(|index| {
+                let frames = AMD_TRACKER_CHUNK.min(AMD_TRACKER_FRAMES - index * AMD_TRACKER_CHUNK);
+                self.startup.push_back(StartupStep::TrackerFrames(frames));
+            });
+            self.startup.push_back(StartupStep::TrackerClose);
         }
-        self.settle_amd_frame_tracker();
-        stages.mark("amd_settle_deferred");
+    }
+
+    pub fn startup_pending(&self) -> bool {
+        !self.startup.is_empty()
+    }
+
+    pub fn startup_step(&mut self) {
+        let stages = crate::stages::StageClock::from_env();
+        let Some(step) = self.startup.pop_front() else {
+            return;
+        };
+        let label = match &step {
+            StartupStep::Pipeline(kind, format) => format!("startup_pso {kind:?}-{}", format.0),
+            StartupStep::TrackerOpen => "startup_tracker_open".to_owned(),
+            StartupStep::TrackerFrames(frames) => format!("startup_tracker_frames {frames}"),
+            StartupStep::TrackerClose => "startup_tracker_close".to_owned(),
+        };
+        let (stats, phases) = (self.stats, self.phases);
+        let outcome = match step {
+            StartupStep::Pipeline(kind, format) => match self.gpu.as_mut() {
+                Some(gpu) => gpu.renderer.warm_one(kind, format).map_err(GpuError::from),
+                None => Ok(()),
+            },
+            StartupStep::TrackerOpen => self.open_tracker(),
+            StartupStep::TrackerFrames(frames) => self.present_tracker(frames),
+            StartupStep::TrackerClose => self.close_tracker(),
+        };
+        self.stats = stats;
+        self.phases = phases;
+        if outcome.is_err() {
+            self.startup
+                .retain(|step| matches!(step, StartupStep::Pipeline(..)));
+            let _ = self.close_tracker();
+        }
+        stages.mark(&label);
+    }
+
+    fn open_tracker(&mut self) -> Result<(), GpuError> {
+        let plan = tracker_plan()?;
+        let window = WindowId::new(1).ok_or(GpuError::Unsupported("window id"))?;
+        let surface = self.create_composition_surface(window, AMD_TRACKER_EXTENT)?;
+        self.tracker = Some(Tracker { plan, surface });
+        Ok(())
+    }
+
+    fn present_tracker(&mut self, frames: u32) -> Result<(), GpuError> {
+        let Some((plan, surface)) = self
+            .tracker
+            .as_ref()
+            .map(|tracker| (tracker.plan.clone(), tracker.surface))
+        else {
+            return Ok(());
+        };
+        (0..frames).try_for_each(|_| {
+            self.wait_for_frame_slot(surface)?;
+            self.execute(&plan, &FrameInputs::new(surface))?;
+            self.present(surface, PresentHint::Immediate).map(|_| ())
+        })
+    }
+
+    fn close_tracker(&mut self) -> Result<(), GpuError> {
+        match self.tracker.take() {
+            Some(tracker) => self.destroy_surface(tracker.surface),
+            None => Ok(()),
+        }
     }
 
     fn settle_amd_frame_tracker(&mut self) {
@@ -396,6 +492,8 @@ impl WindowBackend {
     fn assemble(options: WindowOptions, core: Core, gpu: Gpu) -> Self {
         Self {
             startup_deferred: false,
+            startup: std::collections::VecDeque::new(),
+            tracker: None,
             options,
             capabilities: describe(&core),
             surfaces: HashMap::new(),
@@ -440,6 +538,10 @@ impl WindowBackend {
 
     pub fn phases(&self) -> PhaseTimes {
         self.phases
+    }
+
+    pub fn ledger(&self) -> crate::ledger::Snapshot {
+        crate::ledger::snapshot()
     }
 
     pub fn memory_breakdown(&self) -> Result<MemoryBreakdown, GpuError> {
@@ -848,9 +950,12 @@ impl WindowBackend {
 
     fn recover_inner(&mut self) -> Result<RecoveryReport, GpuError> {
         let cache = self.pipeline_cache();
+        let tracker = self.tracker.take().map(|tracker| tracker.surface);
+        self.startup.clear();
         let layout: Vec<(SurfaceId, aqua_protocol::WindowId, SurfaceKind, Extent)> = self
             .surfaces
             .iter()
+            .filter(|(id, _)| Some(**id) != tracker)
             .map(|(id, entry)| {
                 let (width, height) = entry.swapchain.extent();
                 (*id, entry.window, entry.kind, Extent { width, height })
@@ -1118,7 +1223,7 @@ impl WindowBackend {
         core.wait_for(fence)?;
         let pointer = crate::scene::util::map_whole(&readback).map_err(GpuError::from)?;
         let bytes = unsafe { std::slice::from_raw_parts(pointer as *const u8, total as usize) };
-        let rgba8 = bgra8_srgb_rows_to_linear_rgba8(
+        let rgba8 = bgra8_rows_to_rgba8(
             bytes,
             footprint.Footprint.RowPitch as usize,
             width as usize,

@@ -1,8 +1,8 @@
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
+use aqua_core::geometry::Rect;
 use aqua_graph::{
-    plan_paint, validate, Extent, Linear2, PaintCommand, PassKind, PlanError, Quad, Shadow,
-    SlugInstance, SlugRun, TextureHandle, TextureRef,
+    Extent, Linear2, PaintCommand, PassKind, PlanError, Quad, Shadow, ShadowCast, SlugInstance,
+    SlugRun, TextureHandle, TextureRef, plan_paint, validate,
 };
 
 const STORE: TextureHandle = TextureHandle(9);
@@ -31,7 +31,6 @@ fn glyph(origin: [f32; 2]) -> SlugInstance {
         color: Oklch::WHITE,
         clip: None,
         opacity: 1.0,
-        backdrop: Some(0.5),
     }
 }
 
@@ -44,6 +43,7 @@ fn only_quads_and_images_take_a_linear_transform() {
         sigma: 2.0,
         spread: 0.0,
         color: Oklch::BLACK,
+        cast: ShadowCast::Whole,
     });
     let commands = [PaintCommand::Linear {
         linear: Linear2::rotation(0.3),

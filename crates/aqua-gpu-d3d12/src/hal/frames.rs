@@ -6,6 +6,7 @@ use super::error::Error;
 use super::ring::{RingError, RingLayout};
 use super::timeline::Timeline;
 use super::util::*;
+use crate::ledger::{Kind, Token, record};
 
 pub const INITIAL_UPLOAD_BYTES: u64 = 1 << 16;
 
@@ -19,13 +20,14 @@ pub struct UploadAlloc {
 struct Mapped {
     resource: ID3D12Resource,
     ptr: *mut u8,
+    _token: Token,
 }
 
 pub struct UploadRing {
     device: ID3D12Device,
     current: Mapped,
     layout: RingLayout,
-    graveyard: Vec<(u64, ID3D12Resource)>,
+    graveyard: Vec<(u64, Mapped)>,
 }
 
 fn create_mapped(device: &ID3D12Device, capacity: u64) -> Result<Mapped, Error> {
@@ -36,7 +38,12 @@ fn create_mapped(device: &ID3D12Device, capacity: u64) -> Result<Mapped, Error> 
         D3D12_RESOURCE_STATE_GENERIC_READ,
     )?;
     let ptr = map_whole(&resource)?;
-    Ok(Mapped { resource, ptr })
+    let _token = record("frame_upload_ring", Kind::UploadBuffer, capacity);
+    Ok(Mapped {
+        resource,
+        ptr,
+        _token,
+    })
 }
 
 fn reserve(
@@ -104,7 +111,7 @@ impl UploadRing {
     fn replace(&mut self, retire_at: u64, capacity: u64) -> Result<(), Error> {
         let fresh = create_mapped(&self.device, capacity)?;
         let old = std::mem::replace(&mut self.current, fresh);
-        self.graveyard.push((retire_at, old.resource));
+        self.graveyard.push((retire_at, old));
         self.layout = RingLayout::new(capacity);
         Ok(())
     }
@@ -134,6 +141,7 @@ impl UploadRing {
 struct Slot {
     allocator: ID3D12CommandAllocator,
     fence: u64,
+    _token: Token,
 }
 
 pub struct FrameRing {
@@ -157,6 +165,7 @@ impl FrameRing {
                         device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)?
                     },
                     fence: 0,
+                    _token: record("command_allocator", Kind::CommandAllocator, 0),
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;

@@ -1,16 +1,16 @@
 use std::sync::OnceLock;
 
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
-use aqua_graph::slug::{pack_glyph, PathCommand, SlugGlyph, STORE_WIDTH};
+use aqua_core::geometry::Rect;
+use aqua_graph::slug::{PathCommand, STORE_WIDTH, SlugGlyph, pack_glyph};
 use aqua_graph::{
-    Extent, Glyph, GlyphRun, Linear2, PaintCommand, SlugInstance, SlugRun, TextureFormat,
-    TextureHandle,
+    Extent, FramePlan, Glyph, GlyphRun, Linear2, PaintCommand, SlugInstance, SlugRun,
+    TextureFormat, TextureHandle, ToneCurve,
 };
 use aqua_protocol::{TextureOp, TextureRegion, TextureUpload, UploadBatch};
 
-use super::assets::{standard_uploads, ATLAS};
-use super::cases::{build, hex, quad, rect, Case, STANDARD};
+use super::assets::{ATLAS, standard_uploads};
+use super::cases::{Case, STANDARD, build, hex, quad, rect};
 
 pub const SLUG_STORE: TextureHandle = TextureHandle(3);
 
@@ -154,7 +154,6 @@ pub fn slug_glyph(
     pixels_per_em: f32,
     placement: Linear2,
     color: Oklch,
-    backdrop: Option<f32>,
 ) -> SlugInstance {
     SlugInstance {
         origin,
@@ -164,7 +163,6 @@ pub fn slug_glyph(
         color,
         clip: None,
         opacity: 1.0,
-        backdrop,
     }
 }
 
@@ -175,16 +173,15 @@ fn slug_run(glyphs: Vec<SlugInstance>) -> PaintCommand {
     })
 }
 
-fn atlas_run(glyphs: &[(Rect, Rect, &str, f32, Option<f32>)]) -> PaintCommand {
+fn atlas_run(glyphs: &[(Rect, Rect, &str, f32)]) -> PaintCommand {
     PaintCommand::Glyphs(GlyphRun {
         atlas: ATLAS,
         glyphs: glyphs
             .iter()
-            .map(|(bounds, texels, color, alpha, backdrop)| Glyph {
+            .map(|(bounds, texels, color, alpha)| Glyph {
                 bounds: *bounds,
                 texels: *texels,
                 color: hex(color, *alpha),
-                backdrop: *backdrop,
             })
             .collect(),
     })
@@ -205,6 +202,105 @@ fn mid() -> PaintCommand {
     quad(0.0, 0.0, 96.0, 72.0, "#7f7f7f", 1.0, 0.0, 0.0)
 }
 
+fn slug_midtone(name: &str) -> Case {
+    let assets = slug_assets();
+    slug_case(
+        name,
+        Oklch::TRANSPARENT,
+        vec![
+            mid(),
+            slug_run(vec![
+                slug_glyph(
+                    assets.ring,
+                    [6.0, 34.0],
+                    30.0,
+                    Linear2::IDENTITY,
+                    hex("#000000", 1.0),
+                ),
+                slug_glyph(
+                    assets.ring,
+                    [50.0, 34.0],
+                    30.0,
+                    Linear2::IDENTITY,
+                    hex("#000000", 0.6),
+                ),
+                slug_glyph(
+                    assets.wedge,
+                    [6.0, 68.0],
+                    30.0,
+                    Linear2::IDENTITY,
+                    hex("#ffffff", 1.0),
+                ),
+                slug_glyph(
+                    assets.wedge,
+                    [50.0, 68.0],
+                    30.0,
+                    Linear2::IDENTITY,
+                    hex("#ffffff", 0.6),
+                ),
+            ]),
+        ],
+    )
+}
+
+fn atlas_midtone(name: &str) -> Case {
+    slug_case(
+        name,
+        Oklch::TRANSPARENT,
+        vec![
+            mid(),
+            atlas_run(&[
+                (
+                    rect(4.0, 4.0, 16.0, 16.0),
+                    rect(0.0, 0.0, 16.0, 16.0),
+                    "#000000",
+                    1.0,
+                ),
+                (
+                    rect(24.0, 4.0, 16.0, 16.0),
+                    rect(0.0, 0.0, 16.0, 16.0),
+                    "#000000",
+                    0.6,
+                ),
+                (
+                    rect(44.0, 4.0, 16.0, 16.0),
+                    rect(32.0, 0.0, 16.0, 16.0),
+                    "#ffffff",
+                    1.0,
+                ),
+                (
+                    rect(64.0, 4.0, 16.0, 16.0),
+                    rect(32.0, 0.0, 16.0, 16.0),
+                    "#ffffff",
+                    0.6,
+                ),
+                (
+                    rect(4.0, 30.0, 16.0, 16.0),
+                    rect(16.0, 0.0, 16.0, 16.0),
+                    "#dd0030",
+                    0.8,
+                ),
+                (
+                    rect(24.0, 30.0, 16.0, 16.0),
+                    rect(16.0, 0.0, 16.0, 16.0),
+                    "#dd0030",
+                    0.4,
+                ),
+            ]),
+        ],
+    )
+}
+
+fn exact_tone(case: Case) -> Case {
+    Case {
+        plan: FramePlan {
+            text_tone: ToneCurve::EXACT,
+            ..case.plan
+        },
+        ..case
+    }
+}
+
 pub fn cases() -> Vec<Case> {
     let assets = slug_assets();
     let white = hex("#ffffff", 1.0);
@@ -215,21 +311,13 @@ pub fn cases() -> Vec<Case> {
             vec![
                 dark(),
                 slug_run(vec![
-                    slug_glyph(
-                        assets.ring,
-                        [4.0, 22.0],
-                        18.0,
-                        Linear2::IDENTITY,
-                        white,
-                        None,
-                    ),
+                    slug_glyph(assets.ring, [4.0, 22.0], 18.0, Linear2::IDENTITY, white),
                     slug_glyph(
                         assets.wedge,
                         [30.0, 40.0],
                         36.0,
                         Linear2::IDENTITY,
                         hex("#ece030", 1.0),
-                        None,
                     ),
                     slug_glyph(
                         assets.blob,
@@ -237,16 +325,8 @@ pub fn cases() -> Vec<Case> {
                         22.0,
                         Linear2::IDENTITY,
                         hex("#20c090", 0.7),
-                        None,
                     ),
-                    slug_glyph(
-                        assets.ring,
-                        [60.0, 62.0],
-                        30.0,
-                        Linear2::IDENTITY,
-                        white,
-                        None,
-                    ),
+                    slug_glyph(assets.ring, [60.0, 62.0], 30.0, Linear2::IDENTITY, white),
                 ]),
             ],
         ),
@@ -262,7 +342,6 @@ pub fn cases() -> Vec<Case> {
                         40.0,
                         Linear2::rotation(0.5),
                         white,
-                        None,
                     ),
                     slug_glyph(
                         assets.blob,
@@ -270,7 +349,6 @@ pub fn cases() -> Vec<Case> {
                         28.0,
                         Linear2::skew(-0.35, 0.0),
                         hex("#dd7030", 1.0),
-                        None,
                     ),
                     slug_glyph(
                         assets.ring,
@@ -278,7 +356,6 @@ pub fn cases() -> Vec<Case> {
                         24.0,
                         Linear2::rotation(-0.9).then(Linear2::skew(0.0, 0.2)),
                         hex("#4060e0", 1.0),
-                        None,
                     ),
                 ]),
             ],
@@ -291,118 +368,22 @@ pub fn cases() -> Vec<Case> {
                 PaintCommand::PushClip(rect(10.0, 14.0, 60.0, 40.0)),
                 PaintCommand::PushOpacity(0.6),
                 slug_run(vec![
-                    slug_glyph(
-                        assets.ring,
-                        [6.0, 50.0],
-                        44.0,
-                        Linear2::IDENTITY,
-                        white,
-                        None,
-                    ),
+                    slug_glyph(assets.ring, [6.0, 50.0], 44.0, Linear2::IDENTITY, white),
                     slug_glyph(
                         assets.wedge,
                         [44.0, 60.0],
                         44.0,
                         Linear2::rotation(0.2),
                         hex("#ece030", 1.0),
-                        None,
                     ),
                 ]),
                 PaintCommand::PopOpacity,
                 PaintCommand::PopClip,
             ],
         ),
-        slug_case(
-            "slug_known_midtone_backdrop",
-            Oklch::TRANSPARENT,
-            vec![
-                mid(),
-                slug_run(vec![
-                    slug_glyph(
-                        assets.ring,
-                        [6.0, 34.0],
-                        30.0,
-                        Linear2::IDENTITY,
-                        hex("#000000", 1.0),
-                        Some(0.5),
-                    ),
-                    slug_glyph(
-                        assets.ring,
-                        [50.0, 34.0],
-                        30.0,
-                        Linear2::IDENTITY,
-                        hex("#000000", 1.0),
-                        None,
-                    ),
-                    slug_glyph(
-                        assets.wedge,
-                        [6.0, 68.0],
-                        30.0,
-                        Linear2::IDENTITY,
-                        hex("#ffffff", 1.0),
-                        Some(0.5),
-                    ),
-                    slug_glyph(
-                        assets.wedge,
-                        [50.0, 68.0],
-                        30.0,
-                        Linear2::IDENTITY,
-                        hex("#ffffff", 1.0),
-                        None,
-                    ),
-                ]),
-            ],
-        ),
-        slug_case(
-            "glyph_atlas_known_backdrop",
-            Oklch::TRANSPARENT,
-            vec![
-                mid(),
-                atlas_run(&[
-                    (
-                        rect(4.0, 4.0, 16.0, 16.0),
-                        rect(0.0, 0.0, 16.0, 16.0),
-                        "#000000",
-                        1.0,
-                        Some(0.5),
-                    ),
-                    (
-                        rect(24.0, 4.0, 16.0, 16.0),
-                        rect(0.0, 0.0, 16.0, 16.0),
-                        "#000000",
-                        1.0,
-                        None,
-                    ),
-                    (
-                        rect(44.0, 4.0, 16.0, 16.0),
-                        rect(32.0, 0.0, 16.0, 16.0),
-                        "#ffffff",
-                        1.0,
-                        Some(0.5),
-                    ),
-                    (
-                        rect(64.0, 4.0, 16.0, 16.0),
-                        rect(32.0, 0.0, 16.0, 16.0),
-                        "#ffffff",
-                        1.0,
-                        None,
-                    ),
-                    (
-                        rect(4.0, 30.0, 16.0, 16.0),
-                        rect(16.0, 0.0, 16.0, 16.0),
-                        "#dd0030",
-                        0.8,
-                        Some(0.5),
-                    ),
-                    (
-                        rect(24.0, 30.0, 16.0, 16.0),
-                        rect(16.0, 0.0, 16.0, 16.0),
-                        "#dd0030",
-                        0.8,
-                        Some(0.1),
-                    ),
-                ]),
-            ],
-        ),
+        slug_midtone("slug_on_midtone"),
+        exact_tone(slug_midtone("slug_exact_tone_on_midtone")),
+        atlas_midtone("glyph_atlas_on_midtone"),
+        exact_tone(atlas_midtone("glyph_atlas_exact_tone_on_midtone")),
     ]
 }

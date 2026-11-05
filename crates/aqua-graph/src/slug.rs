@@ -1,5 +1,5 @@
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
+use aqua_core::geometry::Rect;
 
 use crate::linear::Linear2;
 
@@ -23,7 +23,6 @@ pub struct SlugInstance {
     pub color: Oklch,
     pub clip: Option<Rect>,
     pub opacity: f32,
-    pub backdrop: Option<f32>,
 }
 
 impl SlugInstance {

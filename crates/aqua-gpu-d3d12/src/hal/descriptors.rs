@@ -3,6 +3,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::error::Error;
 use super::ring::{RingError, RingLayout, SlotAllocator};
 use super::timeline::Timeline;
+use crate::ledger::{Kind, Token, record};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Descriptor {
@@ -22,6 +23,7 @@ pub struct CpuHeap {
     stride: usize,
     start: usize,
     slots: SlotAllocator,
+    _token: Token,
 }
 
 impl CpuHeap {
@@ -45,6 +47,11 @@ impl CpuHeap {
             stride,
             start,
             slots: SlotAllocator::new(capacity),
+            _token: record(
+                "cpu_descriptor_heap",
+                Kind::DescriptorHeap,
+                capacity as u64 * stride as u64,
+            ),
         })
     }
 
@@ -75,6 +82,7 @@ pub struct ShaderVisibleHeap {
     static_count: u32,
     statics: SlotAllocator,
     dynamic: RingLayout,
+    _token: Token,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -110,6 +118,11 @@ impl ShaderVisibleHeap {
             static_count,
             statics: SlotAllocator::new(static_count),
             dynamic: RingLayout::new(dynamic_count as u64),
+            _token: record(
+                "shader_visible_heap",
+                Kind::DescriptorHeap,
+                (static_count + dynamic_count) as u64 * stride as u64,
+            ),
         })
     }
 

@@ -4,6 +4,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::Error;
 use super::util::{create_buffer, map_whole};
+use crate::ledger::{Kind, Token, record};
 use crate::policy::ticks_to_duration;
 
 const STAMPS_PER_SLOT: u32 = 64;
@@ -24,6 +25,7 @@ pub struct Timestamps {
     labels: Vec<Vec<&'static str>>,
     latest: Option<Duration>,
     latest_passes: Vec<PassTime>,
+    _tokens: [Token; 2],
 }
 
 #[derive(Clone, Copy)]
@@ -74,7 +76,12 @@ impl Timestamps {
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
         let mapped = map_whole(&readback)? as *const u64;
+        let readback_bytes = count as u64 * STAMP_BYTES;
         Ok(Some(Self {
+            _tokens: [
+                record("timestamp_query_heap", Kind::QueryHeap, readback_bytes),
+                record("timestamp_readback", Kind::ReadbackBuffer, readback_bytes),
+            ],
             heap,
             readback,
             mapped,

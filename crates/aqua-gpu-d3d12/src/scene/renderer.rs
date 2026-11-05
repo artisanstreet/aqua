@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use aqua_graph::tone::ToneCurve;
 use aqua_graph::{
     Barrier, Blend, Extent, FramePlan, LoadOp, PassKind, ResourceState, ShaderId, TextureHandle,
     TextureRef, TransientId,
@@ -21,6 +20,7 @@ use super::tiers::{Active, SceneOptions, resolve};
 use super::timestamps::{PassTime, Timestamps};
 use super::transients::Transients;
 use super::util::*;
+use crate::ledger::{self, Token};
 use crate::pack::{QUAD_STRIDE, SHADOW_STRIDE, pack_quad, pack_shadow};
 use crate::sprite::{glyph_packer, pack_image, pack_slug};
 
@@ -66,6 +66,7 @@ struct Slot {
     capacity: u64,
     srv_heap: ID3D12DescriptorHeap,
     srv_capacity: u32,
+    _tokens: [Token; 2],
 }
 
 fn pass_label(kind: &PassKind) -> &'static str {
@@ -83,11 +84,31 @@ fn pass_label(kind: &PassKind) -> &'static str {
     }
 }
 
+fn ensure_custom<'a>(
+    slot: &'a mut Option<CustomPipelines>,
+    device: &ID3D12Device,
+) -> Result<&'a mut CustomPipelines, Error> {
+    if slot.is_none() {
+        *slot = Some(CustomPipelines::create(device)?);
+    }
+    slot.as_mut().ok_or(Error::Unsupported("custom pipelines"))
+}
+
+fn ensure_compute<'a>(
+    slot: &'a mut Option<ComputePipelines>,
+    device: &ID3D12Device,
+) -> Result<&'a mut ComputePipelines, Error> {
+    if slot.is_none() {
+        *slot = Some(ComputePipelines::create(device)?);
+    }
+    slot.as_mut().ok_or(Error::Unsupported("compute pipelines"))
+}
+
 pub struct SceneRenderer {
     device: ID3D12Device,
     pipelines: Pipelines,
-    custom: CustomPipelines,
-    compute: ComputePipelines,
+    custom: Option<CustomPipelines>,
+    compute: Option<ComputePipelines>,
     emitter: Emitter,
     scratch: Scratch,
     slots: Vec<Slot>,
@@ -131,7 +152,18 @@ fn create_slot(device: &ID3D12Device, capacity: u64, descriptors: u32) -> Result
         D3D12_RESOURCE_STATE_GENERIC_READ,
     )?;
     let mapped = map_whole(&upload)?;
+    let srv_stride =
+        unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) }
+            as u64;
     Ok(Slot {
+        _tokens: [
+            ledger::record("scene_upload", ledger::Kind::UploadBuffer, capacity),
+            ledger::record(
+                "scene_srv_heap",
+                ledger::Kind::DescriptorHeap,
+                descriptors as u64 * srv_stride,
+            ),
+        ],
         upload,
         mapped,
         capacity,
@@ -300,17 +332,13 @@ impl SceneRenderer {
             .map(|_| create_slot(device, INITIAL_UPLOAD_BYTES, INITIAL_DESCRIPTORS))
             .collect::<Result<Vec<_>, _>>()?;
         stages.mark("      timestamps_slots");
-        let custom = CustomPipelines::create(device)?;
-        stages.mark("      custom_pipelines");
-        let compute = ComputePipelines::create(device)?;
-        stages.mark("      compute_pipelines");
         Ok(Self {
             device: device.clone(),
             pipelines,
             emitter: Emitter::new(active.sync),
             scratch: Scratch::default(),
-            custom,
-            compute,
+            custom: None,
+            compute: None,
             slots,
             rtv_heap: create_rtv_heap(device, INITIAL_DESCRIPTORS)?,
             rtv_capacity: INITIAL_DESCRIPTORS,
@@ -383,11 +411,27 @@ impl SceneRenderer {
         hlsl: &str,
         entry: &str,
     ) -> Result<(), Error> {
-        self.compute.register(id, hlsl, entry)
+        ensure_compute(&mut self.compute, &self.device)?.register(id, hlsl, entry)
     }
 
     pub fn warm(&mut self, formats: &[DXGI_FORMAT]) -> Result<(), Error> {
         self.pipelines.warm(formats)
+    }
+
+    pub fn warm_first_frame(&mut self, formats: &[DXGI_FORMAT]) -> Result<(), Error> {
+        self.pipelines.warm_first_frame(formats)
+    }
+
+    pub fn close_startup(&mut self) {
+        self.pipelines.close_startup();
+    }
+
+    pub fn deferred_pipelines(&self, formats: &[DXGI_FORMAT]) -> Vec<(Kind, DXGI_FORMAT)> {
+        self.pipelines.deferred(formats)
+    }
+
+    pub fn warm_one(&mut self, kind: Kind, format: DXGI_FORMAT) -> Result<(), Error> {
+        self.pipelines.warm_one(kind, format)
     }
 
     pub fn late_pipelines(&self) -> &[(Kind, i32)] {
@@ -504,8 +548,9 @@ impl SceneRenderer {
                 },
             )
         };
-        let table = |index: u32| D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: srv_gpu.ptr + index as u64 * self.srv_stride as u64,
+        let srv_stride = self.srv_stride;
+        let table = move |index: u32| D3D12_GPU_DESCRIPTOR_HANDLE {
+            ptr: srv_gpu.ptr + index as u64 * srv_stride as u64,
         };
 
         tracked.clear();
@@ -835,10 +880,11 @@ impl SceneRenderer {
                             },
                         )
                     };
-                    let state = self.compute.get(*id)?;
+                    let compute = ensure_compute(&mut self.compute, &self.device)?;
+                    let state = compute.get(*id)?;
                     compute::dispatch(
                         list,
-                        &self.compute,
+                        compute,
                         &state,
                         params,
                         table(first_descriptor),
@@ -858,7 +904,8 @@ impl SceneRenderer {
                     let rtv = write_bound
                         .rtv
                         .ok_or(Error::Unsupported("write to a persistent texture"))?;
-                    let state = self.custom.get(spec, write_bound.format)?;
+                    let custom = ensure_custom(&mut self.custom, &self.device)?;
+                    let state = custom.get(spec, write_bound.format)?;
                     let bounds = confine(
                         custom::scissor_of(spec.bounds, extent),
                         repaint.filter(|_| write == TextureRef::Surface),
@@ -870,7 +917,7 @@ impl SceneRenderer {
                     }
                     let drawn = custom::draw(
                         list,
-                        &self.custom,
+                        &*custom,
                         &state,
                         &CustomDraw {
                             rtv,
@@ -1002,7 +1049,7 @@ impl SceneRenderer {
                 }
                 (PassKind::Glyphs { .. }, Upload::Sprites { offset, count }) => unsafe {
                     list.SetPipelineState(&self.pipelines.get(Kind::Glyph, write_bound.format)?);
-                    let tone = ToneCurve::native();
+                    let tone = plan.text_tone;
                     let values = constants(
                         extent,
                         1.0,
@@ -1018,7 +1065,7 @@ impl SceneRenderer {
                 },
                 (PassKind::Slug { .. }, Upload::Sprites { offset, count }) => unsafe {
                     list.SetPipelineState(&self.pipelines.get(Kind::Slug, write_bound.format)?);
-                    let tone = ToneCurve::native();
+                    let tone = plan.text_tone;
                     let values = constants(
                         extent,
                         1.0,

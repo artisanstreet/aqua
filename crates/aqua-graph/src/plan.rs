@@ -1,7 +1,8 @@
-use aqua_core::{geometry::Rect, Oklch};
+use aqua_core::{Oklch, geometry::Rect};
 
 use crate::linear::Linear2;
 use crate::slug::SlugInstance;
+use crate::tone::ToneCurve;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Extent {
@@ -136,6 +137,13 @@ pub struct ShadowInstance {
     pub color: Oklch,
     pub clip: Option<Rect>,
     pub opacity: f32,
+    pub cast: ShadowCast,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShadowCast {
+    Whole,
+    Outside,
 }
 
 impl ShadowInstance {
@@ -161,7 +169,6 @@ pub struct GlyphInstance {
     pub color: Oklch,
     pub clip: Option<Rect>,
     pub opacity: f32,
-    pub backdrop: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -435,6 +442,7 @@ pub struct FramePlan {
     pub passes: Vec<Pass>,
     pub heap_bytes: u64,
     pub final_barriers: Vec<Barrier>,
+    pub text_tone: ToneCurve,
 }
 
 impl FramePlan {

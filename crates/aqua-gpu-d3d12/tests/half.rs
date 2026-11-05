@@ -32,17 +32,11 @@ fn row_pitch_padding_is_skipped() {
 }
 
 #[test]
-fn bgra_rows_swap_to_rgba_and_srgb_decodes_to_linear() {
-    use aqua_gpu_d3d12::half::{
-        bgra8_rows_to_rgba8, bgra8_srgb_rows_to_linear_rgba8, srgb_to_linear,
-    };
+fn bgra_rows_swap_to_rgba() {
+    use aqua_gpu_d3d12::half::bgra8_rows_to_rgba8;
     let source = [10u8, 20, 30, 40, 0xff, 0xff, 0xff, 0xff];
     assert_eq!(
         bgra8_rows_to_rgba8(&source, 8, 2, 1),
         vec![30, 20, 10, 40, 255, 255, 255, 255]
     );
-    let decoded = bgra8_srgb_rows_to_linear_rgba8(&[188, 188, 188, 255], 4, 1, 1);
-    assert_eq!(decoded, vec![128, 128, 128, 255]);
-    assert_eq!(srgb_to_linear(0.0), 0.0);
-    assert!((srgb_to_linear(1.0) - 1.0).abs() < 1.0e-6);
 }

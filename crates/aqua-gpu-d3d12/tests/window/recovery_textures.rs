@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
+use aqua_core::geometry::Rect;
 use aqua_gpu_d3d12::hal::selection::AdapterPreference;
 use aqua_gpu_d3d12::window::{RecoveryNotice, TextureRecovery, WindowBackend};
 use aqua_gpu_ref::RefBackend;
@@ -142,10 +142,12 @@ fn mirrored_textures_survive_device_loss(preference: AdapterPreference, label: &
     assert!(backend.mirrored_textures() > 0);
 
     backend.inject_device_removal().unwrap();
-    assert!(backend
-        .execute(&frame, &FrameInputs::new(id))
-        .and_then(|_| backend.present(id, PresentHint::Vsync))
-        .is_err());
+    assert!(
+        backend
+            .execute(&frame, &FrameInputs::new(id))
+            .and_then(|_| backend.present(id, PresentHint::Vsync))
+            .is_err()
+    );
     backend.recover().unwrap();
     let notice = notices.borrow()[0];
     assert!(

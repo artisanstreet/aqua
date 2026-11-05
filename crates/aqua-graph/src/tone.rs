@@ -23,6 +23,12 @@ pub struct ToneCurve {
     contrast: f32,
 }
 
+impl Default for ToneCurve {
+    fn default() -> Self {
+        Self::native()
+    }
+}
+
 impl ToneCurve {
     pub const EXACT: ToneCurve = ToneCurve {
         ratios: [0.0; 4],
@@ -65,23 +71,8 @@ impl ToneCurve {
         alpha + alpha * (1.0 - alpha) * (level * alpha + offset)
     }
 
-    pub fn linear_blend_alpha(&self, coverage: f32, luminance: f32) -> f32 {
-        let backdrop = if luminance > 0.5 { 0.0 } else { 1.0 };
-        self.linear_blend_alpha_over(coverage, luminance, backdrop)
-    }
-
-    pub fn linear_blend_alpha_over(&self, coverage: f32, luminance: f32, backdrop: f32) -> f32 {
-        let toned = self.adjust(coverage, luminance).clamp(0.0, 1.0);
-        let encoded = backdrop + (luminance - backdrop) * toned;
-        let (text, behind, blended) = (
-            srgb_to_linear(luminance),
-            srgb_to_linear(backdrop),
-            srgb_to_linear(encoded),
-        );
-        match (text - behind).abs() > 1.0e-4 {
-            true => ((blended - behind) / (text - behind)).clamp(0.0, 1.0),
-            false => toned,
-        }
+    pub fn alpha(&self, coverage: f32, luminance: f32) -> f32 {
+        self.adjust(coverage, luminance).clamp(0.0, 1.0)
     }
 
     pub fn table(&self, luminance: f32) -> [u8; 256] {
@@ -96,30 +87,10 @@ pub fn luminance(srgb: [f32; 3]) -> f32 {
     srgb[0] * 0.30 + srgb[1] * 0.59 + srgb[2] * 0.11
 }
 
-pub fn srgb_to_linear(encoded: f32) -> f32 {
-    let value = encoded.clamp(0.0, 1.0);
-    match value <= 0.040_45 {
-        true => value / 12.92,
-        false => ((value + 0.055) / 1.055).powf(2.4),
-    }
-}
-
-pub fn linear_to_srgb(linear: f32) -> f32 {
-    let value = linear.clamp(0.0, 1.0);
-    match value <= 0.003_130_8 {
-        true => value * 12.92,
-        false => 1.055 * value.powf(1.0 / 2.4) - 0.055,
-    }
-}
-
-pub fn premultiplied_linear_luminance(color: [f32; 4]) -> f32 {
+pub fn premultiplied_luminance(color: [f32; 4]) -> f32 {
     let alpha = color[3];
     match alpha > 0.0 {
-        true => luminance([
-            linear_to_srgb(color[0] / alpha),
-            linear_to_srgb(color[1] / alpha),
-            linear_to_srgb(color[2] / alpha),
-        ]),
+        true => luminance([color[0] / alpha, color[1] / alpha, color[2] / alpha]),
         false => 0.0,
     }
 }
@@ -153,14 +124,23 @@ mod tests {
     }
 
     #[test]
-    fn linear_blend_alpha_keeps_endpoints_and_lifts_dark_text() {
+    fn alpha_keeps_endpoints_and_stays_in_range() {
         let curve = ToneCurve::native();
         for luminance in [0.0, 0.3, 0.7, 1.0] {
-            assert!(curve.linear_blend_alpha(0.0, luminance).abs() < 1e-5);
-            assert!((curve.linear_blend_alpha(1.0, luminance) - 1.0).abs() < 1e-4);
+            assert!(curve.alpha(0.0, luminance).abs() < 1e-5);
+            assert!((curve.alpha(1.0, luminance) - 1.0).abs() < 1e-4);
+            for coverage in [0.1, 0.5, 0.9] {
+                assert!((0.0..=1.0).contains(&curve.alpha(coverage, luminance)));
+            }
         }
-        assert!(curve.linear_blend_alpha(0.5, 0.0) > curve.adjust(0.5, 0.0));
-        assert!(curve.linear_blend_alpha(0.5, 1.0) < curve.adjust(0.5, 1.0));
+    }
+
+    #[test]
+    fn luminance_of_premultiplied_color_ignores_alpha() {
+        let straight = luminance([0.8, 0.4, 0.2]);
+        let premultiplied = premultiplied_luminance([0.4, 0.2, 0.1, 0.5]);
+        assert!((straight - premultiplied).abs() < 1e-6);
+        assert_eq!(premultiplied_luminance([0.0; 4]), 0.0);
     }
 
     #[test]

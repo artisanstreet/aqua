@@ -1,4 +1,4 @@
-use aqua_graph::{QuadInstance, ShadowInstance};
+use aqua_graph::{QuadInstance, ShadowCast, ShadowInstance};
 
 pub const QUAD_STRIDE: usize = std::mem::size_of::<QuadGpu>();
 pub const SHADOW_STRIDE: usize = std::mem::size_of::<ShadowGpu>();
@@ -72,7 +72,7 @@ pub fn pack_quad(instance: &QuadInstance) -> QuadGpu {
             flag,
         ],
         fill: instance.fill.to_gpu(),
-        border: instance.border_color.to_linear(),
+        border: instance.border_color.to_srgba(),
         gradient,
         stop_a,
         stop_b,
@@ -92,7 +92,15 @@ pub fn pack_shadow(instance: &ShadowInstance) -> ShadowGpu {
             instance.spread,
             instance.opacity,
         ],
-        offset: [instance.offset[0], instance.offset[1], 0.0, 0.0],
+        offset: [
+            instance.offset[0],
+            instance.offset[1],
+            match instance.cast {
+                ShadowCast::Whole => 0.0,
+                ShadowCast::Outside => 1.0,
+            },
+            0.0,
+        ],
         color: instance.color.to_gpu(),
     }
 }

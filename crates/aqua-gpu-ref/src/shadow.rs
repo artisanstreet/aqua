@@ -1,9 +1,9 @@
 use aqua_core::geometry::Rect;
-use aqua_graph::ShadowInstance;
+use aqua_graph::{ShadowCast, ShadowInstance};
 
 use crate::erf::{erf, normal_cdf};
 use crate::raster::{
-    clip_coverage, expand, over, pixel_window, premultiplied, scaled, Layer, QuadShape,
+    Layer, QuadShape, clip_coverage, expand, over, pixel_window, premultiplied, scaled,
 };
 
 pub const HARD_EDGE_SIGMA: f32 = 0.05;
@@ -158,6 +158,14 @@ pub fn draw_shadow(layer: &mut Layer, shadow: &ShadowInstance) {
     let silhouette = Silhouette::of(shadow);
     let hard = shadow.sigma < HARD_EDGE_SIGMA;
     let hard_shape = QuadShape::new(silhouette.rect(), silhouette.radius as f32, 0.0);
+    let element = QuadShape::new(
+        shadow.bounds,
+        shadow
+            .radius
+            .max(0.0)
+            .min(shadow.bounds.w.min(shadow.bounds.h) * 0.5),
+        0.0,
+    );
     (y0..y1).for_each(|y| {
         let py = y as f32 + 0.5;
         let profile = match hard {
@@ -177,7 +185,11 @@ pub fn draw_shadow(layer: &mut Layer, shadow: &ShadowInstance) {
                 Some(row) => row.coverage(px as f64 - silhouette.center.0) as f32,
                 None => hard_shape.coverage(px, py),
             };
-            let strength = coverage * cover * shadow.opacity;
+            let outside = match shadow.cast {
+                ShadowCast::Whole => 1.0,
+                ShadowCast::Outside => 1.0 - element.coverage(px, py),
+            };
+            let strength = coverage * outside * cover * shadow.opacity;
             layer.put(x, y, over(scaled(color, strength), layer.at(x, y)));
         });
     });

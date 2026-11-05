@@ -1,10 +1,10 @@
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
+use aqua_core::geometry::Rect;
 use aqua_gpu_d3d12::hal::selection::AdapterPreference;
-use aqua_gpu_d3d12::window::damage::{Damage, PixelRect};
 use aqua_gpu_d3d12::window::WindowBackend;
+use aqua_gpu_d3d12::window::damage::{Damage, PixelRect};
 use aqua_gpu_ref::RefBackend;
-use aqua_graph::{plan_paint, Extent, FramePlan, PaintCommand, Quad, Shadow};
+use aqua_graph::{Extent, FramePlan, PaintCommand, Quad, Shadow, ShadowCast, plan_paint};
 use aqua_protocol::{FrameInputs, GpuBackend, GpuReadback, PresentHint, SurfaceId, SurfaceTarget};
 
 use crate::backend::{backend, open};
@@ -53,6 +53,7 @@ fn scene(extent: Extent, footer_x: f32, step: u32) -> FramePlan {
             sigma: 3.0,
             spread: 0.0,
             color: Oklch::from_hex("#000000").unwrap().with_alpha(0.6),
+            cast: ShadowCast::Whole,
         }),
         quad(52.0 + travel, 56.0, 28.0, 28.0, "#e11d48", 6.0),
         PaintCommand::PopOpacity,
@@ -260,4 +261,87 @@ fn a_resize_or_an_occluded_history_forces_a_full_repaint() {
     let actual = backend.read_surface(id).unwrap().rgba8;
     let expected = reference(&scene(next, 220.0, 0));
     assert!(compare(&expected, &actual, |_, _| true, width as usize).agrees());
+}
+
+const BLUR: Rect = Rect {
+    x: 20.0,
+    y: 90.0,
+    w: 150.0,
+    h: 80.0,
+};
+
+fn blur_zone() -> Rect {
+    let reach = 4.0 * 6.0 + 16.0;
+    Rect {
+        x: BLUR.x - reach,
+        y: BLUR.y - reach,
+        w: BLUR.w + 2.0 * reach,
+        h: BLUR.h + 2.0 * reach,
+    }
+}
+
+fn blurred_scene(extent: Extent, step: u32) -> FramePlan {
+    let travel = (step % 8) as f32 * 6.0;
+    let commands = [
+        quad(8.0, 8.0, 160.0, 200.0, "#3b82f6", 0.0),
+        quad(40.0, 100.0, 12.0, 60.0, "#f97316", 0.0),
+        quad(200.0, 60.0, 120.0, 120.0, "#f97316", 16.0),
+        quad(52.0 + travel, 56.0, 28.0, 56.0, "#e11d48", 6.0),
+        PaintCommand::BackdropBlur(aqua_graph::BackdropBlur {
+            bounds: BLUR,
+            radius: 6.0,
+            corner_radius: 8.0,
+        }),
+        quad(60.0, 120.0, 40.0, 16.0, "#22c55e", 0.0),
+    ];
+    plan_paint(extent, Oklch::from_hex("#20242c").unwrap(), &commands).unwrap()
+}
+
+fn blurred_repaint(preference: AdapterPreference, label: &str) {
+    let mut backend = backend(preference);
+    let window = TestWindow::open(420, 300);
+    let (id, extent) = open(&mut backend, &window);
+    let width = extent.width as usize;
+    let damage = [PATCH, blur_zone()];
+    for step in 0..3 {
+        backend.wait_for_frame_slot(id).unwrap();
+        backend
+            .execute_damaged(&blurred_scene(extent, step), &FrameInputs::new(id), &[])
+            .unwrap();
+        backend.present(id, PresentHint::Vsync).unwrap();
+        window.pump();
+    }
+    for step in 3..20u32 {
+        let plan = blurred_scene(extent, step);
+        backend.wait_for_frame_slot(id).unwrap();
+        backend
+            .execute_damaged(&plan, &FrameInputs::new(id), &damage)
+            .unwrap();
+        let actual = backend.read_surface(id).unwrap().rgba8;
+        let expected = reference(&plan);
+        let compared = compare(&expected, &actual, |_, _| true, width);
+        assert!(
+            compared.agrees(),
+            "[{label}] step {step}: {} of {} values differ from the reference",
+            compared.over,
+            compared.total
+        );
+        backend.present(id, PresentHint::Vsync).unwrap();
+        window.pump();
+    }
+    assert!(
+        backend.stats().scissored_frames >= 10,
+        "{:?}",
+        backend.stats()
+    );
+}
+
+#[test]
+fn hardware_repaint_across_a_backdrop_blur_matches_the_full_reference() {
+    blurred_repaint(AdapterPreference::HighPerformance, "hardware");
+}
+
+#[test]
+fn warp_repaint_across_a_backdrop_blur_matches_the_full_reference() {
+    blurred_repaint(AdapterPreference::Warp, "warp");
 }

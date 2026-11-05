@@ -7,18 +7,18 @@ use aqua_gpu_d3d12::hal::{create_factory, list_adapters};
 use aqua_gpu_d3d12::window::WindowBackend;
 use aqua_graph::Extent;
 use aqua_protocol::GpuBackend;
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, HMODULE};
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+    CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
 use windows::Win32::System::LibraryLoader::{
-    GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+    GetModuleFileNameW, GetModuleHandleExW,
 };
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, GetCurrentThreadId, GetThreadTimes, OpenThread, THREAD_QUERY_INFORMATION,
 };
+use windows::core::PCWSTR;
 
 use crate::backend::{frame, open, options, scene};
 use crate::test_window::TestWindow;
@@ -144,8 +144,21 @@ fn busy_threads(window: &TestWindow, span: Duration) -> Vec<(String, f64)> {
         .collect()
 }
 
-fn present_resize_and_idle(luid: i64) {
-    let mut backend = WindowBackend::new(options(AdapterPreference::Luid(luid))).expect("backend");
+fn start(luid: i64, early: bool) -> WindowBackend {
+    let options = options(AdapterPreference::Luid(luid));
+    match early {
+        true => {
+            WindowBackend::begin_early(options, || None);
+            WindowBackend::take_early()
+                .expect("early backend was started")
+                .expect("early backend builds")
+        }
+        false => WindowBackend::new(options).expect("backend"),
+    }
+}
+
+fn present_resize_and_idle(luid: i64, early: bool) {
+    let mut backend = start(luid, early);
     let window = TestWindow::open(640, 480);
     let (id, extent) = open(&mut backend, &window);
     (0..10).for_each(|index| {
@@ -154,8 +167,15 @@ fn present_resize_and_idle(luid: i64) {
             &window,
             id,
             &scene(extent, index as f32 / 10.0),
-        )
+        );
+        backend.finish_startup();
+        if backend.startup_pending() {
+            backend.startup_step();
+        }
     });
+    while backend.startup_pending() {
+        backend.startup_step();
+    }
     (0..3).for_each(|step| {
         window.resize(700 + 40 * step, 520 + 30 * step);
         let (width, height) = window.client();
@@ -177,8 +197,23 @@ fn present_resize_and_idle(luid: i64) {
 
 #[test]
 fn idle_after_resize_stays_quiet_on_every_adapter() {
+    quiet_on_every_adapter(
+        "idle::idle_after_resize_stays_quiet_on_every_adapter",
+        false,
+    );
+}
+
+#[test]
+fn idle_after_chunked_startup_stays_quiet_on_every_adapter() {
+    quiet_on_every_adapter(
+        "idle::idle_after_chunked_startup_stays_quiet_on_every_adapter",
+        true,
+    );
+}
+
+fn quiet_on_every_adapter(name: &str, early: bool) {
     if let Ok(luid) = std::env::var(CHILD) {
-        return present_resize_and_idle(luid.parse().expect("luid"));
+        return present_resize_and_idle(luid.parse().expect("luid"), early);
     }
     let factory = create_factory(false).expect("factory");
     let exe = std::env::current_exe().expect("test exe");
@@ -186,11 +221,7 @@ fn idle_after_resize_stays_quiet_on_every_adapter() {
         .into_iter()
         .filter_map(|adapter| {
             let output = Command::new(&exe)
-                .args([
-                    "--exact",
-                    "idle::idle_after_resize_stays_quiet_on_every_adapter",
-                    "--nocapture",
-                ])
+                .args(["--exact", name, "--nocapture"])
                 .env(CHILD, adapter.luid.to_string())
                 .output()
                 .expect("child");

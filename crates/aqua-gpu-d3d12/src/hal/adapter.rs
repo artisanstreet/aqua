@@ -99,9 +99,13 @@ fn open_selected(
     cap: Tier,
     fell_back: bool,
 ) -> Result<Selected, Error> {
+    let stages = crate::stages::StageClock::from_env();
     let adapter_info = describe_adapter(&adapter)?;
+    stages.mark("      describe_adapter");
     let device = open_device(&adapter)?;
+    stages.mark("      create_device_call");
     let features = features::detect(&device);
+    stages.mark("      detect_features");
     let info = DeviceInfo {
         adapter: adapter_info,
         features,

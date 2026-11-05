@@ -19,13 +19,12 @@ fn element(name: PCSTR, index: u32) -> D3D12_INPUT_ELEMENT_DESC {
     }
 }
 
-pub fn glyph_layout() -> [D3D12_INPUT_ELEMENT_DESC; 5] {
+pub fn glyph_layout() -> [D3D12_INPUT_ELEMENT_DESC; 4] {
     [
         element(s!("BOUNDS"), 0),
         element(s!("TEXELS"), 1),
         element(s!("CLIP"), 2),
         element(s!("COLOR"), 3),
-        element(s!("EXTRA"), 4),
     ]
 }
 

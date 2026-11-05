@@ -1,10 +1,12 @@
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
+use aqua_core::geometry::Rect;
 use aqua_gpu_ref::raster::Layer;
 use aqua_gpu_ref::sprites::{
-    draw_glyphs, draw_images, sample_image, RefTexture, TextureError, Textures,
+    RefTexture, TextureError, Textures, draw_glyphs, draw_images, sample_image,
 };
-use aqua_graph::{Extent, GlyphInstance, ImageInstance, TextureFormat, TextureHandle, TextureRef};
+use aqua_graph::{
+    Extent, GlyphInstance, ImageInstance, TextureFormat, TextureHandle, TextureRef, ToneCurve,
+};
 
 fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
     Rect { x, y, w, h }
@@ -48,17 +50,15 @@ fn glyph_pixels_take_their_coverage_from_the_matching_atlas_texel() {
         color: white(1.0),
         clip: None,
         opacity: 1.0,
-        backdrop: None,
     };
-    draw_glyphs(&mut layer, &atlas, &[glyph]);
+    draw_glyphs(&mut layer, &atlas, &[glyph], ToneCurve::native());
     for y in 0..16usize {
         for x in 0..16usize {
             let alpha = layer.pixels[y * 16 + x][3];
             match (4..7).contains(&x) && (5..7).contains(&y) {
                 true => {
                     let coverage = ((x - 4 + 2) * 16 + (y - 5 + 1)) as f32 / 255.0;
-                    let expected =
-                        aqua_graph::tone::ToneCurve::native().linear_blend_alpha(coverage, 1.0);
+                    let expected = ToneCurve::native().alpha(coverage, 1.0);
                     assert!(
                         (alpha - expected).abs() < 1e-6,
                         "({x},{y}) {alpha} vs {expected}"
@@ -80,9 +80,8 @@ fn glyph_clip_and_opacity_scale_the_coverage() {
         color: white(1.0),
         clip: Some(rect(0.0, 0.0, 2.0, 4.0)),
         opacity: 0.5,
-        backdrop: None,
     };
-    draw_glyphs(&mut layer, &atlas, &[glyph]);
+    draw_glyphs(&mut layer, &atlas, &[glyph], ToneCurve::native());
     assert!((layer.pixels[1][3] - 0.5).abs() < 1e-6);
     assert!(layer.pixels[3][3].abs() < 1e-6);
 }
@@ -97,13 +96,14 @@ fn glyph_sampling_clamps_inside_its_atlas_rectangle() {
         color: white(1.0),
         clip: None,
         opacity: 1.0,
-        backdrop: None,
     };
-    draw_glyphs(&mut layer, &atlas, &[glyph]);
-    assert!(layer
-        .pixels
-        .iter()
-        .all(|pixel| (pixel[3] - 1.0).abs() < 1e-6));
+    draw_glyphs(&mut layer, &atlas, &[glyph], ToneCurve::native());
+    assert!(
+        layer
+            .pixels
+            .iter()
+            .all(|pixel| (pixel[3] - 1.0).abs() < 1e-6)
+    );
 }
 
 #[test]

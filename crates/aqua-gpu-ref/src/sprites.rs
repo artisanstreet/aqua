@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use aqua_core::geometry::Rect;
 use aqua_graph::slug::{self, texel_position};
-use aqua_graph::tone::{premultiplied_linear_luminance, ToneCurve};
+use aqua_graph::tone::{ToneCurve, premultiplied_luminance};
 use aqua_graph::{
     Extent, GlyphInstance, ImageInstance, SlugInstance, TextureFormat, TextureHandle, TextureRef,
 };
 
-use crate::raster::{over, Layer, Pixel, Placement};
+use crate::raster::{Layer, Pixel, Placement, over};
 use crate::sample::blend;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,13 +181,17 @@ fn pixel_span(low: f32, high: f32, limit: usize) -> std::ops::Range<usize> {
     start.min(end)..end
 }
 
-pub fn draw_glyphs(layer: &mut Layer, atlas: &RefTexture, instances: &[GlyphInstance]) {
-    let tone = ToneCurve::native();
+pub fn draw_glyphs(
+    layer: &mut Layer,
+    atlas: &RefTexture,
+    instances: &[GlyphInstance],
+    tone: ToneCurve,
+) {
     for glyph in instances {
         let clip = glyph.clip.unwrap_or(NO_CLIP);
         let [r, g, b, a] = glyph.color.to_gpu();
         let color = [r, g, b, a].map(|channel| channel * glyph.opacity);
-        let luminance = premultiplied_linear_luminance(color);
+        let luminance = premultiplied_luminance(color);
         let scale = (
             glyph.texels.w / glyph.bounds.w.max(1.0e-4),
             glyph.texels.h / glyph.bounds.h.max(1.0e-4),
@@ -205,11 +209,7 @@ pub fn draw_glyphs(layer: &mut Layer, atlas: &RefTexture, instances: &[GlyphInst
                     (glyph.texels.x + local_x) as i64,
                     (glyph.texels.y + local_y) as i64,
                 )[0];
-                let toned = match glyph.backdrop {
-                    Some(backdrop) => tone.linear_blend_alpha_over(coverage, luminance, backdrop),
-                    None => tone.linear_blend_alpha(coverage, luminance),
-                };
-                let weight = toned * clip_cover(clip, px, py);
+                let weight = tone.alpha(coverage, luminance) * clip_cover(clip, px, py);
                 let source = color.map(|channel| channel * weight);
                 let index = y * layer.width + x;
                 layer.pixels[index] = over(source, layer.pixels[index]);
@@ -282,8 +282,12 @@ pub fn draw_images(layer: &mut Layer, textures: &Textures, instances: &[ImageIns
     }
 }
 
-pub fn draw_slug(layer: &mut Layer, store: &RefTexture, instances: &[SlugInstance]) {
-    let tone = ToneCurve::native();
+pub fn draw_slug(
+    layer: &mut Layer,
+    store: &RefTexture,
+    instances: &[SlugInstance],
+    tone: ToneCurve,
+) {
     let fetch = |index: u32| store.float_texel(index);
     for glyph in instances {
         let Some(inverse) = glyph.linear.inverse() else {
@@ -292,7 +296,7 @@ pub fn draw_slug(layer: &mut Layer, store: &RefTexture, instances: &[SlugInstanc
         let clip = glyph.clip.unwrap_or(NO_CLIP);
         let [r, g, b, a] = glyph.color.to_gpu();
         let color = [r, g, b, a].map(|channel| channel * glyph.opacity);
-        let luminance = premultiplied_linear_luminance(color);
+        let luminance = premultiplied_luminance(color);
         let pixels_per_em = glyph.pixels_per_em();
         let margin = 1.0 / pixels_per_em.max(1.0e-4);
         let [x0, y0, x1, y1] = glyph.em_bounds;
@@ -309,11 +313,7 @@ pub fn draw_slug(layer: &mut Layer, store: &RefTexture, instances: &[SlugInstanc
                     continue;
                 }
                 let coverage = slug::coverage(fetch, glyph.glyph, em, pixels_per_em);
-                let toned = match glyph.backdrop {
-                    Some(backdrop) => tone.linear_blend_alpha_over(coverage, luminance, backdrop),
-                    None => tone.linear_blend_alpha(coverage, luminance),
-                };
-                let weight = toned * clip_cover(clip, px, py);
+                let weight = tone.alpha(coverage, luminance) * clip_cover(clip, px, py);
                 let source = color.map(|channel| channel * weight);
                 let index = y * layer.width + x;
                 layer.pixels[index] = over(source, layer.pixels[index]);

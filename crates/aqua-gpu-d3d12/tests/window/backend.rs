@@ -1,14 +1,14 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
-use aqua_gpu_d3d12::hal::selection::AdapterPreference;
+use aqua_core::geometry::Rect;
 use aqua_gpu_d3d12::hal::DeviceOptions;
+use aqua_gpu_d3d12::hal::selection::AdapterPreference;
 use aqua_gpu_d3d12::window::damage::{Damage, PixelRect};
 use aqua_gpu_d3d12::window::{RecoveryNotice, WindowBackend, WindowOptions};
 use aqua_gpu_ref::RefBackend;
-use aqua_graph::{plan_paint, Extent, FramePlan, PaintCommand, Quad};
+use aqua_graph::{Extent, FramePlan, PaintCommand, Quad, plan_paint};
 use aqua_protocol::{
     DeviceStatus, FrameInputs, GpuBackend, GpuError, GpuReadback, NativeSurface, PresentHint,
     SurfaceId, SurfaceTarget, WindowId,
@@ -284,9 +284,11 @@ fn survive_loss(preference: AdapterPreference, label: &str) {
     }
 
     backend.inject_device_removal().expect("second removal");
-    assert!(backend
-        .execute(&scene(extent, 0.5), &FrameInputs::new(id))
-        .is_err());
+    assert!(
+        backend
+            .execute(&scene(extent, 0.5), &FrameInputs::new(id))
+            .is_err()
+    );
     backend.recover().expect("second recovery");
     assert_eq!(backend.generation(), 2);
     assert!(
@@ -317,9 +319,11 @@ fn surfaces_can_be_destroyed_and_recreated_on_the_same_window() {
     let (first, extent) = open(&mut backend, &window);
     frame(&mut backend, &window, first, &scene(extent, 0.0));
     backend.destroy_surface(first).expect("destroy");
-    assert!(backend
-        .execute(&scene(extent, 0.0), &FrameInputs::new(first))
-        .is_err());
+    assert!(
+        backend
+            .execute(&scene(extent, 0.0), &FrameInputs::new(first))
+            .is_err()
+    );
     let (second, _) = open(&mut backend, &window);
     frame(&mut backend, &window, second, &scene(extent, 0.0));
 }

@@ -5,10 +5,10 @@ use aqua_protocol::GpuError;
 
 use crate::filter::{blur_down, blur_up, color_matrix};
 use crate::kernels::{ComputeCall, Kernels};
-use crate::raster::{composite_layer, draw_quad, premultiplied, Layer};
+use crate::raster::{Layer, composite_layer, draw_quad, premultiplied};
 use crate::sample::draw_image;
 use crate::shadow::draw_shadow;
-use crate::sprites::{draw_glyphs, draw_images, draw_slug, Textures};
+use crate::sprites::{Textures, draw_glyphs, draw_images, draw_slug};
 
 pub struct Frame<'a> {
     plan: &'a FramePlan,
@@ -151,7 +151,7 @@ impl<'a> Frame<'a> {
                     .persistent
                     .get(*atlas)
                     .ok_or_else(|| failure(format!("unknown atlas {}", atlas.0)))?;
-                draw_glyphs(target, atlas, instances);
+                draw_glyphs(target, atlas, instances, self.plan.text_tone);
                 Ok(())
             }
             PassKind::Slug { store, instances } => {
@@ -159,7 +159,7 @@ impl<'a> Frame<'a> {
                     .persistent
                     .get(*store)
                     .ok_or_else(|| failure(format!("unknown slug store {}", store.0)))?;
-                draw_slug(target, store, instances);
+                draw_slug(target, store, instances, self.plan.text_tone);
                 Ok(())
             }
             PassKind::Images { instances } => {

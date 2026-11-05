@@ -1,4 +1,4 @@
-use crate::analysis::{align_up, lifetime_of, transient_of, Lifetime};
+use crate::analysis::{Lifetime, align_up, lifetime_of, transient_of};
 use crate::plan::{
     Barrier, FramePlan, LoadOp, PassKind, QuadInstance, ResourceState, ShaderId, ShadowInstance,
     TextureRef, TransientId,
@@ -233,9 +233,6 @@ fn check_kind(plan: &FramePlan, index: usize) -> Result<(), PlanError> {
                         && finite_rect(glyph.texels)
                         && (0.0..=1.0).contains(&glyph.opacity)
                         && glyph.clip.is_none_or(finite_rect)
-                        && glyph
-                            .backdrop
-                            .is_none_or(|backdrop| (0.0..=1.0).contains(&backdrop))
                 })
                 .then_some(())
                 .ok_or(non_finite)
@@ -275,9 +272,6 @@ fn check_kind(plan: &FramePlan, index: usize) -> Result<(), PlanError> {
                         && glyph.em_bounds.iter().all(|value| value.is_finite())
                         && (0.0..=1.0).contains(&glyph.opacity)
                         && glyph.clip.is_none_or(finite_rect)
-                        && glyph
-                            .backdrop
-                            .is_none_or(|backdrop| (0.0..=1.0).contains(&backdrop))
                 })
                 .then_some(())
                 .ok_or(non_finite)

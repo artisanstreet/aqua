@@ -1,3 +1,6 @@
+use std::ops::Deref;
+use std::sync::Arc;
+
 use aqua_core::{Oklch, geometry::Rect};
 
 use crate::analysis::{intersect, union};
@@ -6,8 +9,8 @@ use crate::graph::{PlanLimits, RenderGraph};
 use crate::linear::Linear2;
 use crate::plan::{
     Blend, ColorMatrix, CustomPassSpec, Extent, FilterParams, FramePlan, GlyphInstance, Gradient,
-    ImageInstance, Pass, PassKind, QuadInstance, ShaderId, ShadowInstance, TextureFormat,
-    TextureHandle, TextureRef,
+    ImageInstance, LoadOp, Pass, PassKind, QuadInstance, ShaderId, ShadowCast, ShadowInstance,
+    TextureFormat, TextureHandle, TextureRef,
 };
 use crate::slug::SlugInstance;
 use crate::validate::PlanError;
@@ -35,6 +38,7 @@ pub struct Shadow {
     pub sigma: f32,
     pub spread: f32,
     pub color: Oklch,
+    pub cast: ShadowCast,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -42,13 +46,52 @@ pub struct Glyph {
     pub bounds: Rect,
     pub texels: Rect,
     pub color: Oklch,
-    pub backdrop: Option<f32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GlyphList(Arc<Vec<Glyph>>);
+
+impl GlyphList {
+    pub fn retain(&mut self, keep: impl FnMut(&Glyph) -> bool) {
+        Arc::make_mut(&mut self.0).retain(keep);
+    }
+
+    #[must_use]
+    pub fn shares_storage(&self, other: &GlyphList) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Deref for GlyphList {
+    type Target = [Glyph];
+
+    fn deref(&self) -> &[Glyph] {
+        &self.0
+    }
+}
+
+impl From<Vec<Glyph>> for GlyphList {
+    fn from(glyphs: Vec<Glyph>) -> Self {
+        Self(Arc::new(glyphs))
+    }
+}
+
+impl FromIterator<Glyph> for GlyphList {
+    fn from_iter<I: IntoIterator<Item = Glyph>>(glyphs: I) -> Self {
+        Self(Arc::new(glyphs.into_iter().collect()))
+    }
+}
+
+impl PartialEq<Vec<Glyph>> for GlyphList {
+    fn eq(&self, other: &Vec<Glyph>) -> bool {
+        self.0.as_slice() == other.as_slice()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlyphRun {
     pub atlas: TextureHandle,
-    pub glyphs: Vec<Glyph>,
+    pub glyphs: GlyphList,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -308,6 +351,7 @@ fn leaf_bounds(leaf: &Leaf) -> Option<Rect> {
                 color: shadow.color,
                 clip: None,
                 opacity: 1.0,
+                cast: shadow.cast,
             }
             .covered(),
         ),
@@ -402,6 +446,40 @@ fn corner_split(rect: Rect, radius: f32, bounded: Rect) -> Option<CornerSplit> {
     })
 }
 
+fn backdrops(nodes: &[Node], clip: Option<Rect>, out: &mut Vec<Rect>) {
+    for node in nodes {
+        match node {
+            Node::Leaf(Leaf::Backdrop(blur)) => out.extend(clipped(blur.bounds, clip)),
+            Node::Leaf(_) => {}
+            Node::Clip(rect, children) | Node::RoundedClip { rect, children, .. } => {
+                if let Some(next) = clipped(*rect, clip) {
+                    backdrops(children, Some(next), out);
+                }
+            }
+            Node::Group(_, children) | Node::Effect { children, .. } => {
+                backdrops(children, clip, out)
+            }
+        }
+    }
+}
+
+fn reads_backdrop(children: &[Node], clip: Option<Rect>) -> bool {
+    let mut found = Vec::new();
+    backdrops(children, clip, &mut found);
+    !found.is_empty()
+}
+
+fn backdrops_inside(children: &[Node], clip: Option<Rect>, band: Rect) -> bool {
+    let mut found = Vec::new();
+    backdrops(children, clip, &mut found);
+    found.into_iter().all(|rect| {
+        rect.x >= band.x
+            && rect.y >= band.y
+            && rect.right() <= band.right()
+            && rect.bottom() <= band.bottom()
+    })
+}
+
 fn foldable(children: &[Node], clip: Option<Rect>) -> bool {
     let mut rects = Vec::new();
     units(children, clip, &mut rects);
@@ -418,12 +496,31 @@ fn foldable(children: &[Node], clip: Option<Rect>) -> bool {
 }
 
 #[derive(Clone, Copy)]
+struct Behind {
+    target: TextureRef,
+    origin: [f32; 2],
+    extent: Extent,
+}
+
+impl Behind {
+    fn area(&self) -> Rect {
+        Rect {
+            x: self.origin[0],
+            y: self.origin[1],
+            w: self.extent.width as f32,
+            h: self.extent.height as f32,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct Context {
     clip: Option<Rect>,
     opacity: f32,
     target: TextureRef,
     origin: [f32; 2],
     extent: Extent,
+    behind: Option<Behind>,
 }
 
 impl Context {
@@ -469,7 +566,16 @@ impl Context {
             target,
             origin: [region.rect.x, region.rect.y],
             extent: region.extent,
+            behind: Some(self.backdrop()),
         }
+    }
+
+    fn backdrop(&self) -> Behind {
+        self.behind.unwrap_or(Behind {
+            target: self.target,
+            origin: self.origin,
+            extent: self.extent,
+        })
     }
 }
 
@@ -623,7 +729,9 @@ impl Emitter {
         let Some(bounded) = clipped(rect, context.clip) else {
             return;
         };
-        match corner_split(rect, radius, bounded) {
+        let split = corner_split(rect, radius, bounded)
+            .filter(|split| backdrops_inside(children, Some(bounded), split.bands[1]));
+        match split {
             Some(split) => {
                 split.bands.into_iter().for_each(|band| {
                     if let Some(clip) = clipped(band, context.clip) {
@@ -662,7 +770,29 @@ impl Emitter {
             return;
         };
         let layer = self.graph.create(region.extent, TextureFormat::Rgba16Float);
-        self.emit(children, context.layer(layer, region));
+        let seeded = context.behind.is_none() && reads_backdrop(children, Some(bounded));
+        let inner = match seeded {
+            true => {
+                let local = context.local(region.rect);
+                let mut seed = Pass::new(
+                    PassKind::Copy {
+                        source_origin: [local.x as u32, local.y as u32],
+                        dest_origin: [0, 0],
+                        size: region.extent,
+                    },
+                    vec![context.target],
+                    vec![layer],
+                );
+                seed.load = LoadOp::DontCare;
+                self.graph.push(seed);
+                Context {
+                    behind: None,
+                    ..context.layer(layer, region)
+                }
+            }
+            false => context.layer(layer, region),
+        };
+        self.emit(children, inner);
         if !self.written(layer) {
             return;
         }
@@ -676,7 +806,10 @@ impl Emitter {
                     opacity: context.opacity,
                     clip: Some(context.local(rect)),
                     clip_radius: radius,
-                    blend: Blend::Over,
+                    blend: match seeded {
+                        true => Blend::Replace,
+                        false => Blend::Over,
+                    },
                     linear: Linear2::IDENTITY,
                 }],
             },
@@ -813,6 +946,7 @@ impl Emitter {
                     color: shadow.color,
                     clip,
                     opacity,
+                    cast: shadow.cast,
                 },
             ),
             Leaf::Glyphs(run) => self.graph.draw_glyphs(
@@ -824,7 +958,6 @@ impl Emitter {
                     color: glyph.color,
                     clip,
                     opacity,
-                    backdrop: glyph.backdrop,
                 }),
             ),
             Leaf::Slug(run) => self.graph.draw_slug(
@@ -861,19 +994,24 @@ impl Emitter {
                 if blur.radius <= BLUR_EPSILON {
                     return;
                 }
-                let Some(region) = clipped(blur.bounds, context.clip)
+                let source = context.backdrop();
+                let Some(visible) = clipped(blur.bounds, context.clip)
                     .and_then(|r| intersect(r, context.area()))
-                    .map(|r| context.local(r))
+                    .and_then(|r| intersect(r, source.area()))
                 else {
                     return;
                 };
-                if !self.written(target) {
+                if !self.written(source.target) {
                     return;
                 }
                 self.blurred(
-                    target,
-                    region,
-                    region,
+                    source.target,
+                    Rect {
+                        x: visible.x - source.origin[0],
+                        y: visible.y - source.origin[1],
+                        ..visible
+                    },
+                    context.local(visible),
                     blur.radius,
                     blur.corner_radius,
                     Blend::Replace,
@@ -912,6 +1050,7 @@ pub fn plan_paint_with(
             target: TextureRef::Surface,
             origin: [0.0, 0.0],
             extent,
+            behind: None,
         },
     );
     emitter.graph.plan(limits)

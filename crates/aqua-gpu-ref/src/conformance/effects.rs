@@ -1,4 +1,4 @@
-use aqua_core::{geometry::Rect, Oklch};
+use aqua_core::{Oklch, geometry::Rect};
 use aqua_graph::{
     Blend, ColorMatrix, CustomPassSpec, CustomShaderId, FramePlan, ImageInstance, PaintCommand,
     Pass, PassKind, PlanLimits, QuadInstance, RenderGraph, ShaderId, TextureFormat, TextureRef,
@@ -7,8 +7,8 @@ use aqua_protocol::Features;
 
 use super::assets::standard_uploads;
 use super::cases::{
-    backdrop_blur, build, clip, glyph_run, gradient, hex, photo, quad, rect, shadow, stripes, Case,
-    STANDARD,
+    Case, STANDARD, backdrop_blur, build, clip, glyph_run, gradient, hex, photo, quad, rect,
+    shadow, stripes,
 };
 use crate::kernels::{INVERT, ROW_BOX_BLUR, ROW_BOX_BLUR_TILE};
 
@@ -506,5 +506,6 @@ pub fn cases() -> Vec<Case> {
     cases.extend(color_matrix_cases());
     cases.extend(custom_cases());
     cases.push(compute_case());
+    cases.extend(super::glass::cases());
     cases
 }

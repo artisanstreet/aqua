@@ -33,13 +33,6 @@ pub fn rgba16f_rows_to_rgba8(
         .collect()
 }
 
-pub fn srgb_to_linear(value: f32) -> f32 {
-    match value <= 0.04045 {
-        true => value / 12.92,
-        false => ((value + 0.055) / 1.055).powf(2.4),
-    }
-}
-
 pub fn bgra8_rows_to_rgba8(
     source: &[u8],
     row_pitch: usize,
@@ -54,33 +47,6 @@ pub fn bgra8_rows_to_rgba8(
                 .0
                 .iter()
                 .flat_map(|texel| [texel[2], texel[1], texel[0], texel[3]])
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
-pub fn bgra8_srgb_rows_to_linear_rgba8(
-    source: &[u8],
-    row_pitch: usize,
-    width: usize,
-    height: usize,
-) -> Vec<u8> {
-    let decode = |byte: u8| unorm8(srgb_to_linear(byte as f32 / 255.0));
-    (0..height)
-        .flat_map(|row| {
-            let start = row * row_pitch;
-            source[start..start + width * 4]
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .flat_map(|texel| {
-                    [
-                        decode(texel[2]),
-                        decode(texel[1]),
-                        decode(texel[0]),
-                        texel[3],
-                    ]
-                })
                 .collect::<Vec<_>>()
         })
         .collect()

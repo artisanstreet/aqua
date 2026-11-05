@@ -1,11 +1,11 @@
-use aqua_core::{geometry::Rect, Oklch};
+use aqua_core::{Oklch, geometry::Rect};
 use aqua_graph::{
-    plan_paint, BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientQuad,
-    GradientStop, Image, PaintCommand, Quad, Shadow,
+    BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientQuad, GradientStop, Image,
+    PaintCommand, Quad, Shadow, ShadowCast, plan_paint,
 };
 use aqua_protocol::UploadBatch;
 
-use super::assets::{standard_uploads, ATLAS, PHOTO};
+use super::assets::{ATLAS, PHOTO, standard_uploads};
 
 #[derive(Clone, Debug)]
 pub struct Case {
@@ -116,6 +116,7 @@ pub fn shadow(
         sigma,
         spread,
         color: hex(color, alpha),
+        cast: ShadowCast::Whole,
     })
 }
 
@@ -128,7 +129,6 @@ pub fn glyph_run(glyphs: &[(Rect, Rect, &str, f32)]) -> PaintCommand {
                 bounds: *bounds,
                 texels: *texels,
                 color: hex(color, *alpha),
-                backdrop: None,
             })
             .collect(),
     })
@@ -423,6 +423,7 @@ pub fn cases() -> Vec<Case> {
     cases.extend(effect_cases());
     cases.extend(super::effects::cases());
     cases.extend(super::text::cases());
+    cases.push(super::gpui::translucent_white_case());
     cases.extend(super::transforms::cases());
     cases.push(build(
         "extent_one_by_one",

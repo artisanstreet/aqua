@@ -1,11 +1,12 @@
-use aqua_core::{geometry::Rect, Oklch};
-use aqua_gpu_ref::conformance::cases::{build, hex, rect, shadow};
+use aqua_core::color::linear_to_srgb;
+use aqua_core::{Oklch, geometry::Rect};
+use aqua_gpu_ref::RefBackend;
 use aqua_gpu_ref::conformance::Session;
+use aqua_gpu_ref::conformance::cases::{build, hex, rect, shadow};
 use aqua_gpu_ref::erf::normal_cdf;
 use aqua_gpu_ref::shadow::blurred_coverage;
-use aqua_gpu_ref::RefBackend;
 use aqua_graph::{
-    Extent, Gradient, GradientQuad, GradientStop, PaintCommand, Quad, ShadowInstance,
+    Extent, Gradient, GradientQuad, GradientStop, PaintCommand, Quad, ShadowCast, ShadowInstance,
 };
 
 fn instance(
@@ -24,6 +25,7 @@ fn instance(
         color: hex("#000000", 1.0),
         clip: None,
         opacity: 1.0,
+        cast: ShadowCast::Whole,
     }
 }
 
@@ -167,19 +169,19 @@ fn gradient_case(from: Oklch, to: Oklch) -> aqua_gpu_ref::conformance::Case {
 }
 
 #[test]
-fn gradient_interpolates_lightness_linearly_in_oklab() {
+fn gradient_interpolates_lightness_in_oklab_and_encodes_srgb() {
     let pixels = render_pixels(&gradient_case(hex("#000000", 1.0), hex("#ffffff", 1.0)));
     let red_at = |x: usize| pixels.rgba8[x * 4] as f32 / 255.0;
-    let lightness_to_linear = |x: usize| {
+    let lightness_to_encoded = |x: usize| {
         let l = (x as f32 + 0.5) / 64.0;
-        l * l * l
+        linear_to_srgb(l * l * l)
     };
     for x in [0usize, 15, 31, 47, 63] {
         assert!(
-            (red_at(x) - lightness_to_linear(x)).abs() < 2.5 / 255.0,
+            (red_at(x) - lightness_to_encoded(x)).abs() < 2.5 / 255.0,
             "x={x}: {} vs {}",
             red_at(x),
-            lightness_to_linear(x)
+            lightness_to_encoded(x)
         );
     }
 }
@@ -221,10 +223,12 @@ fn shadow_alpha_never_exceeds_the_color_alpha_and_decays_monotonically_outside()
     );
     let pixels = render_pixels(&case);
     let alpha = |x: usize, y: usize| pixels.rgba8[(y * 80 + x) * 4 + 3];
-    assert!(pixels
-        .rgba8
-        .chunks(4)
-        .all(|p| p[3] <= (0.6f32 * 255.0).round() as u8));
+    assert!(
+        pixels
+            .rgba8
+            .chunks(4)
+            .all(|p| p[3] <= (0.6f32 * 255.0).round() as u8)
+    );
     let row: Vec<u8> = (50..80).map(|x| alpha(x, 20)).collect();
     assert!(row.windows(2).all(|pair| pair[0] >= pair[1]));
     assert_eq!(alpha(79, 20), 0);

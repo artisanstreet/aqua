@@ -5,6 +5,8 @@ mod mirror;
 mod pacing;
 
 #[cfg(windows)]
+mod backdrop;
+#[cfg(windows)]
 mod backend;
 #[cfg(windows)]
 mod composition;
@@ -22,6 +24,8 @@ mod refresh;
 mod scissor;
 #[cfg(windows)]
 mod shared_device;
+#[cfg(windows)]
+mod startup;
 #[cfg(windows)]
 #[path = "../support/mod.rs"]
 mod support;

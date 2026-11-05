@@ -41,8 +41,8 @@ pub use frames::{CoreFrame, FrameRing, UploadAlloc, UploadRing};
 pub use monitor::{BudgetMonitor, MemorySnapshot, evict, make_resident};
 #[cfg(windows)]
 pub use swapchain::{
-    BACK_BUFFER_FORMAT, BackBuffer, FrameStatistics, PresentMode, PresentStatus, RENDER_FORMAT,
-    Swapchain, SwapchainTarget,
+    BackBuffer, FrameStatistics, PresentMode, PresentStatus, RENDER_FORMAT, Swapchain,
+    SwapchainTarget,
 };
 #[cfg(windows)]
 pub use timeline::Timeline;

@@ -20,7 +20,7 @@ use super::renderer::{SceneRenderer, SceneTarget};
 use super::tiers::{SceneOptions, TierLimit};
 use super::util::*;
 use crate::hal::tier::Tier;
-use crate::half::{bgra8_rows_to_rgba8, bgra8_srgb_rows_to_linear_rgba8, rgba16f_rows_to_rgba8};
+use crate::half::{bgra8_rows_to_rgba8, rgba16f_rows_to_rgba8};
 
 const SLOTS: usize = 3;
 
@@ -28,24 +28,13 @@ const SLOTS: usize = 3;
 pub enum SurfaceFormat {
     Rgba16Float,
     Bgra8Unorm,
-    Bgra8UnormSrgb,
 }
 
 impl SurfaceFormat {
-    fn resource(self) -> DXGI_FORMAT {
-        match self {
-            SurfaceFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
-            SurfaceFormat::Bgra8Unorm | SurfaceFormat::Bgra8UnormSrgb => {
-                DXGI_FORMAT_B8G8R8A8_TYPELESS
-            }
-        }
-    }
-
-    fn view(self) -> DXGI_FORMAT {
+    fn dxgi(self) -> DXGI_FORMAT {
         match self {
             SurfaceFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
             SurfaceFormat::Bgra8Unorm => DXGI_FORMAT_B8G8R8A8_UNORM,
-            SurfaceFormat::Bgra8UnormSrgb => DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
         }
     }
 
@@ -53,9 +42,6 @@ impl SurfaceFormat {
         match self {
             SurfaceFormat::Rgba16Float => rgba16f_rows_to_rgba8(bytes, pitch, width, height),
             SurfaceFormat::Bgra8Unorm => bgra8_rows_to_rgba8(bytes, pitch, width, height),
-            SurfaceFormat::Bgra8UnormSrgb => {
-                bgra8_srgb_rows_to_linear_rgba8(bytes, pitch, width, height)
-            }
         }
     }
 }
@@ -100,7 +86,7 @@ fn create_surface_resources(
     format: SurfaceFormat,
 ) -> Result<SurfaceResources, Error> {
     let clear = D3D12_CLEAR_VALUE {
-        Format: format.view(),
+        Format: format.dxgi(),
         Anonymous: D3D12_CLEAR_VALUE_0 { Color: [0.0; 4] },
     };
     let mut resource: Option<ID3D12Resource> = None;
@@ -111,7 +97,7 @@ fn create_surface_resources(
             &texture_desc(
                 extent.width,
                 extent.height,
-                format.resource(),
+                format.dxgi(),
                 D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
             ),
             D3D12_RESOURCE_STATE_COMMON,
@@ -129,7 +115,7 @@ fn create_surface_resources(
         })?
     };
     let view = D3D12_RENDER_TARGET_VIEW_DESC {
-        Format: format.view(),
+        Format: format.dxgi(),
         ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
         Anonymous: D3D12_RENDER_TARGET_VIEW_DESC_0 {
             Texture2D: D3D12_TEX2D_RTV {
@@ -183,7 +169,7 @@ impl Gpu {
         let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE)? };
         let event = unsafe { CreateEventW(None, false, false, None)? };
         let mut renderer = SceneRenderer::with_options(&device, SLOTS, cache, options)?;
-        renderer.warm(&[DXGI_FORMAT_R16G16B16A16_FLOAT, format.view()])?;
+        renderer.warm(&[DXGI_FORMAT_R16G16B16A16_FLOAT, format.dxgi()])?;
         let textures = PersistentTextures::new(&device);
         Ok(Self {
             device,
@@ -391,7 +377,7 @@ impl OffscreenBackend {
             });
         }
         self.gpu.check_removed().map_err(GpuError::from)?;
-        let self_format = self.format.view();
+        let self_format = self.format.dxgi();
         let slot = self.next_slot;
         self.next_slot = (self.next_slot + 1) % SLOTS;
         self.gpu
@@ -544,7 +530,7 @@ impl GpuReadback for OffscreenBackend {
         let desc = texture_desc(
             extent.width,
             extent.height,
-            self.format.resource(),
+            self.format.dxgi(),
             D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
         );
         let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();

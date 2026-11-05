@@ -28,8 +28,6 @@ pub struct SlugGpu {
 
 const _: () = assert!(std::mem::size_of::<SlugGpu>() == SPRITE_STRIDE);
 
-const NO_BACKDROP: f32 = -1.0;
-
 fn rect(rect: Rect) -> [f32; 4] {
     [rect.x, rect.y, rect.w, rect.h]
 }
@@ -44,27 +42,27 @@ pub fn pack_glyph(glyph: &GlyphInstance) -> SpriteGpu {
         texels: rect(glyph.texels),
         clip: clip(glyph.clip),
         tail: glyph.color.to_gpu().map(|channel| channel * glyph.opacity),
-        extra: [glyph.backdrop.unwrap_or(NO_BACKDROP), 0.0, 0.0, 0.0],
+        extra: [0.0; 4],
     }
 }
 
 pub fn glyph_packer() -> impl FnMut(&GlyphInstance) -> SpriteGpu {
     let mut memo: Option<(Oklch, [f32; 4])> = None;
     move |glyph| {
-        let linear = match memo {
-            Some((color, linear)) if color == glyph.color => linear,
+        let premultiplied = match memo {
+            Some((color, premultiplied)) if color == glyph.color => premultiplied,
             _ => {
-                let linear = glyph.color.to_gpu();
-                memo = Some((glyph.color, linear));
-                linear
+                let premultiplied = glyph.color.to_gpu();
+                memo = Some((glyph.color, premultiplied));
+                premultiplied
             }
         };
         SpriteGpu {
             bounds: rect(glyph.bounds),
             texels: rect(glyph.texels),
             clip: clip(glyph.clip),
-            tail: linear.map(|channel| channel * glyph.opacity),
-            extra: [glyph.backdrop.unwrap_or(NO_BACKDROP), 0.0, 0.0, 0.0],
+            tail: premultiplied.map(|channel| channel * glyph.opacity),
+            extra: [0.0; 4],
         }
     }
 }
@@ -92,12 +90,7 @@ pub fn pack_slug(glyph: &SlugInstance) -> SlugGpu {
     let linear = glyph.linear.pack();
     SlugGpu {
         placement: [glyph.origin[0], glyph.origin[1], linear[0], linear[1]],
-        glyph: [
-            linear[2],
-            linear[3],
-            glyph.glyph as f32,
-            glyph.backdrop.unwrap_or(NO_BACKDROP),
-        ],
+        glyph: [linear[2], linear[3], glyph.glyph as f32, 0.0],
         bounds: glyph.em_bounds,
         clip: clip(glyph.clip),
         color: glyph.color.to_gpu().map(|channel| channel * glyph.opacity),

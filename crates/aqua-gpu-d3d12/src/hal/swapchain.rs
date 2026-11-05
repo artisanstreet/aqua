@@ -6,9 +6,9 @@ use windows::Win32::System::Threading::WaitForSingleObjectEx;
 use windows::core::Interface;
 
 use super::error::Error;
+use crate::ledger::{Kind, Token, record};
 
-pub const BACK_BUFFER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
-pub const RENDER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+pub const RENDER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 const BUFFER_COUNT: u32 = 2;
 const OCCLUDED: i32 = 0x087A0001;
 
@@ -39,6 +39,7 @@ pub struct BackBuffer<'a> {
 pub struct Swapchain {
     swapchain: IDXGISwapChain3,
     buffers: Vec<ID3D12Resource>,
+    tokens: Vec<Token>,
     rtv_heap: ID3D12DescriptorHeap,
     rtv_stride: usize,
     waitable: HANDLE,
@@ -114,7 +115,7 @@ impl Swapchain {
         let desc = DXGI_SWAP_CHAIN_DESC1 {
             Width: width,
             Height: height,
-            Format: BACK_BUFFER_FORMAT,
+            Format: RENDER_FORMAT,
             Stereo: false.into(),
             SampleDesc: DXGI_SAMPLE_DESC {
                 Count: 1,
@@ -163,6 +164,7 @@ impl Swapchain {
         let mut created = Self {
             swapchain,
             buffers: Vec::new(),
+            tokens: Vec::new(),
             rtv_stride: unsafe {
                 device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV)
             } as usize,
@@ -191,7 +193,17 @@ impl Swapchain {
 
     fn acquire(&mut self, device: &ID3D12Device) -> Result<(), Error> {
         self.buffers.clear();
+        self.tokens.clear();
+        let label = match self.target {
+            SwapchainTarget::Hwnd(_) => "swapchain_buffer",
+            SwapchainTarget::Composition => "composition_swapchain_buffer",
+        };
         for index in 0..BUFFER_COUNT {
+            self.tokens.push(record(
+                label,
+                Kind::Swapchain,
+                self.width as u64 * self.height as u64 * 4,
+            ));
             let buffer: ID3D12Resource = unsafe { self.swapchain.GetBuffer(index)? };
             let handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: self.rtv_start() + index as usize * self.rtv_stride,

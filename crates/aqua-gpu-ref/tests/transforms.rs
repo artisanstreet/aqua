@@ -1,9 +1,9 @@
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
-use aqua_gpu_ref::conformance::text::{slug_assets, slug_glyph, SLUG_STORE};
-use aqua_gpu_ref::raster::{draw_quad, Layer};
-use aqua_gpu_ref::sprites::{draw_glyphs, draw_slug, RefTexture};
-use aqua_graph::tone::{premultiplied_linear_luminance, ToneCurve};
+use aqua_core::geometry::Rect;
+use aqua_gpu_ref::conformance::text::{SLUG_STORE, slug_assets, slug_glyph};
+use aqua_gpu_ref::raster::{Layer, draw_quad};
+use aqua_gpu_ref::sprites::{RefTexture, draw_glyphs, draw_slug};
+use aqua_graph::tone::{ToneCurve, premultiplied_luminance};
 use aqua_graph::{Extent, GlyphInstance, Linear2, QuadInstance, SlugInstance, TextureFormat};
 use aqua_protocol::TextureOp as UploadOp;
 
@@ -98,7 +98,7 @@ fn slug_store() -> RefTexture {
 
 fn render_slug(instance: SlugInstance) -> Layer {
     let mut layer = Layer::transparent(128, 128);
-    draw_slug(&mut layer, &slug_store(), &[instance]);
+    draw_slug(&mut layer, &slug_store(), &[instance], ToneCurve::EXACT);
     layer
 }
 
@@ -113,7 +113,7 @@ fn slug_ring_ink_matches_its_analytic_area_at_every_scale_and_placement() {
         (48.0, Linear2::skew(0.4, 0.0)),
         (30.0, Linear2::skew(0.0, -0.3).then(Linear2::rotation(2.0))),
     ] {
-        let layer = render_slug(slug_glyph(ring, [40.0, 80.0], ppem, placement, white, None));
+        let layer = render_slug(slug_glyph(ring, [40.0, 80.0], ppem, placement, white));
         let expected = std::f32::consts::PI * (0.5f32 * 0.5 - 0.22 * 0.22) * ppem * ppem;
         let ink = alpha_sum(&layer);
         assert!(
@@ -133,7 +133,6 @@ fn slug_counter_is_empty_and_the_stroke_is_solid() {
         64.0,
         Linear2::IDENTITY,
         white,
-        None,
     ));
     let centre = layer.at(10 + 32, 100 - 32);
     let stroke = layer.at(10 + 6, 100 - 32);
@@ -141,7 +140,7 @@ fn slug_counter_is_empty_and_the_stroke_is_solid() {
     assert!(stroke[3] > 0.99, "{stroke:?}");
 }
 
-fn single_glyph(coverage: u8, backdrop: Option<f32>, color: &str) -> [f32; 4] {
+fn single_glyph(coverage: u8, tone: ToneCurve, color: &str) -> [f32; 4] {
     let mut atlas = RefTexture::new(Extent::new(1, 1), TextureFormat::R8Unorm).unwrap();
     atlas.write(0, 0, Extent::new(1, 1), &[coverage]).unwrap();
     let glyph = GlyphInstance {
@@ -150,30 +149,33 @@ fn single_glyph(coverage: u8, backdrop: Option<f32>, color: &str) -> [f32; 4] {
         color: Oklch::from_hex(color).unwrap(),
         clip: None,
         opacity: 1.0,
-        backdrop,
     };
     let mut layer = Layer::transparent(1, 1);
-    draw_glyphs(&mut layer, &atlas, &[glyph]);
+    draw_glyphs(&mut layer, &atlas, &[glyph], tone);
     layer.at(0, 0)
 }
 
 #[test]
-fn glyph_alpha_uses_the_known_backdrop_through_the_tone_curve() {
-    let tone = ToneCurve::native();
-    for (color, backdrop) in [("#000000", 0.5), ("#ffffff", 0.5), ("#303030", 0.9)] {
+fn glyph_alpha_follows_the_plan_tone_curve_in_encoded_space() {
+    let native = ToneCurve::native();
+    for color in ["#000000", "#ffffff", "#303030", "#dd7030"] {
         let source = Oklch::from_hex(color).unwrap();
-        let luminance = premultiplied_linear_luminance(source.to_gpu());
+        let luminance = premultiplied_luminance(source.to_gpu());
         for coverage in [40u8, 128, 220] {
-            let expected =
-                tone.linear_blend_alpha_over(f32::from(coverage) / 255.0, luminance, backdrop);
-            let got = single_glyph(coverage, Some(backdrop), color)[3];
+            let fraction = f32::from(coverage) / 255.0;
+            let toned = single_glyph(coverage, native, color)[3];
+            let exact = single_glyph(coverage, ToneCurve::EXACT, color)[3];
             assert!(
-                (got - expected).abs() < 1.0e-5,
-                "{color} {coverage}: {got} vs {expected}"
+                (toned - native.alpha(fraction, luminance)).abs() < 1.0e-5,
+                "{color} {coverage}: {toned}"
+            );
+            assert!(
+                (exact - fraction).abs() < 1.0e-5,
+                "{color} {coverage}: {exact}"
             );
         }
     }
-    let known = single_glyph(128, Some(0.5), "#000000")[3];
-    let assumed = single_glyph(128, None, "#000000")[3];
-    assert!((known - assumed).abs() > 0.02, "{known} vs {assumed}");
+    let dark = single_glyph(128, native, "#000000")[3];
+    let light = single_glyph(128, native, "#ffffff")[3];
+    assert!(light > dark + 0.02, "{light} vs {dark}");
 }

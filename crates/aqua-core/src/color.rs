@@ -1,14 +1,3 @@
-//! Canonical public color model: OKLCH with alpha.
-//!
-//! This is the single authoring interchange type. External formats (hex sRGB,
-//! display P3-approximated sRGB, HSL) convert here at import boundaries; GPU
-//! working values (premultiplied linear light) convert at the render
-//! boundary via [`Oklch::to_gpu`]. The conversion math was reviewed against
-//! `aqua-render`'s prototype: identical matrices and transfer curve.
-
-// The sRGB/OKLab matrices below are the published constants (IEC 61966-2-1,
-// Björn Ottosson's OKLab derivation). Their decimal digits exceed f32
-// precision by design; storage rounds to the nearest representable value.
 #![allow(clippy::excessive_precision)]
 
 /// Authored UI color: OKLCH + alpha.
@@ -165,22 +154,17 @@ impl Oklch {
         Self::from_srgb8(to8(r), to8(g), to8(b), alpha)
     }
 
-    /// Render-boundary value: premultiplied linear-light sRGB + alpha, ready
-    /// for shaders and GPU composition.
     #[must_use]
     pub fn to_gpu(self) -> [f32; 4] {
-        let (a, b) = lch_to_oklab(self.c, self.h);
-        let lin = oklab_to_linear_srgb(self.l, a, b);
-        let alpha = self.alpha.clamp(0.0, 1.0);
-        [lin[0] * alpha, lin[1] * alpha, lin[2] * alpha, alpha]
+        let [r, g, b, alpha] = self.to_srgba();
+        [r * alpha, g * alpha, b * alpha, alpha]
     }
 
-    /// Non-premultiplied linear-light sRGB + alpha (readback/comparison).
     #[must_use]
-    pub fn to_linear(self) -> [f32; 4] {
+    pub fn to_srgba(self) -> [f32; 4] {
         let (a, b) = lch_to_oklab(self.c, self.h);
-        let lin = oklab_to_linear_srgb(self.l, a, b);
-        [lin[0], lin[1], lin[2], self.alpha.clamp(0.0, 1.0)]
+        let [r, g, b] = oklab_to_linear_srgb(self.l, a, b).map(linear_to_srgb);
+        [r, g, b, self.alpha.clamp(0.0, 1.0)]
     }
 
     /// Quantized 8-bit sRGB + float alpha (exports, snapshots, tests).
@@ -188,11 +172,8 @@ impl Oklch {
     /// the original [`Oklch`] when exact re-editing is required.
     #[must_use]
     pub fn to_srgb8(self) -> [u8; 4] {
-        let (a, b) = lch_to_oklab(self.c, self.h);
-        let lin = oklab_to_linear_srgb(self.l, a, b);
-        let [r, g, b] = linear_to_srgb8(lin);
-        let alpha = (self.alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
-        [r, g, b, alpha]
+        self.to_srgba()
+            .map(|channel| (channel * 255.0).round().clamp(0.0, 255.0) as u8)
     }
 
     /// Interpolate toward `other`. Lightness/chroma/alpha lerp linearly; hue
@@ -240,18 +221,13 @@ pub fn srgb8_to_linear([r, g, b]: [u8; 3]) -> [f32; 3] {
     })
 }
 
-/// Linear light to sRGB bytes.
 #[must_use]
-pub fn linear_to_srgb8([r, g, b]: [f32; 3]) -> [u8; 3] {
-    [r, g, b].map(|v| {
-        let v = v.clamp(0.0, 1.0);
-        let s = if v <= 0.0031308 {
-            v * 12.92
-        } else {
-            1.055 * v.powf(1.0 / 2.4) - 0.055
-        };
-        (s * 255.0).round().clamp(0.0, 255.0) as u8
-    })
+pub fn linear_to_srgb(linear: f32) -> f32 {
+    let value = linear.clamp(0.0, 1.0);
+    match value <= 0.003_130_8 {
+        true => value * 12.92,
+        false => 1.055 * value.powf(1.0 / 2.4) - 0.055,
+    }
 }
 
 fn linear_srgb_to_oklab([r, g, b]: [f32; 3]) -> (f32, f32, f32) {
@@ -381,7 +357,7 @@ mod tests {
             ("#f00", [255, 0, 0]),
         ] {
             let c = Oklch::from_hex(hex).expect("valid hex");
-            let [r, g, b] = linear_to_srgb8([c.to_linear()[0], c.to_linear()[1], c.to_linear()[2]]);
+            let [r, g, b, _] = c.to_srgb8();
             assert_eq!([r, g, b], expect, "hex {hex}");
         }
     }

@@ -1,9 +1,9 @@
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
+use aqua_core::geometry::Rect;
 use aqua_gpu_d3d12::hal::budget::{Trim, Visibility};
 use aqua_gpu_d3d12::hal::selection::AdapterPreference;
 use aqua_gpu_d3d12::window::MemoryBreakdown;
-use aqua_graph::{plan_paint, Extent, FramePlan, PaintCommand, Quad};
+use aqua_graph::{Extent, FramePlan, PaintCommand, Quad, plan_paint};
 
 use crate::backend::{backend, frame, open, scene};
 use crate::test_window::TestWindow;
@@ -72,6 +72,19 @@ fn breakdown_and_trim(preference: AdapterPreference, label: &str) {
     );
     assert!(warm.transient_heap_bytes > 0, "[{label}] no transient heap");
     assert!(warm.frame_upload_bytes > 0 && warm.scene_upload_bytes > 0);
+
+    let ledger = backend.ledger();
+    let swapchain = ledger.find("swapchain_buffer").unwrap().line;
+    assert!(
+        swapchain.bytes >= expected_swapchain,
+        "[{label}] ledger swapchain {}",
+        swapchain.bytes
+    );
+    assert!(ledger.peak_bytes_of("transient_heap") >= warm.transient_heap_bytes);
+    assert!(ledger.peak_bytes_of("frame_upload_ring") >= warm.frame_upload_bytes);
+    assert!(ledger.find("command_allocator").unwrap().line.count >= 2);
+    assert!(ledger.find("pipeline_state").unwrap().line.count > 0);
+    eprintln!("[{label}] {}", ledger.render());
 
     let freed = backend.trim(everything()).unwrap();
     let trimmed = backend.memory_breakdown().unwrap();

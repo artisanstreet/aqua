@@ -67,12 +67,30 @@ fn transformed(rect: Rect, transform: Transform2D) -> Rect {
 fn is_group_open(item: &DisplayItem) -> bool {
     matches!(
         item,
-        DisplayItem::PushTransform(_) | DisplayItem::PushOpacity(_)
+        DisplayItem::PushTransform(_)
+            | DisplayItem::PushOpacity(_)
+            | DisplayItem::PushTextColorMap(_)
+            | DisplayItem::PushGpuiTextColorMap(_)
+            | DisplayItem::PushGpuiTextShimmer(_)
+            | DisplayItem::PushGpuiTextColor(_)
+            | DisplayItem::PushGpuiTextOpacity(_)
+            | DisplayItem::PushGpuiSourceTextColor(_)
+            | DisplayItem::PushGpuiQuadPulse(_)
     )
 }
 
 fn is_group_close(item: &DisplayItem) -> bool {
-    matches!(item, DisplayItem::PopTransform | DisplayItem::PopOpacity)
+    matches!(
+        item,
+        DisplayItem::PopTransform
+            | DisplayItem::PopOpacity
+            | DisplayItem::PopTextColorMap
+            | DisplayItem::PopGpuiTextColorMap
+            | DisplayItem::PopGpuiTextColor
+            | DisplayItem::PopGpuiTextOpacity
+            | DisplayItem::PopGpuiSourceTextColor
+            | DisplayItem::PopGpuiQuadPulse
+    )
 }
 
 fn local_rect(item: &DisplayItem, ink: &dyn Fn(&TextRun) -> Option<Rect>) -> Kind {

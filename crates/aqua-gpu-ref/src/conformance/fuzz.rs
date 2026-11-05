@@ -3,7 +3,7 @@ use aqua_graph::{Extent, PaintCommand};
 
 use super::assets::{ATLAS_EXTENT, PHOTO_EXTENT};
 use super::cases::{
-    backdrop_blur, build, clip, glyph_run, gradient, hex, photo, quad, rect, shadow, Case,
+    Case, backdrop_blur, build, clip, glyph_run, gradient, hex, photo, quad, rect, shadow,
 };
 
 pub struct SplitMix64(u64);

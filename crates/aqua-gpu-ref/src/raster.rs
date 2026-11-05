@@ -1,4 +1,4 @@
-use aqua_core::{geometry::Rect, Oklch};
+use aqua_core::{Oklch, geometry::Rect};
 use aqua_graph::{Gradient, Linear2, QuadInstance};
 
 pub type Pixel = [f32; 4];
@@ -47,7 +47,7 @@ pub fn premultiplied(color: Oklch) -> Pixel {
 }
 
 fn straight(color: Oklch) -> Pixel {
-    color.to_linear()
+    color.to_srgba()
 }
 
 fn length(x: f32, y: f32) -> f32 {

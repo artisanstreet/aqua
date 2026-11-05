@@ -9,6 +9,7 @@ use super::Error;
 use super::barriers::{BarrierMode, initial_layout};
 use super::formats::dxgi;
 use super::util::*;
+use crate::ledger::{Kind, Token, record};
 use crate::placement::{Planned, place};
 use crate::policy::{HeapDecision, HeapGate};
 
@@ -35,13 +36,13 @@ struct Retired {
     fence: u64,
     bytes: u64,
     _resources: Vec<Entry>,
-    _heap: Option<ID3D12Heap>,
+    _heap: Option<(ID3D12Heap, Token)>,
 }
 
 pub struct Transients {
     device10: Option<ID3D12Device10>,
     gate: HeapGate,
-    heap: Option<(ID3D12Heap, u64)>,
+    heap: Option<(ID3D12Heap, u64, Token)>,
     needed: u64,
     keys: Vec<Key>,
     entries: Vec<Entry>,
@@ -148,7 +149,7 @@ impl Transients {
     pub fn trim(&mut self, frame_fence: u64) -> u64 {
         let freed = self.heap_bytes();
         let entries = std::mem::take(&mut self.entries);
-        let heap = self.heap.take().map(|(heap, _)| heap);
+        let heap = self.heap.take().map(|(heap, _, token)| (heap, token));
         if !entries.is_empty() || heap.is_some() {
             self.retired.push(Retired {
                 fence: frame_fence,
@@ -185,7 +186,7 @@ impl Transients {
     }
 
     pub fn heap_bytes(&self) -> u64 {
-        self.heap.as_ref().map(|(_, size)| *size).unwrap_or(0)
+        self.heap.as_ref().map(|(_, size, _)| *size).unwrap_or(0)
     }
 
     fn matches(&self, plan: &FramePlan) -> bool {
@@ -288,16 +289,22 @@ impl Transients {
                     };
                     let mut heap: Option<ID3D12Heap> = None;
                     unsafe { device.CreateHeap(&desc, &mut heap)? };
-                    heap.map(|heap| (heap, size))
+                    heap.map(|heap| {
+                        (
+                            heap,
+                            size,
+                            record("transient_heap", Kind::TransientHeap, size),
+                        )
+                    })
                 }
             };
             let previous = std::mem::replace(&mut self.heap, new_heap);
-            old_bytes = previous.as_ref().map(|(_, size)| *size).unwrap_or(0);
-            old_heap = previous.map(|(heap, _)| heap);
+            old_bytes = previous.as_ref().map(|(_, size, _)| *size).unwrap_or(0);
+            old_heap = previous.map(|(heap, _, token)| (heap, token));
         }
         let mut created = Vec::with_capacity(keys.len());
         for (key, offset) in keys.iter().zip(&placement.offsets) {
-            let (heap, _) = self.heap.as_ref().ok_or(Error::NoAdapter)?;
+            let (heap, _, _) = self.heap.as_ref().ok_or(Error::NoAdapter)?;
             created.push(Entry {
                 resource: self.create(device, heap, key, *offset)?,
                 extent: key.extent,

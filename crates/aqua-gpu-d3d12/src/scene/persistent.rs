@@ -8,6 +8,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::Error;
 use super::renderer::PersistentView;
 use super::util::*;
+use crate::ledger::{Kind as LedgerKind, Token, record};
 
 const PITCH_ALIGNMENT: u64 = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT as u64;
 const PLACEMENT_ALIGNMENT: u64 = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT as u64;
@@ -19,9 +20,11 @@ struct Entry {
     format: TextureFormat,
     extent: Extent,
     state: D3D12_RESOURCE_STATES,
+    _token: Token,
 }
 
 struct Staging {
+    _token: Token,
     resource: ID3D12Resource,
     ptr: *mut u8,
     capacity: u64,
@@ -40,7 +43,7 @@ pub struct PersistentTextures {
     device: ID3D12Device,
     entries: HashMap<TextureHandle, Entry>,
     staging: Vec<Staging>,
-    graveyard: Vec<(u64, ID3D12Resource)>,
+    graveyard: Vec<(u64, Entry)>,
     uploaded_bytes: u64,
 }
 
@@ -50,6 +53,14 @@ pub fn dxgi_format(format: TextureFormat) -> Option<DXGI_FORMAT> {
         TextureFormat::Rgba8Unorm => Some(DXGI_FORMAT_R8G8B8A8_UNORM),
         TextureFormat::Rgba32Float => Some(DXGI_FORMAT_R32G32B32A32_FLOAT),
         _ => None,
+    }
+}
+
+fn texture_label(format: TextureFormat) -> &'static str {
+    match format {
+        TextureFormat::R8Unorm => "persistent_r8",
+        TextureFormat::Rgba8Unorm => "persistent_rgba8",
+        _ => "persistent_other",
     }
 }
 
@@ -174,9 +185,14 @@ impl PersistentTextures {
                 format,
                 extent,
                 state: D3D12_RESOURCE_STATE_COMMON,
+                _token: record(
+                    texture_label(format),
+                    LedgerKind::Texture,
+                    texture_bytes(extent, format),
+                ),
             },
         ) {
-            self.graveyard.push((frame_fence, previous.resource));
+            self.graveyard.push((frame_fence, previous));
         }
         Ok(())
     }
@@ -201,6 +217,7 @@ impl PersistentTextures {
                     staging.busy_until > completed || staging.capacity >= capacity
                 });
                 self.staging.push(Staging {
+                    _token: record("atlas_staging", LedgerKind::UploadBuffer, capacity),
                     resource,
                     ptr,
                     capacity,
@@ -245,7 +262,7 @@ impl PersistentTextures {
                     TextureOp::Release => {
                         copying.retain(|handle| *handle != upload.handle);
                         if let Some(entry) = self.entries.remove(&upload.handle) {
-                            self.graveyard.push((frame_fence, entry.resource));
+                            self.graveyard.push((frame_fence, entry));
                         }
                     }
                     TextureOp::Write { region, data } => {

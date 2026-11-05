@@ -1,5 +1,5 @@
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
+use aqua_core::geometry::Rect;
 use aqua_gpu_d3d12::sprite::{pack_glyph, pack_glyphs, pack_image};
 use aqua_graph::{GlyphInstance, ImageInstance, TextureHandle, TextureRef};
 
@@ -19,7 +19,6 @@ fn glyph(x: f32, color: Oklch, opacity: f32) -> GlyphInstance {
         color,
         clip: None,
         opacity,
-        backdrop: None,
     }
 }
 

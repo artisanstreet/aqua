@@ -3,8 +3,15 @@ use aqua_protocol::{
     Features, FrameInputs, GpuBackend, GpuReadback, SurfaceId, SurfaceTarget, UploadBatch,
 };
 
-use super::cases::{cases, Case, STANDARD};
+use super::cases::{Case, STANDARD, cases};
 use super::effects::requirements;
+use super::glass::{
+    MAX_STEP, MIN_SPREAD, blurred, column_steepest, glass_cases, interior_difference, profile,
+    rim_pair, rows,
+};
+use super::gpui;
+
+const RIM_TOLERANCE: u8 = 2;
 use super::session::Session;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,6 +183,60 @@ fn recovery_preserves_output<B: GpuBackend + GpuReadback>(backend: &mut B) -> Re
     Ok(())
 }
 
+fn translucent_white_matches_gpui<B: GpuBackend + GpuReadback>(
+    backend: &mut B,
+) -> Result<(), String> {
+    let pixels = Session::new(backend)
+        .render_case(&gpui::translucent_white_case())
+        .map_err(describe)?;
+    match gpui::deviation(&pixels) {
+        None => Ok(()),
+        Some((x, y, expected, actual)) => Err(format!(
+            "translucent white over #111111 at ({x}, {y}) is {actual}, GPUI's gamma-space blend gives {expected} (tolerance {})",
+            gpui::TOLERANCE
+        )),
+    }
+}
+
+fn backdrop_glass_is_blurred<B: GpuBackend + GpuReadback>(backend: &mut B) -> Result<(), String> {
+    let mut session = Session::new(backend);
+    for glass in glass_cases() {
+        let pixels = session.render_case(&glass.case).map_err(describe)?;
+        for row in rows(glass.glass) {
+            let profile = profile(&pixels, glass.glass, row);
+            expect(blurred(profile), || {
+                format!(
+                    "{} row {row}: the glass must show the stripes behind it blurred, got spread {} and steepest step {} (flat when the spread is under {MIN_SPREAD}, sharp when a step exceeds {MAX_STEP})",
+                    glass.case.name, profile.spread, profile.steepest
+                )
+            })?;
+        }
+        let seam = column_steepest(&pixels, glass.glass);
+        expect(seam <= MAX_STEP, || {
+            format!(
+                "{} has a horizontal seam: a vertical step of {seam} exceeds {MAX_STEP}",
+                glass.case.name
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn drop_shadows_stay_outside_glass<B: GpuBackend + GpuReadback>(
+    backend: &mut B,
+) -> Result<(), String> {
+    let pair = rim_pair();
+    let mut session = Session::new(backend);
+    let bare = session.render_case(&pair.bare).map_err(describe)?;
+    let rimmed = session.render_case(&pair.rimmed).map_err(describe)?;
+    let difference = interior_difference(&bare, &rimmed, pair.glass);
+    expect(difference <= RIM_TOLERANCE, || {
+        format!(
+            "the glass interior changed by {difference} when its own drop shadows were added: an outer shadow painted under the element and the backdrop blur picked it up"
+        )
+    })
+}
+
 pub fn run_contract<B: GpuBackend + GpuReadback>(backend: &mut B) -> Vec<ContractReport> {
     vec![
         check(
@@ -209,6 +270,18 @@ pub fn run_contract<B: GpuBackend + GpuReadback>(backend: &mut B) -> Vec<Contrac
         check(
             "recovery_preserves_output",
             recovery_preserves_output(backend),
+        ),
+        check(
+            "translucent_white_matches_gpui",
+            translucent_white_matches_gpui(backend),
+        ),
+        check(
+            "backdrop_glass_is_blurred",
+            backdrop_glass_is_blurred(backend),
+        ),
+        check(
+            "drop_shadows_stay_outside_glass",
+            drop_shadows_stay_outside_glass(backend),
         ),
     ]
 }

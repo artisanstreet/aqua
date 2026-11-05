@@ -1,5 +1,5 @@
 use aqua::images::DecodedImage;
-use aqua::{px, ui, ImageAssets, Instant, ManagedUiApp, Style, UiApp};
+use aqua::{ImageAssets, Instant, ManagedUiApp, Style, UiApp, px, ui};
 use aqua_core::{Rect, Size};
 use aqua_text::{SharedFonts, SharedRuns};
 
@@ -146,7 +146,9 @@ fn managed_gif_selects_frames_by_host_time_and_gpu_admission_reports_failure_on(
     assert!(app.synchronize_images(Instant::ZERO).unwrap().is_empty());
     assert_eq!(app.gpu_image_bytes(), 0);
     let root = app.ui().tree().root().unwrap();
-    app.ui_mut().tree_mut().get_mut(root).unwrap().paint.opacity = Some(1.0);
+    let mut root_paint = app.ui().tree().paint(root).unwrap();
+    root_paint.opacity = Some(1.0);
+    app.ui_mut().tree_mut().set_paint(root, root_paint);
     for (time, expected) in [
         (0, [255, 0, 0, 255]),
         (30_000_000, [0, 255, 0, 255]),

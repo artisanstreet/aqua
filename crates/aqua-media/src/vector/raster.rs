@@ -1,6 +1,6 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use aqua_core::vector::{Brush, Drawing, FillRule, LineCap, LineJoin, PathCommand, VectorSource};
@@ -147,28 +147,16 @@ pub fn rasterize(
                 translate.pre_scale(scale, scale),
                 &mut pixmap.as_mut(),
             );
-            for pixel in pixmap.pixels_mut() {
-                let straight = pixel.demultiply();
-                let alpha = f32::from(straight.alpha()) / 255.0;
-                let color = match svg.tint {
-                    Some(color) => {
-                        let [r, g, b, a] = color.to_linear();
-                        [r * alpha * a, g * alpha * a, b * alpha * a, alpha * a]
-                    }
-                    None => {
-                        let [r, g, b] = aqua_core::color::srgb8_to_linear([
-                            straight.red(),
-                            straight.green(),
-                            straight.blue(),
-                        ]);
-                        [r * alpha, g * alpha, b * alpha, alpha]
-                    }
-                };
-                let [r, g, b, a] =
-                    color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8);
-                *pixel =
-                    tiny_skia::PremultipliedColorU8::from_rgba(r.min(a), g.min(a), b.min(a), a)
-                        .ok_or(VectorError::InvalidGeometry)?;
+            if let Some(tint) = svg.tint {
+                let [r, g, b, a] = tint.to_srgba();
+                for pixel in pixmap.pixels_mut() {
+                    let alpha = f32::from(pixel.alpha()) / 255.0 * a;
+                    let [r, g, b, a] = [r * alpha, g * alpha, b * alpha, alpha]
+                        .map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8);
+                    *pixel =
+                        tiny_skia::PremultipliedColorU8::from_rgba(r.min(a), g.min(a), b.min(a), a)
+                            .ok_or(VectorError::InvalidGeometry)?;
+                }
             }
         }
     }
@@ -192,9 +180,8 @@ fn dimensions(width: u32, height: u32, budget: VectorBudget) -> Result<(), Vecto
 }
 
 fn color(color: Oklch) -> Result<tiny_skia::Color, VectorError> {
-    let [r, g, b, a] = color.to_linear();
-    tiny_skia::Color::from_rgba(r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0), a)
-        .ok_or(VectorError::InvalidGeometry)
+    let [r, g, b, a] = color.to_srgba();
+    tiny_skia::Color::from_rgba(r, g, b, a).ok_or(VectorError::InvalidGeometry)
 }
 
 fn point(point: Point) -> Result<tiny_skia::Point, VectorError> {

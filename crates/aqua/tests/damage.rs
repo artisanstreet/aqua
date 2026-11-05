@@ -43,7 +43,7 @@ fn rig() -> Rig {
 }
 
 fn settle(rig: &mut Rig, scale: f32) -> Plan {
-    let plan = rig.planner.plan(&rig.scene, &rig.runs, SIZE, scale);
+    let plan = rig.planner.plan(&rig.scene, &rig.runs, SIZE, scale, true);
     rig.planner.commit();
     plan
 }
@@ -146,7 +146,7 @@ fn an_uncommitted_frame_does_not_advance_the_baseline() {
     let mut rig = rig();
     settle(&mut rig, 1.0);
     rig.scene.update(rig.blocks[1], block(70.0, 140.0));
-    let lost = rig.planner.plan(&rig.scene, &rig.runs, SIZE, 1.0);
+    let lost = rig.planner.plan(&rig.scene, &rig.runs, SIZE, 1.0, true);
     assert!(matches!(lost, Plan::Regions(_)));
     rig.planner.invalidate();
     assert_eq!(settle(&mut rig, 1.0), Plan::Full);
@@ -162,13 +162,13 @@ fn moving_a_group_damages_both_extents() {
     scene.insert(block(300.0, 200.0));
     let runs = SharedRuns::new();
     let mut planner = DamagePlanner::new();
-    planner.plan(&scene, &runs, SIZE, 1.0);
+    planner.plan(&scene, &runs, SIZE, 1.0, true);
     planner.commit();
     scene.update(
         push,
         DisplayItem::PushTransform(Transform2D::translate(0.0, 100.0)),
     );
-    let plan = planner.plan(&scene, &runs, SIZE, 1.0);
+    let plan = planner.plan(&scene, &runs, SIZE, 1.0, true);
     assert!(covers(
         &plan,
         Rect {
@@ -210,12 +210,22 @@ fn blur_at(x: f32, y: f32) -> DisplayItem {
 }
 
 #[test]
-fn damage_that_reaches_a_backdrop_blur_repaints_fully() {
+fn damage_that_reaches_a_backdrop_blur_widens_to_the_whole_blur_zone() {
     let mut rig = rig();
     rig.scene.insert(blur_at(200.0, 200.0));
     settle(&mut rig, 1.0);
     rig.scene.update(rig.blocks[0], block(200.0, 190.0));
-    assert_eq!(settle(&mut rig, 1.0), Plan::Full);
+    let plan = settle(&mut rig, 1.0);
+    assert!(matches!(plan, Plan::Regions(_)), "{plan:?}");
+    assert!(covers(
+        &plan,
+        Rect {
+            x: 200.0 - 48.0,
+            y: 200.0 - 48.0,
+            w: 50.0 + 96.0,
+            h: 50.0 + 96.0
+        }
+    ));
 }
 
 #[test]
@@ -304,9 +314,43 @@ fn a_pulse_under_a_transform_damages_the_transformed_footprint() {
 }
 
 #[test]
-fn a_pulse_behind_a_blur_repaints_fully() {
+fn a_pulse_behind_a_blur_repaints_the_whole_blur_zone_and_nothing_far_from_it() {
     let mut rig = rig();
     rig.scene.insert(blur_at(290.0, 190.0));
+    rig.scene.insert(pulse());
+    rig.scene.insert(quad(300.0, 200.0));
+    rig.scene.insert(DisplayItem::PopGpuiQuadPulse);
+    settle(&mut rig, 1.0);
+    let plan = settle(&mut rig, 1.0);
+    let zone = Rect {
+        x: 290.0 - 48.0,
+        y: 190.0 - 48.0,
+        w: 50.0 + 96.0,
+        h: 50.0 + 96.0,
+    };
+    assert!(covers(&plan, zone));
+    let Plan::Regions(regions) = &plan else {
+        panic!("expected regions, got {plan:?}")
+    };
+    assert!(
+        regions
+            .iter()
+            .all(|r| !(r.x < 100.0 && r.right() > 100.0 && r.y < 50.0 && r.bottom() > 50.0))
+    );
+}
+
+#[test]
+fn a_blur_zone_that_swallows_most_of_the_frame_repaints_fully() {
+    let mut rig = rig();
+    rig.scene.insert(DisplayItem::BackdropBlur {
+        bounds: Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 400.0,
+            h: 280.0,
+        },
+        radius: 8.0,
+    });
     rig.scene.insert(pulse());
     rig.scene.insert(quad(300.0, 200.0));
     rig.scene.insert(DisplayItem::PopGpuiQuadPulse);
@@ -412,9 +456,24 @@ mod differential {
     }
 
     fn run(scale: f32, seed: u64) {
+        run_with(scale, seed, false);
+    }
+
+    fn run_with(scale: f32, seed: u64, blurred: bool) {
         let mut rng = Lcg(seed);
         let mut scene = Scene::new();
         let mut nodes: Vec<NodeId> = (0..10).map(|_| scene.insert(item(&mut rng))).collect();
+        if blurred {
+            scene.insert(DisplayItem::BackdropBlur {
+                bounds: Rect {
+                    x: 50.0,
+                    y: 30.0,
+                    w: 50.0,
+                    h: 40.0,
+                },
+                radius: 3.0,
+            });
+        }
         let push = scene.insert(DisplayItem::PushTransform(Transform2D::translate(0.0, 0.0)));
         let grouped: Vec<NodeId> = (0..3).map(|_| scene.insert(item(&mut rng))).collect();
         scene.insert(DisplayItem::PopTransform);
@@ -426,7 +485,7 @@ mod differential {
         };
         let mut backend = RefBackend::new();
         let mut shown = render(&mut backend, &scene, scale);
-        planner.plan(&scene, &runs, size, scale);
+        planner.plan(&scene, &runs, size, scale, true);
         planner.commit();
         let mut partial = 0;
         for step in 0..30 {
@@ -457,7 +516,7 @@ mod differential {
                     nodes.push(scene.insert(item(&mut rng)));
                 }
             }
-            let plan = planner.plan(&scene, &runs, size, scale);
+            let plan = planner.plan(&scene, &runs, size, scale, true);
             planner.commit();
             let fresh = render(&mut backend, &scene, scale);
             match &plan {
@@ -481,7 +540,115 @@ mod differential {
     }
 
     #[test]
+    fn partial_regions_reproduce_the_full_render_around_a_backdrop_blur() {
+        [21, 22, 23, 25, 26, 27]
+            .into_iter()
+            .for_each(|seed| run_with(1.0, seed, true));
+    }
+
+    #[test]
     fn partial_regions_reproduce_the_full_render_at_fractional_scale() {
         (11..=14).for_each(|seed| run(1.25, seed));
     }
+}
+
+#[test]
+fn an_animated_quad_keeps_damaging_across_unchanged_frames() {
+    let mut scene = Scene::new();
+    scene.insert(DisplayItem::PushGpuiQuadPulse(
+        aqua_core::scene::GpuiQuadPulse {
+            start_ms: 0,
+            period_ms: 1000,
+            min_opacity: 0.4,
+        },
+    ));
+    scene.insert(DisplayItem::Quad {
+        bounds: Rect {
+            x: 100.0,
+            y: 100.0,
+            w: 20.0,
+            h: 20.0,
+        },
+        corners: aqua_core::geometry::CornerRadii::uniform(0.0),
+        fill: Oklch::from_hex("#336699").unwrap(),
+        border_widths: aqua_core::geometry::Insets::uniform(0.0),
+        border_color: Oklch::TRANSPARENT,
+        dashed: false,
+    });
+    scene.insert(DisplayItem::PopGpuiQuadPulse);
+    let far = scene.insert(block(300.0, 200.0));
+    let runs = SharedRuns::new();
+    let mut planner = DamagePlanner::new();
+    let animated = Rect {
+        x: 100.0,
+        y: 100.0,
+        w: 20.0,
+        h: 20.0,
+    };
+    assert_eq!(planner.plan(&scene, &runs, SIZE, 1.0, true), Plan::Full);
+    planner.commit();
+    let first = planner.plan(&scene, &runs, SIZE, 1.0, true);
+    planner.commit();
+    let second = planner.plan(&scene, &runs, SIZE, 1.0, true);
+    planner.commit();
+    assert!(covers(&first, animated));
+    assert_eq!(first, second);
+    scene.update(far, block(310.0, 200.0));
+    let moved = planner.plan(&scene, &runs, SIZE, 1.0, true);
+    assert!(covers(&moved, animated));
+    assert!(covers(
+        &moved,
+        Rect {
+            x: 310.0,
+            y: 200.0,
+            w: 20.0,
+            h: 20.0
+        }
+    ));
+    planner.commit();
+    planner.invalidate();
+    assert_eq!(planner.plan(&scene, &runs, SIZE, 1.0, true), Plan::Full);
+}
+
+#[test]
+fn restyling_a_text_scope_damages_what_it_wraps_and_not_the_whole_frame() {
+    let tint = |lightness: f32| {
+        DisplayItem::PushGpuiTextColor(aqua_core::GpuiHsla {
+            h: 0.55,
+            s: 0.5,
+            l: lightness,
+            a: 1.0,
+        })
+    };
+    let mut scene = Scene::new();
+    let push = scene.insert(tint(0.4));
+    scene.insert(block(20.0, 20.0));
+    scene.insert(DisplayItem::PopGpuiTextColor);
+    scene.insert(block(300.0, 220.0));
+    let runs = SharedRuns::new();
+    let mut planner = DamagePlanner::new();
+    planner.plan(&scene, &runs, SIZE, 1.0, true);
+    planner.commit();
+    scene.update(push, tint(0.8));
+    let plan = planner.plan(&scene, &runs, SIZE, 1.0, true);
+    planner.commit();
+    assert!(matches!(plan, Plan::Regions(_)), "{plan:?}");
+    assert!(covers(
+        &plan,
+        Rect {
+            x: 20.0,
+            y: 20.0,
+            w: 20.0,
+            h: 20.0
+        }
+    ));
+    let Plan::Regions(regions) = &plan else {
+        unreachable!()
+    };
+    assert!(regions.iter().all(|r| r.right() < 200.0));
+    scene.insert(tint(0.2));
+    scene.insert(block(60.0, 120.0));
+    scene.insert(DisplayItem::PopGpuiTextColor);
+    let grown = planner.plan(&scene, &runs, SIZE, 1.0, true);
+    assert!(matches!(grown, Plan::Regions(_)), "{grown:?}");
 }

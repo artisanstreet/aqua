@@ -17,6 +17,7 @@ const DRAIN_LIMIT: usize = 4096;
 const MAX_PENDING_POLLS: u32 = 60;
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(3);
 const ANIMATION_PERIOD: Duration = Duration::from_millis(15);
+const HEAVY_ANIMATION_PERIOD: Duration = Duration::from_millis(33);
 
 fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
@@ -273,6 +274,16 @@ impl Slot {
         }
     }
 
+    fn startup_step(&mut self) -> bool {
+        match &mut self.stage {
+            Stage::Running(target) if target.startup_pending() => {
+                target.startup_step();
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn idle_trim_deadline(&mut self, now: WallInstant) -> Option<WallInstant> {
         match &mut self.stage {
             Stage::Running(target) => target.idle_trim_in().map(|after| now + after),
@@ -309,6 +320,9 @@ impl Slot {
             || visibility
             || due(repaint_at)
             || due(wake_at);
+        if !urgent && self.startup_step() {
+            return Status::Ran;
+        }
         if !urgent {
             let earliest = [repaint_at, wake_at, idle_at].into_iter().flatten().min();
             return Status::Waiting(earliest);
@@ -476,6 +490,15 @@ impl Slot {
             Repaint::Animating => {
                 self.quiet = true;
                 Pending::At(now + ANIMATION_PERIOD)
+            }
+            Repaint::Heavy => {
+                self.quiet = true;
+                Pending::At(now + HEAVY_ANIMATION_PERIOD)
+            }
+            Repaint::Still(rest) => {
+                self.quiet = true;
+                self.polls = 0;
+                Pending::At(now + rest)
             }
             Repaint::Poll(delay) => match self.polls < MAX_PENDING_POLLS {
                 true => {

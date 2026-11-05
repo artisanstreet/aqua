@@ -21,6 +21,8 @@ struct Probe {
     script: Mutex<Vec<Repaint>>,
     thread: AtomicU64,
     visibility: Mutex<Vec<bool>>,
+    startup_left: AtomicU32,
+    startup_done: AtomicU32,
 }
 
 struct Fake {
@@ -44,6 +46,15 @@ impl FrameTarget for Fake {
             Relaxed,
         );
         vec![Feedback::Presented(frame)]
+    }
+
+    fn startup_pending(&self) -> bool {
+        self.probe.startup_left.load(Relaxed) > 0
+    }
+
+    fn startup_step(&mut self) {
+        self.probe.startup_left.fetch_sub(1, Relaxed);
+        self.probe.startup_done.fetch_add(1, Relaxed);
     }
 
     fn invalidate(&mut self) {
@@ -323,4 +334,20 @@ fn hiding_and_showing_a_window_reaches_its_target_once_per_change() {
     });
     std::thread::sleep(Duration::from_millis(60));
     assert_eq!(*probe.visibility.lock().unwrap(), vec![true, false]);
+}
+
+#[test]
+fn startup_steps_run_one_per_idle_turn_without_presenting() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    probe.startup_left.store(6, Relaxed);
+    let mut link = settled_link(&service, &probe);
+    wait_until("every startup step", || {
+        link.poll();
+        probe.startup_done.load(Relaxed) == 6
+    });
+    let presents = probe.presents.load(Relaxed);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(probe.startup_done.load(Relaxed), 6);
+    assert_eq!(probe.presents.load(Relaxed), presents);
 }

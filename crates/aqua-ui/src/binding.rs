@@ -97,6 +97,7 @@ pub struct View {
     bound: HashMap<RawId, BoundState>,
     content: Vec<Element>,
     collections: HashMap<RawId, CollectionMount>,
+    layout_viewport: Option<Size>,
 }
 
 struct BoundState {
@@ -549,6 +550,7 @@ impl View {
             bound: HashMap::new(),
             content: Vec::new(),
             collections: HashMap::new(),
+            layout_viewport: None,
         }
     }
 
@@ -620,6 +622,7 @@ impl View {
         // fragments error here, loudly, instead of vanishing a key).
         self.content = splice_top_level(elements)?;
         let specs = lower_all(&self.content)?;
+        aqua_core::checkpoint::reach();
         // `synced` tracks whether the tree already reflects the lowered
         // specs, so a refreshed root spec is never synced as a child of
         // itself.
@@ -657,6 +660,7 @@ impl View {
                     let same_key = tree.get(r).is_some_and(|record| record.key == specs[0].key);
                     let refreshed = same_key
                         && self.content[0].refresh_mounted(tree, r, &TypoChain::default())?;
+                    aqua_core::checkpoint::reach();
                     match refreshed {
                         true => synced = true, // children already synced inside
                         false => {
@@ -677,6 +681,7 @@ impl View {
                 }
             }
         }
+        aqua_core::checkpoint::reach();
         let root = self.root.unwrap();
         // Pair nodes with elements positionally (fragments already spliced).
         // Collection elements pair their container node with the window
@@ -721,6 +726,7 @@ impl View {
         // Prune bookkeeping AND scopes for removed subtrees (plus dead
         // collection mounts): without this, effects outlive their rows and
         // leak until the whole view disposes.
+        aqua_core::checkpoint::reach();
         self.prune_dead(tree);
         Ok(self.paired_ids(tree, root))
     }
@@ -819,11 +825,12 @@ impl View {
         measurer: &dyn TextMeasurer,
         register: &mut dyn FnMut(CollectionRowRegistration) -> Result<(), String>,
     ) -> Result<(), String> {
-        if self
-            .collections
-            .values()
-            .any(|mount| mount.state.descriptor().source.width_sensitive())
-        {
+        let viewport_unchanged = self.layout_viewport == Some(viewport);
+        self.layout_viewport = Some(viewport);
+        if self.collections.values().any(|mount| {
+            mount.state.descriptor().source.width_sensitive()
+                && (!viewport_unchanged || mount.state.viewport_width() <= 0.0)
+        }) {
             tree.compute_layout(viewport, measurer)?;
             aqua_core::checkpoint::reach();
         }
@@ -1146,8 +1153,11 @@ impl View {
             m.state.settle_following();
             if vw > 0.0 {
                 let p = m.state.descriptor().source.layout(vw);
+                let source = &m.state.descriptor().source;
                 if p.column_widths != m.built_plan.column_widths
-                    || (width_sensitive && p.content_width != m.built_plan.content_width)
+                    || (width_sensitive
+                        && source.width_class(p.content_width)
+                            != source.width_class(m.built_plan.content_width))
                 {
                     PlanAction::Adopt(p)
                 } else {

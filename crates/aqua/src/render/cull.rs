@@ -66,6 +66,31 @@ fn closes_layer(command: &PaintCommand) -> bool {
     )
 }
 
+fn closes_empty(open: &PaintCommand, close: &PaintCommand) -> bool {
+    matches!(
+        (open, close),
+        (
+            PaintCommand::PushClip(_) | PaintCommand::PushRoundedClip { .. },
+            PaintCommand::PopClip
+        ) | (PaintCommand::PushOpacity(_), PaintCommand::PopOpacity)
+    )
+}
+
+fn collapse_empty_scopes(commands: &mut Vec<PaintCommand>) {
+    let mut kept = 0usize;
+    for index in 0..commands.len() {
+        let empties = kept > 0 && closes_empty(&commands[kept - 1], &commands[index]);
+        match empties {
+            true => kept -= 1,
+            false => {
+                commands.swap(kept, index);
+                kept += 1;
+            }
+        }
+    }
+    commands.truncate(kept);
+}
+
 pub fn cull(commands: &mut Vec<PaintCommand>, region: Rect) -> u32 {
     let before = commands.len();
     let mut layers = 0usize;
@@ -88,5 +113,6 @@ pub fn cull(commands: &mut Vec<PaintCommand>, region: Rect) -> u32 {
             },
         }
     });
+    collapse_empty_scopes(commands);
     (before - commands.len()) as u32
 }

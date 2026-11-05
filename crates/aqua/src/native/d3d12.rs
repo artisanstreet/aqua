@@ -7,8 +7,10 @@ use std::sync::{Arc, Once};
 use std::time::Duration;
 
 use aqua_core::{Oklch, Rect};
-use aqua_gpu_d3d12::hal::budget::Visibility;
-use aqua_gpu_d3d12::window::{TextureRecovery, WindowBackend, WindowOptions};
+#[cfg(not(feature = "d3d12"))]
+use aqua_gpu_d3d11 as gpu;
+#[cfg(feature = "d3d12")]
+use aqua_gpu_d3d12 as gpu;
 use aqua_graph::{Extent, FramePlan};
 use aqua_protocol::{
     Feedback, FrameId, FrameInputs, FrameReport, GpuBackend, GpuCapabilities, GpuError,
@@ -17,6 +19,8 @@ use aqua_protocol::{
 };
 use aqua_runtime::RenderSide;
 use aqua_text::{SharedFonts, SharedRuns};
+use gpu::hal::budget::Visibility;
+use gpu::window::{TextureRecovery, WindowBackend, WindowOptions};
 
 use crate::render::host::{DamageSlot, FrameTarget, GpuFrames, RenderStats, Repaint};
 use crate::render::link::{CompositionSink, InitFactory, RenderContext};
@@ -68,6 +72,12 @@ fn since_process_start() -> Option<Duration> {
 }
 
 pub fn prewarm() {
+    if crate::profile::enabled() {
+        eprintln!(
+            "aqua-startup prewarm_called process_ms={:.1}",
+            since_process_start().map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
+        );
+    }
     WindowBackend::begin_early(WindowOptions::from_env(), persist::load_pipeline_cache);
 }
 
@@ -198,7 +208,7 @@ impl WindowHandle {
                 .collect();
             let phases = backend.phases();
             format!(
-                "d3d12 gpu_ms={:.3} passes_ms=[{}] slot_wait_us={} reserve_us={} transients_recreated={} late_pso={:?}",
+                "d3d12 gpu_ms={:.3} passes_ms=[{}] slot_wait_us={} reserve_us={} transients_recreated={} late_pso={:?} window={:?}",
                 backend
                     .gpu_frame_time()
                     .map_or(0.0, |time| time.as_secs_f64() * 1000.0),
@@ -206,7 +216,8 @@ impl WindowHandle {
                 phases.slot_wait.as_micros(),
                 phases.reserve.as_micros(),
                 phases.reserve_created,
-                backend.late_pipelines()
+                backend.late_pipelines(),
+                backend.stats()
             )
         });
     }
@@ -252,6 +263,14 @@ impl WindowHandle {
         self.hub.backend.borrow_mut().finish_startup();
     }
 
+    fn startup_pending(&self) -> bool {
+        self.hub.backend.borrow().startup_pending()
+    }
+
+    fn startup_step(&self) {
+        self.hub.backend.borrow_mut().startup_step();
+    }
+
     fn pipeline_cache(&self) -> Option<Vec<u8>> {
         self.hub.backend.borrow().pipeline_cache()
     }
@@ -265,6 +284,10 @@ impl WindowHandle {
                 "aqua-gpu-memory: {memory:?} unattributed={} heap={:?}",
                 memory.unattributed(),
                 crate::mem_probe::process_heap()
+            );
+            eprintln!(
+                "aqua-gpu-ledger: {}",
+                self.hub.backend.borrow().ledger().render()
             );
         }
     }
@@ -460,6 +483,14 @@ impl FrameTarget for WindowTarget {
 
     fn invalidate(&mut self) {
         self.frames.invalidate();
+    }
+
+    fn startup_pending(&self) -> bool {
+        self.frames.backend().startup_pending()
+    }
+
+    fn startup_step(&mut self) {
+        self.frames.backend().startup_step();
     }
 
     fn idle_trim_in(&mut self) -> Option<std::time::Duration> {

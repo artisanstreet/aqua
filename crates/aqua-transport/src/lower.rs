@@ -1,5 +1,5 @@
 use aqua_core::{DisplayItem, Oklch, Rect, Size};
-use aqua_graph::{PaintCommand, Quad, Shadow};
+use aqua_graph::{PaintCommand, Quad, Shadow, ShadowCast, ToneCurve};
 use aqua_protocol::{FrameReport, Instant, UploadBatch};
 use aqua_scene::Scene;
 
@@ -10,6 +10,7 @@ pub struct Lowered {
     pub unsupported: u32,
     pub approximated: u32,
     pub glyphs: u32,
+    pub text_tone: ToneCurve,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,6 +113,7 @@ impl State {
             sigma: blur.max(0.0) * 0.5 * self.scale,
             spread: spread * self.scale,
             color,
+            cast: ShadowCast::Outside,
         }));
     }
 

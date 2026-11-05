@@ -244,6 +244,7 @@ pub struct FrameWork {
     pub layouts: usize,
     pub layout_nodes_measured: usize,
     pub layout_nodes_committed: usize,
+    pub layout_nodes_visited: usize,
 }
 
 type ViewportCap = (NodeId, f32, f32);
@@ -275,10 +276,11 @@ impl FrameWorkWindow {
         total.layouts += work.layouts;
         total.layout_nodes_measured += work.layout_nodes_measured;
         total.layout_nodes_committed += work.layout_nodes_committed;
+        total.layout_nodes_visited += work.layout_nodes_visited;
         let total = *total;
         (now - self.started >= 1.0).then(|| {
             let line = format!(
-                "aqua-work: builds={} scene_reused={} nodes_visited={} max_visited={} layouts={} measured={} committed={} text_checked={} shaped={} src_bytes={} ops_emitted={} reconciled={}",
+                "aqua-work: builds={} scene_reused={} nodes_visited={} max_visited={} layouts={} measured={} committed={} layout_visited={} text_checked={} shaped={} src_bytes={} ops_emitted={} reconciled={}",
                 self.builds,
                 self.reused,
                 total.tree_nodes_visited,
@@ -286,6 +288,7 @@ impl FrameWorkWindow {
                 total.layouts,
                 total.layout_nodes_measured,
                 total.layout_nodes_committed,
+                total.layout_nodes_visited,
                 total.text_nodes_checked,
                 total.text_runs_shaped,
                 total.text_source_bytes,
@@ -1209,8 +1212,10 @@ impl Runtime {
 
     pub fn build_frame(&mut self) -> Result<Option<Seconds>, RuntimeError> {
         self.tree.take_visited();
+        self.tree.take_layout_visited();
         let built = self.build_frame_inner();
         self.frame_work.tree_nodes_visited = self.tree.take_visited();
+        self.frame_work.layout_nodes_visited = self.tree.take_layout_visited();
         self.report_work();
         let now = self.clock;
         let work = self.frame_work;
@@ -1290,6 +1295,7 @@ impl Runtime {
         if changed {
             let _span = probe::span(Phase::Build);
             self.cached_scene = self.emit_keyed();
+            aqua_core::checkpoint::reach();
             self.cached_text_nodes = self
                 .cached_scene
                 .iter()
@@ -1317,6 +1323,7 @@ impl Runtime {
         } else {
             self.frame_work.tree_scene_reused = true;
         }
+        aqua_core::checkpoint::reach();
         let selection_items = self.caret_selection_items();
         let mut dynamic = self.text_background_items(&selection_items)?;
         dynamic.extend(selection_items);
@@ -1356,6 +1363,7 @@ impl Runtime {
             self.reconcile(keyed);
             self.dynamic_order = dynamic_order;
         }
+        aqua_core::checkpoint::reach();
         let now = self.clock;
         self.host.advance_motion(now);
         self.tree.run_deferred_canvas_actions();
@@ -1378,6 +1386,7 @@ impl Runtime {
         count(Metric::Layouts, work.layouts);
         count(Metric::NodesMeasured, work.layout_nodes_measured);
         count(Metric::NodesCommitted, work.layout_nodes_committed);
+        count(Metric::LayoutNodesVisited, work.layout_nodes_visited);
         count(Metric::NodesVisited, work.tree_nodes_visited);
         count(Metric::TextNodesChecked, work.text_nodes_checked);
         count(Metric::TextRunsShaped, work.text_runs_shaped);

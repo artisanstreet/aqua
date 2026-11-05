@@ -479,13 +479,20 @@ impl<A: Application + 'static> Handler for Host<A> {
         self.aqua.wakeups += 1;
         let presented_before = self.aqua.frames_presented;
         self.flush_pending();
+        aqua_core::checkpoint::reach();
         self.dispatch_resizes(Some(now));
+        aqua_core::checkpoint::reach();
         self.aqua.drain_text(&mut self.app);
+        aqua_core::checkpoint::reach();
         self.aqua.draw_input_frames(&mut self.app, now);
+        aqua_core::checkpoint::reach();
         self.aqua.pump_inbox(&mut self.app);
+        aqua_core::checkpoint::reach();
         self.process_requests();
         self.poll_dialogs();
+        aqua_core::checkpoint::reach();
         self.aqua.draw_ready(&mut self.app, now);
+        aqua_core::checkpoint::reach();
         self.aqua.report_host_stats();
         self.publish_inspector();
         if self.aqua.quit_requested() {

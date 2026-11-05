@@ -113,6 +113,7 @@ type PreparedFactory<T> =
 type BatchedFactory<T> = Box<dyn Fn(&T) -> Result<BatchedCollectionRow, CollectionError>>;
 type WidthBatchedFactory<T> =
     Box<dyn Fn(&T, &CollectionLayout) -> Result<BatchedCollectionRow, CollectionError>>;
+type WidthClass = Box<dyn Fn(f32) -> f32>;
 type KeyFactory<T> = Box<dyn Fn(&T) -> Key>;
 type RevisionFactory<T> = Box<dyn Fn(&T) -> Option<u64>>;
 
@@ -666,6 +667,7 @@ pub struct List<T> {
     prepared_row_fn: Option<PreparedFactory<T>>,
     batched_row_fn: Option<BatchedFactory<T>>,
     width_batched_row_fn: Option<WidthBatchedFactory<T>>,
+    width_class_fn: Option<WidthClass>,
     styles: Vec<Style>,
     virtualized: bool,
     estimated_row_height: Length,
@@ -689,6 +691,7 @@ impl<T> List<T> {
             prepared_row_fn: None,
             batched_row_fn: None,
             width_batched_row_fn: None,
+            width_class_fn: None,
             styles: Vec::new(),
             virtualized: false,
             estimated_row_height: Length::Px(32.0),
@@ -750,6 +753,11 @@ impl<T> List<T> {
         self.batched_row_fn = Some(Box::new(f));
         self.prepared_row_fn = None;
         self.width_batched_row_fn = None;
+        self
+    }
+
+    pub fn width_class(mut self, f: impl Fn(f32) -> f32 + 'static) -> Self {
+        self.width_class_fn = Some(Box::new(f));
         self
     }
 
@@ -883,6 +891,7 @@ impl<T> List<T> {
             prepared_row_fn: self.prepared_row_fn,
             batched_row_fn: self.batched_row_fn,
             width_batched_row_fn: self.width_batched_row_fn,
+            width_class_fn: self.width_class_fn,
             estimated_row_height: self.estimated_row_height,
         });
         let mut descriptor = CollectionDescriptor::new(
@@ -917,6 +926,7 @@ pub struct ListSource<T> {
     prepared_row_fn: Option<PreparedFactory<T>>,
     batched_row_fn: Option<BatchedFactory<T>>,
     width_batched_row_fn: Option<WidthBatchedFactory<T>>,
+    width_class_fn: Option<WidthClass>,
     estimated_row_height: Length,
 }
 
@@ -932,6 +942,13 @@ impl<T> CollectionSource for ListSource<T> {
 
     fn width_sensitive(&self) -> bool {
         self.width_batched_row_fn.is_some()
+    }
+
+    fn width_class(&self, width: f32) -> u32 {
+        self.width_class_fn
+            .as_ref()
+            .map_or(width, |class| class(width))
+            .to_bits()
     }
 
     fn key(&self, index: usize) -> Key {

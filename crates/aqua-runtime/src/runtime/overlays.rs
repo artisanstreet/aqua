@@ -389,7 +389,7 @@ impl Runtime {
                     let background = self
                         .tree
                         .get(owner)
-                        .and_then(|record| record.paint.fill)
+                        .and_then(|record| record.paint().fill)
                         .unwrap_or(aqua_core::Oklch::new(0.24, 0.008, 255.0));
                     let foreground = self
                         .tree

@@ -20,6 +20,7 @@ use super::lower::Lowering;
 
 const MAINTENANCE_FRAMES: u64 = 900;
 const PENDING_POLL: Duration = Duration::from_millis(33);
+const HEAVY_REPAINT_RATIO: f32 = 0.2;
 
 pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
@@ -29,6 +30,8 @@ pub enum Repaint {
     Settled,
     NextFrame,
     Animating,
+    Heavy,
+    Still(Duration),
     Poll(Duration),
 }
 
@@ -41,6 +44,10 @@ pub trait FrameTarget {
     fn wait_frame(&mut self);
     fn present(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback>;
     fn invalidate(&mut self) {}
+    fn startup_pending(&self) -> bool {
+        false
+    }
+    fn startup_step(&mut self) {}
     fn idle_trim_in(&mut self) -> Option<Duration> {
         None
     }
@@ -135,6 +142,7 @@ pub struct GpuFrames<B: GpuBackend<Error = GpuError> + 'static> {
     since_maintenance: u64,
     counted: HostCounters,
     damage: Option<DamageStage>,
+    repaint_ratio: f32,
 }
 
 impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
@@ -167,6 +175,7 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
             since_maintenance: 0,
             counted: HostCounters::default(),
             damage: None,
+            repaint_ratio: 1.0,
         }
     }
 
@@ -238,7 +247,13 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
         let transitioning = self.host.lowering().transition_active();
         let plan = match side.viewport() {
             _ if transitioning => Plan::Full,
-            Some((size, scale)) => stage.planner.plan(side.scene(), &stage.runs, size, scale),
+            Some((size, scale)) => stage.planner.plan(
+                side.scene(),
+                &stage.runs,
+                size,
+                scale,
+                self.host.lowering().last_report().pending == 0,
+            ),
             None => Plan::Full,
         };
         let stats = &self.stats;
@@ -258,6 +273,21 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
             (Plan::Regions(rects), Some(probe)) => probe(self.host.backend(), self.surface, rects),
             _ => None,
         };
+        self.repaint_ratio = match (&plan, region, side.viewport()) {
+            (Plan::Regions(_), Some(region), Some((size, scale))) => {
+                let frame = (size.w * scale) * (size.h * scale);
+                (region.w * region.h / frame.max(1.0)).clamp(0.0, 1.0)
+            }
+            _ => 1.0,
+        };
+        crate::profile::note(|| match &plan {
+            Plan::Full => "plan=full".to_string(),
+            Plan::Regions(rects) => format!(
+                "plan=regions:{} bound={:?} cull={region:?}",
+                rects.len(),
+                rects.iter().copied().reduce(Rect::union)
+            ),
+        });
         self.host.lowering_mut().set_cull(region);
         *stage.slot.borrow_mut() = match plan {
             Plan::Full => None,
@@ -368,7 +398,9 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
                 maintenance(self.host.backend_mut());
             }
         }
+        let staging = WallInstant::now();
         self.stage_damage(side);
+        crate::profile::note(|| format!("damage_us={}", staging.elapsed().as_micros()));
         let feedback = self.host.execute(side, frame);
         self.settle_damage(&feedback);
         self.account();
@@ -398,15 +430,25 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
     fn repaint(&self) -> Repaint {
         let report = self.host.lowering().last_report();
         let transition = self.host.lowering().transition_active();
+        let still = report
+            .still_micros
+            .filter(|_| !report.pulsing)
+            .map(Duration::from_micros);
         match (
             report.pulsing || report.shimmering,
             transition,
             report.pending > 0,
+            still,
         ) {
-            (true, true, _) => Repaint::NextFrame,
-            (true, false, _) => Repaint::Animating,
-            (false, _, true) => Repaint::Poll(PENDING_POLL),
-            (false, _, false) => Repaint::Settled,
+            (true, true, _, _) => Repaint::NextFrame,
+            (true, false, true, Some(rest)) => Repaint::Poll(rest.min(PENDING_POLL)),
+            (true, false, false, Some(rest)) => Repaint::Still(rest),
+            (true, false, _, None) => match self.repaint_ratio > HEAVY_REPAINT_RATIO {
+                true => Repaint::Heavy,
+                false => Repaint::Animating,
+            },
+            (false, _, true, _) => Repaint::Poll(PENDING_POLL),
+            (false, _, false, _) => Repaint::Settled,
         }
     }
 }

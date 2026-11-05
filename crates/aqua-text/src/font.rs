@@ -131,11 +131,43 @@ impl PrewarmJob {
         (0x20u8..0x7f).for_each(|byte| {
             entry.glyph_for(char::from(byte));
         });
+        crate::shape::warm_entry(&entry);
         Some(PrewarmedEntry {
             key: self.key,
             revision: self.revision,
             entry: Arc::new(entry),
         })
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) struct PlanKey {
+    direction: harfrust::Direction,
+    script: harfrust::Script,
+    features: Vec<(u32, u32, u32, u32)>,
+}
+
+impl PlanKey {
+    pub(crate) fn new(
+        direction: harfrust::Direction,
+        script: harfrust::Script,
+        features: &[harfrust::Feature],
+    ) -> Self {
+        Self {
+            direction,
+            script,
+            features: features
+                .iter()
+                .map(|feature| {
+                    (
+                        u32::from_be_bytes(feature.tag.to_be_bytes()),
+                        feature.value,
+                        feature.start,
+                        feature.end,
+                    )
+                })
+                .collect(),
+        }
     }
 }
 
@@ -158,6 +190,7 @@ pub struct FontEntry {
     color: bool,
     postscript_name: String,
     glyphs: Mutex<HashMap<char, u16>>,
+    plans: Mutex<HashMap<PlanKey, Arc<harfrust::ShapePlan>>>,
 }
 
 impl FontEntry {
@@ -230,6 +263,7 @@ impl FontEntry {
             color,
             postscript_name,
             glyphs: Mutex::new(HashMap::new()),
+            plans: Mutex::new(HashMap::new()),
             bytes,
         })
     }
@@ -332,12 +366,40 @@ impl FontEntry {
         Some(run(&shaper))
     }
 
+    pub(crate) fn shape_plan(
+        &self,
+        shaper: &harfrust::Shaper<'_>,
+        key: PlanKey,
+        features: &[harfrust::Feature],
+    ) -> Arc<harfrust::ShapePlan> {
+        let mut plans = self
+            .plans
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(plan) = plans.get(&key) {
+            return Arc::clone(plan);
+        }
+        let plan = Arc::new(harfrust::ShapePlan::new(
+            shaper,
+            key.direction,
+            Some(key.script),
+            None,
+            features,
+        ));
+        if plans.len() >= PLAN_CACHE_LIMIT {
+            plans.clear();
+        }
+        plans.insert(key, Arc::clone(&plan));
+        plan
+    }
+
     pub fn with_font<R>(&self, run: impl FnOnce(&skrifa::FontRef<'_>) -> R) -> Option<R> {
         let font = skrifa::FontRef::from_index(self.bytes.bytes(), self.bytes.index()).ok()?;
         Some(run(&font))
     }
 }
 
+const PLAN_CACHE_LIMIT: usize = 64;
 const CANDIDATE_CACHE_LIMIT: usize = 512;
 const COVERAGE_CACHE_LIMIT: usize = 16_384;
 const SCAN_CACHE_LIMIT: usize = 8_192;

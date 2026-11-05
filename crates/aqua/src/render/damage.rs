@@ -1,3 +1,4 @@
+use aqua_core::NodeId;
 use aqua_core::geometry::{Point, Transform2D};
 use aqua_core::hash::FastMap;
 use aqua_core::{DisplayItem, Rect, Size};
@@ -8,7 +9,9 @@ const MAX_REGIONS: usize = 8;
 const ANTIALIAS_PAD: f32 = 1.0;
 const OVERHANG_PAD: f32 = 6.0;
 const OVERHANG_RATIO: f32 = 0.15;
-const BLUR_REACH_PAD: f32 = 8.0;
+const BLUR_REACH_PAD: f32 = 16.0;
+const BLUR_REACH_RADII: f32 = 4.0;
+const FULL_AREA_RATIO: f32 = 0.75;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Plan {
@@ -29,9 +32,13 @@ pub struct DamagePlanner {
     staged: Option<Footprints>,
     viewport: Option<Viewport>,
     staged_viewport: Option<Viewport>,
+    committed_revision: Option<u64>,
+    staged_revision: Option<u64>,
+    traits: Option<(u64, SceneTraits)>,
+    seen: FastMap<NodeId, u64>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct SceneTraits {
     animated: Vec<Rect>,
     blurs: Vec<Rect>,
@@ -59,7 +66,7 @@ fn transformed(rect: Rect, transform: Transform2D) -> Rect {
 }
 
 fn blur_zone(bounds: Rect, radius: f32) -> Rect {
-    let reach = radius.abs() * 2.0 + BLUR_REACH_PAD;
+    let reach = radius.abs() * BLUR_REACH_RADII + BLUR_REACH_PAD;
     Rect {
         x: bounds.x - reach,
         y: bounds.y - reach,
@@ -156,30 +163,80 @@ impl DamagePlanner {
         Self::default()
     }
 
-    pub fn plan(&mut self, scene: &Scene, runs: &SharedRuns, size: Size, scale: f32) -> Plan {
+    pub fn plan(
+        &mut self,
+        scene: &Scene,
+        runs: &SharedRuns,
+        size: Size,
+        scale: f32,
+        stable: bool,
+    ) -> Plan {
         let viewport = Viewport {
             width: size.w,
             height: size.h,
             scale,
         };
+        let revision = scene.revision();
+        if crate::profile::enabled() {
+            self.note_changes(scene);
+        }
+        let unchanged = stable
+            && self.committed.is_some()
+            && self.viewport == Some(viewport)
+            && self.committed_revision == Some(revision);
+        match (unchanged, self.traits.as_ref()) {
+            (true, Some((cached, traits))) if *cached == revision => {
+                self.staged = None;
+                self.staged_viewport = None;
+                self.staged_revision = None;
+                return diff(None, viewport, &traits.blurs, &traits.animated);
+            }
+            _ => {}
+        }
         let ink = ink_boxes(scene, runs);
         let after = Footprints::of_scene(scene, &|run| ink.get(&run.id).copied());
         let traits = traits_of(scene, &ink);
         let plan = match (&self.committed, self.viewport) {
-            (Some(before), Some(previous)) if previous == viewport => {
-                diff(before, &after, viewport, &traits.blurs, &traits.animated)
-            }
+            (Some(before), Some(previous)) if previous == viewport => diff(
+                Some((before, &after)),
+                viewport,
+                &traits.blurs,
+                &traits.animated,
+            ),
             _ => Plan::Full,
         };
         self.staged = Some(after);
         self.staged_viewport = Some(viewport);
+        self.staged_revision = Some(revision);
+        self.traits = Some((revision, traits));
         plan
+    }
+
+    fn note_changes(&mut self, scene: &Scene) {
+        let mut changed: Vec<String> = Vec::new();
+        let mut count = 0usize;
+        let mut now: FastMap<NodeId, u64> = FastMap::default();
+        for (id, item) in scene.ordered() {
+            let revision = scene.item_revision(id).unwrap_or(0);
+            now.insert(id, revision);
+            if self.seen.get(&id) != Some(&revision) {
+                count += 1;
+                if changed.len() < 4 {
+                    let text = format!("{item:?}");
+                    changed.push(text.chars().take(70).collect());
+                }
+            }
+        }
+        let removed = self.seen.keys().filter(|id| !now.contains_key(id)).count();
+        self.seen = now;
+        crate::profile::note(|| format!("changed={count} removed={removed} first={changed:?}"));
     }
 
     pub fn commit(&mut self) {
         if let Some(staged) = self.staged.take() {
             self.committed = Some(staged);
             self.viewport = self.staged_viewport.take();
+            self.committed_revision = self.staged_revision.take();
         }
     }
 
@@ -188,12 +245,36 @@ impl DamagePlanner {
         self.viewport = None;
         self.staged = None;
         self.staged_viewport = None;
+        self.committed_revision = None;
+        self.staged_revision = None;
+        self.traits = None;
     }
 }
 
+fn overlaps(a: Rect, b: Rect) -> bool {
+    a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom()
+}
+
+fn absorb_blur_zones(damage: &mut Vec<Rect>, zones: &[Rect]) -> bool {
+    let mut absorbed = vec![false; zones.len()];
+    loop {
+        let mut grew = false;
+        for (zone, taken) in zones.iter().zip(absorbed.iter_mut()) {
+            if !*taken && damage.iter().any(|rect| overlaps(*rect, *zone)) {
+                damage.push(*zone);
+                *taken = true;
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    absorbed.contains(&true)
+}
+
 fn diff(
-    before: &Footprints,
-    after: &Footprints,
+    changes: Option<(&Footprints, &Footprints)>,
     viewport: Viewport,
     blurs: &[Rect],
     animated: &[Rect],
@@ -206,24 +287,34 @@ fn diff(
     };
     let mut tracker = DamageTracker::new(viewport.scale);
     tracker.set_frame_size(physical.w, physical.h);
-    tracker.record_scene_diff(before, after);
+    if let Some((before, after)) = changes {
+        tracker.record_scene_diff(before, after);
+    }
     animated
         .iter()
         .for_each(|rect| tracker.record_rect_change(*rect, None));
     let mut set = tracker.take();
     let scale = viewport.scale;
-    let behind_blur = set.damage.iter().any(|damage| {
-        blurs.iter().any(|zone| {
-            let zone = Rect {
+    let widened = !set.full && {
+        let zones: Vec<Rect> = blurs
+            .iter()
+            .map(|zone| Rect {
                 x: zone.x * scale,
                 y: zone.y * scale,
                 w: zone.w * scale,
                 h: zone.h * scale,
-            };
-            damage.intersect(zone).w > 0.0 && damage.intersect(zone).h > 0.0
-        })
-    });
-    match (set.full, behind_blur) {
+            })
+            .collect();
+        absorb_blur_zones(&mut set.damage, &zones)
+    };
+    let mostly_frame = widened
+        && set
+            .damage
+            .iter()
+            .copied()
+            .reduce(Rect::union)
+            .is_some_and(|bound| bound.w * bound.h > physical.w * physical.h * FULL_AREA_RATIO);
+    match (set.full, mostly_frame) {
         (true, _) | (_, true) => Plan::Full,
         _ => {
             set.coalesce(MAX_REGIONS);

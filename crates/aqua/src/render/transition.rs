@@ -64,22 +64,6 @@ pub enum Invalid {
     Tint,
 }
 
-fn linear_channel(value: f32) -> f32 {
-    match value <= 0.04045 {
-        true => value / 12.92,
-        false => ((value + 0.055) / 1.055).powf(2.4),
-    }
-}
-
-fn linear_of(srgb: color::Srgba) -> [f32; 4] {
-    [
-        linear_channel(srgb[0]),
-        linear_channel(srgb[1]),
-        linear_channel(srgb[2]),
-        srgb[3],
-    ]
-}
-
 impl Settings {
     fn checked(self) -> Result<Self, Invalid> {
         match (
@@ -98,7 +82,7 @@ impl Settings {
         Self {
             duration: request.duration,
             band: request.band,
-            tint: request.shimmer.to_linear(),
+            tint: request.shimmer.to_srgba(),
             sweep: Sweep::Soft,
         }
         .checked()
@@ -108,7 +92,7 @@ impl Settings {
         Self {
             duration: request.duration,
             band: request.band,
-            tint: linear_of(color::hsla(request.shimmer)),
+            tint: color::hsla(request.shimmer),
             sweep: Sweep::Eased,
         }
         .checked()
@@ -118,7 +102,7 @@ impl Settings {
         Self {
             duration: request.duration,
             band: request.band,
-            tint: linear_of(color::text_color(request.shimmer)),
+            tint: color::text_color(request.shimmer),
             sweep: Sweep::Eased,
         }
         .checked()

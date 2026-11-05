@@ -1,9 +1,9 @@
 use aqua::render::namespace::{
-    namespace_plan, namespace_uploads, Namespaces, NAMESPACE_LIMIT, NAMESPACE_SHIFT,
+    NAMESPACE_LIMIT, NAMESPACE_SHIFT, Namespaces, namespace_plan, namespace_uploads,
 };
 use aqua_core::{Oklch, Rect};
 use aqua_graph::{
-    plan_paint, Extent, Glyph, GlyphRun, Image, PaintCommand, PassKind, TextureHandle, TextureRef,
+    Extent, Glyph, GlyphRun, Image, PaintCommand, PassKind, TextureHandle, TextureRef, plan_paint,
 };
 use aqua_protocol::{TextureOp, TextureUpload, UploadBatch};
 
@@ -47,8 +47,8 @@ fn plan() -> aqua_graph::FramePlan {
                 bounds: rect(),
                 texels: rect(),
                 color: Oklch::BLACK,
-                backdrop: None,
-            }],
+            }]
+            .into(),
         }),
         PaintCommand::Image(Image {
             source: TextureHandle(5),

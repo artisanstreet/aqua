@@ -1,6 +1,6 @@
 use aqua::render::cull::cull;
 use aqua_core::{Oklch, Rect};
-use aqua_graph::{Glyph, GlyphRun, PaintCommand, Quad, Shadow, TextureHandle};
+use aqua_graph::{Glyph, GlyphRun, PaintCommand, Quad, Shadow, ShadowCast, TextureHandle};
 
 fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
     Rect { x, y, w, h }
@@ -21,7 +21,6 @@ fn glyph(x: f32) -> Glyph {
         bounds: rect(x, 0.0, 8.0, 8.0),
         texels: rect(0.0, 0.0, 1.0, 1.0),
         color: Oklch::from_hex("#ffffff").unwrap(),
-        backdrop: None,
     }
 }
 
@@ -41,7 +40,7 @@ fn drops_leaves_outside_the_region_and_keeps_those_that_touch_it() {
 }
 
 #[test]
-fn keeps_scope_commands_so_pushes_and_pops_stay_balanced() {
+fn keeps_populated_scopes_balanced_and_drops_emptied_ones() {
     let mut commands = vec![
         PaintCommand::PushClip(rect(0.0, 0.0, 20.0, 20.0)),
         quad(0.0, 0.0),
@@ -49,11 +48,25 @@ fn keeps_scope_commands_so_pushes_and_pops_stay_balanced() {
         PaintCommand::PushOpacity(0.5),
         quad(120.0, 120.0),
         PaintCommand::PopOpacity,
+        PaintCommand::PushClip(rect(100.0, 100.0, 20.0, 20.0)),
+        PaintCommand::PushRoundedClip {
+            rect: rect(0.0, 0.0, 20.0, 20.0),
+            radius: 4.0,
+        },
+        quad(0.0, 0.0),
+        PaintCommand::PopClip,
+        PaintCommand::PopClip,
     ];
-    cull(&mut commands, REGION);
-    assert_eq!(commands.len(), 5);
-    assert!(matches!(commands[0], PaintCommand::PushClip(_)));
-    assert!(matches!(commands[1], PaintCommand::PopClip));
+    let culled = cull(&mut commands, REGION);
+    assert_eq!(culled, 8);
+    assert_eq!(
+        commands,
+        vec![
+            PaintCommand::PushOpacity(0.5),
+            quad(120.0, 120.0),
+            PaintCommand::PopOpacity,
+        ]
+    );
 }
 
 #[test]
@@ -61,11 +74,11 @@ fn thins_glyph_runs_and_drops_empty_ones() {
     let mut commands = vec![
         PaintCommand::Glyphs(GlyphRun {
             atlas: TextureHandle(1),
-            glyphs: vec![glyph(0.0), glyph(104.0), glyph(500.0)],
+            glyphs: vec![glyph(0.0), glyph(104.0), glyph(500.0)].into(),
         }),
         PaintCommand::Glyphs(GlyphRun {
             atlas: TextureHandle(1),
-            glyphs: vec![glyph(0.0), glyph(500.0)],
+            glyphs: vec![glyph(0.0), glyph(500.0)].into(),
         }),
     ];
     cull(&mut commands, rect(100.0, 0.0, 50.0, 50.0));
@@ -86,6 +99,7 @@ fn shadows_reach_into_the_region_through_their_blur() {
             sigma: 10.0,
             spread: 0.0,
             color: Oklch::from_hex("#000000").unwrap(),
+            cast: ShadowCast::Whole,
         })
     };
     let mut commands = vec![shadow(90.0 - 20.0), shadow(0.0)];

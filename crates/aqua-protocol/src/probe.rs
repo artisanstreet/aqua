@@ -61,6 +61,7 @@ pub enum Metric {
     Layouts,
     NodesMeasured,
     NodesCommitted,
+    LayoutNodesVisited,
     NodesVisited,
     TextNodesChecked,
     TextRunsShaped,
@@ -82,10 +83,11 @@ pub enum Metric {
 }
 
 impl Metric {
-    pub const ALL: [Metric; 21] = [
+    pub const ALL: [Metric; 22] = [
         Metric::Layouts,
         Metric::NodesMeasured,
         Metric::NodesCommitted,
+        Metric::LayoutNodesVisited,
         Metric::NodesVisited,
         Metric::TextNodesChecked,
         Metric::TextRunsShaped,
@@ -117,6 +119,7 @@ impl Metric {
             Metric::Layouts => "layouts",
             Metric::NodesMeasured => "nodes_measured",
             Metric::NodesCommitted => "nodes_committed",
+            Metric::LayoutNodesVisited => "layout_visited",
             Metric::NodesVisited => "nodes_visited",
             Metric::TextNodesChecked => "text_nodes_checked",
             Metric::TextRunsShaped => "text_runs_shaped",

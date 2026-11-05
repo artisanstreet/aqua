@@ -5,9 +5,10 @@ use aqua::render::lower::Lowering;
 use aqua::ui::Text;
 use aqua_core::geometry::{CornerRadii, Insets, Rect};
 use aqua_core::gpui_mesh::{GpuiMesh, GpuiMeshStyle, GpuiMeshVertex};
-use aqua_core::scene::{DisplayItem, GpuiShadowLayer, ShadowLayer};
+use aqua_core::scene::{DisplayItem, GpuiShadowLayer, ShadowLayer, TextRasterMode};
 use aqua_core::vector::{FillRule, GpuiPath, GpuiPathStyle, PathCommand, VectorSource};
 use aqua_core::{GpuiBackground, GpuiHsla, Oklch, Point, Size, Transform2D};
+use aqua_graph::ToneCurve;
 use aqua_scene::Scene;
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_transport::{LowerContext, Lowered};
@@ -458,6 +459,18 @@ fn context() -> LowerContext {
 }
 
 #[test]
+fn outline_text_raster_mode_lowers_with_exact_glyph_coverage() {
+    let (app, fonts, runs) = text_app();
+    let scene = app.scene();
+    let mut lowering = Lowering::new(fonts, runs);
+    assert_eq!(lowered(&mut lowering, scene).text_tone, ToneCurve::native());
+    lowering.set_text_raster(TextRasterMode::Outline);
+    assert_eq!(lowered(&mut lowering, scene).text_tone, ToneCurve::EXACT);
+    lowering.set_text_raster(TextRasterMode::PlatformDefault);
+    assert_eq!(lowered(&mut lowering, scene).text_tone, ToneCurve::native());
+}
+
+#[test]
 fn atlas_uploads_are_sent_once_and_again_after_a_device_that_lost_its_textures() {
     let (app, fonts, runs) = text_app();
     let scene = app.scene();
@@ -568,4 +581,50 @@ fn images_drawn_small_upload_a_reduced_copy_and_release_every_level() {
     lowering.release_image(7);
     lowered(&mut lowering, &Scene::new());
     assert!(resident_images(&lowering).is_empty());
+}
+
+#[test]
+fn culling_while_walking_matches_culling_the_finished_commands() {
+    let region = rect(100.0, 20.0, 40.0, 30.0);
+    let scene = scene_of(vec![
+        quad(rect(2.0, 2.0, 20.0, 20.0), CornerRadii::uniform(0.0)),
+        DisplayItem::PushClip {
+            bounds: rect(0.0, 0.0, 60.0, 40.0),
+            radius: 0.0,
+        },
+        quad(rect(30.0, 10.0, 20.0, 20.0), CornerRadii::uniform(4.0)),
+        DisplayItem::PopClip,
+        DisplayItem::Rect {
+            bounds: rect(110.0, 25.0, 10.0, 10.0),
+            radius: 2.0,
+            fill: red(),
+            border_width: 1.0,
+            border_color: red(),
+            shadow: Some((2.0, 2.0, 6.0, red())),
+        },
+        DisplayItem::Rect {
+            bounds: rect(300.0, 25.0, 10.0, 10.0),
+            radius: 2.0,
+            fill: red(),
+            border_width: 0.0,
+            border_color: Oklch::TRANSPARENT,
+            shadow: Some((2.0, 2.0, 6.0, red())),
+        },
+        DisplayItem::PushOpacity(0.5),
+        quad(rect(200.0, 30.0, 8.0, 8.0), CornerRadii::uniform(0.0)),
+        DisplayItem::PopOpacity,
+    ]);
+    let walk = |early: bool| {
+        let mut lowering = Lowering::new(SharedFonts::new(), SharedRuns::new());
+        lowering.set_cull(early.then_some(region));
+        lowering
+            .commands(&scene, SIZE, 1.0, aqua_protocol::Instant::ZERO)
+            .0
+    };
+    let early = walk(true);
+    let mut late = walk(false);
+    aqua::render::cull::cull(&mut late, region);
+    assert_eq!(early, late);
+    assert!(!early.is_empty());
+    assert!(early.len() < walk(false).len());
 }

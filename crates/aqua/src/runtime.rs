@@ -1662,7 +1662,9 @@ impl Aqua {
             probe.build_finished();
         }
         self.sync_chrome(app, id, &observed);
+        aqua_core::checkpoint::reach();
         self.sync_access(app, id);
+        aqua_core::checkpoint::reach();
         if hidden {
             return;
         }
@@ -1684,9 +1686,11 @@ impl Aqua {
         if !motion.is_empty() {
             link.push_commands(motion.into_iter().map(RenderCommand::Motion));
         }
+        aqua_core::checkpoint::reach();
         if let Some(scene) = app.scene_mut(id) {
             link.push_scene(scene);
         }
+        aqua_core::checkpoint::reach();
         if let Some(probe) = self.input_latency.as_mut() {
             probe.scene_pushed(link.scenes_queued());
         }

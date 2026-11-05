@@ -15,7 +15,7 @@ use super::host::{Clock, RenderStats, TargetInit};
 use super::service::{NewSlot, RenderService, ServiceHandle};
 use super::transition::Settings;
 
-const RING_CAPACITY: usize = 4096;
+const RING_CAPACITY: usize = 512;
 
 #[derive(Clone, Debug)]
 pub enum ExternalUpdate {

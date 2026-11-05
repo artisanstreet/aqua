@@ -4,7 +4,7 @@ use std::sync::Arc;
 use unicode_bidi::ParagraphBidiInfo;
 use unicode_script::Script;
 
-use crate::font::{FontEntry, FontManager};
+use crate::font::{FontEntry, FontManager, PlanKey};
 use crate::raster::embolden_width;
 use crate::style::{StyledSpan, TextStyle};
 
@@ -57,15 +57,28 @@ pub(crate) fn shape_run(
     }
     buffer.guess_segment_properties();
     buffer.set_flags(harfrust::BufferFlags::BEGINNING_OF_TEXT | harfrust::BufferFlags::END_OF_TEXT);
+    let direction = buffer.direction();
+    let script = buffer.script();
+    let language = buffer.language();
     let scale = params.size_px / entry.units_per_em();
     let widening = match entry.synthetic_bold() {
         true => embolden_width(params.size_px),
         false => 0.0,
     };
     let shaped = entry.with_shaper(|shaper| {
+        let plan = match language {
+            None => Some(entry.shape_plan(
+                shaper,
+                PlanKey::new(direction, script, params.features),
+                params.features,
+            )),
+            Some(_) => None,
+        };
         let glyphs = shaper.shape(
             buffer,
-            harfrust::ShapeOptions::new().features(params.features),
+            harfrust::ShapeOptions::new()
+                .features(params.features)
+                .plan(plan.as_deref()),
         );
         let mut out = Vec::with_capacity(glyphs.len());
         for (info, position) in glyphs.glyph_infos().iter().zip(glyphs.glyph_positions()) {
@@ -99,6 +112,24 @@ pub(crate) fn shape_run(
     glyphs
 }
 
+const WARMUP_TEXT: &str = "The quick brown fox jumps over the lazy dog 0123456789 office fi fl ffi (){}[]<>=+-*/_.,;:!?\"'`~@#$%^&|\\";
+
+pub(crate) fn warm_entry(entry: &FontEntry) {
+    let mut buffer = harfrust::UnicodeBuffer::new();
+    buffer.push_str(WARMUP_TEXT);
+    buffer.set_direction(harfrust::Direction::LeftToRight);
+    if let Some(script) = text_script(WARMUP_TEXT).and_then(harfrust_script) {
+        buffer.set_script(script);
+    }
+    buffer.guess_segment_properties();
+    buffer.set_flags(harfrust::BufferFlags::BEGINNING_OF_TEXT | harfrust::BufferFlags::END_OF_TEXT);
+    let key = PlanKey::new(buffer.direction(), buffer.script(), &[]);
+    entry.with_shaper(|shaper| {
+        let plan = entry.shape_plan(shaper, key, &[]);
+        shaper.shape(buffer, harfrust::ShapeOptions::new().plan(Some(&plan)));
+    });
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RunGlyph {
     pub glyph_id: u16,
@@ -116,14 +147,55 @@ pub(crate) struct ShapedRun {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Cluster {
-    pub start: usize,
-    pub end: usize,
+    start: u32,
+    end: u32,
+    run: u32,
+    glyph_start: u32,
+    glyph_end: u32,
     pub advance: f32,
-    pub run: usize,
-    pub glyphs: Range<usize>,
     pub level: u8,
     pub blank: bool,
     pub tab: bool,
+}
+
+impl Cluster {
+    pub(crate) fn new(
+        bytes: Range<usize>,
+        advance: f32,
+        run: usize,
+        glyphs: Range<usize>,
+        level: u8,
+        blank: bool,
+        tab: bool,
+    ) -> Self {
+        Self {
+            start: bytes.start as u32,
+            end: bytes.end as u32,
+            run: run as u32,
+            glyph_start: glyphs.start as u32,
+            glyph_end: glyphs.end as u32,
+            advance,
+            level,
+            blank,
+            tab,
+        }
+    }
+
+    pub(crate) fn start(&self) -> usize {
+        self.start as usize
+    }
+
+    pub(crate) fn end(&self) -> usize {
+        self.end as usize
+    }
+
+    pub(crate) fn run(&self) -> usize {
+        self.run as usize
+    }
+
+    pub(crate) fn glyphs(&self) -> Range<usize> {
+        self.glyph_start as usize..self.glyph_end as usize
+    }
 }
 
 pub(crate) struct ShapedParagraph {
@@ -363,16 +435,15 @@ pub(crate) fn shape_paragraph(
             } else {
                 group.iter().map(|glyph| glyph.advance).sum()
             };
-            clusters.push(Cluster {
-                start,
-                end,
+            clusters.push(Cluster::new(
+                start..end,
                 advance,
-                run: run_index,
-                glyphs: first..run_glyphs.len(),
-                level: piece.level,
-                blank: is_hanging_blank(slice),
+                run_index,
+                first..run_glyphs.len(),
+                piece.level,
+                is_hanging_blank(slice),
                 tab,
-            });
+            ));
         }
         runs.push(ShapedRun {
             entry: Some(entry),

@@ -114,3 +114,36 @@ fn a_changed_cycle_restarts_from_its_anchor() {
     };
     assert!((set.sample(1, faster, 3.0) - 1.0).abs() < 1e-6);
 }
+
+#[test]
+fn a_sweep_holds_only_through_its_delay() {
+    let sweep = Cycle::Sweep {
+        delay: 1.5,
+        duration: 3.0,
+    };
+    assert_eq!(sweep.holds_for(0.0), Some(1.5));
+    assert!((sweep.holds_for(1.0).unwrap() - 0.5).abs() < 1e-9);
+    assert_eq!(sweep.holds_for(1.5), None);
+    assert_eq!(sweep.holds_for(4.0), None);
+    assert!((sweep.holds_for(4.5 + 0.25).unwrap() - 1.25).abs() < 1e-9);
+    assert_eq!(PULSE.holds_for(0.3), None);
+    let without_delay = Cycle::Sweep {
+        delay: 0.0,
+        duration: 2.0,
+    };
+    assert_eq!(without_delay.holds_for(0.5), None);
+}
+
+#[test]
+fn a_cycle_set_reports_the_hold_relative_to_its_anchor() {
+    let sweep = Cycle::Sweep {
+        delay: 2.0,
+        duration: 1.0,
+    };
+    let mut set: CycleSet<u8> = CycleSet::new();
+    set.sample(1, sweep, 10.0);
+    assert_eq!(set.sample(1, sweep, 10.5), 0.0);
+    assert!((set.holds_for(1, 10.5).unwrap() - 1.5).abs() < 1e-9);
+    assert_eq!(set.holds_for(1, 12.5), None);
+    assert_eq!(set.holds_for(2, 10.5), None);
+}

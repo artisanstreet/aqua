@@ -101,7 +101,7 @@ fn emit_phase_report() {
         runtime.build_frame().unwrap();
         build.push(started.elapsed().as_secs_f64() * 1e6);
         let started = WallInstant::now();
-        planner.plan(runtime.scene(), &runs, size, 1.0);
+        planner.plan(runtime.scene(), &runs, size, 1.0, true);
         planner.commit();
         damage.push(started.elapsed().as_secs_f64() * 1e6);
         let started = WallInstant::now();
@@ -125,5 +125,59 @@ fn emit_phase_report() {
         line("damage_us", &mut damage),
         line("lower_us", &mut lower),
         line("plan_us", &mut plan_us)
+    );
+}
+
+#[test]
+#[ignore]
+fn animated_frame_report() {
+    let fonts = SharedFonts::new();
+    let runs = SharedRuns::new();
+    let mut runtime = Runtime::new(fonts.clone(), runs.clone());
+    runtime.set_viewport(1200.0, 800.0, 1.0);
+    mount(&mut runtime, 200);
+    runtime.build_frame().unwrap();
+    let mut lowering = Lowering::new(fonts, runs.clone());
+    let mut planner = DamagePlanner::new();
+    let size = Size::new(1200.0, 800.0);
+    let (mut warm, mut culled, mut damage) = (vec![], vec![], vec![]);
+    let (mut full_items, mut full_commands, mut small_commands, mut small_culled) = (0, 0, 0, 0);
+    planner.plan(runtime.scene(), &runs, size, 1.0, true);
+    planner.commit();
+    for step in 0..400 {
+        let started = WallInstant::now();
+        planner.plan(runtime.scene(), &runs, size, 1.0, true);
+        damage.push(started.elapsed().as_secs_f64() * 1e6);
+        lowering.set_cull(None);
+        let started = WallInstant::now();
+        let (out, _, report) =
+            lowering
+                .at(Instant::ZERO)
+                .commands(runtime.scene(), size, 1.0, Instant::ZERO);
+        warm.push(started.elapsed().as_secs_f64() * 1e6);
+        full_items = report.items;
+        full_commands = out.len();
+        lowering.retain_frame(out);
+        lowering.set_cull(Some(aqua_core::Rect {
+            x: 400.0 + (step % 8) as f32,
+            y: 300.0,
+            w: 9.0,
+            h: 9.0,
+        }));
+        let started = WallInstant::now();
+        let (out, _, report) =
+            lowering
+                .at(Instant::ZERO)
+                .commands(runtime.scene(), size, 1.0, Instant::ZERO);
+        culled.push(started.elapsed().as_secs_f64() * 1e6);
+        small_commands = out.len();
+        small_culled = report.culled;
+        lowering.retain_frame(out);
+    }
+    println!(
+        "perf-animated items={full_items} full_commands={full_commands} small_commands={small_commands} culled={small_culled}\n  {}\n  {}\n  {}",
+        line("full_lower_us", &mut warm),
+        line("culled_lower_us", &mut culled),
+        line("damage_us", &mut damage)
     );
 }

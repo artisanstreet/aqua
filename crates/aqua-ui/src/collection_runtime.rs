@@ -215,6 +215,9 @@ pub trait CollectionSource {
     fn width_sensitive(&self) -> bool {
         false
     }
+    fn width_class(&self, width: f32) -> u32 {
+        width.to_bits()
+    }
     /// Whether this snapshot contains no rows.
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -877,6 +880,10 @@ impl CollectionState {
     /// Current column plan.
     pub fn plan(&self) -> &CollectionLayout {
         &self.plan
+    }
+
+    pub fn viewport_width(&self) -> f32 {
+        self.viewport_w
     }
 
     /// Recompute the column plan when the viewport width changed. Returns

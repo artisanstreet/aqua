@@ -38,6 +38,22 @@ impl Cycle {
     }
 }
 
+impl Cycle {
+    #[must_use]
+    pub fn holds_for(self, elapsed: Seconds) -> Option<Seconds> {
+        match self {
+            Cycle::Pulse { .. } => None,
+            Cycle::Sweep { delay, duration } => match duration > 0.0 && delay > 0.0 {
+                true => {
+                    let at = elapsed.max(0.0) % (delay + duration);
+                    (at < delay).then_some(delay - at)
+                }
+                false => None,
+            },
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct CycleSet<K> {
     anchors: HashMap<K, (Cycle, Seconds)>,
@@ -87,5 +103,11 @@ impl<K: Copy + Eq + Hash> CycleSet<K> {
             *entry = (cycle, now);
         }
         cycle.value(now - entry.1)
+    }
+
+    #[must_use]
+    pub fn holds_for(&self, key: K, now: Seconds) -> Option<Seconds> {
+        let (cycle, anchor) = self.anchors.get(&key)?;
+        cycle.holds_for(now - anchor)
     }
 }

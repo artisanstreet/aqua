@@ -196,11 +196,15 @@ impl TextStack {
 pub struct ShimmerClocks {
     cycles: CycleSet<u64>,
     phases: HashMap<u64, f32>,
+    still_for: Option<f64>,
+    moving: bool,
 }
 
 impl ShimmerClocks {
     pub fn begin_frame(&mut self) {
         self.phases.clear();
+        self.still_for = None;
+        self.moving = false;
         self.cycles.begin_frame();
     }
 
@@ -213,6 +217,11 @@ impl ShimmerClocks {
         self.cycles.active()
     }
 
+    #[must_use]
+    pub fn hold(&self) -> Option<f64> {
+        self.still_for.filter(|_| !self.moving)
+    }
+
     pub fn phase(&mut self, shimmer: &GpuiTextShimmer, now: f64) -> f32 {
         if let Some(phase) = self.phases.get(&shimmer.key) {
             return *phase;
@@ -222,6 +231,10 @@ impl ShimmerClocks {
             duration: shimmer.duration.as_secs_f64(),
         };
         let phase = self.cycles.sample(shimmer.key, cycle, now);
+        match self.cycles.holds_for(shimmer.key, now) {
+            Some(held) => self.still_for = Some(self.still_for.map_or(held, |s| s.min(held))),
+            None => self.moving = true,
+        }
         self.phases.insert(shimmer.key, phase);
         phase
     }

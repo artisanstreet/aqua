@@ -254,18 +254,18 @@ fn finish_paragraph(
         let mut glyphs = Vec::with_capacity(line.placed.glyphs.len());
         for placed in &line.placed.glyphs {
             let cluster = &paragraph.clusters[placed.cluster];
-            let run = &paragraph.runs[cluster.run];
+            let run = &paragraph.runs[cluster.run()];
             let Some(entry) = &run.entry else { continue };
             let glyph = &run.glyphs[placed.glyph];
             if glyph.glyph_id == 3 && entry.is_emoji() {
                 continue;
             }
             let (src_start, src_end) =
-                display_range_to_source(cluster_map, cluster.start, cluster.end);
+                display_range_to_source(cluster_map, cluster.start(), cluster.end());
             let (color_srgb, color_hsla, source_color_hsla) = colors.at(src_start);
             glyphs.push(LaidGlyph {
-                display_byte_start: cluster.start,
-                display_byte_end: cluster.end,
+                display_byte_start: cluster.start(),
+                display_byte_end: cluster.end(),
                 src_byte_start: src_start,
                 src_byte_end: src_end,
                 font_id: entry.id(),
@@ -291,8 +291,8 @@ fn finish_paragraph(
         let display_range = match line.placed.clusters.is_empty() {
             true => paragraph.start..paragraph.start,
             false => {
-                paragraph.clusters[line.placed.clusters.start].start
-                    ..paragraph.clusters[line.placed.clusters.end - 1].end
+                paragraph.clusters[line.placed.clusters.start].start()
+                    ..paragraph.clusters[line.placed.clusters.end - 1].end()
             }
         };
         max_w = max_w.max(line.placed.content_width);
@@ -409,7 +409,7 @@ fn line_metrics(paragraph: &ShapedParagraph, range: &std::ops::Range<usize>) -> 
     let mut ascent = 0.0f32;
     let mut descent = 0.0f32;
     for cluster in &paragraph.clusters[range.clone()] {
-        let run = &paragraph.runs[cluster.run];
+        let run = &paragraph.runs[cluster.run()];
         height = height.max(run.line_height);
         if let Some(entry) = &run.entry {
             ascent = ascent.max(entry.ascent_em() * run.size_px);

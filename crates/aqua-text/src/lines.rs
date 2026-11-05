@@ -36,7 +36,7 @@ pub(crate) fn break_lines(
     let Some(limit) = limit.filter(|_| wrap != WrapMode::None) else {
         return std::iter::once(0..count).collect();
     };
-    let allowed_after = |index: usize| breaks.binary_search(&clusters[index].end).is_ok();
+    let allowed_after = |index: usize| breaks.binary_search(&clusters[index].end()).is_ok();
     let mut lines = Vec::new();
     let mut start = 0;
     let mut x = 0.0f32;
@@ -150,8 +150,8 @@ pub(crate) fn place_line(
     for &position in &order {
         let cluster = &clusters[position];
         let width = widths[position];
-        let run = &paragraph.runs[cluster.run];
-        let indices = cluster.glyphs.clone();
+        let run = &paragraph.runs[cluster.run()];
+        let indices = cluster.glyphs();
         if cluster.tab {
             glyphs.push(PlacedGlyph {
                 cluster: range.start + position,
@@ -223,7 +223,7 @@ pub(crate) fn justify(line: &mut PlacedLine, paragraph: &ShapedParagraph, contai
     for placed in &mut line.glyphs {
         placed.x += shift;
         let cluster = &paragraph.clusters[placed.cluster];
-        let last_glyph = placed.glyph + 1 == cluster.glyphs.end;
+        let last_glyph = placed.glyph + 1 == cluster.glyphs().end;
         let trailing_blank = placed.cluster >= line.clusters.end - line.trailing_blanks;
         if cluster.blank && last_glyph && !trailing_blank {
             placed.advance += extra;
@@ -240,16 +240,7 @@ mod tests {
     use super::*;
 
     fn cluster(start: usize, advance: f32, blank: bool) -> Cluster {
-        Cluster {
-            start,
-            end: start + 1,
-            advance,
-            run: 0,
-            glyphs: 0..1,
-            level: 0,
-            blank,
-            tab: false,
-        }
+        Cluster::new(start..start + 1, advance, 0, 0..1, 0, blank, false)
     }
 
     fn word_clusters(text: &str, width: f32) -> (Vec<Cluster>, Vec<usize>) {

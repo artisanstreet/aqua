@@ -431,6 +431,101 @@ fn width_sensitive_rows_use_committed_inner_width_on_first_frame_and_resize() {
     assert!(resized.iter().all(|(_, width)| *width == 350.0));
 }
 
+#[test]
+fn width_class_keeps_rows_while_the_class_is_stable_and_rebuilds_when_it_changes() {
+    use aqua_ui::collection::{BatchedCollectionRow, List};
+    use aqua_ui::style::{Length, Style};
+    use std::cell::RefCell;
+
+    let measured = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&measured);
+    let descriptor = List::new()
+        .items(0..1000usize)
+        .key(|index| *index)
+        .width_class(|width| width.min(500.0))
+        .try_batched_row_with_layout(move |index, layout| {
+            seen.borrow_mut().push((*index, layout.content_width));
+            Ok(BatchedCollectionRow {
+                element: ui::Text::builder().arg(format!("row-{index}")).build(),
+                batches: Vec::new(),
+            })
+        })
+        .style(
+            Style::new()
+                .width(Length::Pct(100.0))
+                .height(Length::Px(160.0)),
+        )
+        .virtualize()
+        .descriptor();
+    let mut tree = UiTree::new();
+    let runtime = Runtime::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    view.set_content(&mut tree, vec![Element::collection(descriptor)])
+        .unwrap();
+    drive(&mut view, &mut tree, 900.0, 400.0);
+    let initial = measured.borrow().len();
+    assert!(initial > 0);
+    drive(&mut view, &mut tree, 700.0, 400.0);
+    drive(&mut view, &mut tree, 600.0, 400.0);
+    assert_eq!(measured.borrow().len(), initial);
+    drive(&mut view, &mut tree, 400.0, 400.0);
+    let next = measured.borrow();
+    let rebuilt = &next[initial..];
+    assert!(!rebuilt.is_empty());
+    assert!(rebuilt.iter().all(|(_, width)| *width == 400.0));
+}
+
+#[test]
+fn width_sensitive_rows_follow_container_width_changes_at_a_fixed_viewport() {
+    use aqua_core::Insets;
+    use aqua_ui::collection::{BatchedCollectionRow, List};
+    use aqua_ui::style::{Length, Style};
+    use std::cell::RefCell;
+
+    let measured = Rc::new(RefCell::new(Vec::new()));
+    let descriptor = |percent: f32| {
+        let seen = Rc::clone(&measured);
+        List::new()
+            .items(0..1000usize)
+            .key(|index| *index)
+            .try_batched_row_with_layout(move |index, layout| {
+                seen.borrow_mut().push((*index, layout.content_width));
+                Ok(BatchedCollectionRow {
+                    element: ui::Text::builder().arg(format!("row-{index}")).build(),
+                    batches: Vec::new(),
+                })
+            })
+            .style(
+                Style::new()
+                    .width(Length::Pct(percent))
+                    .height(Length::Px(160.0))
+                    .padding_insets(Insets {
+                        left: 20.0,
+                        right: 30.0,
+                        top: 0.0,
+                        bottom: 0.0,
+                    }),
+            )
+            .virtualize()
+            .descriptor()
+    };
+    let mut tree = UiTree::new();
+    let runtime = Runtime::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    view.set_content(&mut tree, vec![Element::collection(descriptor(50.0))])
+        .unwrap();
+    drive(&mut view, &mut tree, 1000.0, 400.0);
+    drive(&mut view, &mut tree, 1000.0, 400.0);
+    let before = measured.borrow().len();
+    view.set_content(&mut tree, vec![Element::collection(descriptor(25.0))])
+        .unwrap();
+    drive(&mut view, &mut tree, 1000.0, 400.0);
+    let after = measured.borrow();
+    let rebuilt = &after[before..];
+    assert!(!rebuilt.is_empty());
+    assert!(rebuilt.iter().all(|(_, width)| *width == 200.0));
+}
+
 /// Static texts under `id` (descendant walk): roles sit on row wrapper
 /// nodes, readable text on their children.
 fn descendant_texts(tree: &UiTree, id: NodeId) -> Vec<String> {

@@ -1,6 +1,6 @@
 use aqua_core::Oklch;
 use aqua_core::geometry::{CornerRadii, Rect};
-use aqua_graph::{Gradient, GradientQuad, PaintCommand, Quad, Shadow};
+use aqua_graph::{Gradient, GradientQuad, PaintCommand, Quad, Shadow, ShadowCast};
 
 const DASH_LIMIT: usize = 256;
 const SEAM_REACH: f32 = 2.0;
@@ -190,8 +190,43 @@ fn clipped(
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Pieces {
+    items: [Piece; 4],
+    len: usize,
+}
+
+impl Pieces {
+    fn of<const N: usize>(items: [Piece; N]) -> Self {
+        let blank = Piece {
+            clip: None,
+            radius: 0.0,
+        };
+        let mut all = [blank; 4];
+        all[..N].copy_from_slice(&items);
+        Self { items: all, len: N }
+    }
+}
+
+impl std::ops::Deref for Pieces {
+    type Target = [Piece];
+
+    fn deref(&self) -> &[Piece] {
+        &self.items[..self.len]
+    }
+}
+
+impl IntoIterator for Pieces {
+    type Item = Piece;
+    type IntoIter = std::iter::Take<std::array::IntoIter<Piece, 4>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.into_iter().take(self.len)
+    }
+}
+
 #[must_use]
-pub fn pieces(bounds: Rect, radii: Radii, reach: f32) -> Vec<Piece> {
+pub fn pieces(bounds: Rect, radii: Radii, reach: f32) -> Pieces {
     let radii = radii.fitted(bounds);
     let left = bounds.x - reach;
     let top = bounds.y - reach;
@@ -205,11 +240,11 @@ pub fn pieces(bounds: Rect, radii: Radii, reach: f32) -> Vec<Piece> {
         radii.top_left == radii.top_right && radii.bottom_left == radii.bottom_right,
         radii.top_left == radii.bottom_left && radii.top_right == radii.bottom_right,
     ) {
-        (true, _, _) => vec![Piece {
+        (true, _, _) => Pieces::of([Piece {
             clip: None,
             radius: radii.top_left,
-        }],
-        (false, true, _) => vec![
+        }]),
+        (false, true, _) => Pieces::of([
             Piece {
                 clip: area(left, top, right, mid_y),
                 radius: radii.top_left,
@@ -218,8 +253,8 @@ pub fn pieces(bounds: Rect, radii: Radii, reach: f32) -> Vec<Piece> {
                 clip: area(left, mid_y, right, bottom),
                 radius: radii.bottom_left,
             },
-        ],
-        (false, false, true) => vec![
+        ]),
+        (false, false, true) => Pieces::of([
             Piece {
                 clip: area(left, top, mid_x, bottom),
                 radius: radii.top_left,
@@ -228,8 +263,8 @@ pub fn pieces(bounds: Rect, radii: Radii, reach: f32) -> Vec<Piece> {
                 clip: area(mid_x, top, right, bottom),
                 radius: radii.top_right,
             },
-        ],
-        (false, false, false) => vec![
+        ]),
+        (false, false, false) => Pieces::of([
             Piece {
                 clip: area(left, top, mid_x, mid_y),
                 radius: radii.top_left,
@@ -246,7 +281,7 @@ pub fn pieces(bounds: Rect, radii: Radii, reach: f32) -> Vec<Piece> {
                 clip: area(left, mid_y, mid_x, bottom),
                 radius: radii.bottom_left,
             },
-        ],
+        ]),
     }
 }
 
@@ -464,6 +499,7 @@ pub fn emit_shadow(
                         sigma: spec.sigma,
                         spread: spec.spread,
                         color: spec.color,
+                        cast: ShadowCast::Outside,
                     }));
                 });
             });
@@ -495,6 +531,7 @@ pub fn emit_shadow(
                         sigma: spec.sigma,
                         spread: 0.0,
                         color: spec.color,
+                        cast: ShadowCast::Whole,
                     }));
                 }),
             }

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use aqua_core::{Oklch, Size};
-use aqua_graph::{Extent, plan_paint_with};
+use aqua_graph::{Extent, FramePlan, plan_paint_with};
 use aqua_protocol::{
     DeviceStatus, Feedback, FrameId, FrameInputs, FrameReport, GpuBackend, GpuError, Instant,
     PresentHint, SurfaceId, SurfaceTarget,
@@ -336,12 +336,15 @@ where
             self.backend.upload(lowered.uploads.clone())?;
         }
         let plan_span = probe::span(Phase::Plan);
-        let plan = plan_paint_with(
-            extent,
-            self.config.clear,
-            &lowered.commands,
-            self.backend.capabilities().plan_limits(),
-        )?;
+        let plan = FramePlan {
+            text_tone: lowered.text_tone,
+            ..plan_paint_with(
+                extent,
+                self.config.clear,
+                &lowered.commands,
+                self.backend.capabilities().plan_limits(),
+            )?
+        };
         drop(plan_span);
         let wait_span = probe::span(Phase::Wait);
         self.acquire_slot(surface)?;

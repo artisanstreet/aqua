@@ -103,45 +103,6 @@ impl DecodedImage {
             self.pixels[i + 3],
         ])
     }
-
-    pub fn to_premultiplied_linear_rgba(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.pixels.len());
-        for px in self.pixels.as_chunks::<4>().0 {
-            let a = px[3] as f32 / 255.0;
-            let lin = aqua_core::color::srgb8_to_linear([px[0], px[1], px[2]]);
-            for c in lin {
-                out.push((c * a.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8);
-            }
-            out.push(px[3]);
-        }
-        out
-    }
-
-    pub fn to_premultiplied_linear_f16(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.pixels.len() * 2);
-        for px in self.pixels.as_chunks::<4>().0 {
-            let a = px[3] as f32 / 255.0;
-            let lin = aqua_core::color::srgb8_to_linear([px[0], px[1], px[2]]);
-            for c in lin {
-                out.extend_from_slice(&f32_to_f16_bits(c * a).to_le_bytes());
-            }
-            out.extend_from_slice(&f32_to_f16_bits(a).to_le_bytes());
-        }
-        out
-    }
-
-    pub fn premultiplied_linear_f32(&self) -> Vec<[f32; 4]> {
-        self.pixels
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|px| {
-                let lin = aqua_core::color::srgb8_to_linear([px[0], px[1], px[2]]);
-                let a = px[3] as f32 / 255.0;
-                [lin[0] * a, lin[1] * a, lin[2] * a, a]
-            })
-            .collect()
-    }
 }
 
 pub fn is_svg(bytes: &[u8]) -> bool {
@@ -438,41 +399,4 @@ impl MediaCache {
 
 fn next_generation(current: u32) -> Option<u32> {
     (current < LAYER_MAX_GENERATION).then(|| current + 1)
-}
-
-pub fn f32_to_f16_bits(v: f32) -> u16 {
-    let bits = v.to_bits();
-    let sign = ((bits >> 16) & 0x8000) as u16;
-    let exp = ((bits >> 23) & 0xff) as i32;
-    let mant = bits & 0x7fffff;
-    if exp == 255 {
-        return sign | 0x7c00 | if mant == 0 { 0 } else { 0x0200 };
-    }
-    let half_exp = exp - 127 + 15;
-    if half_exp >= 31 {
-        return sign | 0x7c00; // overflow -> inf
-    }
-    if half_exp <= 0 {
-        if half_exp < -10 {
-            return sign; // too small even for subnormals
-        }
-        let m = mant | 0x800000;
-        let shift = (1 - half_exp) as u32;
-        let rest = m & ((1 << shift) - 1);
-        let half = 1 << (shift - 1);
-        let mut out = m >> shift;
-        if rest > half || (rest == half && (out & 1) == 1) {
-            out += 1;
-        }
-        return sign | out as u16;
-    }
-    let mut out = (mant >> 13) as u16;
-    let rest = mant & 0x1fff;
-    if rest > 0x1000 || (rest == 0x1000 && (out & 1) == 1) {
-        out += 1;
-        if out == 0x0400 {
-            return sign | (((half_exp + 1) as u16) << 10);
-        }
-    }
-    sign | ((half_exp as u16) << 10) | (out & 0x03ff)
 }

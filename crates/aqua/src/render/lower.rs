@@ -9,10 +9,9 @@ use aqua_core::geometry::{CornerRadii, Rect, snap_device_pixel, snap_device_stro
 use aqua_core::image::ImagePlacement;
 use aqua_core::scene::{DisplayItem, ShadowLayer, TextRasterMode};
 use aqua_core::{GpuiBackground, GpuiHsla, Oklch, Point, Size, Transform2D};
-use aqua_graph::tone::luminance;
 use aqua_graph::{
     BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientQuad, GradientStop, Image,
-    Linear2, PaintCommand, PlanError, PlanLimits, Quad, Shadow, SlugInstance, SlugRun,
+    Linear2, PaintCommand, PlanError, PlanLimits, Quad, Shadow, SlugInstance, SlugRun, ToneCurve,
     plan_paint_with,
 };
 use aqua_media::atlas::{AtlasConfig, ImageKey, PageId, Placement, Slot, StreamBudget};
@@ -41,11 +40,11 @@ use super::transition::{Phase, Settings, Transition};
 use super::vector::{VectorCache, gradient_axis, rotation_steps};
 
 const MESH_TAG: u64 = 0xC000_0000_0000_0000;
-const ROUNDED_CLIP_AREA_CAP: f32 = 0.75;
 const SLUG_TEXT_PX: f32 = 160.0;
-const OPAQUE_FILL: f32 = 0.98;
-const FILL_MEMORY: usize = 256;
-const FILL_SEARCH: usize = 64;
+const CULL_EDGE_PAD: f32 = 2.0;
+const STILL_MARGIN_MICROS: u64 = 1_000;
+const TEXT_OVERHANG_PAD: f32 = 6.0;
+const TEXT_OVERHANG_RATIO: f32 = 0.15;
 const RUN_CACHE_BYTES: usize = 3 << 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -74,6 +73,7 @@ pub struct LowerReport {
     pub culled: u32,
     pub pulsing: bool,
     pub shimmering: bool,
+    pub still_micros: Option<u64>,
     pub skipped: BTreeMap<Unsupported, u32>,
 }
 
@@ -121,12 +121,25 @@ struct RetainedImage {
     premultiplied: Arc<[u8]>,
 }
 
+#[derive(Clone, Copy)]
+struct PenY {
+    relative: f32,
+    bearing: i32,
+}
+
+impl PenY {
+    fn top(self, base_y: f32) -> f32 {
+        ((base_y + self.relative).round() as i32 - self.bearing) as f32
+    }
+}
+
 struct RunEntry {
-    signature: [u32; 14],
+    signature: [u32; 11],
     laid: Arc<LaidOut>,
     epoch: u64,
-    origin: (i32, i32),
+    base: (f32, f32),
     commands: Vec<PaintCommand>,
+    pens: Vec<Vec<PenY>>,
     pages: Vec<PageId>,
     glyphs: u32,
     bytes: usize,
@@ -155,29 +168,55 @@ impl RunCache {
     }
 }
 
-fn shifted(command: &PaintCommand, dx: f32, dy: f32) -> PaintCommand {
-    let place = |bounds: Rect| Rect {
-        x: bounds.x + dx,
-        y: bounds.y + dy,
-        ..bounds
-    };
-    match command {
-        PaintCommand::Glyphs(run) => PaintCommand::Glyphs(GlyphRun {
+fn kind_name(item: &DisplayItem) -> &'static str {
+    match item {
+        DisplayItem::Rect { .. } => "Rect",
+        DisplayItem::Quad { .. } => "Quad",
+        DisplayItem::Text { .. } => "Text",
+        DisplayItem::Image { .. } => "Image",
+        DisplayItem::External { .. } => "External",
+        DisplayItem::Vector { .. } => "Vector",
+        DisplayItem::GpuiSvg { .. } => "GpuiSvg",
+        DisplayItem::GpuiTransformedSvg { .. } => "GpuiTransformedSvg",
+        DisplayItem::GpuiPath { .. } => "GpuiPath",
+        DisplayItem::GpuiMesh { .. } => "GpuiMesh",
+        DisplayItem::GpuiShadow { .. } | DisplayItem::Shadow { .. } => "Shadow",
+        DisplayItem::GpuiBackground { .. } => "GpuiBackground",
+        DisplayItem::GpuiBorder { .. } => "GpuiBorder",
+        DisplayItem::PushClip { .. } | DisplayItem::PushRoundedClip { .. } => "PushClip",
+        DisplayItem::BackdropBlur { .. } | DisplayItem::BackdropBlurRounded { .. } => "Backdrop",
+        DisplayItem::PushContentBlur { .. } => "ContentBlur",
+        _ => "scope",
+    }
+}
+
+fn replaced(command: &PaintCommand, pens: &[PenY], dx: f32, base_y: f32) -> PaintCommand {
+    match (command, pens) {
+        (PaintCommand::Glyphs(run), pens) => PaintCommand::Glyphs(GlyphRun {
             atlas: run.atlas,
             glyphs: run
                 .glyphs
                 .iter()
-                .map(|glyph| Glyph {
-                    bounds: place(glyph.bounds),
+                .zip(pens)
+                .map(|(glyph, pen)| Glyph {
+                    bounds: Rect {
+                        x: glyph.bounds.x + dx,
+                        y: pen.top(base_y),
+                        ..glyph.bounds
+                    },
                     ..*glyph
                 })
                 .collect(),
         }),
-        PaintCommand::Image(image) => PaintCommand::Image(Image {
-            bounds: place(image.bounds),
+        (PaintCommand::Image(image), [pen]) => PaintCommand::Image(Image {
+            bounds: Rect {
+                x: image.bounds.x + dx,
+                y: pen.top(base_y),
+                ..image.bounds
+            },
             ..*image
         }),
-        other => other.clone(),
+        (other, _) => other.clone(),
     }
 }
 
@@ -185,7 +224,9 @@ fn run_bytes(commands: &[PaintCommand]) -> usize {
     commands
         .iter()
         .map(|command| match command {
-            PaintCommand::Glyphs(run) => run.glyphs.len() * std::mem::size_of::<Glyph>(),
+            PaintCommand::Glyphs(run) => {
+                run.glyphs.len() * (std::mem::size_of::<Glyph>() + std::mem::size_of::<PenY>())
+            }
             _ => std::mem::size_of::<PaintCommand>(),
         })
         .sum::<usize>()
@@ -210,32 +251,46 @@ struct Walk {
     pulses: Vec<f32>,
     item: (u32, u32),
     lifted: bool,
-    fills: Vec<(Rect, f32)>,
-    clear_luminance: Option<f32>,
+    cull: Option<Rect>,
 }
 
 impl Walk {
-    fn remember_fill(&mut self, bounds: Rect, paint: Paint) {
-        if let Paint::Solid(color) = paint {
-            if color.alpha >= OPAQUE_FILL && !self.lifted {
-                let [r, g, b, _] = color::srgb(color);
-                if self.fills.len() >= FILL_MEMORY * 2 {
-                    self.fills.drain(..FILL_MEMORY);
-                }
-                self.fills.push((bounds, luminance([r, g, b])));
-            }
+    fn hidden(&mut self, rect: Rect, reach: f32) -> bool {
+        let Some(region) = self.cull else {
+            return false;
+        };
+        if self.lifted || self.open.contains(&Scope::Blur) {
+            return false;
+        }
+        let pad = reach + CULL_EDGE_PAD;
+        let outside = rect.x - pad >= region.right()
+            || region.x >= rect.right() + pad
+            || rect.y - pad >= region.bottom()
+            || region.y >= rect.bottom() + pad;
+        if outside {
+            self.report.culled += 1;
+        }
+        outside
+    }
+
+    fn emit_box(
+        &mut self,
+        bounds: Rect,
+        radii: Radii,
+        paint: Option<Paint>,
+        border: Option<Border>,
+    ) {
+        if !self.hidden(bounds, 0.0) {
+            shape::emit_box(&mut self.out, bounds, radii, paint, border);
         }
     }
 
-    fn backdrop_at(&self, x: f32, y: f32) -> Option<f32> {
-        let point = Point::new(x, y);
-        self.fills
-            .iter()
-            .rev()
-            .take(FILL_SEARCH)
-            .find(|(bounds, _)| bounds.contains(point))
-            .map(|(_, luminance)| *luminance)
-            .or(self.clear_luminance)
+    fn emit_shadow(&mut self, bounds: Rect, radii: Radii, spec: ShadowSpec) -> Fidelity {
+        let reach = spec.sigma.abs() * 3.0 + spec.spread.abs() + spec.dx.abs().max(spec.dy.abs());
+        match self.hidden(bounds, reach) {
+            true => Fidelity::Exact,
+            false => shape::emit_shadow(&mut self.out, bounds, radii, spec),
+        }
     }
 
     fn flat_radii(&mut self, radii: Radii, bounds: Rect) -> Radii {
@@ -645,19 +700,30 @@ impl Lowering {
             pulses: Vec::new(),
             item: (0, 0),
             lifted: false,
-            fills: Vec::new(),
-            clear_luminance: Some(self.clear)
-                .filter(|clear| clear.alpha >= OPAQUE_FILL)
-                .map(|clear| {
-                    let [r, g, b, _] = color::srgb(clear);
-                    luminance([r, g, b])
-                }),
+            cull: match (self.begun.is_some(), self.transition.is_some()) {
+                (false, false) => self.cull,
+                _ => None,
+            },
         };
+        let profiled = crate::profile::enabled();
+        let mut kinds: std::collections::BTreeMap<&'static str, (u32, u64)> = Default::default();
+        let loop_started = WallInstant::now();
         for (id, item) in scene.ordered() {
             walk.report.items += 1;
             walk.item = (id.raw().index, id.raw().generation);
-            self.emit(item, &mut walk);
+            match profiled {
+                true => {
+                    let item_started = WallInstant::now();
+                    self.emit(item, &mut walk);
+                    let spent = item_started.elapsed().as_nanos() as u64;
+                    let slot = kinds.entry(kind_name(item)).or_insert((0, 0));
+                    slot.0 += 1;
+                    slot.1 += spent;
+                }
+                false => self.emit(item, &mut walk),
+            }
         }
+        let loop_us = loop_started.elapsed().as_micros();
         while let Some(kind) = walk.open.pop() {
             walk.out.push(match kind {
                 Scope::Clip => PaintCommand::PopClip,
@@ -666,6 +732,10 @@ impl Lowering {
             });
         }
         walk.report.shimmering = self.shimmer.active();
+        walk.report.still_micros = self
+            .shimmer
+            .hold()
+            .map(|seconds| (seconds * 1.0e6).ceil() as u64 + STILL_MARGIN_MICROS);
         self.shimmer.end_frame();
         self.pulse_cycles.end_frame();
         self.adopt_previous(&previous);
@@ -675,13 +745,30 @@ impl Lowering {
         previous.clear();
         self.spare_commands = previous;
         if let Some(region) = self.cull {
-            walk.report.culled = super::cull::cull(&mut walk.out, region);
+            walk.report.culled += super::cull::cull(&mut walk.out, region);
             if let Some(stats) = &self.stats {
                 stats
                     .culled_commands
                     .fetch_add(u64::from(walk.report.culled), Ordering::Relaxed);
             }
         }
+        crate::profile::note(|| {
+            let mut top: Vec<_> = kinds.iter().collect();
+            top.sort_by_key(|(_, (_, spent))| std::cmp::Reverse(*spent));
+            let top: Vec<String> = top
+                .iter()
+                .take(6)
+                .map(|(name, (count, spent))| format!("{name}:{count}:{}us", spent / 1000))
+                .collect();
+            format!(
+                "walk_kinds=[{}] walk_items={} walk_culled={} walk_us={} loop_us={loop_us} pre_us={}",
+                top.join(","),
+                walk.report.items,
+                walk.report.culled,
+                started.elapsed().as_micros(),
+                loop_started.duration_since(started).as_micros()
+            )
+        });
         walk.report.shimmering |= self.overlay_transition(&mut walk.out, walk.surface, now);
         walk.report.commands = walk.out.len() as u32;
         let inserts_before = self.glyph_inserts;
@@ -758,7 +845,10 @@ impl Lowering {
         let plan = planned?;
         Ok(Lowered {
             uploads,
-            plan,
+            plan: FramePlan {
+                text_tone: self.text_tone(),
+                ..plan
+            },
             report,
         })
     }
@@ -809,7 +899,7 @@ impl Lowering {
                         color: *color,
                         inset: false,
                     };
-                    let fidelity = shape::emit_shadow(&mut walk.out, bounds, radii, spec);
+                    let fidelity = walk.emit_shadow(bounds, radii, spec);
                     walk.note(fidelity);
                 }
                 let border = Border {
@@ -817,14 +907,7 @@ impl Lowering {
                     color: *border_color,
                     dashed: false,
                 };
-                walk.remember_fill(bounds, Paint::Solid(*fill));
-                shape::emit_box(
-                    &mut walk.out,
-                    bounds,
-                    radii,
-                    Some(Paint::Solid(*fill)),
-                    Some(border),
-                );
+                walk.emit_box(bounds, radii, Some(Paint::Solid(*fill)), Some(border));
             }
             DisplayItem::Quad {
                 bounds,
@@ -843,8 +926,7 @@ impl Lowering {
                 });
                 let radii = walk.flat_radii(Radii::scaled(*corners, s), bounds);
                 let paint = scale_paint(Paint::Solid(*fill), factor);
-                walk.remember_fill(bounds, paint);
-                shape::emit_box(&mut walk.out, bounds, radii, Some(paint), Some(border));
+                walk.emit_box(bounds, radii, Some(paint), Some(border));
             }
             DisplayItem::GpuiBackground {
                 bounds,
@@ -855,8 +937,7 @@ impl Lowering {
                 let bounds = snapped(at.rect(*bounds));
                 let paint = scale_paint(background_paint(*background, bounds), factor);
                 let radii = walk.flat_radii(Radii::scaled(*corners, s), bounds);
-                walk.remember_fill(bounds, paint);
-                shape::emit_box(&mut walk.out, bounds, radii, Some(paint), None);
+                walk.emit_box(bounds, radii, Some(paint), None);
             }
             DisplayItem::GpuiBorder {
                 bounds,
@@ -873,15 +954,14 @@ impl Lowering {
                 });
                 let bounds = snapped(at.rect(*bounds));
                 let radii = walk.flat_radii(Radii::scaled(*corners, s), bounds);
-                shape::emit_box(&mut walk.out, bounds, radii, None, Some(border));
+                walk.emit_box(bounds, radii, None, Some(border));
             }
             DisplayItem::Shadow {
                 bounds,
                 corners,
                 layer,
             } => {
-                let fidelity = shape::emit_shadow(
-                    &mut walk.out,
+                let fidelity = walk.emit_shadow(
                     outward(at.rect(*bounds)),
                     Radii::scaled(*corners, s),
                     shadow_spec(layer, layer.color, s),
@@ -901,8 +981,7 @@ impl Lowering {
                     inset: layer.inset,
                     color: Oklch::TRANSPARENT,
                 };
-                let fidelity = shape::emit_shadow(
-                    &mut walk.out,
+                let fidelity = walk.emit_shadow(
                     outward(at.rect(*bounds)),
                     Radii::scaled(*corners, s),
                     shadow_spec(&geometry, hsla_oklch(layer.color), s),
@@ -1032,8 +1111,12 @@ impl Lowering {
                 tint,
                 opacity,
             } => {
+                let destination = at.rect(*bounds);
+                if walk.hidden(destination, 0.0) {
+                    return;
+                }
                 let vector = self.vectors.svg(source, tint.map(hsla_oklch), 0);
-                self.emit_vector(vector, at.rect(*bounds), *opacity, walk);
+                self.emit_vector(vector, destination, *opacity, walk);
             }
             DisplayItem::GpuiTransformedSvg {
                 bounds,
@@ -1051,14 +1134,25 @@ impl Lowering {
                     w: width,
                     h: height,
                 };
+                let destination = at.rect(placed);
+                if walk.hidden(destination, destination.w.max(destination.h)) {
+                    return;
+                }
                 let vector = self.vectors.svg(
                     source,
                     Some(hsla_oklch(*tint)),
                     rotation_steps(transform.rotation_radians),
                 );
-                self.emit_vector(vector, at.rect(placed), *opacity, walk);
+                self.emit_vector(vector, destination, *opacity, walk);
             }
-            DisplayItem::GpuiPath { path, .. } => self.emit_path(path, at, walk),
+            DisplayItem::GpuiPath {
+                path,
+                transformed_window_logical_bounds,
+            } => {
+                if !walk.hidden(at.rect(*transformed_window_logical_bounds), 1.0) {
+                    self.emit_path(path, at, walk)
+                }
+            }
             DisplayItem::GpuiMesh {
                 bounds,
                 corners,
@@ -1103,11 +1197,9 @@ impl Lowering {
     fn push_clip(&mut self, walk: &mut Walk, rect: Rect, radii: Radii) {
         let fitted = radii.fitted(rect);
         let radius = fitted.max();
-        let area = rect.w * rect.h;
-        let cheap = area <= walk.surface.w * walk.surface.h * ROUNDED_CLIP_AREA_CAP;
         walk.open.push(Scope::Clip);
-        match (radius >= 0.75, cheap) {
-            (true, true) => {
+        match radius >= 0.75 {
+            true => {
                 walk.note(match fitted.is_uniform() {
                     true => Fidelity::Exact,
                     false => Fidelity::Approximated,
@@ -1115,11 +1207,7 @@ impl Lowering {
                 walk.out
                     .push(PaintCommand::PushRoundedClip { rect, radius });
             }
-            (true, false) => {
-                walk.note(Fidelity::Approximated);
-                walk.out.push(PaintCommand::PushClip(rect));
-            }
-            (false, _) => walk.out.push(PaintCommand::PushClip(rect)),
+            false => walk.out.push(PaintCommand::PushClip(rect)),
         }
     }
 
@@ -1144,6 +1232,23 @@ impl Lowering {
         let at = walk.at();
         let s = at.scale();
         let (base_x, base_y) = at.point(origin[0], origin[1]);
+        if walk.cull.is_some() && at.is_exact() {
+            let pad = (TEXT_OVERHANG_PAD + TEXT_OVERHANG_RATIO * laid.size.1) * s;
+            let ink = Rect {
+                x: base_x,
+                y: base_y,
+                w: laid.size.0 * s,
+                h: laid.size.1 * s,
+            };
+            if walk.hidden(ink, pad) {
+                if let Some(entry) = self.run_cache.entries.get(&run_id) {
+                    for page in &entry.pages {
+                        self.residency.touch_page(*page);
+                    }
+                }
+                return;
+            }
+        }
         let mapped = self.text.has_map();
         let plain = !mapped && !self.text.has_base();
         let phase = match self.text.shimmer() {
@@ -1154,13 +1259,12 @@ impl Lowering {
             .text
             .top_map()
             .map_or(walk.surface, |map| at.rect(map.bounds));
-        let mut batches: Vec<(aqua_media::atlas::PageId, Vec<Glyph>)> = Vec::new();
+        let mut batches: Vec<(aqua_media::atlas::PageId, Vec<Glyph>, Vec<PenY>)> = Vec::new();
         let mut color_images: Vec<PaintCommand> = Vec::new();
+        let mut color_pens: Vec<PenY> = Vec::new();
         let mut last_color: Option<([f32; 4], Oklch)> = None;
         let moving = !walk.transforms.is_empty()
             && (!at.is_exact() || (s / walk.base.scale() - 1.0).abs() > 1.0e-3);
-        let first_baseline = laid.lines.first().map_or(0.0, |line| line.baseline_y);
-        let backdrop = walk.backdrop_at(base_x + 1.0, base_y + first_baseline * s * 0.5);
         let mut curves: Vec<SlugInstance> = Vec::new();
         let signature = self
             .text
@@ -1169,22 +1273,18 @@ impl Lowering {
             .map(|text| {
                 [
                     (base_x - base_x.floor()).to_bits(),
-                    (base_y - base_y.floor()).to_bits(),
                     s.to_bits(),
                     scene_color.l.to_bits(),
                     scene_color.c.to_bits(),
                     scene_color.h.to_bits(),
                     scene_color.alpha.to_bits(),
                     opacity.to_bits(),
-                    backdrop.map_or(0, f32::to_bits),
-                    u32::from(backdrop.is_some()),
                     text[0] ^ (text[1] << 1),
                     text[2],
                     text[3],
                     text[4],
                 ]
             });
-        let origin_cell = (base_x.floor() as i32, base_y.floor() as i32);
         let epoch = self.residency.eviction_epoch();
         if let Some(signature) = signature {
             if let Some(entry) = self.run_cache.entries.get(&run_id).filter(|entry| {
@@ -1192,14 +1292,19 @@ impl Lowering {
                     && entry.epoch == epoch
                     && Arc::ptr_eq(&entry.laid, &laid)
             }) {
-                let dx = (origin_cell.0 - entry.origin.0) as f32;
-                let dy = (origin_cell.1 - entry.origin.1) as f32;
-                walk.out.extend(
-                    entry
-                        .commands
-                        .iter()
-                        .map(|command| shifted(command, dx, dy)),
-                );
+                match entry.base == (base_x, base_y) {
+                    true => walk.out.extend(entry.commands.iter().cloned()),
+                    false => {
+                        let dx = base_x.floor() - entry.base.0.floor();
+                        walk.out.extend(
+                            entry
+                                .commands
+                                .iter()
+                                .zip(&entry.pens)
+                                .map(|(command, pens)| replaced(command, pens, dx, base_y)),
+                        );
+                    }
+                }
                 walk.report.glyphs += entry.glyphs;
                 for page in &entry.pages {
                     self.residency.touch_page(*page);
@@ -1250,7 +1355,6 @@ impl Lowering {
                                 color: tinted,
                                 clip: None,
                                 opacity: 1.0,
-                                backdrop,
                             });
                             walk.report.glyphs += 1;
                             walk.report.curves += 1;
@@ -1262,8 +1366,8 @@ impl Lowering {
                 }
                 let x = base_x + (glyph.x + glyph.x_offset) * s;
                 let (pixel_x, subpixel) = quantize_x(x);
-                let pen_y =
-                    (base_y + (line.baseline_y + glyph.y - glyph.y_offset) * s).round() as i32;
+                let relative_y = (line.baseline_y + glyph.y - glyph.y_offset) * s;
+                let pen_y = (base_y + relative_y).round() as i32;
                 let mut key = raster_key(glyph, subpixel);
                 key.size_bits = quantize_size(glyph.font_size_px * s).to_bits();
                 let resolved = self
@@ -1310,14 +1414,24 @@ impl Lowering {
                             bounds,
                             texels: texel_rect(&placement, full_source()),
                             color: tinted,
-                            backdrop,
+                        };
+                        let pen = PenY {
+                            relative: relative_y,
+                            bearing: placement.bearing[1],
                         };
                         match batches.last_mut() {
-                            Some((page, glyphs)) if *page == placement.page => glyphs.push(entry),
-                            _ => batches.push((placement.page, vec![entry])),
+                            Some((page, glyphs, pens)) if *page == placement.page => {
+                                glyphs.push(entry);
+                                pens.push(pen);
+                            }
+                            _ => batches.push((placement.page, vec![entry], vec![pen])),
                         }
                     }
                     GlyphSlot::Color(_) => {
+                        color_pens.push(PenY {
+                            relative: relative_y,
+                            bearing: placement.bearing[1],
+                        });
                         push_image(
                             &mut color_images,
                             &placement,
@@ -1330,11 +1444,13 @@ impl Lowering {
                 }
             }
         }
-        for (page, glyphs) in batches {
+        let mut run_pens: Vec<Vec<PenY>> = Vec::new();
+        for (page, glyphs, pens) in batches {
             walk.out.push(PaintCommand::Glyphs(GlyphRun {
                 atlas: texture_handle(page),
-                glyphs,
+                glyphs: glyphs.into(),
             }));
+            run_pens.push(pens);
         }
         if !curves.is_empty() {
             walk.out.push(PaintCommand::Slug(SlugRun {
@@ -1349,15 +1465,26 @@ impl Lowering {
                 && self.residency.eviction_epoch() == epoch
         }) {
             let commands = walk.out[started..].to_vec();
+            let mut color_pens = color_pens.into_iter();
+            let mut run_pens = run_pens.into_iter();
+            let pens: Vec<Vec<PenY>> = commands
+                .iter()
+                .map(|command| match command {
+                    PaintCommand::Glyphs(_) => run_pens.next().unwrap_or_default(),
+                    PaintCommand::Image(_) => color_pens.next().into_iter().collect(),
+                    _ => Vec::new(),
+                })
+                .collect();
             self.run_cache.insert(
                 run_id,
                 RunEntry {
                     signature,
                     laid: laid.clone(),
                     epoch,
-                    origin: origin_cell,
+                    base: (base_x, base_y),
                     bytes: run_bytes(&commands),
                     commands,
+                    pens,
                     pages,
                     glyphs: walk.report.glyphs - glyphs_before,
                 },
@@ -1404,6 +1531,9 @@ impl Lowering {
             walk.report.pending += 1;
             return;
         };
+        if walk.hidden(bounds, 0.0) {
+            return;
+        }
         let (destination, source, clipped) = match fit {
             None => (bounds, full_source(), false),
             Some((fit, position, source)) => {
@@ -1603,6 +1733,13 @@ impl Lowering {
         self.outline_text = mode == TextRasterMode::Outline;
     }
 
+    fn text_tone(&self) -> ToneCurve {
+        match self.outline_text {
+            true => ToneCurve::EXACT,
+            false => ToneCurve::native(),
+        }
+    }
+
     pub fn transition_active(&self) -> bool {
         self.transition.is_some() || self.begun.is_some()
     }
@@ -1780,6 +1917,7 @@ impl aqua_transport::Lowering for Lowering {
             unsupported: report.unsupported(),
             approximated: report.approximated,
             glyphs: report.glyphs,
+            text_tone: self.text_tone(),
         }
     }
 

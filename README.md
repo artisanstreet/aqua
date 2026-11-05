@@ -4,32 +4,19 @@
 
 **A native, GPU-accelerated GUI framework for Rust.**
 
-Explicit reactivity · Render-thread animation · Browser-grade styling · Deterministic by design
-
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange.svg)](Cargo.toml)
-[![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6.svg)](docs/PLATFORM.md)
+[![Platforms: Windows | macOS | Linux](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](docs/PLATFORM.md)
 [![Status: Pre-release](https://img.shields.io/badge/status-pre--release-yellow.svg)](#status)
-
-[Getting started](docs/GETTING_STARTED.md) ·
-[Authoring guide](docs/AUTHORING.md) ·
-[Architecture](ARCHITECTURE.md) ·
-[Examples](crates/aqua/examples)
 
 </div>
 
 ---
 
-Aqua is a desktop UI framework that goes straight to the platform: Direct3D for
-rendering, Win32 for windowing, DirectWrite-grade text, Text Services Framework
-for input methods and UI Automation for accessibility. No webview, no
-cross-platform abstraction layer in the hot path.
-
-Under the native adapters sits a **pure, sans-IO core**. The whole runtime is a
-state machine, `step(Input) -> Output`, that reads no clock, spawns no threads
-and touches no files. That makes every frame reproducible: record a session,
-replay it, seek through it, and diff it pixel for pixel against a CPU reference
-renderer.
+Aqua is a UI framework for building fast, beautiful desktop apps in Rust. You
+write your app once, and Aqua runs it on each platform's own graphics, text,
+input and accessibility stack, so it looks, feels and performs like it belongs
+there.
 
 ```rust
 use aqua::{Aqua, Context, IntoView, Material, Theme, px};
@@ -67,29 +54,59 @@ fn main() -> Result<(), aqua::Error> {
 }
 ```
 
-## Why Aqua
+## Motivation
 
-- **Native from the first pixel.** Direct3D 11 by default, Direct3D 12 opt-in,
-  real Win32 windows with Mica and Acrylic materials, overlay title bars and
-  native caption buttons.
-- **Reactivity you can read.** A view lists its dependencies explicitly. There
-  are no hidden subscriptions and no whole-tree diffing: invalidation cost
-  follows what changed, not how big the view is.
-- **Animation off the main thread.** Motion runs as analytic spring tracks on a
-  dedicated render thread. While something animates, your app code does no
-  work at all.
-- **Styling on the level of a browser engine.** Composable `const` styles,
-  design tokens, themes, Oklch color, flexbox and grid layout via
+Desktop apps usually have to choose between two options. A webview gives you a
+great authoring model but ships a browser with every app: heavy on memory and
+startup, and never quite native in how it scrolls, types or reads to a screen
+reader. A classic cross-platform toolkit is lighter, but it tends to draw the
+lowest common denominator of every platform and to re-implement what the OS
+already does well.
+
+Aqua exists to get rid of that choice.
+
+**One codebase, native everywhere.** Everything that makes a UI a UI (state,
+layout, styling, text shaping, animation and render planning) lives in a pure
+core that is shared on every platform. Below it, each platform gets a thin
+adapter built on its best native APIs: its own GPU API, window system, text
+input and accessibility tree. Your app code never changes, and it never goes
+through a generic abstraction layer on the hot path. On Windows that means
+Direct3D, Win32 and UI Automation. On macOS it means Metal, AppKit and
+NSAccessibility. On Linux it means Vulkan, Wayland and AT-SPI.
+
+**Reactivity without the guesswork.** In Aqua a view declares exactly which
+signals it depends on. Nothing subscribes implicitly, and nothing re-runs the
+whole tree and diffs it. When a signal changes, only the views that named it
+rebuild, and keyed children keep their identity, focus and edit state. The
+cost of an update follows what changed, not how big your UI is, and you can
+see where it happens by reading the code.
+
+**Smooth by construction.** Animation runs as spring curves on a dedicated
+render thread. While something moves, your app code does no work at all, so a
+busy main thread never drops a frame, and an idle window really is idle.
+
+**Deterministic all the way down.** The core is a state machine with no clock,
+threads or I/O of its own. Every session can be recorded, replayed and checked
+pixel for pixel against a CPU reference renderer, which keeps Aqua honest on
+every platform it runs on.
+
+## Features
+
+- **Native rendering** on each platform's own GPU API, with system materials
+  such as Mica, Acrylic and vibrancy, custom title bars and native window
+  controls.
+- **Explicit reactivity** with signals, scopes and keyed reconciliation.
+- **Browser-grade styling:** composable `const` styles, design tokens, themes,
+  Oklch color, flexbox and grid layout via
   [Taffy](https://github.com/DioxusLabs/taffy), shadows, blur and custom GPU
-  passes without forking the framework.
-- **Text that holds up.** Shaping, bidi, line breaking, editing, IME
-  composition and glyph rasterization, gated by pixel diffs against
-  DirectWrite.
-- **Deterministic and testable.** Every subsystem runs headless. A CPU
-  reference renderer is the oracle for the GPU path, and recorded input
-  sessions replay to identical output.
-- **Idle means idle.** Scheduling is demand-driven. An unchanged window sleeps
-  instead of looping.
+  passes.
+- **First-class text:** shaping, bidi, line breaking, rich editing and IME
+  composition, tested against each platform's native text renderer.
+- **Virtualized collections:** lists and tables that scroll hundreds of
+  thousands of rows.
+- **Accessible by default:** every element maps to the platform accessibility
+  tree.
+- **Headless and testable:** every subsystem runs without a window or GPU.
 
 ## Installation
 
@@ -100,8 +117,7 @@ Aqua is not yet published on crates.io. Depend on it through git:
 aqua = { git = "https://github.com/artisanstreet/aqua" }
 ```
 
-**Requirements:** Rust 1.93 or newer. Windowed apps target Windows 10 and 11.
-The pure crates, the reference renderer and headless runs work on Linux too.
+Aqua needs Rust 1.93 or newer.
 
 ## A tour of the API
 
@@ -147,8 +163,7 @@ Aqua::Button().styles([BUTTON, PRIMARY])
 ### State
 
 Signals live in a scope and come as a read/write pair. Views rebuild only when
-the signals they declare change, and keyed children keep their identity, focus
-and edit state across rebuilds.
+the signals they declare change.
 
 ```rust
 let (todos, set_todos) = cx.scope().signal(Vec::<Todo>::new());
@@ -188,8 +203,8 @@ without a display, which is how they run in CI.
 
 ## Architecture
 
-Aqua is split into **pure crates** that plan and **adapters** that execute.
-Dependencies only point inward, and the boundary is machine-checked.
+Aqua is split into a **pure core** that plans and **platform adapters** that
+execute. Dependencies only point inward, and the boundary is machine-checked.
 
 ```
                     ┌─────────────────────────────┐
@@ -200,13 +215,13 @@ Dependencies only point inward, and the boundary is machine-checked.
  ┌─────────────────┐   ┌──────────────────────┐   ┌──────────────────┐
  │  Pure core      │   │  Ports               │   │  Adapters        │
  │                 │   │                      │   │                  │
- │  reactive  ui   │   │  aqua-protocol       │◀──│  gpu-d3d11/12    │
- │  style  layout  │──▶│  Machine, GpuBackend │   │  gpu-ref (CPU)   │
- │  text  motion   │   │  RenderHost, Ime...  │   │  shell-win32     │
- │  scene  graph   │   │                      │   │  ime-tsf a11y-uia│
+ │  reactive  ui   │   │  aqua-protocol       │◀──│  GPU backends    │
+ │  style  layout  │──▶│  Machine, GpuBackend │   │  window shells   │
+ │  text  motion   │   │  RenderHost, Ime...  │   │  text input      │
+ │  scene  graph   │   │                      │   │  accessibility   │
  └─────────────────┘   └──────────────────────┘   └──────────────────┘
-   no I/O, no clock,                                all unsafe and
-   no threads, no unsafe                            OS code lives here
+   shared on every                                  one set per
+   platform                                         platform
 ```
 
 | Crate | Role |
@@ -220,12 +235,17 @@ Dependencies only point inward, and the boundary is machine-checked.
 | `aqua-motion` | Motion targets and analytic spring tracks |
 | `aqua-scene` / `aqua-graph` | Display list, damage, render graph planner |
 | `aqua-runtime` | The sans-IO frame pipeline and render side |
-| `aqua-gpu-d3d11` | Direct3D 11 backend (Windows default) |
-| `aqua-gpu-d3d12` | Direct3D 12 backend (opt-in) |
 | `aqua-gpu-ref` | CPU reference renderer: oracle and headless backend |
-| `aqua-shell-win32` | Windows, input, DPI, chrome, clipboard, dialogs |
-| `aqua-ime-tsf` / `aqua-a11y-uia` | Input methods and accessibility |
 | `aqua-verify` | Architecture enforcement, heap gates, differential tests |
+
+Each platform plugs in through the same ports:
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| Rendering | Direct3D 11 / 12 | Metal | Vulkan |
+| Windowing | Win32 | AppKit | Wayland, X11 |
+| Text input | Text Services Framework | NSTextInputClient | IBus, Fcitx |
+| Accessibility | UI Automation | NSAccessibility | AT-SPI |
 
 The full design, with its decision records, is in
 [`ARCHITECTURE.md`](ARCHITECTURE.md).
@@ -254,16 +274,11 @@ cd aqua
 cargo test --workspace
 ```
 
-Cross-compiling a Windows build from WSL is covered in
-[`docs/WINDOWS_BUILD.md`](docs/WINDOWS_BUILD.md).
-
 ## Status
 
-Aqua is pre-release and the API will change. Windows is the first platform;
-other platforms will follow through new adapters behind the same ports. We do
-not publish speed comparisons until they come from matched, reproducible
-workloads; see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for what is
-measured today.
+Aqua is pre-release and the API will change. We do not publish speed
+comparisons until they come from matched, reproducible workloads; see
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for what is measured today.
 
 ## Contributing
 

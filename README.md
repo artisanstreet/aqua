@@ -1,140 +1,281 @@
-# Aqua — Rust GUI framework
+<div align="center">
 
-Aqua is a Rust GUI framework with one shared codebase and platform adapters
-(Windows first). Product requirements and architecture live in
-[`GUI_FRAMEWORK_DESIGN.md`](GUI_FRAMEWORK_DESIGN.md); the build plan in
-[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). This file is the
-implementation ledger: what runs today, how to run it, and what is next.
+# Aqua
 
-## Run it
+**A native, GPU-accelerated GUI framework for Rust.**
 
-```sh
-cargo run -p aqua --example todo                 # canonical App, real window
-cargo run -p aqua --example todo -- --headless   # canonical App, headless pump (CI-safe)
-cargo run -p aqua --example collections          # List/Table demo, real window
-cargo run -p aqua --example collections -- --headless  # List/Table demo, headless pump
+Explicit reactivity · Render-thread animation · Browser-grade styling · Deterministic by design
+
+[![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
+[![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange.svg)](Cargo.toml)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6.svg)](docs/PLATFORM.md)
+[![Status: Pre-release](https://img.shields.io/badge/status-pre--release-yellow.svg)](#status)
+
+[Getting started](docs/GETTING_STARTED.md) ·
+[Authoring guide](docs/AUTHORING.md) ·
+[Architecture](ARCHITECTURE.md) ·
+[Examples](crates/aqua/examples)
+
+</div>
+
+---
+
+Aqua is a desktop UI framework that goes straight to the platform: Direct3D for
+rendering, Win32 for windowing, DirectWrite-grade text, Text Services Framework
+for input methods and UI Automation for accessibility. No webview, no
+cross-platform abstraction layer in the hot path.
+
+Under the native adapters sits a **pure, sans-IO core**. The whole runtime is a
+state machine, `step(Input) -> Output`, that reads no clock, spawns no threads
+and touches no files. That makes every frame reproducible: record a session,
+replay it, seek through it, and diff it pixel for pixel against a CPU reference
+renderer.
+
+```rust
+use aqua::{Aqua, Context, IntoView, Material, Theme, px};
+
+fn counter(cx: &Context) -> impl IntoView {
+    let (count, set_count) = cx.scope().signal(0);
+
+    cx.view((count,), move |(count,)| {
+        let increment = set_count.clone();
+
+        Aqua::Box()
+            .child(Aqua::Text(format!("Clicked {count} times")).build())
+            .child(
+                Aqua::Button()
+                    .on_activate(move || increment.update(|n| *n += 1))
+                    .child(Aqua::Text("Increment").build())
+                    .build(),
+            )
+            .build()
+    })
+}
+
+fn main() -> Result<(), aqua::Error> {
+    Aqua::App()
+        .config(
+            Aqua::Config().window(
+                Aqua::Window()
+                    .title("Counter")
+                    .size(px(480.0), px(320.0))
+                    .theme(Theme::Dark)
+                    .material(Material::Glass),
+            ),
+        )
+        .run(counter)
+}
 ```
 
-To build a Windows Todo executable from WSL using Artisan Editor's Nix
-cross-compilation shell:
+## Why Aqua
 
-```sh
-bash scripts/build-windows.sh
+- **Native from the first pixel.** Direct3D 11 by default, Direct3D 12 opt-in,
+  real Win32 windows with Mica and Acrylic materials, overlay title bars and
+  native caption buttons.
+- **Reactivity you can read.** A view lists its dependencies explicitly. There
+  are no hidden subscriptions and no whole-tree diffing: invalidation cost
+  follows what changed, not how big the view is.
+- **Animation off the main thread.** Motion runs as analytic spring tracks on a
+  dedicated render thread. While something animates, your app code does no
+  work at all.
+- **Styling on the level of a browser engine.** Composable `const` styles,
+  design tokens, themes, Oklch color, flexbox and grid layout via
+  [Taffy](https://github.com/DioxusLabs/taffy), shadows, blur and custom GPU
+  passes without forking the framework.
+- **Text that holds up.** Shaping, bidi, line breaking, editing, IME
+  composition and glyph rasterization, gated by pixel diffs against
+  DirectWrite.
+- **Deterministic and testable.** Every subsystem runs headless. A CPU
+  reference renderer is the oracle for the GPU path, and recorded input
+  sessions replay to identical output.
+- **Idle means idle.** Scheduling is demand-driven. An unchanged window sleeps
+  instead of looping.
+
+## Installation
+
+Aqua is not yet published on crates.io. Depend on it through git:
+
+```toml
+[dependencies]
+aqua = { git = "https://github.com/artisanstreet/aqua" }
 ```
 
-Output: `dist/windows/aqua-todo.exe`. See
-[`docs/WINDOWS_BUILD.md`](docs/WINDOWS_BUILD.md) for prerequisites and the
-inherited x86-64-v3 CPU requirement.
+**Requirements:** Rust 1.93 or newer. Windowed apps target Windows 10 and 11.
+The pure crates, the reference renderer and headless runs work on Linux too.
 
-Time-bounded smoke (no user input; validates idle behavior):
+## A tour of the API
 
-```sh
-AQUA_SMOKE_MS=2000 cargo run -p aqua --example showcase
-# frame-budget mode for active animation: AQUA_SMOKE_FRAMES=120 ...
+### Elements
+
+UI is built with the `Aqua::*()` factories. Every element takes children and a
+list of styles.
+
+```rust
+Aqua::Box()
+    .styles([CARD])
+    .child(Aqua::Text("Settings").styles([HEADING]).build())
+    .child(Aqua::Checkbox("Enable sync").checked(true).build())
+    .child(Aqua::Slider(0.5).build())
+    .build()
 ```
 
-On WSLg hosts without `DISPLAY` in the environment:
+Available out of the box: `Box`, `Text`, `Button`, `Checkbox`, `Slider`,
+`Dropdown`, `Tabs`, `Scroll`, `List`, `Table`, `Media`, `Canvas`,
+`Viewport3D`, `Fragment` and `Dynamic`.
 
-```sh
-DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/$(id -u) \
-  AQUA_SMOKE_MS=2000 cargo run -p aqua --example showcase
+### Styles
+
+Styles are plain `const` values. Pass several and later entries win per field,
+so variants compose without inheritance tricks.
+
+```rust
+use aqua::{Aqua, Style, pct, px};
+use aqua::prelude::Oklch;
+
+const ACCENT: Oklch = Oklch::new(0.65, 0.17, 252.0);
+
+const BUTTON: Style = Aqua::Style()
+    .padding(px(12.0))
+    .radius(px(10.0))
+    .background(Oklch::WHITE.with_alpha(0.06));
+
+const PRIMARY: Style = Aqua::Style().background(ACCENT);
+
+Aqua::Button().styles([BUTTON, PRIMARY])
 ```
 
-Validated 2026-10-25 (Linux/WSLg, native run): window opens, GPU presents,
-clipboard backend System, smoke exits 0 —
-`wakeups=8 requested=6 produced=3 presented_frames=3 render_errors=0`
-(idle app sleeps; no loop). Windows 11 native run also exits 0
-(`wakeups=5 requested=4 produced=2 presented=2`, System clipboard).
+### State
 
-```sh
-CARGO_BUILD_JOBS=2 cargo test -p aqua            # facade suite (13 lib + integration)
-cargo check --workspace --all-targets            # full shared-workspace gate
-cargo check -p aqua --target x86_64-pc-windows-gnu --all-targets
+Signals live in a scope and come as a read/write pair. Views rebuild only when
+the signals they declare change, and keyed children keep their identity, focus
+and edit state across rebuilds.
+
+```rust
+let (todos, set_todos) = cx.scope().signal(Vec::<Todo>::new());
+let (draft, set_draft) = cx.scope().signal(String::new());
+
+Aqua::Text("")
+    .bind((draft.clone(), set_draft.clone()))
+    .placeholder("New task")
+    .on_submit(move || set_todos.update(|v| v.push(Todo::new(draft.get()))))
+    .build()
 ```
 
-Getting started: [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md).
-Contracts: [`docs/APPLICATION.md`](docs/APPLICATION.md),
-[`docs/AUTHORING.md`](docs/AUTHORING.md),
-[`docs/IMPLEMENTATION_CONTRACT.md`](docs/IMPLEMENTATION_CONTRACT.md),
-[`docs/PLATFORM.md`](docs/PLATFORM.md), [`docs/SCHEDULER.md`](docs/SCHEDULER.md),
-[`docs/REACTIVITY.md`](docs/REACTIVITY.md), [`docs/TEXT.md`](docs/TEXT.md),
-[`docs/STYLING.md`](docs/STYLING.md),
-[`docs/STYLE_CONTRACT.md`](docs/STYLE_CONTRACT.md),
-[`docs/COLLECTIONS.md`](docs/COLLECTIONS.md),
-[`docs/GPU_EXTENSIONS.md`](docs/GPU_EXTENSIONS.md),
-[`docs/OVERLAYS_AND_MOTION.md`](docs/OVERLAYS_AND_MOTION.md),
-[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md), [`docs/VALIDATION.md`](docs/VALIDATION.md).
+### Collections
 
-## Architecture (one shared codebase)
+`List` and `Table` virtualize out of the box, with variable row heights,
+scroll anchoring, focus pinning and `fr` column tracks. The `collections`
+example scrolls 100,000 rows.
 
-| Crate | Owns |
+### Windows
+
+Windows are configured declaratively: title, size, minimum size, theme,
+material (`Glass`, solid fallback) and title bar style (`Native`, `Overlay`,
+`Hidden`). Multiple windows share one render thread.
+
+## Examples
+
+```sh
+cargo run -p aqua --example todo            # reactive todo list on a glass window
+cargo run -p aqua --example collections     # 100k-row virtual list and sortable table
+cargo run -p aqua --example showcase        # the full runtime surface: media, 3D, IME, a11y
+cargo run -p aqua --example multi_window    # several windows, one render thread
+cargo run -p aqua --example editor_shell    # an editor-style application shell
+```
+
+`todo` and `collections` accept `-- --headless` to run their scripted input
+without a display, which is how they run in CI.
+
+## Architecture
+
+Aqua is split into **pure crates** that plan and **adapters** that execute.
+Dependencies only point inward, and the boundary is machine-checked.
+
+```
+                    ┌─────────────────────────────┐
+                    │            aqua             │  public API, event loop
+                    └──────────────┬──────────────┘
+          ┌────────────────────────┼────────────────────────┐
+          ▼                        ▼                        ▼
+ ┌─────────────────┐   ┌──────────────────────┐   ┌──────────────────┐
+ │  Pure core      │   │  Ports               │   │  Adapters        │
+ │                 │   │                      │   │                  │
+ │  reactive  ui   │   │  aqua-protocol       │◀──│  gpu-d3d11/12    │
+ │  style  layout  │──▶│  Machine, GpuBackend │   │  gpu-ref (CPU)   │
+ │  text  motion   │   │  RenderHost, Ime...  │   │  shell-win32     │
+ │  scene  graph   │   │                      │   │  ime-tsf a11y-uia│
+ └─────────────────┘   └──────────────────────┘   └──────────────────┘
+   no I/O, no clock,                                all unsafe and
+   no threads, no unsafe                            OS code lives here
+```
+
+| Crate | Role |
 |---|---|
-| `aqua` (facade) | Event loop, `AquaConfig`, canonical `App` builder + `Context`/`IntoView`, `Aqua::*()` authoring factories, `Application` low-level endpoint, GPU completion worker, shared fonts/runs handles, showcase |
-| `aqua-core` | IDs, geometry, color, scene vocabulary, input events, semantics |
-| `aqua-reactive` | Explicit-dependency graph, scopes, batching, flush boundary |
-| `aqua-text` | Shaping, editing model, shared fonts + run registry |
-| `aqua-render` | wgpu 2D renderer, scene store, surface, media + viewport passes |
-| `aqua-ui` | Tree, layout, overlays, motion, element and collection builders, virtualized row realization |
+| `aqua` | Public API, composition root and the event loop |
+| `aqua-reactive` | Declared-dependency graph, scopes, batching |
+| `aqua-ui` | Element builders, node tree, keyed reconciliation, overlays |
+| `aqua-style` | Styles, tokens, cascade, themes |
+| `aqua-layout` | Flexbox and grid on Taffy |
+| `aqua-text` | Shaping, bidi, line breaking, editing, rasterization |
+| `aqua-motion` | Motion targets and analytic spring tracks |
+| `aqua-scene` / `aqua-graph` | Display list, damage, render graph planner |
+| `aqua-runtime` | The sans-IO frame pipeline and render side |
+| `aqua-gpu-d3d11` | Direct3D 11 backend (Windows default) |
+| `aqua-gpu-d3d12` | Direct3D 12 backend (opt-in) |
+| `aqua-gpu-ref` | CPU reference renderer: oracle and headless backend |
+| `aqua-shell-win32` | Windows, input, DPI, chrome, clipboard, dialogs |
+| `aqua-ime-tsf` / `aqua-a11y-uia` | Input methods and accessibility |
+| `aqua-verify` | Architecture enforcement, heap gates, differential tests |
 
-`aqua::ui` ≡ `aqua_ui::element::ui`.
-`UiApp` (`crates/aqua/src/ui_app.rs`, overlay-agent owned) is the
-high-level host over `View`/`UiTree`. New code uses the canonical root
-builder (`docs/APPLICATION.md`) and the `Aqua::*()` factories
-(`docs/AUTHORING.md`): `Aqua::App().config(Aqua::Config().window(
-Aqua::Window().title(..).size(..).min_size(..).theme(..).material(..))).run(todo_app)`
-with `fn todo_app(cx: &Context) -> impl IntoView` returning
-`cx.view(explicit deps, render)`; `Aqua::run_ui` / `run_ui_reactive` and the
-`Application` trait remain as the low-level escape. The `todo` example
-(`crates/aqua/examples/todo.rs`) opens a window by default
-(`cargo run -p aqua --example todo`); `-- --headless` runs its deterministic
-input and state validation without a display. The `collections` example
-(`crates/aqua/examples/collections.rs`) demos a 100k-row virtualized `List`
-and a sortable `Table` with `fr` tracks through the same factories.
-The showcase drives the low-level `Application` escape directly to exercise the
-full runtime surface (event loop, externals, IME, a11y).
+The full design, with its decision records, is in
+[`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-## Feature matrix (honest status)
+## Documentation
 
-| Capability | Status |
+| Guide | |
 |---|---|
-| Window open + winit 0.30 event loop (Windows-first, Linux running) | Implemented, native + WSLg runs green |
-| Demand-driven scheduling, fps target, idle sleep | Implemented (`Scheduler`; validated idle at fps default) |
-| Canonical input routing (modifiers, key text + IME suppression, real cancel, file drops) | Implemented |
-| Reactive state (explicit signals, keyed scopes, host-driven flush boundary) | Implemented |
-| List/Table, shared columns and opt-in virtualization | Implemented; variable-height windows, anchors, focus pinning and eviction tested |
-| Text editing + shaped runs (shared fonts/registry, caret/selection, IME) | Implemented; pixels render via shared `TextBackend` |
-| Media (decode → cache → GPU upload → `External` every frame) | Implemented in showcase |
-| Viewport3D (depth-tested cube, custom renderer, resize/device-recreate) | Implemented in showcase |
-| Toggle pulse via canonical `MotionController` + scheduler deadlines | Implemented |
-| Filter popover (placement, light dismissal, focus restore) | Implemented |
-| GPU-completion-backed backpressure (worker thread, blocking wait, proxy wake) | Implemented |
-| OS prefs (reduced motion/contrast/transparency, theme), material fallback | Implemented |
-| Native clipboard (system w/ explicit fallback), native dialogs (gated) | Implemented |
-| Accessibility bridge (invisible-first attach, waker, snapshot push, action drain) | Implemented (mechanics; screen-reader run pending) |
-| `UiApp` high-level host + builder Todo | Implemented; headless input lifecycle and native Windows GPU smoke pass |
-| Screen-reader behavior, native material appearance, richer editing gestures | Pending; native smoke verifies API execution and frame submission, not appearance or assistive-technology behavior |
+| [Getting started](docs/GETTING_STARTED.md) | Install, run the examples, write a first app |
+| [Application](docs/APPLICATION.md) | The `App` builder, config and lifecycle |
+| [Authoring](docs/AUTHORING.md) | Elements, events and composition |
+| [Styling](docs/STYLING.md) | Styles, tokens and themes |
+| [Reactivity](docs/REACTIVITY.md) | Signals, scopes and views |
+| [Collections](docs/COLLECTIONS.md) | Virtualized lists and tables |
+| [Text](docs/TEXT.md) | Shaping, editing and IME |
+| [Overlays and motion](docs/OVERLAYS_AND_MOTION.md) | Popovers, springs and presence |
+| [Window chrome](docs/WINDOW_CHROME.md) | Title bars, materials and caption buttons |
+| [GPU extensions](docs/GPU_EXTENSIONS.md) | Custom render passes |
+| [Performance](docs/PERFORMANCE.md) | Counters, budgets and how we measure |
 
-No performance-superiority claim is made; no comparative measurements exist.
+## Building from source
 
-## For contributors
+```sh
+git clone https://github.com/artisanstreet/aqua
+cd aqua
+cargo test --workspace
+```
 
-- One shared workspace; targeted commands (`-p <owned-crate>`), one `target/` lock.
-- No duplicate engines: consume peer contracts, fix integration, relay gaps to the parent.
-- Styling is canonical `aqua::Style` arrays (`styles: [BASE, override]`,
-  later wins per field); see [`docs/STYLING.md`](docs/STYLING.md). Shared
-  pieces can be `const` (`Oklch::new` is const); fixed arrays have a known
-  length and may contain constant or runtime values. `LayoutStyle`/`Paint` remain as the
-  lower-level resolved types.
-- Tests live in each crate + `crates/aqua/tests/` (test-agent owned); fix compile defects in owned files, relay others with file:line.
+Cross-compiling a Windows build from WSL is covered in
+[`docs/WINDOWS_BUILD.md`](docs/WINDOWS_BUILD.md).
 
-## Validation and remaining work
+## Status
 
-Run `AQUA_REQUIRE_GPU=1 bash scripts/validate.sh` for the strict checks.
-The final results and native smoke evidence are in
-[`docs/VALIDATION.md`](docs/VALIDATION.md).
+Aqua is pre-release and the API will change. Windows is the first platform;
+other platforms will follow through new adapters behind the same ports. We do
+not publish speed comparisons until they come from matched, reproducible
+workloads; see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for what is
+measured today.
 
-This is an initial implementation. UI host traversals remain linear when
-building a frame; richer selection gestures, clipboard shortcuts, and
-native screen-reader validation remain work. See
-[`docs/UI_APP.md`](docs/UI_APP.md) and
-[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for the precise limits.
+## Contributing
+
+Issues and pull requests are welcome. Before opening a PR, run
+`cargo test --workspace`. The architecture rules are enforced by
+`aqua-verify`, so a change that breaks a boundary fails in CI and not in
+review.
+
+## License
+
+Aqua is licensed under the [BSD 3-Clause License](LICENSE).
+
+<div align="center">
+<sub>Built by <a href="https://github.com/artisanstreet">Artisan Street</a>.</sub>
+</div>

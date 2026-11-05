@@ -3,17 +3,17 @@
 
 use std::time::Instant;
 
-use aqua_gpu_d3d12::hal::DeviceOptions;
-use aqua_gpu_d3d12::hal::selection::AdapterPreference;
-use aqua_gpu_d3d12::window::{WindowBackend, WindowOptions};
+use aqua_gpu_d3d11::hal::selection::AdapterPreference;
+use aqua_gpu_d3d11::hal::DeviceOptions;
+use aqua_gpu_d3d11::window::{WindowBackend, WindowOptions};
 use aqua_gpu_ref::conformance::assets::standard_uploads;
 use aqua_gpu_ref::conformance::cases::hex;
-use aqua_graph::{Extent, plan_paint};
+use aqua_graph::{plan_paint, Extent};
 use aqua_protocol::{FrameInputs, GpuBackend, NativeSurface, PresentHint, SurfaceTarget, WindowId};
-use aqua_verify::budget::{MIB, Measured, MemoryBudget, RENDERER_WINDOWED};
-use aqua_verify::heap::{CountingAllocator, live_bytes};
+use aqua_verify::budget::{Measured, MemoryBudget, MIB, RENDERER_WINDOWED};
+use aqua_verify::heap::{live_bytes, CountingAllocator};
 use aqua_verify::process::{sample, video_memory};
-use aqua_verify::stats::{Distribution, intervals, jank};
+use aqua_verify::stats::{intervals, jank, Distribution};
 use aqua_verify::workload::editor_workload;
 
 #[path = "support/exclusive.rs"]
@@ -90,7 +90,7 @@ fn run(preference: AdapterPreference, high_performance: bool, budget: Option<Mem
     let surface = backend
         .create_surface(SurfaceTarget::Native(NativeSurface {
             window: WindowId::new(1).unwrap(),
-            hwnd: window.0.0 as u64,
+            hwnd: window.0 .0 as u64,
             extent,
         }))
         .unwrap();

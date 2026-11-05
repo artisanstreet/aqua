@@ -105,15 +105,16 @@ impl Rig {
     }
 
     fn block(&self) -> Option<(f32, f32)> {
-        let glide = self
+        let translations: Vec<f32> = self
             .render
             .scene()
             .ordered()
-            .find_map(|(_, item)| match item {
+            .filter_map(|(_, item)| match item {
                 DisplayItem::PushTransform(t) => Some(t.ty),
                 _ => None,
             })
-            .unwrap_or(0.0);
+            .collect();
+        let glide = translations.iter().take(2).sum::<f32>();
         self.render
             .scene()
             .ordered()

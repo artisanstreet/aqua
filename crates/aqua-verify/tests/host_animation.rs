@@ -2,8 +2,8 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::{Duration, Instant as WallInstant};
 
 use aqua::render::host::{Clock, DamageSlot, FrameTarget, GpuFrames};

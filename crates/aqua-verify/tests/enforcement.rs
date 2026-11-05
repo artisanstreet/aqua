@@ -109,19 +109,27 @@ fn crate_sources(name: &str) -> Vec<String> {
         }
     }
     let mut out = Vec::new();
-    walk(&workspace_root().join("crates").join(name).join("src"), &mut out);
+    walk(
+        &workspace_root().join("crates").join(name).join("src"),
+        &mut out,
+    );
     out
 }
 
 fn crate_root(name: &str) -> String {
-    std::fs::read_to_string(workspace_root().join("crates").join(name).join("src/lib.rs"))
-        .unwrap_or_else(|error| panic!("{name}: {error}"))
+    std::fs::read_to_string(
+        workspace_root()
+            .join("crates")
+            .join(name)
+            .join("src/lib.rs"),
+    )
+    .unwrap_or_else(|error| panic!("{name}: {error}"))
 }
 
 #[test]
 fn pure_adapter_host_and_verify_lists_match_the_architecture_document() {
-    let document = std::fs::read_to_string(workspace_root().join("ARCHITECTURE.md"))
-        .expect("ARCHITECTURE.md");
+    let document =
+        std::fs::read_to_string(workspace_root().join("ARCHITECTURE.md")).expect("ARCHITECTURE.md");
     let roles = architecture_crate_roles(&document);
     let named = |role: &str| -> Vec<String> {
         let mut names: Vec<String> = roles
@@ -143,10 +151,7 @@ fn pure_adapter_host_and_verify_lists_match_the_architecture_document() {
     assert_eq!(PURE_CRATES.len(), 13);
     assert_eq!(named("Pure"), sorted(&[PURE_CRATES]));
     assert_eq!(named("Host"), sorted(&[HOST_CRATES]));
-    assert_eq!(
-        named("Adapters"),
-        sorted(&[ADAPTER_CRATES, VERIFY_CRATES])
-    );
+    assert_eq!(named("Adapters"), sorted(&[ADAPTER_CRATES, VERIFY_CRATES]));
 }
 
 #[test]
@@ -199,14 +204,12 @@ fn adapters_declare_and_implement_their_ports() {
         .iter()
         .filter(|(name, port)| {
             !crate_sources(name).iter().any(|source| {
-                blank_comments_and_strings(source)
-                    .lines()
-                    .any(|line| {
-                        let line = line.trim_start();
-                        line.starts_with("impl")
-                            && line.contains(&format!("{port} for "))
-                            && !line.contains("fmt::")
-                    })
+                blank_comments_and_strings(source).lines().any(|line| {
+                    let line = line.trim_start();
+                    line.starts_with("impl")
+                        && line.contains(&format!("{port} for "))
+                        && !line.contains("fmt::")
+                })
             })
         })
         .map(|(name, port)| format!("{name} has no impl of {port}"))

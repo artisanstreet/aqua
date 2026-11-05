@@ -118,7 +118,11 @@ fn offline_final_frame(kind: Kind, fonts: &SharedFonts, log: &Log) -> Option<u64
 #[test]
 fn a_live_host_session_replays_to_identical_runtime_outputs_and_scene() {
     let (host, log) = recorded(Kind::Reference);
-    assert!(log.len() > 50, "the session recorded only {} steps", log.len());
+    assert!(
+        log.len() > 50,
+        "the session recorded only {} steps",
+        log.len()
+    );
     assert!(log.iter().any(|e| !e.output.render.is_empty()));
     let mut fresh = fresh_runtime(host.aqua.fonts().clone());
     let replayed = replay(&mut fresh, log.iter().map(|entry| entry.input.clone()));
@@ -132,7 +136,10 @@ fn replayed_render_commands_reproduce_the_live_final_frame_on_every_backend() {
         let (host, log) = recorded(kind);
         let live = host.last_hash().expect("live frame");
         let offline = offline_final_frame(kind, host.aqua.fonts(), &log).expect("offline frame");
-        assert_eq!(live, offline, "{kind:?}: replay produced a different final frame");
+        assert_eq!(
+            live, offline,
+            "{kind:?}: replay produced a different final frame"
+        );
     }
 }
 
@@ -148,7 +155,10 @@ fn two_live_sessions_replay_to_the_same_final_scene_and_frame() {
     );
 }
 
-fn timeline_over(fonts: &SharedFonts, inputs: impl Iterator<Item = RuntimeInput>) -> Timeline<Runtime> {
+fn timeline_over(
+    fonts: &SharedFonts,
+    inputs: impl Iterator<Item = RuntimeInput>,
+) -> Timeline<Runtime> {
     let fonts = fonts.clone();
     let mut line = Timeline::new(move || fresh_runtime(fonts.clone()));
     inputs.for_each(|input| {
@@ -201,7 +211,10 @@ fn a_paused_timeline_over_the_host_runtime_freezes_until_stepped() {
             line.step(input.clone());
         });
     assert_eq!(line.now(), frozen);
-    line.advance(Duration::from_millis(16), &[aqua_protocol::WindowId::new(1).unwrap()]);
+    line.advance(
+        Duration::from_millis(16),
+        &[aqua_protocol::WindowId::new(1).unwrap()],
+    );
     assert_eq!(line.now(), frozen + Duration::from_millis(16));
 }
 

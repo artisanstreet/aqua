@@ -1,0 +1,673 @@
+waitopen bench-large 20
+sleep 3
+move 760 450
+shot bottom
+wheel 760 450 120
+sleep 1.5
+shot notch1
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+sleep 1
+shot depth1
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+sleep 1
+shot depth2
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+sleep 1
+shot depth3
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+sleep 1
+shot depth4
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+sleep 1
+shot depth5
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+sleep 1
+shot depth6
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+sleep 1
+shot depth7
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+wheel 760 450 120
+sleep 0.06
+sleep 1
+shot depth8
+move 760 450
+wheel 760 450 120
+sleep 1
+shot edge
+wheel 760 450 40
+sleep 1
+shot edge2
+click 24 876
+sleep 2
+shot dialog
+key esc
+sleep 1
+click 760 800
+sleep 1
+typehex 68 65 6C 6C 6F 20 1F642 20 2728 20 1F44D 20 1F600 20 6F 6B
+sleep 1.5
+shot emoji
+move 760 450
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+sleep 1.2
+shot far1
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+sleep 1.2
+shot far2
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+sleep 1.2
+shot far3
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+sleep 1.2
+shot far4
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+sleep 1.2
+shot far5
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+sleep 1.2
+shot far6
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+sleep 1.2
+shot far7
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+sleep 1.2
+shot far8
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+sleep 1.2
+shot far9
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+sleep 1.2
+shot far10
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+sleep 1.2
+shot far11
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+wheel 760 450 120
+sleep 0.05
+sleep 1.2
+shot far12

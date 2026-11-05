@@ -6,7 +6,7 @@ pub const RENDERER_OFFSCREEN: MemoryBudget = MemoryBudget {
     private_total: 96 * MIB,
     framework_heap: 4 * MIB,
     steady_growth: MIB,
-    vram_total: 48 * MIB,
+    vram_total: 56 * MIB,
 };
 
 pub const RENDERER_WINDOWED: MemoryBudget = MemoryBudget {

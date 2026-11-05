@@ -16,11 +16,9 @@ fn reports_calls_with_their_line() {
         tokens("fn a() {\n    let t = std::time::Instant::now();\n    eprintln!(\"x\");\n}\n");
     assert!(hits.contains(&("Instant::now", 2)));
     assert!(hits.contains(&("eprintln!", 3)));
-    assert!(
-        !hits
-            .iter()
-            .any(|(token, _)| *token == "print!" || *token == "eprint!")
-    );
+    assert!(!hits
+        .iter()
+        .any(|(token, _)| *token == "print!" || *token == "eprint!"));
 }
 
 #[test]
@@ -51,11 +49,9 @@ fn after() { eprint!(); }
     let hits = tokens(source);
     assert!(hits.contains(&("std::thread", 5)));
     assert!(hits.contains(&("eprint!", 8)));
-    assert!(
-        !hits
-            .iter()
-            .any(|(token, _)| *token == "std::fs" || *token == "dbg!" || *token == "println!")
-    );
+    assert!(!hits
+        .iter()
+        .any(|(token, _)| *token == "std::fs" || *token == "dbg!" || *token == "println!"));
 }
 
 #[test]
@@ -112,11 +108,9 @@ fn an_allowed_edge_is_not_followed() {
         breaches(&workspace, "text", &banned, &|_, _| false).len(),
         1
     );
-    assert!(
-        breaches(&workspace, "text", &banned, &|from, to| (from, to)
-            == ("text", "fonts"))
-        .is_empty()
-    );
+    assert!(breaches(&workspace, "text", &banned, &|from, to| (from, to)
+        == ("text", "fonts"))
+    .is_empty());
 }
 
 #[test]

@@ -4,13 +4,13 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant as WallInstant};
 
-use aqua::UiApp;
 use aqua::render::host::{FrameTarget, GpuFrames, RenderStats};
 use aqua::render::link::{ExternalUpdate, InitFactory};
 use aqua::render::lower::Lowering;
+use aqua::UiApp;
 use aqua::{Aqua, AquaConfig};
 use aqua_core::{InputEvent, Point, PointerButton, PointerEvent, PointerKind, ScrollDelta};
-use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
+use aqua_gpu_d3d11::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
 use aqua_gpu_ref::RefBackend;
 use aqua_graph::Extent;
 use aqua_protocol::geometry::{AquaWindowId, LogicalSize};
@@ -37,10 +37,10 @@ pub fn extent() -> Extent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Reference,
-    D3d12(AdapterPreference),
+    D3d11(AdapterPreference),
 }
 
-pub const KINDS: [Kind; 2] = [Kind::Reference, Kind::D3d12(AdapterPreference::Warp)];
+pub const KINDS: [Kind; 2] = [Kind::Reference, Kind::D3d11(AdapterPreference::Warp)];
 
 #[derive(Default)]
 pub struct Captured {
@@ -93,7 +93,7 @@ pub fn target(
                 sink,
             }))
         }
-        Kind::D3d12(preference) => {
+        Kind::D3d11(preference) => {
             let mut backend = OffscreenBackend::with_format(preference, SurfaceFormat::Bgra8Unorm)
                 .map_err(|e| e.to_string())?;
             let surface: SurfaceId = backend

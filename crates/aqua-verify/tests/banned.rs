@@ -155,7 +155,14 @@ fn editor_port_closure_reaches_no_banned_crate() {
         .iter()
         .flat_map(|target| {
             let output = std::process::Command::new(&cargo)
-                .args(["tree", "--offline", "-p", "editor-aqua", "-e", "normal,build"])
+                .args([
+                    "tree",
+                    "--offline",
+                    "-p",
+                    "editor-aqua",
+                    "-e",
+                    "normal,build",
+                ])
                 .args(["--prefix", "none", "--format", "{p}", "--target", target])
                 .arg("--manifest-path")
                 .arg(port.join("Cargo.toml"))
@@ -174,5 +181,9 @@ fn editor_port_closure_reaches_no_banned_crate() {
                 .collect::<BTreeSet<_>>()
         })
         .collect();
-    assert!(found.is_empty(), "editor-aqua closure:\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "editor-aqua closure:\n{}",
+        found.join("\n")
+    );
 }

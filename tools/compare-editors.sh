@@ -31,7 +31,7 @@ RESIZE_COUNT=${AQUA_COMPARE_RESIZE_COUNT:-120}
 RUNS=${AQUA_COMPARE_RUNS:-3}
 TARGETS=${AQUA_COMPARE_TARGETS:-"aqua gpui"}
 PHASES=${AQUA_COMPARE_PHASES:-"main open stream keys wakesrc spikes"}
-DIAG_PHASES="wakesrc spikes memdiag streamprof"
+DIAG_PHASES="wakesrc spikes memdiag streamprof coldprof"
 SNAPSHOT_DIR=${AQUA_COMPARE_SNAPSHOT_DIR:-}
 MAX_SYSTEM_LOAD=${AQUA_COMPARE_MAX_SYSTEM_LOAD:-25}
 export AQUA_STATS_OVERRIDE=off
@@ -144,7 +144,7 @@ phase_args() {
     main) echo "artisan://thread/$HOST_ID/$LARGE" ;;
     open) echo "artisan://new/$HOST_ID" ;;
     stream|streamprof) echo "artisan://thread/$HOST_ID/$STREAM" ;;
-    wakesrc|spikes|memdiag|idlegate|resize|resizeprof) echo "artisan://thread/$HOST_ID/$LARGE" ;;
+    wakesrc|spikes|memdiag|idlegate|resize|resizeprof|cold|coldprof) echo "artisan://thread/$HOST_ID/$LARGE" ;;
   esac
 }
 
@@ -153,6 +153,9 @@ phase_steps() {
   case $phase in
     main)
       echo "waitopen $LARGE 12 $SIDEBAR_THREAD 30; sleep 3; display state; load boot_load 3; cpu boot; gpumem boot; sleep 2; cpu idle0; wakes idle $IDLE_SECONDS; threads idle_threads $IDLE_THREAD_SECONDS; cpu idle1; lat idle_latency 300 10; snapshot pre; shot thread; scrolllat scroll $SCROLL_X $SCROLL_Y $SCROLL_FRAMES $SCROLL_GAP_MS 120; changed pre 0 0 1518 900; cpu scroll1; sleep 4; cpu settle; gpumem settle; click $COMPOSER_CLICK; sleep 1; typelat type $COMPOSER_RECT $TYPE_COUNT 60; resizelat resize $RESIZE_COUNT 16; sleep 3; cpu rs0; wakes after_resize $IDLE_SECONDS; cpu rs1; threads after_resize_threads $IDLE_THREAD_SECONDS; load end_load 3; shot final"
+      ;;
+    cold|coldprof)
+      echo "waitopen $LARGE 45 $SIDEBAR_THREAD 30; sleep 2"
       ;;
     open)
       echo "sleep 4; cpu boot; shot landing; click $SIDEBAR_THREAD; waitopen $LARGE 60; sleep 2; shot opened; cpu opened; gpumem opened"
@@ -175,7 +178,7 @@ phase_steps() {
       echo "waitopen $LARGE 45 $SIDEBAR_THREAD 30; sleep 5; cpu rs0; resizelat resize $RESIZE_COUNT 16; cpu rs1; sleep 1; cpu rs2; resizelat resize2 $RESIZE_COUNT 16; cpu rs3; sleep 2; shot final"
       ;;
     streamprof)
-      echo "waitopen $STREAM 45; sleep 3; cpu stream0; trigger $(win "$rundir")\\trigger; lat stream_latency 300 30; cpu stream1; wakes stream 10; cpu stream2; sleep 8"
+      echo "waitopen $STREAM 45; sleep 3; cpu stream0; trigger $(win "$rundir")\\trigger; lat stream_latency 300 30; cpu stream1; threads stream_threads 8; cpu stream2; sleep 8"
       ;;
     stream)
       echo "waitopen $STREAM 45; sleep 3; cpu stream0; trigger $(win "$rundir")\\trigger; lat stream_latency 300 30; cpu stream1; wakes stream 10; cpu stream2; sleep 8; shot streamed; gpumem stream"
@@ -189,6 +192,8 @@ drive() {
   local stats=off profile=0
   [ "$phase" = wakesrc ] || [ "$phase" = idlegate ] && stats=wakes
   [ "$phase" = memdiag ] && stats=memory
+  [ -n "${AQUA_COMPARE_STATS_MODE:-}" ] && stats=$AQUA_COMPARE_STATS_MODE
+  [ "$phase" = coldprof ] && { stats=profile; profile=1; }
   [ "$phase" = spikes ] || [ "$phase" = resizeprof ] || [ "$phase" = streamprof ] && { stats=profile; profile=1; }
   [ "$phase" = streamprof ] && stats=profilewakes
   [ "$phase" = resizeprof ] && export AQUA_GAP_TRACE=1
@@ -257,38 +262,16 @@ flock -w 7200 9 || die "another scoreboard run held /tmp/aqua-scoreboard.lock fo
 
 exec 8>"/tmp/aqua-forge-port-$FIXTURE_PORT.lock"
 flock -w 120 8 || die "fixture Forge port $FIXTURE_PORT is locked by another run (/tmp/aqua-forge-port-$FIXTURE_PORT.lock)"
-ancestors=" "
-walk=$$
-while [ "$walk" -gt 1 ]; do
-  ancestors="$ancestors$walk "
-  walk=$(awk '{print $4}' "/proc/$walk/stat" 2>/dev/null || echo 1)
-done
-for other in $(pgrep -f 'compare-editors\.sh|key-latency\.sh' || true); do
-  case "$ancestors" in *" $other "*) continue ;; esac
-  [ -r "/proc/$other/cmdline" ] || continue
-  script=$(tr '\0' '\n' <"/proc/$other/cmdline" 2>/dev/null | sed -n 2p || true)
-  case "$(basename "${script:-none}")" in
-    compare-editors.sh|key-latency.sh) ;;
-    *) continue ;;
-  esac
-  holds=0
-  for fd in /proc/$other/fd/*; do
-    [ "$(readlink "$fd" 2>/dev/null)" = /tmp/aqua-scoreboard.lock ] && holds=1
-  done
-  if [ "$holds" != 1 ]; then
-    sleep 2
-    [ -d "/proc/$other" ] || continue
-    for fd in /proc/$other/fd/*; do
-      [ "$(readlink "$fd" 2>/dev/null)" = /tmp/aqua-scoreboard.lock ] && holds=1
-    done
+PIDFILE=/tmp/aqua-scoreboard.pid
+proc_start() { awk '{print $22}' "/proc/$1/stat" 2>/dev/null || true; }
+if [ -r "$PIDFILE" ]; then
+  read -r held_pid held_start <"$PIDFILE" || true
+  if [ -n "${held_pid:-}" ] && [ "$held_pid" != "$$" ] && [ "$(proc_start "$held_pid")" = "${held_start:-none}" ]; then
+    die "scoreboard pid $held_pid (recorded in $PIDFILE) is still alive although its lock was released; stop it first"
   fi
-  if [ "$holds" != 1 ]; then
-    waited_other=0
-    while [ -d "/proc/$other" ] && [ $waited_other -lt 600 ]; do sleep 5; waited_other=$((waited_other + 5)); done
-    [ -d "/proc/$other" ] || continue
-  fi
-  [ "$holds" = 1 ] || die "process $other runs an older scoreboard script that does not take /tmp/aqua-scoreboard.lock; it shares the fixture directory and Forge port $FIXTURE_PORT. Stop it first."
-done
+fi
+echo "$$ $(proc_start $$)" >"$PIDFILE"
+trap 'rm -f "$PIDFILE"' EXIT
 
 fixture_prepare
 mkdir -p "$OUT"
@@ -325,6 +308,24 @@ wait_quiet() {
     sleep 10; waited=$((waited + 13))
   done
 }
+
+system_load() {
+  powershell.exe -NoProfile -Command "[math]::Round((Get-Counter '\\Processor(_Total)\\% Processor Time' -SampleInterval 1 -MaxSamples 3 | ForEach-Object { \$_.CounterSamples[0].CookedValue } | Measure-Object -Average).Average, 1)" </dev/null 2>/dev/null | tr -d '\r' || true
+}
+preflight_load() {
+  local waited=0 load
+  while true; do
+    load=$(system_load)
+    awk -v l="${load:-100}" -v m="$MAX_SYSTEM_LOAD" 'BEGIN { exit !(l <= m) }' && { echo "machine load ${load}% (limit ${MAX_SYSTEM_LOAD}%), starting" >&2; return 0; }
+    if [ "$waited" -ge "$QUIET_WAIT" ]; then
+      [ "${AQUA_COMPARE_REQUIRE_QUIET:-1}" = 1 ] || { echo "WARNING: machine at ${load:-unknown}% CPU after ${QUIET_WAIT}s, measuring anyway (AQUA_COMPARE_REQUIRE_QUIET=0)" >&2; return 0; }
+      die "machine load ${load:-unknown}% stayed above ${MAX_SYSTEM_LOAD}% for ${QUIET_WAIT}s; rerun when the machine is quiet or set AQUA_COMPARE_REQUIRE_QUIET=0 to measure anyway"
+    fi
+    echo "machine load ${load:-unknown}% above ${MAX_SYSTEM_LOAD}%, waiting" >&2
+    sleep 10; waited=$((waited + 13))
+  done
+}
+preflight_load
 
 run_phase() {
   local run=$1 which=$2 phase=$3 exe=$4

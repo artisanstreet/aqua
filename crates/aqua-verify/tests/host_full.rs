@@ -4,13 +4,13 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant as WallInstant};
 
-use aqua::UiApp;
 use aqua::render::host::{FrameTarget, GpuFrames};
 use aqua::render::link::InitFactory;
 use aqua::render::lower::Lowering;
+use aqua::UiApp;
 use aqua::{Aqua, AquaConfig};
 use aqua_core::{InputEvent, Point, PointerButton, PointerEvent, PointerKind, ScrollDelta};
-use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
+use aqua_gpu_d3d11::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
 use aqua_gpu_ref::RefBackend;
 use aqua_graph::Extent;
 use aqua_protocol::geometry::{AquaWindowId, LogicalSize};
@@ -21,12 +21,12 @@ use aqua_protocol::{
 use aqua_runtime::RenderSide;
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_verify::fingerprint;
-use aqua_verify::heap::{CountingAllocator, measure};
+use aqua_verify::heap::{measure, CountingAllocator};
 
 #[path = "support/ui.rs"]
 mod ui;
 
-use ui::{ROW, editor_like, observed};
+use ui::{editor_like, observed, ROW};
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -40,7 +40,7 @@ const FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     Reference,
-    D3d12(AdapterPreference),
+    D3d11(AdapterPreference),
 }
 
 #[derive(Default)]
@@ -126,7 +126,7 @@ fn factory(
                         sink,
                     }) as Box<dyn FrameTarget>)
                 }
-                Kind::D3d12(preference) => {
+                Kind::D3d11(preference) => {
                     let mut backend =
                         OffscreenBackend::with_format(preference, SurfaceFormat::Bgra8Unorm)
                             .map_err(|e| e.to_string())?;
@@ -284,9 +284,9 @@ fn script(host: &mut Host) -> Vec<u64> {
 fn adapters() -> Vec<Kind> {
     [
         Kind::Reference,
-        Kind::D3d12(AdapterPreference::Warp),
-        Kind::D3d12(AdapterPreference::HighPerformance),
-        Kind::D3d12(AdapterPreference::MinimumPower),
+        Kind::D3d11(AdapterPreference::Warp),
+        Kind::D3d11(AdapterPreference::HighPerformance),
+        Kind::D3d11(AdapterPreference::MinimumPower),
     ]
     .into()
 }
@@ -334,7 +334,7 @@ fn disagreement(a: &SurfacePixels, b: &SurfacePixels) -> (u8, f64) {
 }
 
 #[test]
-fn the_full_host_on_d3d12_matches_the_reference_host_after_each_scripted_step() {
+fn the_full_host_on_d3d11_matches_the_reference_host_after_each_scripted_step() {
     let mut reference = open(Kind::Reference).expect("reference host");
     let mut others: Vec<(Kind, Host)> = adapters()
         .into_iter()

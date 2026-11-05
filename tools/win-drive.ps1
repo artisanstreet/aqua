@@ -148,9 +148,10 @@ $env:ARTISAN_EDITOR_DATA = $dataDir
 if ($env:AQUA_RWC_OVERRIDE -eq "off") { Remove-Item Env:AQUA_RENDER_WHEN_COVERED -ErrorAction SilentlyContinue } else { $env:AQUA_RENDER_WHEN_COVERED = "1" }
 $keepProfile = $env:AQUA_PROFILE
 $override = $env:AQUA_STATS_OVERRIDE
-if ($override -in @("off","wakes","profile","profilewakes","memory")) {
+if ($override -in @("off","wakes","burst","profile","profilewakes","memory")) {
   foreach ($n in @("AQUA_FRAME_STATS","AQUA_PERF","AQUA_WAKE_STATS","AQUA_PROFILE","AQUA_INPUT_LATENCY","AQUA_REBUILD_STATS","AQUA_MEMORY_REPORT")) { Remove-Item "Env:$n" -ErrorAction SilentlyContinue }
   if ($override -eq "wakes" -or $override -eq "profilewakes") { $env:AQUA_WAKE_STATS = "1" }
+  if ($override -eq "burst") { $env:AQUA_WAKE_STATS = "burst" }
   if ($override -eq "memory") { $env:AQUA_MEMORY_REPORT = "1" }
   if ($override -eq "profile" -or $override -eq "profilewakes") { $env:AQUA_PROFILE = $keepProfile }
 } elseif ($Stats -eq "1") { $env:AQUA_FRAME_STATS = "1"; $env:AQUA_PERF = "1"; $env:AQUA_WAKE_STATS = "1" } else { Remove-Item Env:AQUA_FRAME_STATS -ErrorAction SilentlyContinue }
@@ -197,6 +198,62 @@ try {
   if ($proc.HasExited) { "probe-exited exit_code=$($proc.ExitCode) after_boot_s=$Boot" }
   function Pack($x, $y) { $px = [int][Math]::Round($x * $scale); $py = [int][Math]::Round($y * $scale); [IntPtr](($py -shl 16) -bor ($px -band 0xFFFF)) }
   function Post($m, $w, $l) { [void][W]::PostMessage($h, [uint32]$m, [IntPtr]$w, $l) }
+function Ensure-TD {
+  if (-not ("TD" -as [type])) { Add-Type -TypeDefinition @"
+using System; using System.Runtime.InteropServices; using System.Text;
+public static class TD {
+  [DllImport("kernel32.dll")] public static extern IntPtr OpenThread(uint a, bool i, uint id);
+  [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+  [DllImport("kernel32.dll")] public static extern int GetThreadDescription(IntPtr h, out IntPtr d);
+  [DllImport("ntdll.dll")] public static extern int NtQueryInformationThread(IntPtr h, int cls, out IntPtr info, int len, IntPtr ret);
+  public static long Start(uint id) { IntPtr h = OpenThread(0x0040, false, id); if (h == IntPtr.Zero) return 0; IntPtr a; int r = NtQueryInformationThread(h, 9, out a, IntPtr.Size, IntPtr.Zero); CloseHandle(h); return r == 0 ? a.ToInt64() : 0; }
+  public static string Name(uint id) { IntPtr h = OpenThread(0x0040, false, id); if (h == IntPtr.Zero) return ""; IntPtr d; string r = ""; if (GetThreadDescription(h, out d) >= 0 && d != IntPtr.Zero) r = Marshal.PtrToStringUni(d); CloseHandle(h); return r; }
+}
+"@ }
+}
+function Get-ThreadCounters($targetPid) {
+  if (-not ("TS" -as [type])) { Add-Type -TypeDefinition @"
+using System; using System.Collections.Generic; using System.Runtime.InteropServices;
+public static class TS {
+  [DllImport("ntdll.dll")] static extern int NtQuerySystemInformation(int cls, IntPtr buf, int len, out int ret);
+  public static Dictionary<int, long[]> Read(int pid) {
+    int size = 1 << 21; 
+    while (true) {
+      IntPtr buf = Marshal.AllocHGlobal(size);
+      try {
+        int ret;
+        int st = NtQuerySystemInformation(5, buf, size, out ret);
+        if (st == unchecked((int)0xC0000004)) { size = Math.Max(size * 2, ret + (1 << 16)); continue; }
+        var result = new Dictionary<int, long[]>();
+        if (st != 0) return result;
+        long off = 0;
+        while (true) {
+          long baseAddr = buf.ToInt64() + off;
+          int next = Marshal.ReadInt32((IntPtr)baseAddr);
+          int threads = Marshal.ReadInt32((IntPtr)(baseAddr + 4));
+          long id = Marshal.ReadInt64((IntPtr)(baseAddr + 80));
+          if (id == pid) {
+            result[-1] = new long[] { (uint)Marshal.ReadInt32((IntPtr)(baseAddr + 16)), (uint)Marshal.ReadInt32((IntPtr)(baseAddr + 128)) };
+            for (int i = 0; i < threads; i++) {
+              long t = baseAddr + 256 + i * 80L;
+              long kernel = Marshal.ReadInt64((IntPtr)t);
+              long user = Marshal.ReadInt64((IntPtr)(t + 8));
+              int tid = (int)Marshal.ReadInt64((IntPtr)(t + 48));
+              long cs = (uint)Marshal.ReadInt32((IntPtr)(t + 64));
+              result[tid] = new long[] { cs, kernel + user };
+            }
+            return result;
+          }
+          if (next == 0) return result;
+          off += next;
+        }
+      } finally { Marshal.FreeHGlobal(buf); }
+    }
+  }
+}
+"@ }
+  [TS]::Read([int]$targetPid)
+}
 function Probe-Latency($name, $kind, $count, $gap, $scroll, $x, $y, $delta) {
   $sw = [System.Diagnostics.Stopwatch]::new()
   $total = [System.Diagnostics.Stopwatch]::StartNew()
@@ -275,6 +332,7 @@ function Probe-Latency($name, $kind, $count, $gap, $scroll, $x, $y, $delta) {
       }
       "key" { $k = $a[0].ToLower(); $code = if ($vk.ContainsKey($k)) { $vk[$k] } else { [int][char]$a[0].ToUpper()[0] }; Post 0x100 $code 0; Start-Sleep -Milliseconds 30; Post 0x101 $code ([IntPtr]0xC0000001) }
       "type" { foreach ($c in $arg.ToCharArray()) { Post 0x102 ([int]$c) 1; Start-Sleep -Milliseconds 25 } }
+      "typehex" { foreach ($cp in $a) { foreach ($c in [char]::ConvertFromUtf32([Convert]::ToInt32($cp, 16)).ToCharArray()) { Post 0x102 ([int]$c) 1; Start-Sleep -Milliseconds 25 } } }
       "keypost" {
         $gap = [int]$a[1]
         $text = $a[0] -replace "_", " "
@@ -314,62 +372,58 @@ function Probe-Latency($name, $kind, $count, $gap, $scroll, $x, $y, $delta) {
       "threads" {
         $secs = [int]$a[1]
         try {
-          if (-not ("TD" -as [type])) { Add-Type -TypeDefinition @"
-using System; using System.Runtime.InteropServices; using System.Text;
-public static class TD {
-  [DllImport("kernel32.dll")] public static extern IntPtr OpenThread(uint a, bool i, uint id);
-  [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
-  [DllImport("kernel32.dll")] public static extern int GetThreadDescription(IntPtr h, out IntPtr d);
-  [DllImport("ntdll.dll")] public static extern int NtQueryInformationThread(IntPtr h, int cls, out IntPtr info, int len, IntPtr ret);
-  public static long Start(uint id) { IntPtr h = OpenThread(0x0040, false, id); if (h == IntPtr.Zero) return 0; IntPtr a; int r = NtQueryInformationThread(h, 9, out a, IntPtr.Size, IntPtr.Zero); CloseHandle(h); return r == 0 ? a.ToInt64() : 0; }
-  public static string Name(uint id) { IntPtr h = OpenThread(0x0040, false, id); if (h == IntPtr.Zero) return ""; IntPtr d; string r = ""; if (GetThreadDescription(h, out d) >= 0 && d != IntPtr.Zero) r = Marshal.PtrToStringUni(d); CloseHandle(h); return r; }
-}
-"@ }
-          $snap = {
-            $m = @{}
-            $cs = @{}
-            Get-CimInstance Win32_PerfRawData_PerfProc_Thread -Filter "Name like '$($proc.ProcessName)/%'" | ForEach-Object { $cs[[int]$_.IDThread] = [double]$_.ContextSwitchesPersec }
-            $proc.Refresh()
-            foreach ($t in $proc.Threads) { $m[$t.Id] = @{ cpu = $t.TotalProcessorTime.TotalMilliseconds; cs = $cs[$t.Id]; name = [TD]::Name([uint32]$t.Id); start = ([TD]::Start([uint32]$t.Id) - $proc.MainModule.BaseAddress.ToInt64()); module = (($proc.Modules | Where-Object { $a0 = [TD]::Start([uint32]$t.Id); $a0 -ge $_.BaseAddress.ToInt64() -and $a0 -lt ($_.BaseAddress.ToInt64() + $_.ModuleMemorySize) } | Select-Object -First 1).ModuleName); wait = "$($t.WaitReason)" } }
-            $m
-          }
-          $s0 = & $snap
+          Ensure-TD
+          $s0 = Get-ThreadCounters $procId
           Start-Sleep -Seconds $secs
-          $s1 = & $snap
+          $s1 = Get-ThreadCounters $procId
+          $proc.Refresh()
+          $mods = @($proc.Modules)
+          $base = $proc.MainModule.BaseAddress.ToInt64()
+          $info = @{}
+          foreach ($t in $proc.Threads) { $info[$t.Id] = $t }
           $active = 0
           foreach ($id in $s1.Keys) {
+            if ($id -lt 0) { continue }
             $b = $s0[$id]; $e = $s1[$id]
-            if ($b) { $dc = $e.cs - $b.cs; $dm = $e.cpu - $b.cpu } else { $dc = $e.cs; $dm = $e.cpu }
-            $started = ""; try { $started = [int](($proc.Threads | Where-Object { $_.Id -eq $id } | Select-Object -First 1).StartTime - $proc.StartTime).TotalMilliseconds } catch {}
-            if ($dc -gt 0 -or $dm -gt 0) { $active++ }
-            if ($dc -gt 0 -or $dm -gt 0) { "probe-thread name=$($a[0]) tid=$id thread='$($e.name)' started_ms=$started module=$($e.module) start_rva=0x$([Convert]::ToString([int64]$e.start,16)) ctx_per_s=$([math]::Round($dc / $secs,1)) cpu_ms_per_s=$([math]::Round($dm / $secs,1))" }
+            if ($b) { $dc = $e[0] - $b[0]; $dm = ($e[1] - $b[1]) / 10000.0 } else { $dc = $e[0]; $dm = $e[1] / 10000.0 }
+            if ($dc -le 0 -and $dm -le 0) { continue }
+            $active++
+            $t = $info[[int]$id]
+            $addr = [TD]::Start([uint32]$id)
+            $module = ($mods | Where-Object { $addr -ge $_.BaseAddress.ToInt64() -and $addr -lt ($_.BaseAddress.ToInt64() + $_.ModuleMemorySize) } | Select-Object -First 1).ModuleName
+            $started = ""; try { $started = [int]($t.StartTime - $proc.StartTime).TotalMilliseconds } catch {}
+            "probe-thread name=$($a[0]) tid=$id thread='$([TD]::Name([uint32]$id))' started_ms=$started module=$module start_rva=0x$([Convert]::ToString([int64]($addr - $base),16)) ctx_per_s=$([math]::Round($dc / $secs,1)) cpu_ms_per_s=$([math]::Round($dm / $secs,1))"
           }
-        "probe-threads-done name=$($a[0]) seconds=$secs active=$active total=$($s1.Count)"
+        "probe-threads-done name=$($a[0]) seconds=$secs active=$active total=$($s1.Count - 1)"
         } catch { "probe-threads name=$($a[0]) unavailable=$($_.Exception.Message)" }
       }
       "wakes" {
         $secs = [int]$a[1]
-        $pn = (Get-Process -Id $procId).ProcessName
-        $snap = {
-          $m = @{}
-          Get-CimInstance Win32_PerfRawData_PerfProc_Thread -Filter "Name like '$pn/%'" -ErrorAction SilentlyContinue | Where-Object { $_.IDProcess -eq $procId } | ForEach-Object { $m[[int]$_.IDThread] = [double]$_.ContextSwitchesPersec }
-          $m
-        }
-        $prev = & $snap
-        $perSec = @()
+        $prev = Get-ThreadCounters $procId
+        $windowStart = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $perSec = @(); $faultsHard = @(); $faultsAll = @()
         $perThread = @{}
         for ($i = 0; $i -lt $secs; $i++) {
           Start-Sleep -Milliseconds 1000
-          $cur = & $snap
+          $cur = Get-ThreadCounters $procId
           $sum = 0.0
-          foreach ($id in $cur.Keys) { if ($prev.ContainsKey($id)) { $d = [math]::Max(0.0, $cur[$id] - $prev[$id]); $sum += $d; $perThread[$id] = [double]$perThread[$id] + $d } }
+          foreach ($id in $cur.Keys) {
+            if ($id -lt 0) { continue }
+            $before = if ($prev.ContainsKey($id)) { $prev[$id][0] } else { 0 }
+            $d = [math]::Max(0.0, [double]($cur[$id][0] - $before))
+            $sum += $d; $perThread[$id] = [double]$perThread[$id] + $d
+          }
           $perSec += $sum
+          $faultsHard += [int]($cur[-1][0] - $prev[-1][0]); $faultsAll += [int]($cur[-1][1] - $prev[-1][1])
           $prev = $cur
         }
         $avg = ($perSec | Measure-Object -Average).Average
         $mx = ($perSec | Measure-Object -Maximum).Maximum
-        $top = ($perThread.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 4 | ForEach-Object { "$($_.Key)=$([math]::Round($_.Value / $secs,0))" }) -join ","
-        "probe-wakes name=$($a[0]) seconds=$secs context_switches_per_sec_avg=$([math]::Round($avg,1)) max=$([math]::Round($mx,1)) top_threads=$top attempt=1"
+        Ensure-TD
+        $top = ($perThread.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 4 | ForEach-Object { "$($_.Key)=$([math]::Round($_.Value / $secs,1))($([TD]::Name([uint32]$_.Key)))" }) -join ","
+        $series = ($perSec | ForEach-Object { [int]$_ }) -join ","
+        "probe-wakes name=$($a[0]) seconds=$secs context_switches_per_sec_avg=$([math]::Round($avg,2)) max=$([math]::Round($mx,1)) top_threads=$top attempt=1"
+        "probe-ctxseries name=$($a[0]) start_unix_ms=$windowStart per_second=$series hard_faults=$($faultsHard -join ",") page_faults=$($faultsAll -join ",")"
       }
       "display" {
         try {

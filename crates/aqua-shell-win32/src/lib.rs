@@ -14,7 +14,7 @@ pub mod timing;
 mod event;
 
 pub use event::{Chrome, FileDrag, Handler, ShellError, ShellEvent, WindowKind, WindowOptions};
-pub use hooks::{set_message_hook, MessageHook, RawMessage};
+pub use hooks::{MessageHook, RawMessage, set_message_hook};
 
 #[cfg(windows)]
 mod apartment;
@@ -48,7 +48,7 @@ mod wndproc;
 #[cfg(windows)]
 pub use handle::NativeHandle;
 #[cfg(windows)]
-pub use looping::{now, quit, run, schedule, set_waitables, Waker};
+pub use looping::{Waker, now, pump_sent_messages, quit, run, schedule, set_waitables};
 #[cfg(windows)]
 pub use material::MaterialOutcome;
 #[cfg(windows)]

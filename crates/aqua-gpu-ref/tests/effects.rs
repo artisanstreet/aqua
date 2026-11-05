@@ -1,8 +1,8 @@
 use aqua_core::Oklch;
-use aqua_gpu_ref::conformance::cases::{backdrop_blur, build, hex, quad, rect};
-use aqua_gpu_ref::conformance::{requirements, Requirement, Session};
-use aqua_gpu_ref::kernels::INVERT;
 use aqua_gpu_ref::RefBackend;
+use aqua_gpu_ref::conformance::cases::{backdrop_blur, build, hex, quad, rect};
+use aqua_gpu_ref::conformance::{Requirement, Session, requirements};
+use aqua_gpu_ref::kernels::INVERT;
 use aqua_graph::{ColorMatrix, CustomPassSpec, Extent, PaintCommand, PassKind, ShaderId};
 use aqua_protocol::{GpuBackend, SurfacePixels};
 
@@ -157,4 +157,50 @@ fn plans_report_the_features_they_need() {
             ..
         }
     )));
+}
+
+#[test]
+fn large_rounded_clip_has_no_seams_and_rounds_every_corner() {
+    let mut backend = RefBackend::new();
+    let extent = Extent::new(400, 300);
+    let case = build(
+        "large_rounded_clip",
+        extent,
+        Oklch::TRANSPARENT,
+        &[
+            PaintCommand::PushRoundedClip {
+                rect: rect(4.0, 4.0, 380.0, 280.0),
+                radius: 12.0,
+            },
+            quad(0.0, 0.0, 400.0, 300.0, "#3366cc", 1.0, 0.0, 0.0),
+            quad(150.0, 0.0, 100.0, 120.0, "#ffffff", 0.5, 0.0, 0.0),
+            PaintCommand::PopClip,
+        ],
+    );
+    let pixels = Session::new(&mut backend)
+        .render_case(&case)
+        .expect("renders");
+    let column = |x: usize| (30..270).map(|y| at(&pixels, x, y)).collect::<Vec<_>>();
+    (20..370).for_each(|x| {
+        [14, 15, 16, 17, 266, 267, 268, 269]
+            .into_iter()
+            .for_each(|y| assert_eq!(at(&pixels, x, y)[3], 255, "alpha at {x},{y}"));
+    });
+    (30..270).for_each(|y| {
+        [14, 15, 16, 17, 370, 371, 372, 373]
+            .into_iter()
+            .for_each(|x| assert_eq!(at(&pixels, x, y)[3], 255, "alpha at {x},{y}"));
+    });
+    assert_eq!(at(&pixels, 190, 20), at(&pixels, 190, 14));
+    assert_eq!(at(&pixels, 190, 16), at(&pixels, 190, 15));
+    assert_eq!(column(190)[0], at(&pixels, 190, 30));
+    [(4, 4), (383, 4), (4, 283), (383, 283)]
+        .into_iter()
+        .for_each(|(x, y)| assert_eq!(at(&pixels, x, y)[3], 0, "corner {x},{y}"));
+    [(7, 7), (380, 7), (7, 280), (380, 280)]
+        .into_iter()
+        .for_each(|(x, y)| {
+            let alpha = at(&pixels, x, y)[3];
+            assert!(alpha > 0 && alpha < 255, "edge {x},{y}: {alpha}");
+        });
 }

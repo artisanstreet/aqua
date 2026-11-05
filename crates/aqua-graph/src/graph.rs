@@ -1,13 +1,17 @@
 use std::collections::{HashMap, HashSet};
 
-use aqua_core::Oklch;
+use aqua_core::{Oklch, geometry::Rect};
 
-use crate::analysis::{align_up, first_writers, independent, intersect, lifetimes, Lifetime};
-use crate::plan::{
-    Barrier, Extent, FramePlan, LoadOp, Pass, PassKind, ResourceState, TextureFormat, TextureRef,
-    TransientId, TransientTexture,
+use crate::analysis::{
+    Lifetime, align_up, first_writers, independent, intersect, lifetimes, union,
 };
-use crate::validate::{validate, PlanError};
+use crate::plan::{
+    Barrier, Extent, FramePlan, GlyphInstance, LoadOp, Pass, PassKind, QuadInstance, ResourceState,
+    ShaderId, ShadowInstance, TextureFormat, TextureHandle, TextureRef, TransientId,
+    TransientTexture,
+};
+use crate::slug::SlugInstance;
+use crate::validate::{PlanError, validate};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlanLimits {
@@ -38,6 +42,10 @@ pub struct RenderGraph {
     pub clear: Oklch,
     resources: Vec<ResourceDesc>,
     passes: Vec<Pass>,
+    extents: Vec<Option<Rect>>,
+    merged: usize,
+    glyph_scratch: Vec<GlyphInstance>,
+    slug_scratch: Vec<SlugInstance>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -55,6 +63,10 @@ impl RenderGraph {
             clear,
             resources: Vec::new(),
             passes: Vec::new(),
+            extents: Vec::new(),
+            merged: 0,
+            glyph_scratch: Vec::new(),
+            slug_scratch: Vec::new(),
         }
     }
 
@@ -65,7 +77,155 @@ impl RenderGraph {
     }
 
     pub fn push(&mut self, pass: Pass) {
-        self.passes.push(pass);
+        match batchable(&pass) {
+            true => self.merged += usize::from(place(&mut self.passes, &mut self.extents, pass)),
+            false => {
+                self.extents.push(drawn_extent(&pass));
+                self.passes.push(pass);
+            }
+        }
+    }
+
+    pub fn draw_quad(&mut self, target: TextureRef, quad: QuadInstance) {
+        let extent = clip_to(quad.covered(), quad.clip);
+        let tag = Tag::Quad;
+        let found = self.find_batch(target, tag, extent);
+        match (found, &mut self.passes) {
+            (Some(index), passes) => {
+                if let PassKind::Instanced { instances, .. } = &mut passes[index].kind {
+                    instances.push(quad);
+                }
+                self.merged += 1;
+                self.extents[index] = grown(self.extents[index], extent);
+            }
+            _ => self.start_batch(
+                PassKind::Instanced {
+                    shader: ShaderId::Quad,
+                    instances: vec![quad],
+                },
+                Vec::new(),
+                target,
+                extent,
+            ),
+        }
+    }
+
+    pub fn draw_shadow(&mut self, target: TextureRef, shadow: ShadowInstance) {
+        let extent = clip_to(shadow.covered(), shadow.clip);
+        let found = self.find_batch(target, Tag::Shadow, extent);
+        match found {
+            Some(index) => {
+                if let PassKind::Shadows { instances } = &mut self.passes[index].kind {
+                    instances.push(shadow);
+                }
+                self.merged += 1;
+                self.extents[index] = grown(self.extents[index], extent);
+            }
+            None => self.start_batch(
+                PassKind::Shadows {
+                    instances: vec![shadow],
+                },
+                Vec::new(),
+                target,
+                extent,
+            ),
+        }
+    }
+
+    pub fn draw_glyphs(
+        &mut self,
+        target: TextureRef,
+        atlas: TextureHandle,
+        glyphs: impl Iterator<Item = GlyphInstance>,
+    ) {
+        let mut scratch = std::mem::take(&mut self.glyph_scratch);
+        scratch.clear();
+        scratch.extend(glyphs);
+        let extent = fold_extent(scratch.iter().map(|g| clip_to(g.bounds, g.clip))).flatten();
+        let found = self.find_batch(target, Tag::Glyphs(atlas), extent);
+        match found {
+            Some(index) => {
+                if let PassKind::Glyphs { instances, .. } = &mut self.passes[index].kind {
+                    instances.extend_from_slice(&scratch);
+                }
+                self.merged += 1;
+                self.extents[index] = grown(self.extents[index], extent);
+            }
+            None => self.start_batch(
+                PassKind::Glyphs {
+                    atlas,
+                    instances: scratch.clone(),
+                },
+                vec![TextureRef::Persistent(atlas)],
+                target,
+                extent,
+            ),
+        }
+        self.glyph_scratch = scratch;
+    }
+
+    pub fn draw_slug(
+        &mut self,
+        target: TextureRef,
+        store: TextureHandle,
+        glyphs: impl Iterator<Item = SlugInstance>,
+    ) {
+        let mut scratch = std::mem::take(&mut self.slug_scratch);
+        scratch.clear();
+        scratch.extend(glyphs);
+        let extent = fold_extent(scratch.iter().map(|g| clip_to(g.covered(), g.clip))).flatten();
+        let found = self.find_batch(target, Tag::Slug(store), extent);
+        match found {
+            Some(index) => {
+                if let PassKind::Slug { instances, .. } = &mut self.passes[index].kind {
+                    instances.extend_from_slice(&scratch);
+                }
+                self.merged += 1;
+                self.extents[index] = grown(self.extents[index], extent);
+            }
+            None => self.start_batch(
+                PassKind::Slug {
+                    store,
+                    instances: scratch.clone(),
+                },
+                vec![TextureRef::Persistent(store)],
+                target,
+                extent,
+            ),
+        }
+        self.slug_scratch = scratch;
+    }
+
+    fn start_batch(
+        &mut self,
+        kind: PassKind,
+        reads: Vec<TextureRef>,
+        target: TextureRef,
+        extent: Option<Rect>,
+    ) {
+        self.passes.push(Pass::new(kind, reads, vec![target]));
+        self.extents.push(extent);
+    }
+
+    fn find_batch(&self, target: TextureRef, tag: Tag, extent: Option<Rect>) -> Option<usize> {
+        for (index, earlier) in self.passes.iter().enumerate().rev() {
+            let same_target = earlier.writes.as_slice() == [target];
+            if same_target
+                && earlier.load == LoadOp::Load
+                && earlier.constants.is_empty()
+                && tag.matches(&earlier.kind)
+            {
+                return Some(index);
+            }
+            let touches = earlier.writes.contains(&target) || earlier.reads.contains(&target);
+            let disjoint = same_target
+                && !earlier.reads.contains(&target)
+                && matches!((self.extents[index], extent), (Some(a), Some(b)) if intersect(a, b).is_none());
+            if touches && !disjoint {
+                return None;
+            }
+        }
+        None
     }
 
     pub fn passes(&self) -> &[Pass] {
@@ -84,10 +244,13 @@ impl RenderGraph {
         self.plan_with_stats(limits).map(|(plan, _)| plan)
     }
 
-    pub fn plan_with_stats(self, limits: PlanLimits) -> Result<(FramePlan, PlanStats), PlanError> {
+    pub fn plan_with_stats(
+        mut self,
+        limits: PlanLimits,
+    ) -> Result<(FramePlan, PlanStats), PlanError> {
         let mut stats = PlanStats::default();
         self.check_resources(limits)?;
-        let mut passes = self.passes.clone();
+        let mut passes = std::mem::take(&mut self.passes);
         stats.culled_instances = cull_instances(&self, &mut passes);
         passes = drop_unfed(passes);
         let before = passes.len();
@@ -95,7 +258,7 @@ impl RenderGraph {
         stats.culled_passes = before - passes.len();
         let before = passes.len();
         passes = merge_passes(passes);
-        stats.merged_passes = before - passes.len();
+        stats.merged_passes = before - passes.len() + self.merged;
         ensure_surface_clear(&mut passes, self.clear);
         let lives = lifetimes(&passes);
         let (textures, heap_bytes, naive) = allocate(&self, &lives, limits.heap_alignment);
@@ -287,24 +450,147 @@ fn absorb(target: &mut Pass, source: Pass) {
     }
 }
 
-fn merge_passes(passes: Vec<Pass>) -> Vec<Pass> {
-    let mut result: Vec<Pass> = Vec::with_capacity(passes.len());
-    for pass in passes {
-        let mut destination = None;
-        for (index, earlier) in result.iter().enumerate().rev() {
-            if same_batch(earlier, &pass) {
-                destination = Some(index);
-                break;
-            }
-            if !independent(earlier, &pass) {
-                break;
-            }
-        }
-        match destination {
-            Some(index) => absorb(&mut result[index], pass),
-            None => result.push(pass),
+#[derive(Clone, Copy)]
+enum Tag {
+    Quad,
+    Shadow,
+    Glyphs(TextureHandle),
+    Slug(TextureHandle),
+}
+
+impl Tag {
+    fn matches(self, kind: &PassKind) -> bool {
+        match (self, kind) {
+            (
+                Tag::Quad,
+                PassKind::Instanced {
+                    shader: ShaderId::Quad,
+                    ..
+                },
+            ) => true,
+            (Tag::Shadow, PassKind::Shadows { .. }) => true,
+            (Tag::Glyphs(a), PassKind::Glyphs { atlas, .. }) => a == *atlas,
+            (Tag::Slug(a), PassKind::Slug { store, .. }) => a == *store,
+            _ => false,
         }
     }
+}
+
+fn clip_to(covered: Rect, clip: Option<Rect>) -> Option<Rect> {
+    match clip {
+        Some(clip) => intersect(covered, clip),
+        None => Some(covered),
+    }
+}
+
+fn fold_extent(rects: impl Iterator<Item = Option<Rect>>) -> Option<Option<Rect>> {
+    rects.into_iter().try_fold(None::<Rect>, |acc, rect| {
+        rect.map(|rect| Some(acc.map_or(rect, |acc| union(acc, rect))))
+    })
+}
+
+fn drawn_extent(pass: &Pass) -> Option<Rect> {
+    let clipped = |covered: Rect, clip: Option<Rect>| match clip {
+        Some(clip) => intersect(covered, clip),
+        None => Some(covered),
+    };
+    let extent = match &pass.kind {
+        PassKind::Instanced { instances, .. } => {
+            fold_extent(instances.iter().map(|q| clipped(q.covered(), q.clip)))
+        }
+        PassKind::Shadows { instances } => {
+            fold_extent(instances.iter().map(|s| clipped(s.covered(), s.clip)))
+        }
+        PassKind::Glyphs { instances, .. } => {
+            fold_extent(instances.iter().map(|g| clipped(g.bounds, g.clip)))
+        }
+        PassKind::Images { instances } => {
+            fold_extent(instances.iter().map(|i| clipped(i.covered(), i.clip)))
+        }
+        PassKind::Slug { instances, .. } => {
+            fold_extent(instances.iter().map(|g| clipped(g.covered(), g.clip)))
+        }
+        _ => None,
+    };
+    extent.flatten()
+}
+
+fn spatially_disjoint(
+    earlier: &Pass,
+    earlier_extent: Option<Rect>,
+    pass: &Pass,
+    extent: Option<Rect>,
+) -> bool {
+    let (Some(a), Some(b)) = (earlier_extent, extent) else {
+        return false;
+    };
+    earlier.writes == pass.writes
+        && earlier.writes.len() == 1
+        && !earlier.reads.contains(&earlier.writes[0])
+        && !pass.reads.contains(&pass.writes[0])
+        && intersect(a, b).is_none()
+}
+
+fn batchable(pass: &Pass) -> bool {
+    matches!(
+        pass.kind,
+        PassKind::Instanced { .. }
+            | PassKind::Shadows { .. }
+            | PassKind::Glyphs { .. }
+            | PassKind::Slug { .. }
+    ) && pass
+        .reads
+        .iter()
+        .all(|read| !matches!(read, TextureRef::Transient(_)))
+}
+
+fn grown(existing: Option<Rect>, added: Option<Rect>) -> Option<Rect> {
+    match (existing, added) {
+        (Some(a), Some(b)) => Some(union(a, b)),
+        _ => None,
+    }
+}
+
+fn merge_target(
+    result: &[Pass],
+    extents: &[Option<Rect>],
+    pass: &Pass,
+    extent: Option<Rect>,
+) -> Option<usize> {
+    for (index, earlier) in result.iter().enumerate().rev() {
+        if same_batch(earlier, pass) {
+            return Some(index);
+        }
+        if !independent(earlier, pass) && !spatially_disjoint(earlier, extents[index], pass, extent)
+        {
+            return None;
+        }
+    }
+    None
+}
+
+fn place(passes: &mut Vec<Pass>, extents: &mut Vec<Option<Rect>>, pass: Pass) -> bool {
+    let extent = drawn_extent(&pass);
+    match merge_target(passes, extents, &pass, extent) {
+        Some(index) => {
+            extents[index] = grown(extents[index], extent);
+            absorb(&mut passes[index], pass);
+            true
+        }
+        None => {
+            passes.push(pass);
+            extents.push(extent);
+            false
+        }
+    }
+}
+
+fn merge_passes(passes: Vec<Pass>) -> Vec<Pass> {
+    let mut result = Vec::with_capacity(passes.len());
+    let mut extents = Vec::with_capacity(passes.len());
+    passes.into_iter().for_each(|pass| {
+        place(&mut result, &mut extents, pass);
+    });
     result
 }
 

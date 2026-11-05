@@ -34,6 +34,8 @@ pub trait Lowering: 'static {
 
     fn frame_reported(&mut self, _report: &FrameReport) {}
 
+    fn reclaim(&mut self, _commands: Vec<PaintCommand>) {}
+
     fn trim(&mut self, _request: TrimRequest) -> usize {
         0
     }

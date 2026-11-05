@@ -1,12 +1,12 @@
 use crate::event::{Handler, ShellError, ShellEvent};
-use crate::state::{self, Queued, HANDLER, IN_HANDLER, ORIGIN};
+use crate::state::{self, HANDLER, IN_HANDLER, ORIGIN, Queued};
 use crate::timing;
-use crate::wndproc::{hwnd_from, WM_WAKE};
+use crate::wndproc::{WM_WAKE, hwnd_from};
 use aqua_protocol::Instant;
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{
-    CancelWaitableTimer, CreateWaitableTimerExW, SetWaitableTimer,
-    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CancelWaitableTimer, CreateWaitableTimerExW,
+    SetWaitableTimer,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -44,6 +44,24 @@ pub fn now() -> Instant {
 
 pub fn schedule(at: Instant) {
     state::with(|s| s.wake_at = Some(s.wake_at.map_or(at, |existing| existing.min(at))));
+}
+
+const PUMP_SPACING: std::time::Duration = std::time::Duration::from_micros(300);
+
+pub fn pump_sent_messages() {
+    if !state::UI_THREAD.get() {
+        return;
+    }
+    let now = std::time::Instant::now();
+    if state::LAST_PUMP
+        .get()
+        .is_some_and(|last| now.duration_since(last) < PUMP_SPACING)
+    {
+        return;
+    }
+    state::LAST_PUMP.set(Some(now));
+    let mut msg = MSG::default();
+    let _ = unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE) };
 }
 
 pub fn quit() {
@@ -99,6 +117,7 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
     if HANDLER.get().is_some() {
         return Err(ShellError::LoopAlreadyRunning);
     }
+    state::UI_THREAD.set(true);
     let mut boxed: Box<dyn Handler> = Box::new(handler);
     HANDLER.set(Some(&mut *boxed as *mut dyn Handler));
     let timer = unsafe {

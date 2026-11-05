@@ -1,17 +1,17 @@
 use std::time::{Duration, Instant};
 
-use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
+use windows::core::Interface;
 
-use super::adapter::{create_factory, enable_debug_layer, select, DeviceInfo};
-use super::budget::{pressure, trim_for, Pressure, Trim, Visibility};
+use super::adapter::{DeviceInfo, create_factory, enable_debug_layer, select};
+use super::budget::{Pressure, Trim, Visibility, pressure, trim_for};
 use super::descriptors::{CpuHeap, DynamicRange, ShaderVisibleHeap};
 use super::error::Error;
 use super::frames::{CoreFrame, FrameRing, UploadAlloc};
 use super::monitor::{BudgetMonitor, MemorySnapshot};
-use super::recovery::{classify, LossCause, LossHistory, RecoveryStep};
-use super::selection::{parse_preference, Adapter, AdapterPreference};
+use super::recovery::{LossCause, LossHistory, RecoveryStep, classify};
+use super::selection::{Adapter, AdapterPreference, parse_preference};
 use super::swapchain::Swapchain;
 use super::tier::{Tier, Tiers};
 use super::timeline::Timeline;
@@ -116,8 +116,11 @@ fn build(options: &DeviceOptions) -> Result<Built, Error> {
     if options.debug_layer {
         enable_debug_layer();
     }
+    let stages = crate::stages::StageClock::from_env();
     let factory = create_factory(options.debug_layer)?;
+    stages.mark("    factory");
     let selected = select(&factory, options.preference, options.max_tier)?;
+    stages.mark("    select_device");
     let device = selected.device;
     let queue: ID3D12CommandQueue = unsafe {
         device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
@@ -127,11 +130,18 @@ fn build(options: &DeviceOptions) -> Result<Built, Error> {
             NodeMask: 0,
         })?
     };
+    stages.mark("    queue");
+    let timeline = Timeline::new(&device)?;
+    let frames = FrameRing::new(&device, options.frames_in_flight.max(2))?;
+    stages.mark("    timeline_frames");
+    let rtv = CpuHeap::new(&device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, RTV_CAPACITY)?;
+    let srv = ShaderVisibleHeap::new(&device, STATIC_DESCRIPTORS, DYNAMIC_DESCRIPTORS)?;
+    stages.mark("    heaps");
     Ok(Built {
-        timeline: Timeline::new(&device)?,
-        frames: FrameRing::new(&device, options.frames_in_flight.max(2))?,
-        rtv: CpuHeap::new(&device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, RTV_CAPACITY)?,
-        srv: ShaderVisibleHeap::new(&device, STATIC_DESCRIPTORS, DYNAMIC_DESCRIPTORS)?,
+        timeline,
+        frames,
+        rtv,
+        srv,
         monitor: BudgetMonitor::new(&selected.adapter)?,
         info: selected.info,
         factory,

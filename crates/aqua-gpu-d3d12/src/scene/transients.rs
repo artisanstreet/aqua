@@ -5,11 +5,11 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use windows::core::Interface;
 
-use super::barriers::{initial_layout, BarrierMode};
+use super::Error;
+use super::barriers::{BarrierMode, initial_layout};
 use super::formats::dxgi;
 use super::util::*;
-use super::Error;
-use crate::placement::{place, Planned};
+use crate::placement::{Planned, place};
 use crate::policy::{HeapDecision, HeapGate};
 
 const HEAP_ALIGNMENT: u64 = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT as u64;

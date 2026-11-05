@@ -1,10 +1,10 @@
-use crate::event::{win32, ShellError};
-use windows::core::IUnknown;
+use crate::event::{ShellError, win32};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
 };
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+use windows::core::IUnknown;
 
 pub(crate) struct Composition {
     device: IDCompositionDevice,

@@ -1,10 +1,10 @@
 use std::ffi::c_void;
 use std::mem::size_of;
 
-use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
+use windows::core::Interface;
 
 use super::Error;
 

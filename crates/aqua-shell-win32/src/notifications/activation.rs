@@ -1,5 +1,5 @@
 use super::{AppIdentity, NotificationResponse};
-use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 
 pub const SCHEME: &str = "aqua-toast";
 pub const ACTIVATION_FLAG: &str = "--aqua-toast-activation";
@@ -80,22 +80,23 @@ pub fn parse_activation_url(text: &str) -> Result<Activation, ActivationUrlError
 }
 
 #[cfg(windows)]
-pub use host::{handle_launch, register_protocol, unregister_protocol, Launch, Receiver};
+pub use host::{Launch, Receiver, handle_launch, register_protocol, unregister_protocol};
 
 #[cfg(windows)]
 mod host {
-    use super::{parse_activation_url, Activation, ACTIVATION_FLAG, SCHEME};
+    use super::{ACTIVATION_FLAG, Activation, SCHEME, parse_activation_url};
     use crate::notifications::{NotificationError, ResponseHandler};
     use std::path::Path;
-    use windows::core::PCWSTR;
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::DataExchange::COPYDATASTRUCT;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowExW, GetWindowLongPtrW,
-        RegisterClassW, SendMessageTimeoutW, SetWindowLongPtrW, CW_USEDEFAULT, GWLP_USERDATA,
-        HWND_MESSAGE, SMTO_ABORTIFHUNG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COPYDATA, WNDCLASSW,
+        CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowExW,
+        GWLP_USERDATA, GetWindowLongPtrW, HWND_MESSAGE, RegisterClassW, SMTO_ABORTIFHUNG,
+        SendMessageTimeoutW, SetWindowLongPtrW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COPYDATA,
+        WNDCLASSW,
     };
+    use windows::core::PCWSTR;
 
     const CLASS: &str = "AquaToastReceiver";
     const MAGIC: usize = 0x4151_5441;
@@ -155,7 +156,8 @@ mod host {
         if data.dwData != MAGIC || data.lpData.is_null() {
             return LRESULT(0);
         }
-        let bytes = unsafe { std::slice::from_raw_parts(data.lpData as *const u8, data.cbData as usize) };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(data.lpData as *const u8, data.cbData as usize) };
         let activation = std::str::from_utf8(bytes)
             .ok()
             .and_then(|text| parse_activation_url(text).ok())
@@ -175,7 +177,10 @@ mod host {
     }
 
     impl Receiver {
-        pub fn create(identifier: &str, handler: ResponseHandler) -> Result<Self, NotificationError> {
+        pub fn create(
+            identifier: &str,
+            handler: ResponseHandler,
+        ) -> Result<Self, NotificationError> {
             let instance = unsafe { GetModuleHandleW(None) }.map_err(native_error)?;
             let class = wide(CLASS);
             let description = WNDCLASSW {

@@ -1,8 +1,8 @@
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D12::*;
 
-use super::pipeline::{CONSTANT_DWORDS, MATRIX_DWORDS, ROOT_DWORDS};
 use super::Error;
+use super::pipeline::{CONSTANT_DWORDS, MATRIX_DWORDS, ROOT_DWORDS};
 use crate::hal::tier::Tier;
 
 pub const INDEX_DWORD: u32 = 14;

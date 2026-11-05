@@ -10,18 +10,18 @@ use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::Error;
 use super::barriers::Emitter;
 use super::compute::{self, ComputePipelines};
 use super::custom::{self, CustomDraw, CustomPipelines};
 use super::formats::{dxgi, state_for};
 use super::pipeline::{Kind, PipelineStats, Pipelines};
 use super::sprites;
-use super::tiers::{resolve, Active, SceneOptions};
+use super::tiers::{Active, SceneOptions, resolve};
 use super::timestamps::{PassTime, Timestamps};
 use super::transients::Transients;
 use super::util::*;
-use super::Error;
-use crate::pack::{pack_quad, pack_shadow, QUAD_STRIDE, SHADOW_STRIDE};
+use crate::pack::{QUAD_STRIDE, SHADOW_STRIDE, pack_quad, pack_shadow};
 use crate::sprite::{glyph_packer, pack_image, pack_slug};
 
 const INITIAL_UPLOAD_BYTES: u64 = 1 << 16;
@@ -287,8 +287,10 @@ impl SceneRenderer {
         cache: Option<&[u8]>,
         options: SceneOptions,
     ) -> Result<Self, Error> {
+        let stages = crate::stages::StageClock::from_env();
         let active = resolve(device, options.limit);
         let pipelines = Pipelines::create(device, cache, active.binding)?;
+        stages.mark("      pipelines_create");
         let timestamps = match options.timestamps {
             true => Timestamps::new(device, slots.max(1))?,
             false => None,
@@ -297,13 +299,18 @@ impl SceneRenderer {
         let slots = (0..slot_count)
             .map(|_| create_slot(device, INITIAL_UPLOAD_BYTES, INITIAL_DESCRIPTORS))
             .collect::<Result<Vec<_>, _>>()?;
+        stages.mark("      timestamps_slots");
+        let custom = CustomPipelines::create(device)?;
+        stages.mark("      custom_pipelines");
+        let compute = ComputePipelines::create(device)?;
+        stages.mark("      compute_pipelines");
         Ok(Self {
             device: device.clone(),
             pipelines,
             emitter: Emitter::new(active.sync),
             scratch: Scratch::default(),
-            custom: CustomPipelines::create(device)?,
-            compute: ComputePipelines::create(device)?,
+            custom,
+            compute,
             slots,
             rtv_heap: create_rtv_heap(device, INITIAL_DESCRIPTORS)?,
             rtv_capacity: INITIAL_DESCRIPTORS,

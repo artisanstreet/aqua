@@ -3,12 +3,11 @@ use crate::hooks::{self, RawMessage};
 use crate::input::{self, PointerButtonSource};
 use crate::looping::turn;
 use crate::pointer::{self, Device};
-use crate::regions::{self, ht, Geometry};
+use crate::regions::{self, Geometry, ht};
 use crate::state::{self, Queued};
 use aqua_core::{CursorIcon, InputEvent, KeyEvent, Modifiers, Point, PointerEvent, PointerKind};
-use aqua_protocol::chrome::RectI;
 use aqua_protocol::CaptionControl;
-use windows::core::PCWSTR;
+use aqua_protocol::chrome::RectI;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{ClientToScreen, PtInRect, ScreenToClient, ValidateRect};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
@@ -16,14 +15,15 @@ use windows::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, GetDpiForWindow, GetSystemMetricsForDpi,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, GetKeyboardLayout, GetKeyboardState, ReleaseCapture, SetCapture, ToUnicodeEx,
-    TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+    GetKeyState, GetKeyboardLayout, GetKeyboardState, ReleaseCapture, SetCapture, TME_LEAVE,
+    TME_NONCLIENT, TRACKMOUSEEVENT, ToUnicodeEx, TrackMouseEvent,
 };
 use windows::Win32::UI::Input::Pointer::{
     GetPointerInfo, GetPointerPenInfo, GetPointerType, POINTER_INFO, POINTER_PEN_INFO,
 };
 use windows::Win32::UI::Input::{GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTHEADER, RID_INPUT};
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::PCWSTR;
 
 pub(crate) static CLASS_NAME: [u16; 12] = {
     let text = *b"AquaShell32";
@@ -449,7 +449,11 @@ pub(crate) unsafe extern "system" fn wndproc(
             unsafe {
                 let _ = ValidateRect(Some(hwnd), None);
             }
-            state::window(raw, |w| w.redraw_pending = true);
+            state::window(raw, |w| {
+                if !std::mem::take(&mut w.resized_since_paint) {
+                    w.redraw_pending = true;
+                }
+            });
             Some(LRESULT(0))
         }
         WM_WAKE => {
@@ -537,6 +541,7 @@ pub(crate) unsafe extern "system" fn wndproc(
                     raw,
                     ShellEvent::Maximized(wparam.0 as u32 == SIZE_MAXIMIZED),
                 );
+                state::window(raw, |w| w.resized_since_paint = true);
                 state::emit(raw, ShellEvent::Resized { width, height });
                 if state::with(|s| s.in_modal) {
                     turn();

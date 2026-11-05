@@ -1,27 +1,27 @@
-use crate::event::{win32, Chrome, ShellError, ShellEvent, WindowKind, WindowOptions};
+use crate::event::{Chrome, ShellError, ShellEvent, WindowKind, WindowOptions, win32};
 use crate::handle::NativeHandle;
 use crate::looping::Waker;
 use crate::material::{self, MaterialOutcome};
 use crate::state::{self, WindowState};
-use crate::wndproc::{self, hwnd_from, CLASS_NAME};
+use crate::wndproc::{self, CLASS_NAME, hwnd_from};
 use aqua_core::{CursorIcon, Modifiers};
 use aqua_protocol::chrome::DragRects;
 use aqua_protocol::{DragRegions, WindowId, WindowMaterial};
 use std::sync::Once;
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HINSTANCE, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
-    GetDC, GetMonitorInfoW, MonitorFromWindow, ReleaseDC, SetDIBitsToDevice, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, GetDC, GetMonitorInfoW,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, ReleaseDC, SetDIBitsToDevice,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{
-    AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi,
-    SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    AdjustWindowRectExForDpi, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForSystem,
+    GetDpiForWindow, GetSystemMetricsForDpi, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-use windows::Win32::UI::Input::{RegisterRawInputDevices, RAWINPUTDEVICE, RIDEV_REMOVE};
+use windows::Win32::UI::Input::{RAWINPUTDEVICE, RIDEV_REMOVE, RegisterRawInputDevices};
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::PCWSTR;
 
 static INIT: Once = Once::new();
 
@@ -162,6 +162,7 @@ impl Window {
                         rects: DragRects::default(),
                         cursor: CursorIcon::Default,
                         redraw_pending: true,
+                        resized_since_paint: false,
                         tracking_client: false,
                         tracking_nc: false,
                         hover: None,

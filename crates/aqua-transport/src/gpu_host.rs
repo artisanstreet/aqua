@@ -1,10 +1,10 @@
 use aqua_protocol::probe::{self, Metric, Phase};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use aqua_core::{Oklch, Size};
-use aqua_graph::{plan_paint_with, Extent};
+use aqua_graph::{Extent, plan_paint_with};
 use aqua_protocol::{
     DeviceStatus, Feedback, FrameId, FrameInputs, FrameReport, GpuBackend, GpuError, Instant,
     PresentHint, SurfaceId, SurfaceTarget,
@@ -381,6 +381,7 @@ where
                 .map(|t| u64::try_from(t.as_micros()).unwrap_or(u64::MAX)),
             present_queued_micros: u64::try_from(times.queued.as_micros()).unwrap_or(u64::MAX),
         };
+        self.lowering.reclaim(lowered.commands);
         Ok((report, record))
     }
 

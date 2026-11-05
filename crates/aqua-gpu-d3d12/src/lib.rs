@@ -7,4 +7,7 @@ pub mod sprite;
 pub mod window;
 
 #[cfg(windows)]
+pub(crate) mod stages;
+
+#[cfg(windows)]
 pub mod scene;

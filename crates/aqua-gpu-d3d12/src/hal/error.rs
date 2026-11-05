@@ -1,4 +1,4 @@
-use super::recovery::{classify, LossCause};
+use super::recovery::{LossCause, classify};
 
 #[derive(Debug)]
 pub enum Error {

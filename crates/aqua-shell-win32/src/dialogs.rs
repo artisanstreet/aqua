@@ -1,6 +1,6 @@
 use crate::dialog_protocol::{
-    decode_request, decode_response, encode_request, encode_response, HelperKind, HelperRequest,
-    HelperResponse,
+    HelperKind, HelperRequest, HelperResponse, decode_request, decode_response, encode_request,
+    encode_response,
 };
 use crate::event::ShellError;
 use crate::handle::NativeHandle;
@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 const HELPER_FLAG: &str = "--aqua-shell-dialog-helper";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;

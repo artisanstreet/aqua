@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
-use windows::Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_SINGLETHREADED};
+use windows::Win32::System::WinRT::{RO_INIT_SINGLETHREADED, RoInitialize, RoUninitialize};
 
 pub(crate) struct Apartment {
     owned: bool,

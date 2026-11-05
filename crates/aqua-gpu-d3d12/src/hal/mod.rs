@@ -26,7 +26,7 @@ mod timeline;
 mod util;
 
 #[cfg(windows)]
-pub use adapter::{create_factory, list_adapters, DeviceInfo};
+pub use adapter::{DeviceInfo, create_factory, list_adapters};
 #[cfg(windows)]
 pub use descriptors::{CpuHeap, Descriptor, DynamicRange, ShaderVisibleHeap, VisibleDescriptor};
 #[cfg(windows)]
@@ -38,11 +38,11 @@ pub use features::detect;
 #[cfg(windows)]
 pub use frames::{CoreFrame, FrameRing, UploadAlloc, UploadRing};
 #[cfg(windows)]
-pub use monitor::{evict, make_resident, BudgetMonitor, MemorySnapshot};
+pub use monitor::{BudgetMonitor, MemorySnapshot, evict, make_resident};
 #[cfg(windows)]
 pub use swapchain::{
-    BackBuffer, FrameStatistics, PresentMode, PresentStatus, Swapchain, SwapchainTarget,
-    BACK_BUFFER_FORMAT, RENDER_FORMAT,
+    BACK_BUFFER_FORMAT, BackBuffer, FrameStatistics, PresentMode, PresentStatus, RENDER_FORMAT,
+    Swapchain, SwapchainTarget,
 };
 #[cfg(windows)]
 pub use timeline::Timeline;

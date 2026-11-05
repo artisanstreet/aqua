@@ -1,23 +1,23 @@
 use crate::event::ShellError;
-use crate::event::{win32, FileDrag, ShellEvent};
+use crate::event::{FileDrag, ShellEvent, win32};
 use crate::state;
-use crate::wndproc::{hwnd_from, WM_WAKE};
+use crate::wndproc::{WM_WAKE, hwnd_from};
 use aqua_core::Point;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
-use windows::core::{implement, Ref};
 use windows::Win32::Foundation::{HWND, POINT, POINTL, S_OK};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::Com::{
-    CoCreateInstance, IDataObject, CLSCTX_INPROC_SERVER, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL,
+    CLSCTX_INPROC_SERVER, CoCreateInstance, DVASPECT_CONTENT, FORMATETC, IDataObject, TYMED_HGLOBAL,
 };
 use windows::Win32::System::Ole::{
-    IDropTarget, IDropTarget_Impl, OleInitialize, RegisterDragDrop, ReleaseStgMedium,
-    RevokeDragDrop, CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
+    CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE, IDropTarget, IDropTarget_Impl,
+    OleInitialize, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop,
 };
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
-use windows::Win32::UI::Shell::{CLSID_DragDropHelper, DragQueryFileW, IDropTargetHelper, HDROP};
+use windows::Win32::UI::Shell::{CLSID_DragDropHelper, DragQueryFileW, HDROP, IDropTargetHelper};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+use windows::core::{Ref, implement};
 
 fn hdrop_format() -> FORMATETC {
     FORMATETC {

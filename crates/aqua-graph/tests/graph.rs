@@ -1,7 +1,7 @@
-use aqua_core::{geometry::Rect, Oklch};
+use aqua_core::{Oklch, geometry::Rect};
 use aqua_graph::{
-    validate, Extent, FilterParams, GlyphInstance, Pass, PassKind, PlanError, PlanLimits,
-    QuadInstance, RenderGraph, ShaderId, TextureFormat, TextureHandle, TextureRef,
+    Extent, FilterParams, GlyphInstance, Pass, PassKind, PlanError, PlanLimits, QuadInstance,
+    RenderGraph, ShaderId, TextureFormat, TextureHandle, TextureRef, validate,
 };
 
 const EXTENT: Extent = Extent {
@@ -228,17 +228,18 @@ fn compute_and_custom_passes_plan_with_unordered_access_and_declared_inputs() {
     };
     let plan = effect_graph(compute).plan(PlanLimits::default()).unwrap();
     assert_eq!(validate(&plan), Ok(()));
-    assert!(plan
-        .passes
-        .iter()
-        .flat_map(|pass| pass.barriers.iter())
-        .any(|barrier| matches!(
-            barrier,
-            aqua_graph::Barrier::Transition {
-                to: aqua_graph::ResourceState::UnorderedAccess,
-                ..
-            }
-        )));
+    assert!(
+        plan.passes
+            .iter()
+            .flat_map(|pass| pass.barriers.iter())
+            .any(|barrier| matches!(
+                barrier,
+                aqua_graph::Barrier::Transition {
+                    to: aqua_graph::ResourceState::UnorderedAccess,
+                    ..
+                }
+            ))
+    );
     let plan = effect_graph(PassKind::Custom(custom_spec("effect", 1.0)))
         .plan(PlanLimits::default())
         .unwrap();
@@ -287,4 +288,63 @@ fn color_matrix_filters_reject_non_finite_matrices() {
         effect_graph(kind).plan(PlanLimits::default()),
         Err(PlanError::NonFiniteValue { .. })
     ));
+}
+
+fn glyph_at(x: f32) -> Pass {
+    let atlas = TextureHandle(3);
+    let rect = Rect {
+        x,
+        y: 0.0,
+        w: 10.0,
+        h: 10.0,
+    };
+    Pass::new(
+        PassKind::Glyphs {
+            atlas,
+            instances: vec![GlyphInstance {
+                bounds: rect,
+                texels: rect,
+                color: Oklch::WHITE,
+                clip: None,
+                opacity: 1.0,
+                backdrop: None,
+            }],
+        },
+        vec![TextureRef::Persistent(atlas)],
+        vec![TextureRef::Surface],
+    )
+}
+
+fn kinds(plan: &aqua_graph::FramePlan) -> Vec<&'static str> {
+    plan.passes
+        .iter()
+        .filter_map(|pass| match pass.kind {
+            PassKind::Instanced { .. } => Some("quad"),
+            PassKind::Glyphs { .. } => Some("glyph"),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn spatially_disjoint_draws_to_one_target_reorder_into_shared_batches() {
+    let mut graph = graph();
+    graph.push(draw(0.0, TextureRef::Surface));
+    graph.push(glyph_at(0.0));
+    graph.push(draw(40.0, TextureRef::Surface));
+    graph.push(glyph_at(40.0));
+    let plan = graph.plan(PlanLimits::default()).unwrap();
+    assert_eq!(kinds(&plan), vec!["quad", "glyph"]);
+    assert_eq!(plan.passes[0].kind.draw_count(), 2);
+    assert_eq!(plan.passes[1].kind.draw_count(), 2);
+}
+
+#[test]
+fn overlapping_draws_to_one_target_keep_their_paint_order() {
+    let mut graph = graph();
+    graph.push(draw(0.0, TextureRef::Surface));
+    graph.push(glyph_at(5.0));
+    graph.push(draw(8.0, TextureRef::Surface));
+    let plan = graph.plan(PlanLimits::default()).unwrap();
+    assert_eq!(kinds(&plan), vec!["quad", "glyph", "quad"]);
 }

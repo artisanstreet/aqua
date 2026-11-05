@@ -22,3 +22,39 @@ pub fn hold_software() {
         }
     });
 }
+
+#[allow(dead_code)]
+pub struct Prioritized {
+    thread: i32,
+    class: u32,
+}
+
+#[allow(dead_code)]
+pub fn prioritized() -> Prioritized {
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, GetCurrentThread, GetPriorityClass, GetThreadPriority,
+        HIGH_PRIORITY_CLASS, PROCESS_CREATION_FLAGS, SetPriorityClass, SetThreadPriority,
+        THREAD_PRIORITY_TIME_CRITICAL,
+    };
+    let thread = unsafe { GetCurrentThread() };
+    let process = unsafe { GetCurrentProcess() };
+    let previous = Prioritized {
+        thread: unsafe { GetThreadPriority(thread) },
+        class: unsafe { GetPriorityClass(process) },
+    };
+    let _ = unsafe { SetPriorityClass(process, PROCESS_CREATION_FLAGS(HIGH_PRIORITY_CLASS.0)) };
+    let _ = unsafe { SetThreadPriority(thread, THREAD_PRIORITY_TIME_CRITICAL) };
+    previous
+}
+
+impl Drop for Prioritized {
+    fn drop(&mut self) {
+        use windows::Win32::System::Threading::{
+            GetCurrentProcess, GetCurrentThread, PROCESS_CREATION_FLAGS, SetPriorityClass,
+            SetThreadPriority, THREAD_PRIORITY,
+        };
+        let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY(self.thread)) };
+        let _ =
+            unsafe { SetPriorityClass(GetCurrentProcess(), PROCESS_CREATION_FLAGS(self.class)) };
+    }
+}

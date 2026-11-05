@@ -73,11 +73,11 @@ impl OpenTarget {
 #[cfg(windows)]
 fn execute(target: &OpenTarget) -> Result<(), OpenError> {
     use std::os::windows::ffi::OsStrExt;
-    use windows::core::{w, PCWSTR};
     use windows::Win32::UI::Shell::{
         SHOpenFolderAndSelectItems, SHParseDisplayName, ShellExecuteW,
     };
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::{PCWSTR, w};
 
     let _apartment =
         crate::apartment::Apartment::new().map_err(|error| OpenError::Native(error.code().0))?;

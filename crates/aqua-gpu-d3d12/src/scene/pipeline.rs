@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::mem::transmute_copy;
 
-use windows::core::{s, Interface, PCSTR, PCWSTR};
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::core::{Interface, PCSTR, PCWSTR, s};
 
-use super::bindless::{self, Binding};
 use super::Error;
+use super::bindless::{self, Binding};
 
 pub const CONSTANT_DWORDS: u32 = 16;
 pub const MATRIX_DWORDS: u32 = 20;
@@ -136,6 +136,32 @@ impl Kind {
     ];
 }
 
+const WARM_LANES: usize = 1;
+
+struct Shared<'a>(&'a Pipelines);
+
+struct Handoff<T>(T);
+
+unsafe impl<T> Send for Handoff<T> {}
+
+impl Shared<'_> {
+    fn pipelines(&self) -> &Pipelines {
+        self.0
+    }
+}
+
+unsafe impl Send for Shared<'_> {}
+unsafe impl Sync for Shared<'_> {}
+
+struct Built {
+    state: ID3D12PipelineState,
+    used: bool,
+}
+
+fn label(kind: Kind, format: i32) -> String {
+    format!("{kind:?}/{format}")
+}
+
 pub struct Pipelines {
     device: ID3D12Device,
     library: Option<ID3D12PipelineLibrary>,
@@ -146,7 +172,8 @@ pub struct Pipelines {
     pub root_signature: ID3D12RootSignature,
     instance_layout: Vec<D3D12_INPUT_ELEMENT_DESC>,
     shadow_layout: Vec<D3D12_INPUT_ELEMENT_DESC>,
-    built: HashMap<(Kind, i32), ID3D12PipelineState>,
+    built: HashMap<(Kind, i32), Built>,
+    hint: Option<std::collections::BTreeSet<String>>,
 }
 
 fn bytecode(binding: Binding, name: &'static str) -> Result<D3D12_SHADER_BYTECODE, Error> {
@@ -282,9 +309,10 @@ impl Pipelines {
         cache: Option<&[u8]>,
         binding: Binding,
     ) -> Result<Self, Error> {
+        let (hint, library) = super::hint::decode(cache);
         Ok(Self {
             device: device.clone(),
-            library: open_library(device, cache),
+            library: open_library(device, library),
             stats: PipelineStats::default(),
             warmed: false,
             late: Vec::new(),
@@ -313,13 +341,39 @@ impl Pipelines {
                 instance_element(s!("COLOR"), 4),
             ],
             built: HashMap::new(),
+            hint,
         })
     }
 
     pub fn get(&mut self, kind: Kind, format: DXGI_FORMAT) -> Result<ID3D12PipelineState, Error> {
-        if let Some(found) = self.built.get(&(kind, format.0)) {
-            return Ok(found.clone());
+        if let Some(found) = self.built.get_mut(&(kind, format.0)) {
+            found.used = true;
+            return Ok(found.state.clone());
         }
+        let (state, loaded) = self.compile(kind, format)?;
+        match loaded {
+            true => self.stats.loaded += 1,
+            false => self.stats.compiled += 1,
+        }
+        if self.warmed {
+            self.stats.late += 1;
+            self.late.push((kind, format.0));
+        }
+        self.built.insert(
+            (kind, format.0),
+            Built {
+                state: state.clone(),
+                used: true,
+            },
+        );
+        Ok(state)
+    }
+
+    fn compile(
+        &self,
+        kind: Kind,
+        format: DXGI_FORMAT,
+    ) -> Result<(ID3D12PipelineState, bool), Error> {
         let shaders = shaders(kind);
         let glyph_layout = super::sprites::glyph_layout();
         let image_layout = super::sprites::image_layout();
@@ -370,37 +424,90 @@ impl Pipelines {
         let loaded: Option<ID3D12PipelineState> = self.library.as_ref().and_then(|library| {
             unsafe { library.LoadGraphicsPipeline(PCWSTR(name.as_ptr()), &desc) }.ok()
         });
-        let state: ID3D12PipelineState = match loaded {
-            Some(state) => {
-                self.stats.loaded += 1;
-                state
-            }
+        match loaded {
+            Some(state) => Ok((state, true)),
             None => {
                 let state: ID3D12PipelineState =
                     unsafe { self.device.CreateGraphicsPipelineState(&desc)? };
                 if let Some(library) = &self.library {
                     let _ = unsafe { library.StorePipeline(PCWSTR(name.as_ptr()), &state) };
                 }
-                self.stats.compiled += 1;
-                state
+                Ok((state, false))
             }
-        };
-        if self.warmed {
-            self.stats.late += 1;
-            self.late.push((kind, format.0));
         }
-        self.built.insert((kind, format.0), state.clone());
-        Ok(state)
     }
 
     pub fn warm(&mut self, formats: &[DXGI_FORMAT]) -> Result<(), Error> {
-        for format in formats {
-            for kind in Kind::ALL {
-                self.get(kind, *format)?;
+        let mut unique = std::collections::HashSet::new();
+        let wanted: Vec<(Kind, DXGI_FORMAT)> = formats
+            .iter()
+            .flat_map(|format| Kind::ALL.into_iter().map(move |kind| (kind, *format)))
+            .filter(|(kind, format)| !self.built.contains_key(&(*kind, format.0)))
+            .filter(|(kind, format)| self.wanted_at_startup(*kind, *format))
+            .filter(|(kind, format)| unique.insert((*kind, format.0)))
+            .collect();
+        let configured = std::env::var("AQUA_WARM_LANES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(WARM_LANES);
+        let lanes = configured.min(wanted.len()).max(1);
+        let shared = Shared(&*self);
+        let queue = std::sync::atomic::AtomicUsize::new(0);
+        type Compiled = Vec<(usize, Result<(ID3D12PipelineState, bool), Error>)>;
+        let lane = || {
+            let shared = &shared;
+            let mut done: Compiled = Vec::new();
+            loop {
+                let index = queue.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some((kind, format)) = wanted.get(index) else {
+                    break Handoff(done);
+                };
+                done.push((index, shared.pipelines().compile(*kind, *format)));
             }
+        };
+        let results: Vec<Handoff<Compiled>> = std::thread::scope(|scope| {
+            let workers: Vec<_> = (1..lanes).map(|_| scope.spawn(lane)).collect();
+            let own = lane();
+            std::iter::once(own)
+                .chain(
+                    workers
+                        .into_iter()
+                        .map(|worker| worker.join().unwrap_or(Handoff(Vec::new()))),
+                )
+                .collect()
+        });
+        for (index, outcome) in results.into_iter().flat_map(|batch| batch.0) {
+            let (kind, format) = wanted[index];
+            let (state, loaded) = outcome?;
+            match loaded {
+                true => self.stats.loaded += 1,
+                false => self.stats.compiled += 1,
+            }
+            self.built
+                .insert((kind, format.0), Built { state, used: false });
         }
         self.warmed = true;
         Ok(())
+    }
+
+    fn wanted_at_startup(&self, kind: Kind, format: DXGI_FORMAT) -> bool {
+        self.hint
+            .as_ref()
+            .is_none_or(|hint| kind == Kind::Quad || hint.contains(&label(kind, format.0)))
+    }
+
+    fn used_labels(&self) -> std::collections::BTreeSet<String> {
+        self.hint
+            .iter()
+            .flatten()
+            .cloned()
+            .chain(
+                self.built
+                    .iter()
+                    .filter(|(_, built)| built.used)
+                    .map(|((kind, format), _)| label(*kind, *format)),
+            )
+            .collect()
     }
 
     pub fn late(&self) -> &[(Kind, i32)] {
@@ -416,7 +523,7 @@ impl Pipelines {
         let size = unsafe { library.GetSerializedSize() };
         let mut bytes = vec![0u8; size];
         unsafe { library.Serialize(&mut bytes) }.ok()?;
-        Some(bytes)
+        Some(super::hint::encode(&self.used_labels(), &bytes))
     }
 }
 

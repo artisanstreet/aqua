@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
-use aqua_graph::{plan_paint, validate, Extent, FramePlan, PaintCommand, Quad};
+use aqua_core::geometry::Rect;
+use aqua_graph::{Extent, FramePlan, PaintCommand, Quad, plan_paint, validate};
 use aqua_protocol::{
     DeviceStatus, FeatureTier, Features, FrameInputs, FrameReport, GpuBackend, GpuCapabilities,
     GpuError, GpuReadback, PresentHint, PresentTimes, RecoveryReport, SurfaceId, SurfacePixels,
@@ -19,7 +19,7 @@ use super::pacing::{PaceReport, Pacer};
 use super::timing;
 use crate::hal::budget::{Trim, Visibility};
 use crate::hal::{
-    self, BudgetStatus, Core, DeviceOptions, PresentMode, PresentStatus, Swapchain, RENDER_FORMAT,
+    self, BudgetStatus, Core, DeviceOptions, PresentMode, PresentStatus, RENDER_FORMAT, Swapchain,
 };
 use crate::half::bgra8_srgb_rows_to_linear_rgba8;
 use crate::scene::util::{footprint_location, texture_location};
@@ -154,6 +154,7 @@ struct Gpu {
 }
 
 pub struct WindowBackend {
+    startup_deferred: bool,
     options: WindowOptions,
     capabilities: GpuCapabilities,
     surfaces: HashMap<SurfaceId, WindowSurface>,
@@ -168,12 +169,25 @@ pub struct WindowBackend {
     listener: Option<Box<dyn FnMut(RecoveryNotice)>>,
 }
 
-fn build_gpu(core: &Core, options: &WindowOptions, cache: Option<&[u8]>) -> Result<Gpu, GpuError> {
+fn build_gpu(
+    core: &Core,
+    options: &WindowOptions,
+    cache: Option<&[u8]>,
+    deferred_layers: bool,
+) -> Result<Gpu, GpuError> {
     let slots = options.device.frames_in_flight.max(2);
+    let stages = crate::stages::StageClock::from_env();
     let mut renderer = SceneRenderer::with_pipeline_cache(core.device(), slots, cache)?;
-    renderer.warm(&[DXGI_FORMAT_R16G16B16A16_FLOAT, RENDER_FORMAT])?;
+    stages.mark("  renderer_new");
+    match deferred_layers {
+        true => renderer.warm(&[RENDER_FORMAT])?,
+        false => renderer.warm(&[DXGI_FORMAT_R16G16B16A16_FLOAT, RENDER_FORMAT])?,
+    }
+    stages.mark("  warm");
+    let list = core.create_command_list()?;
+    stages.mark("  command_list");
     Ok(Gpu {
-        list: core.create_command_list()?,
+        list,
         renderer,
         textures: PersistentTextures::new(core.device()),
     })
@@ -294,7 +308,7 @@ impl WindowBackend {
         cache: Option<&[u8]>,
     ) -> Result<Self, GpuError> {
         let core = Core::new(options.device)?;
-        let gpu = build_gpu(&core, &options, cache)?;
+        let gpu = build_gpu(&core, &options, cache, false)?;
         let mut backend = Self::assemble(options, core, gpu);
         backend.settle_amd_frame_tracker();
         Ok(backend)
@@ -311,15 +325,23 @@ impl WindowBackend {
             return;
         }
         *slot = Some(std::thread::spawn(move || {
+            let stages = crate::stages::StageClock::from_env();
             let cache = cache();
+            stages.mark("pipeline_cache_load");
             let outcome = Core::new(options.device)
                 .map_err(GpuError::from)
                 .and_then(|core| {
-                    build_gpu(&core, &options, cache.as_deref()).map(|gpu| (core, gpu))
+                    stages.mark("create_device");
+                    build_gpu(&core, &options, cache.as_deref(), true).map(|gpu| (core, gpu))
                 });
+            stages.mark("build_gpu");
+            if let Ok((_, gpu)) = &outcome {
+                stages.note(&format!("{:?}", gpu.renderer.pipeline_stats()));
+            }
             Handoff(outcome.map(|(core, gpu)| {
                 let mut backend = Self::assemble(options, core, gpu);
-                backend.settle_amd_frame_tracker();
+                stages.mark("assemble");
+                backend.startup_deferred = true;
                 backend
             }))
         }));
@@ -332,6 +354,19 @@ impl WindowBackend {
             .take()?;
         let Handoff(outcome) = handle.join().ok()?;
         Some(outcome)
+    }
+
+    pub fn finish_startup(&mut self) {
+        if !std::mem::take(&mut self.startup_deferred) {
+            return;
+        }
+        let stages = crate::stages::StageClock::from_env();
+        if let Some(gpu) = self.gpu.as_mut() {
+            let _ = gpu.renderer.warm(&[DXGI_FORMAT_R16G16B16A16_FLOAT]);
+            stages.mark("warm_layers_deferred");
+        }
+        self.settle_amd_frame_tracker();
+        stages.mark("amd_settle_deferred");
     }
 
     fn settle_amd_frame_tracker(&mut self) {
@@ -360,6 +395,7 @@ impl WindowBackend {
 
     fn assemble(options: WindowOptions, core: Core, gpu: Gpu) -> Self {
         Self {
+            startup_deferred: false,
             options,
             capabilities: describe(&core),
             surfaces: HashMap::new(),
@@ -526,6 +562,16 @@ impl WindowBackend {
         let index = entry.swapchain.current().index;
         let current = Damage::from_rects(damage, Extent { width, height });
         Some(entry.damage.repaint(index, &current))
+    }
+
+    pub fn repaint_bounds(&self, surface: SurfaceId, damage: &[Rect]) -> Option<Rect> {
+        let region = self.repaint_region(surface, damage)?;
+        bounding_rect(&region).map(|rect| Rect {
+            x: rect.left as f32,
+            y: rect.top as f32,
+            w: (rect.right - rect.left) as f32,
+            h: (rect.bottom - rect.top) as f32,
+        })
     }
 
     pub fn surface_kind(&self, surface: SurfaceId) -> Option<SurfaceKind> {
@@ -830,8 +876,8 @@ impl WindowBackend {
                 (Core::new(device)?, self.generation() + 1)
             }
         };
-        let gpu = build_gpu(&core, &self.options, cache.as_deref())
-            .or_else(|_| build_gpu(&core, &self.options, None))?;
+        let gpu = build_gpu(&core, &self.options, cache.as_deref(), false)
+            .or_else(|_| build_gpu(&core, &self.options, None, false))?;
         for (id, window, kind, extent) in &layout {
             self.surfaces
                 .insert(*id, new_surface(&core, *window, *kind, *extent)?);

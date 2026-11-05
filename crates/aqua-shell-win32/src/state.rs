@@ -24,6 +24,7 @@ pub(crate) struct WindowState {
     pub rects: DragRects,
     pub cursor: CursorIcon,
     pub redraw_pending: bool,
+    pub resized_since_paint: bool,
     pub tracking_client: bool,
     pub tracking_nc: bool,
     pub hover: Option<CaptionControl>,
@@ -51,6 +52,8 @@ thread_local! {
     pub(crate) static SHELL: RefCell<Shell> = RefCell::new(Shell::default());
     pub(crate) static HANDLER: Cell<Option<*mut dyn Handler>> = const { Cell::new(None) };
     pub(crate) static IN_HANDLER: Cell<bool> = const { Cell::new(false) };
+    pub(crate) static UI_THREAD: Cell<bool> = const { Cell::new(false) };
+    pub(crate) static LAST_PUMP: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
 }
 
 pub(crate) fn with<R>(f: impl FnOnce(&mut Shell) -> R) -> R {

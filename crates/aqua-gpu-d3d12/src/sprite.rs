@@ -1,5 +1,5 @@
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
+use aqua_core::geometry::Rect;
 use aqua_graph::{GlyphInstance, ImageInstance, SlugInstance};
 
 pub const SPRITE_STRIDE: usize = std::mem::size_of::<SpriteGpu>();

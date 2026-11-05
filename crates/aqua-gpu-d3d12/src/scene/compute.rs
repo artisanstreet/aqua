@@ -5,9 +5,9 @@ use aqua_graph::CustomShaderId;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::Error;
 use super::compile::{compile, serialize_root};
 use super::custom::MAX_INPUTS;
-use super::Error;
 
 pub const ROW_BOX_BLUR: CustomShaderId = CustomShaderId(1);
 pub const PARAMETER_DWORDS: u32 = 4;

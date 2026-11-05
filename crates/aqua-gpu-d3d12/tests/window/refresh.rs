@@ -11,6 +11,7 @@ const FRAMES: usize = 180;
 
 fn paced(preference: AdapterPreference, label: &str) {
     let mut backend = backend(preference);
+    let _priority = crate::support::prioritized();
     let window = TestWindow::open(480, 320);
     let (id, extent) = open(&mut backend, &window);
     let interval = backend.refresh_interval(id).expect("interval");

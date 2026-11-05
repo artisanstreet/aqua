@@ -1,9 +1,9 @@
 use std::ops::Range;
 
 use aqua_graph::{Blend, ImageInstance, TextureRef};
-use windows::core::{s, PCSTR};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::core::{PCSTR, s};
 
 use crate::sprite::SPRITE_STRIDE;
 

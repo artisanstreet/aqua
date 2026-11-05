@@ -58,9 +58,9 @@ pub fn covered(target: Bounds, above: &[Bounds]) -> bool {
     ys.dedup();
     xs.windows(2).all(|x| {
         ys.windows(2).all(|y| {
-            clipped
-                .iter()
-                .any(|rect| rect.left <= x[0] && x[1] <= rect.right && rect.top <= y[0] && y[1] <= rect.bottom)
+            clipped.iter().any(|rect| {
+                rect.left <= x[0] && x[1] <= rect.right && rect.top <= y[0] && y[1] <= rect.bottom
+            })
         })
     })
 }
@@ -70,19 +70,19 @@ pub(crate) use native::{is_covered, pump, watch};
 
 #[cfg(windows)]
 mod native {
-    use super::{covered, Bounds};
+    use super::{Bounds, covered};
     use crate::event::ShellEvent;
     use crate::state;
     use std::cell::Cell;
     use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::Graphics::Dwm::{
-        DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
+        DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute,
     };
     use windows::Win32::Graphics::Gdi::{GetWindowRgnBox, RGN_ERROR};
-    use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
+    use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindow, GetWindowLongW, GetWindowRect, IsIconic, IsWindowVisible, GWL_EXSTYLE,
-        GW_HWNDPREV, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+        GW_HWNDPREV, GWL_EXSTYLE, GetWindow, GetWindowLongW, GetWindowRect, IsIconic,
+        IsWindowVisible, WS_EX_LAYERED, WS_EX_TRANSPARENT,
     };
 
     const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
@@ -169,8 +169,12 @@ mod native {
             )
         }
         .is_ok();
-        (dwm || unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok())
-            .then_some(Bounds::new(rect.left, rect.top, rect.right, rect.bottom))
+        (dwm || unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok()).then_some(Bounds::new(
+            rect.left,
+            rect.top,
+            rect.right,
+            rect.bottom,
+        ))
     }
 
     fn opaque_in_flow(hwnd: HWND) -> bool {
@@ -217,11 +221,11 @@ mod native {
         let changes: Vec<(isize, bool)> = known
             .into_iter()
             .filter_map(|(raw, was)| {
-            let hwnd = crate::wndproc::hwnd_from(raw);
-            let now = unsafe { IsWindowVisible(hwnd) }.as_bool() && is_covered(hwnd);
-            (now != was).then_some((raw, now))
-        })
-        .collect();
+                let hwnd = crate::wndproc::hwnd_from(raw);
+                let now = unsafe { IsWindowVisible(hwnd) }.as_bool() && is_covered(hwnd);
+                (now != was).then_some((raw, now))
+            })
+            .collect();
         changes.into_iter().for_each(|(raw, now)| {
             state::window(raw, |w| w.covered = now);
             state::emit(raw, ShellEvent::Covered(now));

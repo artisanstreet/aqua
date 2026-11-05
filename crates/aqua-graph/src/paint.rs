@@ -1,7 +1,7 @@
-use aqua_core::{geometry::Rect, Oklch};
+use aqua_core::{Oklch, geometry::Rect};
 
 use crate::analysis::{intersect, union};
-use crate::blur::{blur_chain, BlurRequest};
+use crate::blur::{BlurRequest, blur_chain};
 use crate::graph::{PlanLimits, RenderGraph};
 use crate::linear::Linear2;
 use crate::plan::{
@@ -371,6 +371,36 @@ fn units(nodes: &[Node], clip: Option<Rect>, out: &mut Vec<Rect>) {
 }
 
 const FOLD_LIMIT: usize = 512;
+const CORNER_SPLIT_MIN_PIXELS: f32 = 65536.0;
+
+struct CornerSplit {
+    bands: [Rect; 3],
+    corners: [Rect; 4],
+}
+
+fn corner_split(rect: Rect, radius: f32, bounded: Rect) -> Option<CornerSplit> {
+    if bounded.w * bounded.h < CORNER_SPLIT_MIN_PIXELS {
+        return None;
+    }
+    let (left, top, right, bottom) = (rect.x, rect.y, rect.right(), rect.bottom());
+    let inner_left = (left + radius).ceil();
+    let inner_top = (top + radius).ceil();
+    let inner_right = (right - radius).floor();
+    let inner_bottom = (bottom - radius).floor();
+    (inner_left < inner_right && inner_top < inner_bottom).then(|| CornerSplit {
+        bands: [
+            Rect::from_edges(inner_left, top, inner_right, inner_top),
+            Rect::from_edges(left, inner_top, right, inner_bottom),
+            Rect::from_edges(inner_left, inner_bottom, inner_right, bottom),
+        ],
+        corners: [
+            Rect::from_edges(left, top, inner_left, inner_top),
+            Rect::from_edges(inner_right, top, right, inner_top),
+            Rect::from_edges(left, inner_bottom, inner_left, bottom),
+            Rect::from_edges(inner_right, inner_bottom, right, bottom),
+        ],
+    })
+}
 
 fn foldable(children: &[Node], clip: Option<Rect>) -> bool {
     let mut rects = Vec::new();
@@ -518,7 +548,7 @@ impl Emitter {
                 if combined <= 0.0 || children.is_empty() {
                     return;
                 }
-                if foldable(children, context.clip) {
+                if combined >= 1.0 || foldable(children, context.clip) {
                     self.emit(
                         children,
                         Context {
@@ -590,6 +620,41 @@ impl Emitter {
         if radius <= BLUR_EPSILON {
             return self.node(&Node::Clip(rect, children.to_vec()), context);
         }
+        let Some(bounded) = clipped(rect, context.clip) else {
+            return;
+        };
+        match corner_split(rect, radius, bounded) {
+            Some(split) => {
+                split.bands.into_iter().for_each(|band| {
+                    if let Some(clip) = clipped(band, context.clip) {
+                        self.emit(
+                            children,
+                            Context {
+                                clip: Some(clip),
+                                ..context
+                            },
+                        );
+                    }
+                });
+                split.corners.into_iter().for_each(|corner| {
+                    if let Some(clip) = clipped(corner, context.clip) {
+                        self.rounded_layer(
+                            rect,
+                            radius,
+                            children,
+                            Context {
+                                clip: Some(clip),
+                                ..context
+                            },
+                        );
+                    }
+                });
+            }
+            None => self.rounded_layer(rect, radius, children, context),
+        }
+    }
+
+    fn rounded_layer(&mut self, rect: Rect, radius: f32, children: &[Node], context: Context) {
         let Some(bounded) = clipped(rect, context.clip) else {
             return;
         };
@@ -723,78 +788,57 @@ impl Emitter {
         let target = context.target;
         let clip = context.local_clip();
         match leaf {
-            Leaf::Quad(quad, gradient, linear) => self.draw(
-                PassKind::Instanced {
-                    shader: ShaderId::Quad,
-                    instances: vec![QuadInstance {
-                        bounds: context.local(quad.bounds),
-                        radius: quad.radius,
-                        border_width: quad.border_width,
-                        fill: quad.fill,
-                        border_color: quad.border_color,
-                        clip,
-                        gradient: gradient.map(|g| context.local_gradient(g)),
-                        opacity,
-                        linear: *linear,
-                    }],
-                },
-                Vec::new(),
+            Leaf::Quad(quad, gradient, linear) => self.graph.draw_quad(
                 target,
+                QuadInstance {
+                    bounds: context.local(quad.bounds),
+                    radius: quad.radius,
+                    border_width: quad.border_width,
+                    fill: quad.fill,
+                    border_color: quad.border_color,
+                    clip,
+                    gradient: gradient.map(|g| context.local_gradient(g)),
+                    opacity,
+                    linear: *linear,
+                },
             ),
-            Leaf::Shadow(shadow) => self.draw(
-                PassKind::Shadows {
-                    instances: vec![ShadowInstance {
-                        bounds: context.local(shadow.bounds),
-                        radius: shadow.radius,
-                        offset: shadow.offset,
-                        sigma: shadow.sigma,
-                        spread: shadow.spread,
-                        color: shadow.color,
-                        clip,
-                        opacity,
-                    }],
-                },
-                Vec::new(),
+            Leaf::Shadow(shadow) => self.graph.draw_shadow(
                 target,
+                ShadowInstance {
+                    bounds: context.local(shadow.bounds),
+                    radius: shadow.radius,
+                    offset: shadow.offset,
+                    sigma: shadow.sigma,
+                    spread: shadow.spread,
+                    color: shadow.color,
+                    clip,
+                    opacity,
+                },
             ),
-            Leaf::Glyphs(run) => self.draw(
-                PassKind::Glyphs {
-                    atlas: run.atlas,
-                    instances: run
-                        .glyphs
-                        .iter()
-                        .map(|glyph| GlyphInstance {
-                            bounds: context.local(glyph.bounds),
-                            texels: glyph.texels,
-                            color: glyph.color,
-                            clip,
-                            opacity,
-                            backdrop: glyph.backdrop,
-                        })
-                        .collect(),
-                },
-                vec![TextureRef::Persistent(run.atlas)],
+            Leaf::Glyphs(run) => self.graph.draw_glyphs(
                 target,
+                run.atlas,
+                run.glyphs.iter().map(|glyph| GlyphInstance {
+                    bounds: context.local(glyph.bounds),
+                    texels: glyph.texels,
+                    color: glyph.color,
+                    clip,
+                    opacity,
+                    backdrop: glyph.backdrop,
+                }),
             ),
-            Leaf::Slug(run) => self.draw(
-                PassKind::Slug {
-                    store: run.store,
-                    instances: run
-                        .glyphs
-                        .iter()
-                        .map(|glyph| SlugInstance {
-                            origin: [
-                                glyph.origin[0] - context.origin[0],
-                                glyph.origin[1] - context.origin[1],
-                            ],
-                            clip,
-                            opacity: glyph.opacity * opacity,
-                            ..*glyph
-                        })
-                        .collect(),
-                },
-                vec![TextureRef::Persistent(run.store)],
+            Leaf::Slug(run) => self.graph.draw_slug(
                 target,
+                run.store,
+                run.glyphs.iter().map(|glyph| SlugInstance {
+                    origin: [
+                        glyph.origin[0] - context.origin[0],
+                        glyph.origin[1] - context.origin[1],
+                    ],
+                    clip,
+                    opacity: glyph.opacity * opacity,
+                    ..*glyph
+                }),
             ),
             Leaf::Image(image, linear) => self.draw(
                 PassKind::Images {

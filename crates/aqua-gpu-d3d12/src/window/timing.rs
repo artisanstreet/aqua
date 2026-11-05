@@ -1,15 +1,15 @@
 use std::time::Duration;
 
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Dwm::{DwmGetCompositionTimingInfo, DWM_TIMING_INFO};
+use windows::Win32::Graphics::Dwm::{DWM_TIMING_INFO, DwmGetCompositionTimingInfo};
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplaySettingsW, GetMonitorInfoW, MonitorFromWindow, DEVMODEW, ENUM_CURRENT_SETTINGS,
-    HMONITOR, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
+    DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW, GetMonitorInfoW, HMONITOR,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MONITORINFOEXW, MonitorFromWindow,
 };
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
 use super::pacing::{
-    interval_from_ticks, reconcile_interval, ticks_until_next_vblank, FALLBACK_INTERVAL,
+    FALLBACK_INTERVAL, interval_from_ticks, reconcile_interval, ticks_until_next_vblank,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

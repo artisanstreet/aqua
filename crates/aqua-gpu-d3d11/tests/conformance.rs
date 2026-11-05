@@ -1,0 +1,101 @@
+#![cfg(windows)]
+
+mod support;
+
+use aqua_gpu_d3d11::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
+use aqua_gpu_ref::RefBackend;
+use aqua_gpu_ref::conformance::{SuiteConfig, Tolerance, run_suite};
+
+fn fuzz_count() -> usize {
+    std::env::var("AQUA_CONFORMANCE_FUZZ")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(SuiteConfig::default().fuzz_count)
+}
+
+fn run(preference: AdapterPreference, format: SurfaceFormat, tolerance: Tolerance) {
+    let mut backend = OffscreenBackend::with_format(preference, format)
+        .unwrap_or_else(|error| panic!("adapter {preference:?} required but unavailable: {error}"));
+    eprintln!(
+        "{preference:?} {format:?} adapter={} software={} unified={}",
+        backend.device_info().adapter.name,
+        backend.is_software(),
+        backend.is_unified_memory()
+    );
+    let mut reference = RefBackend::new();
+    let config = SuiteConfig {
+        tolerance,
+        fuzz_count: fuzz_count(),
+        ..SuiteConfig::default()
+    };
+    let report = run_suite(&mut reference, &mut backend, &config);
+    eprintln!("{report}");
+    assert_eq!(report.skipped(), 0, "{report}");
+    assert!(
+        report.passed_without_skips(),
+        "{}",
+        report.failures().join("\n")
+    );
+}
+
+const EIGHT_BIT: Tolerance = Tolerance {
+    interior: 6,
+    soft: 16,
+    edge: 64,
+    edge_band: 2,
+};
+#[test]
+fn warp_float_surface_matches_reference() {
+    let _software = support::software();
+    run(
+        AdapterPreference::Warp,
+        SurfaceFormat::Rgba16Float,
+        Tolerance::default(),
+    );
+}
+
+#[test]
+fn hardware_float_surface_matches_reference() {
+    let _software = support::software();
+    run(
+        AdapterPreference::HighPerformance,
+        SurfaceFormat::Rgba16Float,
+        Tolerance::default(),
+    );
+}
+
+#[test]
+fn integrated_float_surface_matches_reference() {
+    let _software = support::software();
+    run(
+        support::integrated(),
+        SurfaceFormat::Rgba16Float,
+        Tolerance::default(),
+    );
+}
+
+#[test]
+fn warp_unorm_surface_matches_reference() {
+    let _software = support::software();
+    run(
+        AdapterPreference::Warp,
+        SurfaceFormat::Bgra8Unorm,
+        EIGHT_BIT,
+    );
+}
+
+#[test]
+fn hardware_unorm_surface_matches_reference() {
+    let _software = support::software();
+    run(
+        AdapterPreference::HighPerformance,
+        SurfaceFormat::Bgra8Unorm,
+        EIGHT_BIT,
+    );
+}
+
+#[test]
+fn integrated_unorm_surface_matches_reference() {
+    let _software = support::software();
+    run(support::integrated(), SurfaceFormat::Bgra8Unorm, EIGHT_BIT);
+}

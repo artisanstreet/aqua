@@ -18,4 +18,4 @@ aqua-text = { path = "crates/aqua-text" }
 aqua-scene = { path = "crates/aqua-scene" }
 aqua-protocol = { path = "crates/aqua-protocol" }
 aqua-runtime = { path = "crates/aqua-runtime" }
-taffy = "0.15"
+taffy = { version = "0.15", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "content_size"] }

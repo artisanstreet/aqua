@@ -91,6 +91,11 @@ float4 ps_shadow(ShadowOut i) : SV_Target
     float4 rect = float4(center - size * 0.5, size);
     float radius = max(i.shape.x + spread, 0.0);
     float alpha = shadow_alpha(p, rect, radius, i.shape.y);
+    if (i.offset.z > 0.5)
+    {
+        float element_radius = min(max(i.shape.x, 0.0), min(i.bounds.z, i.bounds.w) * 0.5);
+        alpha *= saturate(0.5 + box_distance(p, i.bounds, element_radius));
+    }
     float clip_cover = saturate(0.5 - box_distance(p, i.clip, 0.0));
     return i.color * (alpha * clip_cover * i.shape.w);
 }

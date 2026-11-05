@@ -17,3 +17,7 @@ include!(concat!(env!("OUT_DIR"), "/blobs.rs"));
 pub fn find(name: &str) -> Option<&'static Blob> {
     BLOBS.iter().find(|blob| blob.name == name)
 }
+
+pub fn find_dxbc(name: &str) -> Option<&'static Blob> {
+    DXBC.iter().find(|blob| blob.name == name)
+}

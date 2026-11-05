@@ -3,6 +3,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Entry {
     file: &'static str,
@@ -84,17 +85,32 @@ const ENTRIES: &[Entry] = &[
     },
 ];
 
+const LANES: usize = 6;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Bytecode {
+    Dxil { bindless: bool },
+    Dxbc,
+}
+
 enum Host {
     Native,
     Wsl,
 }
 
-struct Dxc {
+struct Tool {
     path: PathBuf,
     host: Host,
 }
 
-fn windows_kit_dxc(root: &Path) -> Option<PathBuf> {
+struct Job<'a> {
+    entry: &'a Entry,
+    bytecode: Bytecode,
+    name: String,
+    output: PathBuf,
+}
+
+fn windows_kit_tool(root: &Path, name: &str) -> Option<PathBuf> {
     let mut versions: Vec<PathBuf> = fs::read_dir(root)
         .ok()?
         .filter_map(|e| e.ok())
@@ -104,7 +120,7 @@ fn windows_kit_dxc(root: &Path) -> Option<PathBuf> {
     versions
         .into_iter()
         .rev()
-        .map(|dir| dir.join("x64").join("dxc.exe"))
+        .map(|dir| dir.join("x64").join(name))
         .find(|candidate| candidate.exists())
 }
 
@@ -115,27 +131,28 @@ fn on_path(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.exists())
 }
 
-fn locate() -> Option<Dxc> {
+fn locate(variable: &str, stem: &str) -> Option<Tool> {
     let native_windows = cfg!(windows);
-    let explicit = env::var_os("AQUA_DXC").map(PathBuf::from);
+    let explicit = env::var_os(variable).map(PathBuf::from);
+    let exe = format!("{stem}.exe");
     let kits = [
         "/mnt/c/Program Files (x86)/Windows Kits/10/bin",
         "C:\\Program Files (x86)\\Windows Kits\\10\\bin",
     ];
     let candidates = explicit
         .into_iter()
-        .chain(on_path("dxc.exe"))
-        .chain(on_path("dxc"))
+        .chain(on_path(&exe))
+        .chain(on_path(stem))
         .chain(
             kits.iter()
-                .filter_map(|root| windows_kit_dxc(Path::new(root))),
+                .filter_map(|root| windows_kit_tool(Path::new(root), &exe)),
         );
     candidates
         .into_iter()
         .find(|path| path.exists())
         .map(|path| {
             let is_exe = path.extension().is_some_and(|ext| ext == "exe");
-            Dxc {
+            Tool {
                 host: if is_exe && !native_windows {
                     Host::Wsl
                 } else {
@@ -146,27 +163,29 @@ fn locate() -> Option<Dxc> {
         })
 }
 
-fn windows_path(dxc: &Dxc, path: &Path) -> String {
-    match dxc.host {
+fn windows_path(tool: &Tool, path: &Path) -> String {
+    match tool.host {
         Host::Native => path.display().to_string(),
         Host::Wsl => {
-            let output = Command::new("wslpath")
-                .arg("-w")
-                .arg(path)
-                .output()
-                .expect("wslpath is required to drive dxc.exe from WSL");
+            let output =
+                Command::new("wslpath").arg("-w").arg(path).output().expect(
+                    "wslpath is required to drive the Windows SDK shader compilers from WSL",
+                );
             String::from_utf8_lossy(&output.stdout).trim().to_string()
         }
     }
 }
 
-fn profile(entry: &str, bindless: bool) -> &'static str {
-    match (entry.split('_').next(), bindless) {
-        (Some("ps"), true) => "ps_6_6",
-        (Some("cs"), true) => "cs_6_6",
-        (Some("vs"), _) => "vs_6_0",
-        (Some("ps"), false) => "ps_6_0",
-        (Some("cs"), false) => "cs_6_0",
+fn profile(entry: &str, bytecode: Bytecode) -> &'static str {
+    match (entry.split('_').next(), bytecode) {
+        (Some("ps"), Bytecode::Dxil { bindless: true }) => "ps_6_6",
+        (Some("cs"), Bytecode::Dxil { bindless: true }) => "cs_6_6",
+        (Some("vs"), Bytecode::Dxil { .. }) => "vs_6_0",
+        (Some("ps"), Bytecode::Dxil { bindless: false }) => "ps_6_0",
+        (Some("cs"), Bytecode::Dxil { bindless: false }) => "cs_6_0",
+        (Some("vs"), Bytecode::Dxbc) => "vs_5_0",
+        (Some("ps"), Bytecode::Dxbc) => "ps_5_0",
+        (Some("cs"), Bytecode::Dxbc) => "cs_5_0",
         _ => panic!("entry {entry} must start with vs_, ps_ or cs_"),
     }
 }
@@ -179,36 +198,88 @@ fn stage(entry: &str) -> &'static str {
     }
 }
 
-fn compile(dxc: &Dxc, source: &Path, include: &Path, entry: &str, bindless: bool, output: &Path) {
-    let mut command = Command::new(&dxc.path);
+fn compile(tool: &Tool, hlsl: &Path, job: &Job) -> Result<(), String> {
+    let source = hlsl.join(job.entry.file);
+    let mut command = Command::new(&tool.path);
     command.args([
         "-nologo",
         "-Zpr",
         "-O3",
         "-T",
-        profile(entry, bindless),
+        profile(job.entry.entry, job.bytecode),
         "-E",
-        entry,
+        job.entry.entry,
     ]);
-    if bindless {
+    if job.bytecode == (Bytecode::Dxil { bindless: true }) {
         command.args(["-D", "BINDLESS=1"]);
     }
     let result = command
         .arg("-I")
-        .arg(windows_path(dxc, include))
+        .arg(windows_path(tool, hlsl))
         .arg("-Fo")
-        .arg(windows_path(dxc, output))
-        .arg(windows_path(dxc, source))
+        .arg(windows_path(tool, &job.output))
+        .arg(windows_path(tool, &source))
         .output()
-        .expect("failed to launch dxc");
-    if !result.status.success() || !output.exists() {
-        panic!(
-            "dxc failed for {} {entry}\n{}{}",
+        .map_err(|error| format!("failed to launch {}: {error}", tool.path.display()))?;
+    match result.status.success() && job.output.exists() {
+        true => Ok(()),
+        false => Err(format!(
+            "{} failed for {} {}\n{}{}",
+            tool.path.display(),
             source.display(),
+            job.entry.entry,
             String::from_utf8_lossy(&result.stdout),
             String::from_utf8_lossy(&result.stderr)
-        );
+        )),
     }
+}
+
+fn run_all(jobs: &[Job], hlsl: &Path, dxc: &Tool, fxc: &Tool) {
+    let next = AtomicUsize::new(0);
+    let failures: Vec<String> = std::thread::scope(|scope| {
+        let lanes: Vec<_> = (0..LANES.min(jobs.len()))
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut failed = Vec::new();
+                    while let Some(job) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        let tool = match job.bytecode {
+                            Bytecode::Dxil { .. } => dxc,
+                            Bytecode::Dxbc => fxc,
+                        };
+                        if let Err(message) = compile(tool, hlsl, job) {
+                            failed.push(message);
+                        }
+                    }
+                    failed
+                })
+            })
+            .collect();
+        lanes
+            .into_iter()
+            .flat_map(|lane| {
+                lane.join()
+                    .unwrap_or_else(|_| vec!["compile lane panicked".into()])
+            })
+            .collect()
+    });
+    if !failures.is_empty() {
+        panic!("{}", failures.join("\n"));
+    }
+}
+
+fn table(generated: &mut String, name: &str, jobs: &[Job], wanted: impl Fn(Bytecode) -> bool) {
+    writeln!(generated, "pub static {name}: &[Blob] = &[").unwrap();
+    for job in jobs.iter().filter(|job| wanted(job.bytecode)) {
+        writeln!(
+            generated,
+            "    Blob {{ name: \"{}\", stage: Stage::{}, bytes: include_bytes!(\"{}\") }},",
+            job.name,
+            stage(job.entry.entry),
+            job.output.display().to_string().replace('\\', "/")
+        )
+        .unwrap();
+    }
+    generated.push_str("];\n");
 }
 
 fn main() {
@@ -218,37 +289,54 @@ fn main() {
     println!("cargo:rerun-if-changed=hlsl");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=AQUA_DXC");
-    let dxc = locate().expect("dxc not found: set AQUA_DXC to dxc or dxc.exe from the Windows SDK");
-    let mut generated = String::from("pub static BLOBS: &[Blob] = &[\n");
-    let variants = ENTRIES.iter().map(|entry| (entry, false)).chain(
-        ENTRIES
-            .iter()
-            .filter(|entry| entry.entry.starts_with("ps_"))
-            .map(|entry| (entry, true)),
+    println!("cargo:rerun-if-env-changed=AQUA_FXC");
+    let dxc = locate("AQUA_DXC", "dxc")
+        .expect("dxc not found: set AQUA_DXC to dxc or dxc.exe from the Windows SDK");
+    let fxc = locate("AQUA_FXC", "fxc").expect(
+        "fxc not found: set AQUA_FXC to fxc.exe from the Windows SDK (same bin folder as dxc.exe)",
     );
-    for (entry, bindless) in variants {
-        let name = match bindless {
-            true => format!("{}_bl", entry.entry),
-            false => entry.entry.to_string(),
-        };
-        let output = out.join(format!("{name}.dxil"));
-        compile(
-            &dxc,
-            &hlsl.join(entry.file),
-            &hlsl,
-            entry.entry,
-            bindless,
-            &output,
+    let dxil = ENTRIES
+        .iter()
+        .map(|entry| (entry, Bytecode::Dxil { bindless: false }))
+        .chain(
+            ENTRIES
+                .iter()
+                .filter(|entry| entry.entry.starts_with("ps_"))
+                .map(|entry| (entry, Bytecode::Dxil { bindless: true })),
         );
-        writeln!(
-            generated,
-            "    Blob {{ name: \"{}\", stage: Stage::{}, bytes: include_bytes!(\"{}\") }},",
-            name,
-            stage(entry.entry),
-            output.display().to_string().replace('\\', "/")
-        )
-        .unwrap();
-    }
-    generated.push_str("];\n");
+    let dxbc = ENTRIES.iter().map(|entry| (entry, Bytecode::Dxbc));
+    let jobs: Vec<Job> = dxil
+        .chain(dxbc)
+        .map(|(entry, bytecode)| {
+            let (name, file) = match bytecode {
+                Bytecode::Dxil { bindless: true } => {
+                    let name = format!("{}_bl", entry.entry);
+                    let file = format!("{name}.dxil");
+                    (name, file)
+                }
+                Bytecode::Dxil { bindless: false } => {
+                    (entry.entry.to_string(), format!("{}.dxil", entry.entry))
+                }
+                Bytecode::Dxbc => (entry.entry.to_string(), format!("{}.dxbc", entry.entry)),
+            };
+            Job {
+                entry,
+                bytecode,
+                name,
+                output: out.join(file),
+            }
+        })
+        .collect();
+    jobs.iter().for_each(|job| {
+        let _ = fs::remove_file(&job.output);
+    });
+    run_all(&jobs, &hlsl, &dxc, &fxc);
+    let mut generated = String::new();
+    table(&mut generated, "BLOBS", &jobs, |bytecode| {
+        matches!(bytecode, Bytecode::Dxil { .. })
+    });
+    table(&mut generated, "DXBC", &jobs, |bytecode| {
+        bytecode == Bytecode::Dxbc
+    });
     fs::write(out.join("blobs.rs"), generated).unwrap();
 }

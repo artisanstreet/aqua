@@ -3,4 +3,4 @@ name = "aqua-shaders"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Aqua shader blobs: HLSL compiled to signed DXIL at build time"
+description = "Aqua shader blobs: HLSL compiled at build time to signed DXIL (dxc, D3D12) and DXBC SM 5.0 (fxc, D3D11)"

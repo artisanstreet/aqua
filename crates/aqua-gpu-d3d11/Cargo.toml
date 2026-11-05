@@ -1,0 +1,45 @@
+[package]
+name = "aqua-gpu-d3d11"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aqua native D3D11 GpuBackend: immediate context, per-pass binding, pooled transients, DXBC SM 5.0 shaders"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-graph = { path = "../aqua-graph" }
+aqua-protocol = { path = "../aqua-protocol" }
+bytemuck = { version = "1", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+aqua-shaders = { path = "../aqua-shaders" }
+windows = { version = "0.62.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Direct3D_Fxc",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Performance",
+  "Win32_System_Threading",
+  "Win32_System_ProcessStatus",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+aqua-gpu-d3d12 = { path = "../aqua-gpu-d3d12" }
+aqua-shell-win32 = { path = "../aqua-shell-win32" }
+windows = { version = "0.62.2", features = [
+  "Win32_Graphics_Gdi",
+  "Win32_Storage_Xps",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_LibraryLoader",
+] }
+
+[dev-dependencies]
+aqua-media = { path = "../aqua-media" }
+aqua-gpu-ref = { path = "../aqua-gpu-ref" }
+aqua-verify = { path = "../aqua-verify" }

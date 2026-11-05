@@ -22,7 +22,6 @@ struct GlyphIn
     float4 texels : TEXELS;
     float4 clip : CLIP;
     float4 color : COLOR;
-    float4 extra : EXTRA;
     uint vertex : SV_VertexID;
 };
 
@@ -33,7 +32,6 @@ struct GlyphOut
     nointerpolation float4 texels : TEXELS;
     nointerpolation float4 clip : CLIP;
     nointerpolation float4 color : COLOR;
-    nointerpolation float4 extra : EXTRA;
 };
 
 GlyphOut vs_glyph(GlyphIn i)
@@ -45,7 +43,6 @@ GlyphOut vs_glyph(GlyphIn i)
     o.texels = i.texels;
     o.clip = i.clip;
     o.color = i.color;
-    o.extra = i.extra;
     return o;
 }
 
@@ -56,6 +53,6 @@ float4 ps_glyph(GlyphOut i) : SV_Target
     float2 local = floor((p - i.bounds.xy) * scale);
     local = clamp(local, float2(0.0, 0.0), i.texels.zw - 1.0);
     float coverage = atlas.Load(int3(int2(i.texels.xy + local), 0));
-    float toned = linear_blend_alpha(coverage, text_luminance(i.color), i.extra.x);
+    float toned = tone_alpha(coverage, text_luminance(i.color));
     return i.color * (toned * clip_cover(p, i.clip));
 }

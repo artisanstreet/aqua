@@ -178,6 +178,6 @@ float4 ps_slug(SlugOut i) : SV_Target
         return float4(0.0, 0.0, 0.0, 0.0);
     }
     float coverage = slug_coverage(uint(i.glyph.z), em, ppem);
-    float toned = linear_blend_alpha(coverage, text_luminance(i.color), i.glyph.w);
+    float toned = tone_alpha(coverage, text_luminance(i.color));
     return i.color * (toned * clip_cover(p, i.clip));
 }

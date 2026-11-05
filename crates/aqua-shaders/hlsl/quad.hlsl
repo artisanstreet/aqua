@@ -94,8 +94,9 @@ float4 gradient_fill(QuadOut i, float2 p)
     float span = max(i.stop_offsets.y - i.stop_offsets.x, 1.0e-6);
     float u = saturate((t - i.stop_offsets.x) / span);
     float4 lab = lerp(i.stop_a, i.stop_b, u);
-    float3 linear_rgb = max(oklab_to_linear(lab.xyz), 0.0);
-    return float4(linear_rgb * lab.w, lab.w);
+    float3 linear_rgb = saturate(oklab_to_linear(lab.xyz));
+    float3 encoded = float3(srgb_encode(linear_rgb.r), srgb_encode(linear_rgb.g), srgb_encode(linear_rgb.b));
+    return float4(encoded * lab.w, lab.w);
 }
 
 float4 ps_quad(QuadOut i) : SV_Target

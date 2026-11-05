@@ -33,6 +33,12 @@ Texture2D<float4> source : register(t0);
 #endif
 SamplerState linear_clamp : register(s0);
 
+float srgb_encode(float value)
+{
+    float v = saturate(value);
+    return v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+}
+
 float4 to_clip(float2 pixel)
 {
     return float4(pixel.x / viewport.x * 2.0 - 1.0, 1.0 - pixel.y / viewport.y * 2.0, 0.0, 1.0);

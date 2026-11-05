@@ -15,7 +15,7 @@ use super::persistent::PersistentTextures;
 use super::renderer::{SceneOptions, SceneRenderer, SceneTarget};
 use super::{AdapterPreference, Error};
 use crate::hal::budget::Trim;
-use crate::hal::{DeviceInfo, create_factory};
+use crate::hal::{create_factory, DeviceInfo};
 use crate::half::{bgra8_rows_to_rgba8, rgba16f_rows_to_rgba8};
 
 pub const HEAP_ALIGNMENT: u64 = 65_536;
@@ -182,7 +182,11 @@ impl Gpu {
     ) -> Result<Self, Error> {
         let debug = super::debug::requested();
         let factory = create_factory(debug)?;
-        let selected = crate::hal::select_adapter(&factory, preference, debug)?;
+        let creation = crate::hal::Creation {
+            debug,
+            single_threaded: false,
+        };
+        let selected = crate::hal::select_adapter(&factory, preference, creation)?;
         let mut renderer = SceneRenderer::new(&selected.device, cache, options)?;
         renderer.warm()?;
         Ok(Self {

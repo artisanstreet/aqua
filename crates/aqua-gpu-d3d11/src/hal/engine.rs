@@ -1,16 +1,16 @@
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 
+use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::*;
-use windows::core::Interface;
 
-use super::adapter::{DeviceInfo, create_factory, select};
-use super::budget::{Pressure, Trim, Visibility, pressure, trim_for};
+use super::adapter::{create_factory, select, Creation, DeviceInfo};
+use super::budget::{pressure, trim_for, Pressure, Trim, Visibility};
 use super::error::Error;
 use super::monitor::{BudgetMonitor, MemorySnapshot};
-use super::recovery::{LossCause, LossHistory, RecoveryStep, classify};
-use super::selection::{Adapter, AdapterPreference, parse_preference};
+use super::recovery::{classify, LossCause, LossHistory, RecoveryStep};
+use super::selection::{parse_preference, Adapter, AdapterPreference};
 use super::swapchain::{Swapchain, SwapchainTarget};
 
 const LOSS_WINDOW: Duration = Duration::from_secs(10);
@@ -20,6 +20,7 @@ const LOSS_LIMIT: usize = 2;
 pub struct DeviceOptions {
     pub preference: AdapterPreference,
     pub debug_layer: bool,
+    pub single_threaded: bool,
 }
 
 impl Default for DeviceOptions {
@@ -27,6 +28,7 @@ impl Default for DeviceOptions {
         Self {
             preference: AdapterPreference::HighPerformance,
             debug_layer: false,
+            single_threaded: false,
         }
     }
 }
@@ -40,6 +42,7 @@ impl DeviceOptions {
                 .and_then(|text| parse_preference(&text))
                 .unwrap_or(defaults.preference),
             debug_layer: std::env::var("AQUA_D3D11_DEBUG").as_deref() == Ok("1"),
+            single_threaded: std::env::var("AQUA_D3D11_SINGLETHREADED").as_deref() == Ok("1"),
         }
     }
 
@@ -50,6 +53,11 @@ impl DeviceOptions {
 
     pub fn with_debug_layer(mut self, debug_layer: bool) -> Self {
         self.debug_layer = debug_layer;
+        self
+    }
+
+    pub fn with_single_threaded(mut self, single_threaded: bool) -> Self {
+        self.single_threaded = single_threaded;
         self
     }
 }
@@ -94,7 +102,14 @@ fn build(options: &DeviceOptions) -> Result<Built, Error> {
     let stages = crate::stages::StageClock::from_env();
     let factory = create_factory(options.debug_layer)?;
     stages.mark("    factory");
-    let selected = select(&factory, options.preference, options.debug_layer)?;
+    let selected = select(
+        &factory,
+        options.preference,
+        Creation {
+            debug: options.debug_layer,
+            single_threaded: options.single_threaded,
+        },
+    )?;
     stages.mark("    select_device");
     Ok(Built {
         monitor: BudgetMonitor::new(&selected.adapter)?,

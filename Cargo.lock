@@ -301,7 +301,7 @@ name = "aqua-transport"
 version = "0.1.0"
 dependencies = [
  "aqua-core",
- "aqua-gpu-d3d12",
+ "aqua-gpu-d3d11",
  "aqua-gpu-ref",
  "aqua-graph",
  "aqua-motion",
@@ -333,6 +333,7 @@ version = "0.1.0"
 dependencies = [
  "aqua",
  "aqua-core",
+ "aqua-gpu-d3d11",
  "aqua-gpu-d3d12",
  "aqua-gpu-ref",
  "aqua-graph",

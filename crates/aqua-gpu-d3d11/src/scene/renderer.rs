@@ -4,16 +4,17 @@ use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use super::Error;
-use super::custom::{ComputePipelines, CustomPipelines, MAX_INPUTS, scissor_of};
+use super::custom::{scissor_of, ComputePipelines, CustomPipelines, MAX_INPUTS};
 use super::persistent::PersistentTextures;
-use super::pipeline::{CONSTANT_FLOATS, Kind, PipelineStats, Pipelines, Program};
+use super::pipeline::{Kind, PipelineStats, Pipelines, Program, CONSTANT_FLOATS};
 use super::timestamps::{PassTime, Timestamps};
 use super::transients::Transients;
+use super::Error;
 use crate::hal::budget::Trim;
-use crate::ledger::{Kind as LedgerKind, Token, record};
-use crate::pack::{QUAD_STRIDE, SHADOW_STRIDE, pack_quad, pack_shadow};
-use crate::sprite::{SPRITE_STRIDE, glyph_packer, pack_image, pack_slug};
+use crate::ledger::{record, Kind as LedgerKind, Token};
+use crate::lifetimes::Precision;
+use crate::pack::{pack_quad, pack_shadow, QUAD_STRIDE, SHADOW_STRIDE};
+use crate::sprite::{glyph_packer, pack_image, pack_slug, SPRITE_STRIDE};
 
 const INITIAL_INSTANCE_BYTES: u64 = 1 << 16;
 const PARAMETER_BYTES: u64 = 256;
@@ -435,8 +436,8 @@ impl SceneRenderer {
         }
     }
 
-    pub fn reserve(&mut self, plan: &FramePlan) -> Result<bool, Error> {
-        self.transients.ensure(&self.device, plan)
+    pub fn reserve(&mut self, plan: &FramePlan, precision: Precision) -> Result<bool, Error> {
+        self.transients.ensure(&self.device, plan, precision)
     }
 
     fn prepare_instances(&mut self, needed: u64) -> Result<(), Error> {
@@ -645,7 +646,11 @@ impl SceneRenderer {
         if !scratch.bytes.is_empty() {
             write_buffer(context, &self.instances.buffer, &scratch.bytes, 0)?;
         }
-        self.transients.ensure(&self.device, plan)?;
+        let precision = match target.format == DXGI_FORMAT_B8G8R8A8_UNORM {
+            true => Precision::EightBit,
+            false => Precision::Planned,
+        };
+        self.transients.ensure(&self.device, plan, precision)?;
         if let Some(timestamps) = &mut self.timestamps {
             timestamps.poll(context);
             timestamps.begin(context);

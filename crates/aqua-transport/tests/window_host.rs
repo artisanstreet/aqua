@@ -1,6 +1,6 @@
 #![cfg(windows)]
 
-#[path = "../../aqua-gpu-d3d12/tests/hal/window.rs"]
+#[path = "../../aqua-gpu-d3d11/tests/hal/window.rs"]
 mod test_window;
 
 use std::io::{BufRead, BufReader, Write};
@@ -11,9 +11,9 @@ use std::time::{Duration, Instant as StdInstant};
 
 use aqua_core::id::RawId;
 use aqua_core::{DisplayItem, NodeId, Oklch, Rect, Size};
-use aqua_gpu_d3d12::hal::selection::AdapterPreference;
-use aqua_gpu_d3d12::hal::DeviceOptions;
-use aqua_gpu_d3d12::window::{WindowBackend, WindowOptions};
+use aqua_gpu_d3d11::hal::selection::AdapterPreference;
+use aqua_gpu_d3d11::hal::DeviceOptions;
+use aqua_gpu_d3d11::window::{WindowBackend, WindowOptions};
 use aqua_motion::{AppMotion, Binding, Easing, MotionKind, MotionValue, Property};
 use aqua_protocol::{Feedback, FrameId, Instant, RenderCommand, RenderEvent, SceneDiff, WindowId};
 use aqua_runtime::RenderSide;

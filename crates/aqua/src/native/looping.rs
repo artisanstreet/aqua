@@ -19,12 +19,12 @@ use aqua_shell_win32::{
     WindowOptions as ShellOptions,
 };
 
-use super::d3d12;
+use super::gpu;
 use super::hook::TsfHook;
 use super::inspector::HostInspector;
 use super::wakes::{self, WakeLedger};
 use super::window::{UiaSink, Win32Window};
-use crate::coalesce::{Coalescible, Held, Merge, merge};
+use crate::coalesce::{merge, Coalescible, Held, Merge};
 use crate::inbox::AquaUserEvent;
 use crate::runtime::{Application, Aqua, ExternalFileDrag};
 
@@ -178,12 +178,13 @@ impl<A: Application + 'static> Host<A> {
         }
         self.aqua
             .attach_ime(id, Box::new(TsfIme::from_hwnd(id.raw() as isize)));
+        super::startup_mark("window_shown");
         window.show();
         let clear = match options.transparent {
             true => Oklch::TRANSPARENT,
             false => Oklch::BLACK,
         };
-        let factory = d3d12::factory(
+        let factory = gpu::factory(
             id,
             id.raw() as isize,
             physical(window),
@@ -193,6 +194,7 @@ impl<A: Application + 'static> Host<A> {
         );
         self.aqua.attach_render(id, factory, FRAME_INTERVAL);
         self.aqua.dispatch_start(&mut self.app, id);
+        super::startup_mark("app_started");
         self.aqua.scheduler.request_frame(id, FrameReason::EXPOSE);
         Ok(id)
     }
@@ -537,7 +539,7 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
     if aqua_shell_win32::dialogs::run_helper_if_requested() {
         return Ok(());
     }
-    d3d12::prewarm();
+    gpu::prewarm();
     aqua_core::checkpoint::install(aqua_shell_win32::pump_sent_messages);
     super::opt_out_of_throttling();
     super::raise_thread_priority();

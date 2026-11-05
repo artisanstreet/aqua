@@ -10,7 +10,7 @@ use aqua::render::transition::{Settings, Sweep};
 use aqua::UiApp;
 use aqua::{Aqua, AquaConfig};
 use aqua_core::{Oklch, Point, Transform2D};
-use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
+use aqua_gpu_d3d11::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
 use aqua_graph::Extent;
 use aqua_motion::Easing;
 use aqua_protocol::geometry::{AquaWindowId, LogicalSize};
@@ -621,7 +621,7 @@ fn green(pixel: [u8; 4]) -> bool {
 }
 
 #[test]
-fn rotated_and_skewed_boxes_land_on_their_transformed_footprint_on_d3d12() {
+fn rotated_and_skewed_boxes_land_on_their_transformed_footprint_on_d3d11() {
     for preference in adapters() {
         let host = open(preference);
         let label = format!("{preference:?}");

@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::time::{Duration, Instant as WallInstant};
 
 use aqua_core::Rect;
@@ -121,6 +121,7 @@ impl RenderStats {
 
 type RepaintProbe<B> = Box<dyn Fn(&B, SurfaceId, &[Rect]) -> Option<Rect>>;
 type Maintenance<B> = Box<dyn FnMut(&mut B)>;
+type Release<B> = Box<dyn FnMut(&mut B)>;
 type Pressure<B> = Box<dyn FnMut(&mut B) -> bool>;
 type Visibility<B> = Box<dyn FnMut(&mut B, bool) -> bool>;
 
@@ -136,6 +137,7 @@ pub struct GpuFrames<B: GpuBackend<Error = GpuError> + 'static> {
     stats: Arc<RenderStats>,
     hint: PresentHint,
     maintenance: Option<Maintenance<B>>,
+    idle_release: Option<Release<B>>,
     pressure: Option<Pressure<B>>,
     probe: Option<RepaintProbe<B>>,
     visibility: Option<Visibility<B>>,
@@ -169,6 +171,7 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
             stats,
             hint: PresentHint::Vsync,
             maintenance: None,
+            idle_release: None,
             pressure: None,
             probe: None,
             visibility: None,
@@ -200,6 +203,11 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
 
     pub fn with_maintenance(mut self, maintenance: impl FnMut(&mut B) + 'static) -> Self {
         self.maintenance = Some(Box::new(maintenance));
+        self
+    }
+
+    pub fn with_idle_release(mut self, release: impl FnMut(&mut B) + 'static) -> Self {
+        self.idle_release = Some(Box::new(release));
         self
     }
 
@@ -391,7 +399,8 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
             false => self.hint,
         };
         self.host.set_present(hint);
-        if self.stats.trim.swap(false, Ordering::AcqRel) {
+        let idle = self.stats.trim.swap(false, Ordering::AcqRel);
+        if idle {
             self.host.trim_handle().request();
             self.stats.trims.fetch_add(1, Ordering::Relaxed);
             if let Some(maintenance) = self.maintenance.as_mut() {
@@ -402,6 +411,11 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
         self.stage_damage(side);
         crate::profile::note(|| format!("damage_us={}", staging.elapsed().as_micros()));
         let feedback = self.host.execute(side, frame);
+        if idle {
+            if let Some(release) = self.idle_release.as_mut() {
+                release(self.host.backend_mut());
+            }
+        }
         self.settle_damage(&feedback);
         self.account();
         self.since_maintenance += 1;

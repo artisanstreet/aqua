@@ -1,7 +1,7 @@
 #![cfg(windows)]
 
 #[allow(dead_code)]
-#[path = "../../aqua-gpu-d3d12/tests/hal/window.rs"]
+#[path = "../../aqua-gpu-d3d11/tests/hal/window.rs"]
 mod test_window;
 
 use aqua::render::lower::{Lowering, RecoverySignal};
@@ -11,9 +11,9 @@ use aqua::UiApp;
 use aqua_core::geometry::{CornerRadii, Insets, Rect};
 use aqua_core::scene::DisplayItem;
 use aqua_core::{Oklch, Size};
-use aqua_gpu_d3d12::hal::selection::AdapterPreference;
-use aqua_gpu_d3d12::hal::DeviceOptions;
-use aqua_gpu_d3d12::window::{TextureRecovery, WindowBackend, WindowOptions};
+use aqua_gpu_d3d11::hal::selection::AdapterPreference;
+use aqua_gpu_d3d11::hal::DeviceOptions;
+use aqua_gpu_d3d11::window::{TextureRecovery, WindowBackend, WindowOptions};
 use aqua_protocol::{Feedback, Instant, RenderCommand, RenderInput, SceneDiff, WindowId};
 use aqua_runtime::{emit_scene_diff, RenderSide};
 use aqua_text::{SharedFonts, SharedRuns};

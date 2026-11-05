@@ -4,10 +4,10 @@ use aqua_graph::{Extent, FramePlan, TransientId};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use super::Error;
 use super::formats::dxgi;
-use crate::ledger::{Kind, Token, record};
-use crate::lifetimes::{Shape, assign, shapes};
+use super::Error;
+use crate::ledger::{record, Kind, Token};
+use crate::lifetimes::{assign_with, shapes, Precision, Shape};
 
 const IDLE_FRAMES: u32 = 60;
 
@@ -26,6 +26,7 @@ pub struct Texture {
 
 pub struct Transients {
     ceiling: Option<u64>,
+    precision: Precision,
     pool: Vec<Texture>,
     keys: Vec<(TransientId, Shape)>,
     index: HashMap<TransientId, usize>,
@@ -81,6 +82,7 @@ impl Transients {
     pub fn new(ceiling: Option<u64>) -> Self {
         Self {
             ceiling,
+            precision: Precision::Planned,
             pool: Vec::new(),
             keys: Vec::new(),
             index: HashMap::new(),
@@ -108,10 +110,17 @@ impl Transients {
     }
 
     fn matches(&self, plan: &FramePlan) -> bool {
-        self.keys.len() == plan.textures.len() && self.keys.iter().copied().eq(shapes(plan))
+        self.keys.len() == plan.textures.len()
+            && self.keys.iter().copied().eq(shapes(plan, self.precision))
     }
 
-    pub fn ensure(&mut self, device: &ID3D11Device, plan: &FramePlan) -> Result<bool, Error> {
+    pub fn ensure(
+        &mut self,
+        device: &ID3D11Device,
+        plan: &FramePlan,
+        precision: Precision,
+    ) -> Result<bool, Error> {
+        self.precision = precision;
         let created = match self.matches(plan) {
             true => false,
             false => self.reassign(device, plan)?,
@@ -121,7 +130,7 @@ impl Transients {
     }
 
     fn reassign(&mut self, device: &ID3D11Device, plan: &FramePlan) -> Result<bool, Error> {
-        let assignment = assign(plan);
+        let assignment = assign_with(plan, self.precision);
         if let Some(ceiling) = self.ceiling.filter(|ceiling| assignment.bytes() > *ceiling) {
             return Err(Error::Budget {
                 needed: assignment.bytes(),
@@ -150,7 +159,7 @@ impl Transients {
             self.pool[position].idle = 0;
             slots.push(position);
         }
-        self.keys = shapes(plan).collect();
+        self.keys = shapes(plan, self.precision).collect();
         self.index = self
             .keys
             .iter()

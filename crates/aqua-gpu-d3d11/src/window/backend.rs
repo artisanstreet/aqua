@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use aqua_core::geometry::Rect;
-use aqua_graph::{Extent, FramePlan, validate};
+use aqua_graph::{validate, Extent, FramePlan};
 use aqua_protocol::{
     DeviceStatus, FeatureTier, Features, FrameInputs, FrameReport, GpuBackend, GpuCapabilities,
     GpuError, GpuReadback, PresentHint, PresentTimes, RecoveryReport, SurfaceId, SurfacePixels,
@@ -17,9 +17,10 @@ use super::pacing::{PaceReport, Pacer};
 use super::timing;
 use crate::hal::budget::{Trim, Visibility};
 use crate::hal::{
-    self, BudgetStatus, Core, DeviceOptions, PresentMode, PresentStatus, RENDER_FORMAT, Swapchain,
+    self, BudgetStatus, Core, DeviceOptions, PresentMode, PresentStatus, Swapchain, RENDER_FORMAT,
 };
 use crate::half::bgra8_rows_to_rgba8;
+use crate::lifetimes::Precision;
 use crate::scene::{
     PassTime, PersistentStats, PersistentTextures, PipelineKind as Kind, PipelineStats,
     SceneOptions, SceneRenderer, SceneTarget,
@@ -661,7 +662,10 @@ impl WindowBackend {
         };
         let context = core.context();
         let reserve_started = Instant::now();
-        let created = gpu.renderer.reserve(plan).map_err(GpuError::from)?;
+        let created = gpu
+            .renderer
+            .reserve(plan, Precision::EightBit)
+            .map_err(GpuError::from)?;
         let reserve = reserve_started.elapsed();
         let record_started = Instant::now();
         gpu.textures

@@ -1,5 +1,5 @@
 #[cfg(windows)]
-mod d3d12;
+mod gpu;
 #[cfg(windows)]
 mod hook;
 #[cfg(windows)]
@@ -26,8 +26,16 @@ pub fn raise_thread_priority() {}
 
 #[cfg(windows)]
 pub fn prewarm_gpu() {
-    d3d12::prewarm();
+    gpu::prewarm();
 }
+
+#[cfg(windows)]
+pub fn startup_mark(label: &str) {
+    gpu::startup_mark(label);
+}
+
+#[cfg(not(windows))]
+pub fn startup_mark(_label: &str) {}
 
 #[cfg(not(windows))]
 pub fn prewarm_gpu() {}

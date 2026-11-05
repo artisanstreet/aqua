@@ -1,11 +1,11 @@
 use std::ffi::c_void;
 use std::mem::size_of;
 
+use windows::core::Interface;
 use windows::Win32::Foundation::{HMODULE, LUID};
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::*;
-use windows::core::Interface;
 
 use super::error::Error;
 use super::selection::{Adapter, AdapterInfo, AdapterPreference};
@@ -99,8 +99,18 @@ fn create(adapter: &IDXGIAdapter1, flags: D3D11_CREATE_DEVICE_FLAG) -> Result<Op
     }
 }
 
-fn open_device(adapter: &IDXGIAdapter1, debug: bool) -> Result<Opened, Error> {
-    let base = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+#[derive(Clone, Copy)]
+pub struct Creation {
+    pub debug: bool,
+    pub single_threaded: bool,
+}
+
+fn open_device(adapter: &IDXGIAdapter1, creation: Creation) -> Result<Opened, Error> {
+    let debug = creation.debug;
+    let base = match creation.single_threaded {
+        true => D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_SINGLETHREADED,
+        false => D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    };
     match debug {
         false => create(adapter, base),
         true => {
@@ -136,13 +146,13 @@ fn tearing_supported(factory: &IDXGIFactory6) -> bool {
 fn open_selected(
     factory: &IDXGIFactory6,
     adapter: IDXGIAdapter1,
-    debug: bool,
+    creation: Creation,
     fell_back: bool,
 ) -> Result<Selected, Error> {
     let stages = crate::stages::StageClock::from_env();
     let adapter_info = describe_adapter(&adapter)?;
     stages.mark("      describe_adapter");
-    let opened = open_device(&adapter, debug)?;
+    let opened = open_device(&adapter, creation)?;
     stages.mark("      create_device_call");
     let info = DeviceInfo {
         adapter: adapter_info,
@@ -160,15 +170,15 @@ fn open_selected(
     })
 }
 
-fn warp(factory: &IDXGIFactory6, debug: bool, fell_back: bool) -> Result<Selected, Error> {
+fn warp(factory: &IDXGIFactory6, creation: Creation, fell_back: bool) -> Result<Selected, Error> {
     let adapter: IDXGIAdapter1 = unsafe { factory.EnumWarpAdapter()? };
-    open_selected(factory, adapter, debug, fell_back)
+    open_selected(factory, adapter, creation, fell_back)
 }
 
 fn hardware(
     factory: &IDXGIFactory6,
     preference: DXGI_GPU_PREFERENCE,
-    debug: bool,
+    creation: Creation,
 ) -> Option<Selected> {
     (0..)
         .map_while(|index| {
@@ -178,12 +188,12 @@ fn hardware(
             unsafe { adapter.GetDesc1() }
                 .is_ok_and(|desc| desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0)
         })
-        .find_map(|adapter| open_selected(factory, adapter, debug, false).ok())
+        .find_map(|adapter| open_selected(factory, adapter, creation, false).ok())
 }
 
-fn by_luid(factory: &IDXGIFactory6, luid: i64, debug: bool) -> Option<Selected> {
+fn by_luid(factory: &IDXGIFactory6, luid: i64, creation: Creation) -> Option<Selected> {
     let adapter: IDXGIAdapter1 = unsafe { factory.EnumAdapterByLuid(luid_from(luid)) }.ok()?;
-    open_selected(factory, adapter, debug, false).ok()
+    open_selected(factory, adapter, creation, false).ok()
 }
 
 pub fn list_adapters(factory: &IDXGIFactory6) -> Vec<AdapterInfo> {
@@ -217,17 +227,17 @@ pub fn create_factory(debug: bool) -> Result<IDXGIFactory6, Error> {
 pub fn select(
     factory: &IDXGIFactory6,
     preference: AdapterPreference,
-    debug: bool,
+    creation: Creation,
 ) -> Result<Selected, Error> {
-    let hardware_chain = |gpu: DXGI_GPU_PREFERENCE| match hardware(factory, gpu, debug) {
+    let hardware_chain = |gpu: DXGI_GPU_PREFERENCE| match hardware(factory, gpu, creation) {
         Some(selected) => Ok(selected),
-        None => warp(factory, debug, true),
+        None => warp(factory, creation, true),
     };
     match preference {
-        AdapterPreference::Warp => warp(factory, debug, false),
+        AdapterPreference::Warp => warp(factory, creation, false),
         AdapterPreference::HighPerformance => hardware_chain(DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE),
         AdapterPreference::MinimumPower => hardware_chain(DXGI_GPU_PREFERENCE_MINIMUM_POWER),
-        AdapterPreference::Luid(luid) => match by_luid(factory, luid, debug) {
+        AdapterPreference::Luid(luid) => match by_luid(factory, luid, creation) {
             Some(selected) => Ok(selected),
             None => hardware_chain(DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE),
         },

@@ -112,7 +112,7 @@ impl NativeWindow for Win32Window {
 
     fn attach_composition(&self, content: &dyn std::any::Any) -> bool {
         content
-            .downcast_ref::<super::d3d12::CompositionContent>()
+            .downcast_ref::<super::gpu::CompositionContent>()
             .is_some_and(|content| self.window.attach_composition_surface(&content.0).is_ok())
     }
 }

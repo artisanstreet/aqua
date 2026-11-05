@@ -39,7 +39,6 @@ taffy = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(windows)'.dev-dependencies]
-aqua-gpu-d3d12 = { path = "../aqua-gpu-d3d12" }
 serde_json = "1"
 windows = { version = "0.62.2", features = [
   "Win32_Foundation",

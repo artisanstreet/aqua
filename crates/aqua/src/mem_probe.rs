@@ -249,7 +249,7 @@ pub struct ProcessHeap {
 
 #[cfg(windows)]
 pub fn process_heap() -> Option<ProcessHeap> {
-    use windows::Win32::System::Memory::{GetProcessHeap, HEAP_SUMMARY, HeapSummary};
+    use windows::Win32::System::Memory::{GetProcessHeap, HeapSummary, HEAP_SUMMARY};
     let heap = unsafe { GetProcessHeap() }.ok()?;
     let mut summary = HEAP_SUMMARY {
         cb: std::mem::size_of::<HEAP_SUMMARY>() as u32,
@@ -274,7 +274,7 @@ pub fn memory_report_enabled() -> bool {
 #[cfg(windows)]
 pub fn return_memory_to_os() {
     use windows::Win32::System::Memory::{
-        GetProcessHeap, HEAP_FLAGS, HeapCompact, HeapOptimizeResources, HeapSetInformation,
+        GetProcessHeap, HeapCompact, HeapOptimizeResources, HeapSetInformation, HEAP_FLAGS,
     };
     #[repr(C)]
     struct HeapOptimizeResourcesInformation {
@@ -314,7 +314,7 @@ pub fn return_memory_to_os() {
 #[cfg(windows)]
 fn trim_working_set() {
     use windows::Win32::System::Memory::{
-        SETPROCESSWORKINGSETSIZEEX_FLAGS, SetProcessWorkingSetSizeEx,
+        SetProcessWorkingSetSizeEx, SETPROCESSWORKINGSETSIZEEX_FLAGS,
     };
     use windows::Win32::System::Threading::GetCurrentProcess;
     let _ = unsafe {
@@ -348,8 +348,8 @@ pub struct AddressSpaceReport {
 #[cfg(windows)]
 pub fn address_space() -> AddressSpaceReport {
     use windows::Win32::System::Memory::{
-        GetProcessHeaps, HEAP_SUMMARY, HeapSummary, MEM_COMMIT, MEM_PRIVATE,
-        MEMORY_BASIC_INFORMATION, VirtualQuery,
+        GetProcessHeaps, HeapSummary, VirtualQuery, HEAP_SUMMARY, MEMORY_BASIC_INFORMATION,
+        MEM_COMMIT, MEM_PRIVATE,
     };
     let mut regions = Vec::new();
     let mut cursor = 0usize;
@@ -565,4 +565,37 @@ pub fn address_space_summary() -> String {
             }),
     );
     lines.join("\n")
+}
+
+pub fn stage_summary() -> String {
+    const WRITE_COMBINE: u32 = 0x400;
+    let report = address_space();
+    let combined = report
+        .regions
+        .iter()
+        .filter(|region| region.protection & WRITE_COMBINE != 0)
+        .map(|region| region.size)
+        .sum::<usize>();
+    let committed = report.heaps.iter().map(|heap| heap.committed).sum::<u64>();
+    let per_heap = report
+        .heaps
+        .iter()
+        .enumerate()
+        .filter(|(_, heap)| heap.committed >= 512 * 1024)
+        .map(|(index, heap)| {
+            format!(
+                "#{index}={:.1}/{:.1}",
+                heap.allocated as f64 / 1048576.0,
+                heap.committed as f64 / 1048576.0
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "private_mib={:.1} write_combined_mib={:.1} heap_committed_mib={:.1} other_mib={:.1} heaps(alloc/commit)=[{per_heap}]",
+        report.private_committed as f64 / 1048576.0,
+        combined as f64 / 1048576.0,
+        committed as f64 / 1048576.0,
+        (report.private_committed as f64 - combined as f64 - committed as f64) / 1048576.0,
+    )
 }

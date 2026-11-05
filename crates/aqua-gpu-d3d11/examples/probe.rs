@@ -2,19 +2,19 @@
 mod probe {
     use std::time::{Duration, Instant};
 
-    use aqua_core::Oklch;
     use aqua_core::geometry::Rect;
-    use aqua_graph::{Extent, FramePlan, PaintCommand, Quad, Shadow, ShadowCast, plan_paint};
+    use aqua_core::Oklch;
+    use aqua_graph::{plan_paint, Extent, FramePlan, PaintCommand, Quad, Shadow, ShadowCast};
     use aqua_protocol::{
         FrameInputs, GpuBackend, NativeSurface, PresentHint, SurfaceId, SurfaceTarget, WindowId,
     };
+    use windows::core::w;
     use windows::Win32::Foundation::{FILETIME, HWND, RECT};
     use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX};
     use windows::Win32::System::Threading::{
         GetCurrentProcess, GetCurrentProcessId, GetProcessTimes,
     };
     use windows::Win32::UI::WindowsAndMessaging::*;
-    use windows::core::w;
 
     const CLIENT: (i32, i32) = (1898, 1125);
     const FRAMES: usize = 600;
@@ -290,10 +290,13 @@ mod probe {
                 backend.memory_breakdown().map_or(0, |memory| memory.local_usage),
                 &window,
             );
+            let (_, frames_cpu_before) = process_times();
             for index in 0..FRAMES {
                 frame(&mut backend, extent, (index % 26) as f32 / 26.0);
                 window.pump();
             }
+            let (_, frames_cpu_after) = process_times();
+            let frame_cpu_ms = ms(frames_cpu_after - frames_cpu_before) / FRAMES as f64;
             let steady = sample(
                 backend.memory_breakdown().map_or(0, |memory| memory.local_usage),
                 &window,
@@ -320,6 +323,7 @@ mod probe {
             );
             println!("probe backend={} stage=startup {startup}", $name);
             println!("probe backend={} stage=after_{FRAMES}_frames {steady}", $name);
+            println!("probe backend={} frame_cpu_ms={frame_cpu_ms:.3}", $name);
             println!(
                 "probe backend={} idle_cpu_ms_per_s_after_resizes={idle_cpu:.2} pipelines={:?}",
                 $name,

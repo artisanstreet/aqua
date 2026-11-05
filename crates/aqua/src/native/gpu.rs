@@ -25,7 +25,7 @@ use gpu::window::{TextureRecovery, WindowBackend, WindowOptions};
 use crate::render::host::{DamageSlot, FrameTarget, GpuFrames, RenderStats, Repaint};
 use crate::render::link::{CompositionSink, InitFactory, RenderContext};
 use crate::render::lower::{Lowering, RecoverySignal};
-use crate::render::namespace::{Namespaces, namespace_plan, namespace_uploads};
+use crate::render::namespace::{namespace_plan, namespace_uploads, Namespaces};
 use crate::render::persist::{self, PipelineCacheSaver};
 
 static TEXT_SERVICES: Once = Once::new();
@@ -71,7 +71,29 @@ fn since_process_start() -> Option<Duration> {
         .checked_sub(since_epoch)
 }
 
+pub fn startup_mark(label: &str) {
+    if crate::mem_probe::memory_report_enabled() {
+        eprintln!("aqua-stage {label} {}", crate::mem_probe::stage_summary());
+    }
+    if crate::profile::enabled() {
+        eprintln!(
+            "aqua-startup {label} process_ms={:.1}",
+            since_process_start().map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
+        );
+    }
+}
+
+fn stage_nth(label: &str, counter: &std::sync::atomic::AtomicU32, limit: u32) {
+    if crate::mem_probe::memory_report_enabled() {
+        let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
+        if n <= limit {
+            startup_mark(&format!("{label}_{n}"));
+        }
+    }
+}
+
 pub fn prewarm() {
+    startup_mark("prewarm_start");
     if crate::profile::enabled() {
         eprintln!(
             "aqua-startup prewarm_called process_ms={:.1}",
@@ -105,6 +127,7 @@ fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
             since_process_start().map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
         );
     }
+    startup_mark("device_ready");
     let signals: Signals = Rc::default();
     let fan_out = signals.clone();
     backend.set_recovery_listener(Box::new(move |notice| {
@@ -163,6 +186,37 @@ impl WindowHandle {
         })
     }
 
+    fn release_idle(&mut self) {
+        let release = gpu::hal::budget::Trim {
+            shrink_upload_ring: true,
+            free_transients: true,
+            evict_idle_resources: true,
+        };
+        let ledger = std::env::var_os("AQUA_LEDGER").is_some();
+        if ledger {
+            self.print_ledger("before-release");
+        }
+        if let Err(error) = self.hub.backend.borrow_mut().trim(release) {
+            eprintln!("aqua: idle release failed: {error}");
+        }
+        self.report_memory();
+        if ledger {
+            self.print_ledger("after-release");
+        }
+    }
+
+    fn print_ledger(&self, label: &str) {
+        let backend = self.hub.backend.borrow();
+        let usage = backend
+            .memory_breakdown()
+            .map_or(0, |memory| memory.local_usage);
+        eprintln!(
+            "aqua-ledger {label} dxgi_usage_mib={:.2} {}",
+            usage as f64 / 1048576.0,
+            backend.ledger().render()
+        );
+    }
+
     fn adopt_recovery(&mut self) -> Result<(), GpuError> {
         let backend = self.hub.backend.borrow();
         match backend.generation() == self.generation {
@@ -190,7 +244,7 @@ impl WindowHandle {
         let (compiled, loaded, before) = self.profile_mark.get();
         self.profile_mark
             .set((pipelines.compiled, pipelines.loaded, resident));
-        use aqua_protocol::probe::{Metric, count};
+        use aqua_protocol::probe::{count, Metric};
         count(
             Metric::PsoCompiled,
             u64::from(pipelines.compiled.saturating_sub(compiled)),
@@ -330,13 +384,18 @@ impl GpuBackend for WindowHandle {
     }
 
     fn create_surface(&mut self, target: SurfaceTarget) -> Result<SurfaceId, GpuError> {
-        self.hub.backend.borrow_mut().create_surface(target)
+        let created = self.hub.backend.borrow_mut().create_surface(target);
+        startup_mark("surface_created");
+        created
     }
 
     fn upload(&mut self, mut batch: UploadBatch) -> Result<(), GpuError> {
         self.adopt_recovery()?;
         namespace_uploads(self.namespace, &mut batch);
-        self.hub.backend.borrow_mut().upload(batch)
+        let uploaded = self.hub.backend.borrow_mut().upload(batch);
+        static UPLOADS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        stage_nth("uploaded", &UPLOADS, 6);
+        uploaded
     }
 
     fn execute(&mut self, plan: &FramePlan, inputs: &FrameInputs) -> Result<FrameReport, GpuError> {
@@ -353,7 +412,7 @@ impl GpuBackend for WindowHandle {
             }
         };
         let mut backend = self.hub.backend.borrow_mut();
-        match damage {
+        let result = match damage {
             Some(rects) => {
                 let report = backend.execute_damaged(plan, inputs, &rects)?;
                 self.presenting = Some(rects);
@@ -363,7 +422,10 @@ impl GpuBackend for WindowHandle {
                 self.presenting = None;
                 backend.execute(plan, inputs)
             }
-        }
+        };
+        static EXECUTES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        stage_nth("executed", &EXECUTES, 8);
+        result
     }
 
     fn present(&mut self, surface: SurfaceId, hint: PresentHint) -> Result<PresentTimes, GpuError> {
@@ -465,6 +527,13 @@ impl FrameTarget for WindowTarget {
             self.frames.backend().inject_removal();
         }
         let feedback = self.frames.present(side, frame);
+        if crate::mem_probe::memory_report_enabled() {
+            static PRESENTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let count = PRESENTS.fetch_add(1, Ordering::Relaxed) + 1;
+            if matches!(count, 1..=8 | 60 | 400) {
+                startup_mark(&format!("present_{count}"));
+            }
+        }
         if !self.announced && crate::profile::enabled() {
             self.announced = true;
             eprintln!(
@@ -556,6 +625,7 @@ pub fn factory(
                 .with_repaint_probe(|backend: &WindowHandle, surface, damage: &[Rect]| {
                     backend.repaint_bounds(surface, damage)
                 })
+                .with_idle_release(|backend: &mut WindowHandle| backend.release_idle())
                 .with_pressure(|backend: &mut WindowHandle| backend.service_budget())
                 .with_visibility(|backend: &mut WindowHandle, hidden| backend.set_hidden(hidden))
                 .with_maintenance(move |backend: &mut WindowHandle| {

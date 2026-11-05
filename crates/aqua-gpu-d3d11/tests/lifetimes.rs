@@ -1,5 +1,5 @@
 use aqua_core::Oklch;
-use aqua_gpu_d3d11::lifetimes::{Shape, assign};
+use aqua_gpu_d3d11::lifetimes::{assign, assign_with, Precision, Shape};
 use aqua_graph::{
     CustomShaderId, Extent, FramePlan, Pass, PassKind, ShaderId, TextureFormat, TextureRef,
     ToneCurve, TransientId, TransientTexture,
@@ -184,4 +184,40 @@ fn reuse_picks_the_first_free_slot_in_order_of_first_use() {
     let assignment = assign(&plan);
     assert_eq!(assignment.slots.len(), 2);
     assert_eq!(assignment.slot_of, vec![1, 0, 0]);
+}
+
+#[test]
+fn eight_bit_precision_demotes_float_layers_but_not_compute_targets() {
+    let compute = Pass::new(
+        PassKind::Compute {
+            shader: ShaderId::Custom(CustomShaderId(1)),
+            groups: [1, 1, 1],
+            params: [0.0; 4],
+        },
+        vec![layer(1)],
+        vec![layer(2)],
+    );
+    let plan = plan(
+        vec![
+            texture(1, SMALL, TextureFormat::Rgba16Float),
+            texture(2, SMALL, TextureFormat::Rgba16Float),
+            texture(3, SMALL, TextureFormat::Rgba32Float),
+        ],
+        vec![
+            draw(&[], &[layer(1)]),
+            compute,
+            draw(&[2], &[layer(3)]),
+            draw(&[3], &[TextureRef::Surface]),
+        ],
+    );
+    let planned = assign_with(&plan, Precision::Planned);
+    let eight = assign_with(&plan, Precision::EightBit);
+    assert_eq!(planned.bytes(), SMALL.texels() * (8 + 8 + 16));
+    assert_eq!(eight.bytes(), SMALL.texels() * (4 + 8 + 16));
+    assert!(eight
+        .slots
+        .contains(&shape(SMALL, TextureFormat::Bgra8Unorm, false)));
+    assert!(eight
+        .slots
+        .contains(&shape(SMALL, TextureFormat::Rgba16Float, true)));
 }

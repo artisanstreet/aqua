@@ -33,22 +33,44 @@ fn unordered_write(plan: &FramePlan, id: TransientId) -> bool {
     })
 }
 
-pub fn shapes(plan: &FramePlan) -> impl Iterator<Item = (TransientId, Shape)> + '_ {
-    plan.textures.iter().map(|texture| {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Precision {
+    #[default]
+    Planned,
+    EightBit,
+}
+
+fn stored_format(format: TextureFormat, unordered: bool, precision: Precision) -> TextureFormat {
+    match (precision, format, unordered) {
+        (Precision::EightBit, TextureFormat::Rgba16Float, false) => TextureFormat::Bgra8Unorm,
+        _ => format,
+    }
+}
+
+pub fn shapes(
+    plan: &FramePlan,
+    precision: Precision,
+) -> impl Iterator<Item = (TransientId, Shape)> + '_ {
+    plan.textures.iter().map(move |texture| {
+        let unordered = unordered_write(plan, texture.id);
         (
             texture.id,
             Shape {
                 extent: texture.extent,
-                format: texture.format,
-                unordered: unordered_write(plan, texture.id),
+                format: stored_format(texture.format, unordered, precision),
+                unordered,
             },
         )
     })
 }
 
 pub fn assign(plan: &FramePlan) -> Assignment {
+    assign_with(plan, Precision::Planned)
+}
+
+pub fn assign_with(plan: &FramePlan, precision: Precision) -> Assignment {
     let unused = plan.passes.len();
-    let mut order: Vec<(usize, usize, usize, Shape)> = shapes(plan)
+    let mut order: Vec<(usize, usize, usize, Shape)> = shapes(plan, precision)
         .enumerate()
         .map(|(index, (id, shape))| {
             let (first, last) = lifetime_of(&plan.passes, id)

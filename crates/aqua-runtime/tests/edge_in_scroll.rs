@@ -143,8 +143,20 @@ impl Rig {
             .unwrap_or(0.0)
     }
 
+    fn scroll_translate(&self) -> f32 {
+        self.render
+            .scene()
+            .ordered()
+            .filter_map(|(_, item)| match item {
+                DisplayItem::PushTransform(t) => Some(t.ty),
+                _ => None,
+            })
+            .nth(1)
+            .unwrap_or(0.0)
+    }
+
     fn visual_top(&self) -> f32 {
-        self.block().y + self.content_glide()
+        self.block().y + self.content_glide() + self.scroll_translate()
     }
 }
 
@@ -169,15 +181,15 @@ fn an_edge_that_moves_inside_a_scrolled_ancestor_animates_in_scrolled_coordinate
     rig.set_spacer(AFTER);
     rig.app_frame(10.0);
     let start = rig.block();
-    assert!((start.y - (BEFORE - NOTCH)).abs() < 1e-3, "{start:?}");
+    assert!((start.y - BEFORE).abs() < 1e-3, "{start:?}");
     rig.render_only(10.5);
     let mid = rig.block();
-    let expected = (BEFORE + AFTER) / 2.0 - NOTCH;
+    let expected = (BEFORE + AFTER) / 2.0;
     assert!((mid.y - expected).abs() < 1e-2, "{mid:?} vs {expected}");
     assert!((mid.h - 40.0).abs() < 1e-3, "height stays put: {mid:?}");
     rig.render_only(12.0);
     let end = rig.block();
-    assert!((end.y - (AFTER - NOTCH)).abs() < 1e-3, "{end:?}");
+    assert!((end.y - AFTER).abs() < 1e-3, "{end:?}");
     assert!(rig.render.tracks().is_idle());
 }
 
@@ -205,7 +217,7 @@ fn scrolling_during_an_edge_animation_keeps_the_block_continuous_and_lands_exact
         previous = top;
     }
     let end = rig.block();
-    assert!((end.y - (AFTER - 2.0 * NOTCH)).abs() < 1e-2, "{end:?}");
+    assert!((end.y - AFTER).abs() < 1e-2, "{end:?}");
     assert_eq!(rig.content_glide(), 0.0);
     assert!(rig.render.tracks().is_idle());
 }

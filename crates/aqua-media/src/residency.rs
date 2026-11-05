@@ -253,6 +253,25 @@ impl Residency {
         self.colors.get(&ColorKey::Image(*key))
     }
 
+    pub fn vector_key(source: &VectorSource, width: u32, height: u32) -> VectorKey {
+        let (identity, kind) = vector_identity(source);
+        VectorKey {
+            identity,
+            kind,
+            width,
+            height,
+        }
+    }
+
+    pub fn remove_vector(&mut self, key: VectorKey, mode: VectorMode) -> bool {
+        let removed = match mode {
+            VectorMode::Mask => self.masks.remove(&MaskKey::Vector(key)),
+            VectorMode::Color => self.colors.remove(&ColorKey::Vector(key)),
+        };
+        self.forget(key);
+        removed
+    }
+
     pub fn vector(
         &mut self,
         source: &VectorSource,

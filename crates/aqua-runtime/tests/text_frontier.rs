@@ -86,3 +86,28 @@ fn retained_frontier_supports_popup_text_after_frame_and_fails_after_close() {
         .text_frontier(node, 0, CaretAffinity::Downstream)
         .is_none());
 }
+
+#[test]
+fn retained_frontier_survives_unrelated_tree_changes_after_the_frame() {
+    let mut app = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    app.set_viewport(300.0, 200.0, 1.0);
+    app.mount(|_| Text::new("stable").build().with_key("stable"))
+        .unwrap();
+    let node = text_node(&app, "stable");
+    app.build_frame().unwrap();
+    assert!(app
+        .text_frontier(node, 0, CaretAffinity::Downstream)
+        .is_some());
+    app.refresh(vec![
+        Text::new("stable").build().with_key("stable"),
+        Text::new("sibling").build().with_key("sibling"),
+    ])
+    .unwrap();
+    assert!(app
+        .text_frontier(node, 0, CaretAffinity::Downstream)
+        .is_some());
+    let sibling = text_node(&app, "sibling");
+    assert!(app
+        .text_frontier(sibling, 0, CaretAffinity::Downstream)
+        .is_none());
+}

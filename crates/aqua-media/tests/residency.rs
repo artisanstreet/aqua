@@ -301,3 +301,20 @@ fn color_glyphs_share_one_entry_across_subpixel_bins() {
     assert_eq!(updates.uploads.len(), 1);
     assert_eq!(residency.stats().colors.entries, 1);
 }
+
+#[test]
+fn removing_a_vector_key_frees_the_entry_and_its_retained_source() {
+    let mut residency = Residency::new(ResidencyConfig::default());
+    residency.begin_frame();
+    let source = square(30.0, 1.0);
+    residency
+        .vector(&source, 40, 40, VectorMode::Color)
+        .unwrap();
+    residency.finish_frame();
+    assert_eq!(residency.stats().colors.entries, 1);
+    let key = Residency::vector_key(&source, 40, 40);
+    assert!(residency.remove_vector(key, VectorMode::Color));
+    assert_eq!(residency.stats().colors.entries, 0);
+    assert_eq!(residency.stats().retained_source_bytes, 0);
+    assert!(!residency.remove_vector(key, VectorMode::Color));
+}

@@ -1,31 +1,31 @@
 use aqua_core::hash::FastMap;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::time::Instant as WallInstant;
 
-use aqua_core::geometry::{CornerRadii, Rect, snap_device_pixel, snap_device_stroke};
+use aqua_core::geometry::{snap_device_pixel, snap_device_stroke, CornerRadii, Rect};
 use aqua_core::image::ImagePlacement;
 use aqua_core::scene::{DisplayItem, ShadowLayer, TextRasterMode};
 use aqua_core::{GpuiBackground, GpuiHsla, Oklch, Point, Size, Transform2D};
 use aqua_graph::{
-    BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientQuad, GradientStop, Image,
-    Linear2, PaintCommand, PlanError, PlanLimits, Quad, Shadow, SlugInstance, SlugRun, ToneCurve,
-    plan_paint_with,
+    plan_paint_with, BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientQuad,
+    GradientStop, Image, Linear2, PaintCommand, PlanError, PlanLimits, Quad, Shadow, SlugInstance,
+    SlugRun, ToneCurve,
 };
 use aqua_media::atlas::{AtlasConfig, ImageKey, PageId, Placement, Slot, StreamBudget};
 use aqua_media::reduce::{reduce, reduction_level};
-use aqua_media::residency::{GlyphSlot, Residency, ResidencyConfig, VectorMode};
+use aqua_media::residency::{GlyphSlot, Residency, ResidencyConfig, VectorKey, VectorMode};
 use aqua_media::upload::texture_handle;
 use aqua_motion::{Cycle, CycleSet};
 use aqua_protocol::{Instant, UploadBatch};
 use aqua_scene::Scene;
 use aqua_text::layout::LaidOut;
-use aqua_text::raster::{SUBPIXEL_STEPS, quantize_size, quantize_x, raster_key};
+use aqua_text::raster::{quantize_size, quantize_x, raster_key, SUBPIXEL_STEPS};
 use aqua_text::residency::GlyphResolver;
 use aqua_text::runs::RunId;
-use aqua_text::slug::{STORE_HANDLE, SlugCache, SlugStore, StoreLookup};
+use aqua_text::slug::{SlugCache, SlugStore, StoreLookup, STORE_HANDLE};
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_transport::{LowerContext, Lowered as Commands, TrimRequest};
 
@@ -37,7 +37,7 @@ use super::mesh;
 use super::shape::{self, Border, Fidelity, Paint, Radii, ShadowSpec, Sides};
 use super::text::{ShimmerClocks, TextScope, TextStack};
 use super::transition::{Phase, Settings, Transition};
-use super::vector::{VectorCache, gradient_axis, rotation_steps};
+use super::vector::{gradient_axis, rotation_steps, VectorCache};
 
 const MESH_TAG: u64 = 0xC000_0000_0000_0000;
 const SLUG_TEXT_PX: f32 = 160.0;
@@ -252,21 +252,27 @@ struct Walk {
     item: (u32, u32),
     lifted: bool,
     cull: Option<Rect>,
+    clips: Vec<Rect>,
+}
+
+fn outside_region(rect: Rect, region: Rect, pad: f32) -> bool {
+    rect.x - pad >= region.right()
+        || region.x >= rect.right() + pad
+        || rect.y - pad >= region.bottom()
+        || region.y >= rect.bottom() + pad
 }
 
 impl Walk {
     fn hidden(&mut self, rect: Rect, reach: f32) -> bool {
-        let Some(region) = self.cull else {
-            return false;
-        };
         if self.lifted || self.open.contains(&Scope::Blur) {
             return false;
         }
         let pad = reach + CULL_EDGE_PAD;
-        let outside = rect.x - pad >= region.right()
-            || region.x >= rect.right() + pad
-            || rect.y - pad >= region.bottom()
-            || region.y >= rect.bottom() + pad;
+        let outside = self
+            .cull
+            .into_iter()
+            .chain(self.clips.last().copied())
+            .any(|region| outside_region(rect, region, pad));
         if outside {
             self.report.culled += 1;
         }
@@ -321,10 +327,22 @@ impl Walk {
         self.transforms.last().copied().unwrap_or(self.base)
     }
 
+    fn open_clip(&mut self, rect: Rect) {
+        let nested = self
+            .clips
+            .last()
+            .map_or(rect, |outer| outer.intersect(rect));
+        self.open.push(Scope::Clip);
+        self.clips.push(nested);
+    }
+
     fn close(&mut self, kind: Scope) -> bool {
         match self.open.last() {
             Some(top) if *top == kind => {
                 self.open.pop();
+                if kind == Scope::Clip {
+                    self.clips.pop();
+                }
                 true
             }
             _ => false,
@@ -362,6 +380,8 @@ pub struct Lowering {
     glyph_inserts: u64,
     retained: HashMap<u64, RetainedImage>,
     meshes: HashMap<u64, ImageKey>,
+    path_keys: Vec<VectorKey>,
+    path_keys_now: Vec<VectorKey>,
     reduced: HashMap<u64, Vec<ImageKey>>,
     vectors: VectorCache,
     text: TextStack,
@@ -554,6 +574,8 @@ impl Lowering {
             glyph_inserts: 0,
             retained: HashMap::new(),
             meshes: HashMap::new(),
+            path_keys: Vec::new(),
+            path_keys_now: Vec::new(),
             reduced: HashMap::new(),
             vectors: VectorCache::default(),
             text: TextStack::default(),
@@ -700,6 +722,7 @@ impl Lowering {
             pulses: Vec::new(),
             item: (0, 0),
             lifted: false,
+            clips: Vec::new(),
             cull: match (self.begun.is_some(), self.transition.is_some()) {
                 (false, false) => self.cull,
                 _ => None,
@@ -772,6 +795,7 @@ impl Lowering {
         walk.report.shimmering |= self.overlay_transition(&mut walk.out, walk.surface, now);
         walk.report.commands = walk.out.len() as u32;
         let inserts_before = self.glyph_inserts;
+        self.retire_reshaped_paths();
         let updates = self.residency.finish_frame();
         walk.report.atlas_created = updates.created.len() as u32;
         walk.report.atlas_upload_bytes = updates.upload_bytes();
@@ -997,9 +1021,9 @@ impl Lowering {
                 self.push_clip(walk, rect, Radii::scaled(*corners, s));
             }
             DisplayItem::PushGpuiContentMask { bounds } => {
-                walk.open.push(Scope::Clip);
-                walk.out
-                    .push(PaintCommand::PushClip(outward(at.rect(*bounds))));
+                let rect = outward(at.rect(*bounds));
+                walk.open_clip(rect);
+                walk.out.push(PaintCommand::PushClip(rect));
             }
             DisplayItem::PopClip => match walk.close(Scope::Clip) {
                 true => walk.out.push(PaintCommand::PopClip),
@@ -1197,7 +1221,7 @@ impl Lowering {
     fn push_clip(&mut self, walk: &mut Walk, rect: Rect, radii: Radii) {
         let fitted = radii.fitted(rect);
         let radius = fitted.max();
-        walk.open.push(Scope::Clip);
+        walk.open_clip(rect);
         match radius >= 0.75 {
             true => {
                 walk.note(match fitted.is_uniform() {
@@ -1632,20 +1656,28 @@ impl Lowering {
             walk.skip(Unsupported::PathFailed);
             return;
         };
+        crate::profile::note(|| format!("path_raster={}x{}", raster.width, raster.height));
         match self.residency.vector(
             &raster.source,
             raster.width,
             raster.height,
             VectorMode::Color,
         ) {
-            Ok(Slot::Resident(placement)) => push_image(
-                &mut walk.out,
-                &placement,
-                raster.placement,
-                full_source(),
-                1.0,
-                0.0,
-            ),
+            Ok(Slot::Resident(placement)) => {
+                self.path_keys_now.push(Residency::vector_key(
+                    &raster.source,
+                    raster.width,
+                    raster.height,
+                ));
+                push_image(
+                    &mut walk.out,
+                    &placement,
+                    raster.placement,
+                    full_source(),
+                    1.0,
+                    0.0,
+                )
+            }
             Ok(Slot::Blank { .. }) => {}
             Err(_) => walk.skip(Unsupported::PathFailed),
         }
@@ -1723,6 +1755,21 @@ impl Lowering {
             ExternalUpdate::Transition(settings) => self.begin_transition(settings),
             ExternalUpdate::TextRaster(mode) => self.set_text_raster(mode),
         });
+    }
+
+    fn retire_reshaped_paths(&mut self) {
+        let now = std::mem::take(&mut self.path_keys_now);
+        let previous = std::mem::replace(&mut self.path_keys, now);
+        if previous.len() != self.path_keys.len() {
+            return;
+        }
+        previous
+            .iter()
+            .zip(self.path_keys.iter())
+            .filter(|(old, new)| old != new && !self.path_keys.contains(old))
+            .for_each(|(old, _)| {
+                self.residency.remove_vector(*old, VectorMode::Color);
+            });
     }
 
     pub fn begin_transition(&mut self, settings: Settings) {

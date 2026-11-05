@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use aqua_core::{DisplayItem, NodeId, Transform2D};
-use aqua_motion::{Binding, Edge, MotionCommand, MotionValue, Property, TrackId};
+use aqua_motion::{Binding, MotionCommand, MotionValue, Property, TrackId};
 use aqua_protocol::{RenderCommand, RenderEvent};
 use aqua_ui::{overlay::OverlayId, overlay_host::PopupMotion, tree::NodeKind};
 
@@ -153,34 +153,8 @@ impl Runtime {
         self.motion_rt.set_theme(self.host.tracks_mut(), theme, now);
     }
 
-    fn scroll_shift(&self, node: NodeId) -> (f32, f32) {
-        let mut shift = (0.0, 0.0);
-        let mut parent = match self.tree.is_portal(node) {
-            true => None,
-            false => self.tree.get(node).and_then(|record| record.parent),
-        };
-        while let Some(id) = parent {
-            let Some(record) = self.tree.get(id) else {
-                break;
-            };
-            if let NodeKind::Scroll(scroll) = &record.kind {
-                shift.0 -= scroll.offset.x;
-                shift.1 -= scroll.offset.y;
-            }
-            if self.tree.is_portal(id) {
-                break;
-            }
-            parent = record.parent;
-        }
-        shift
-    }
-
     fn scene_targets(&self, binding: Binding) -> Vec<(NodeId, f32)> {
-        let shift = match binding.property {
-            Property::Edge(Edge::Left | Edge::Right) => self.scroll_shift(binding.node).0,
-            Property::Edge(Edge::Top | Edge::Bottom) => self.scroll_shift(binding.node).1,
-            _ => 0.0,
-        };
+        let shift = 0.0;
         self.motion_keys
             .get(&(binding.node, slot_for(binding.property)))
             .into_iter()
@@ -275,7 +249,9 @@ impl Runtime {
                 true => None,
                 false => *roots.entry(node).or_insert_with(|| self.portal_root(node)),
             };
-            if matches!(key, SceneKey::Tree { .. }) && root != portal {
+            if matches!(key, SceneKey::Tree { .. } | SceneKey::ScrollOffset { .. })
+                && root != portal
+            {
                 if let Some(previous) = portal.take() {
                     close_portal(&mut out, previous);
                 }

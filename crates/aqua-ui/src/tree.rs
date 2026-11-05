@@ -45,8 +45,8 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use aqua_core::{
-    Arena, CollectionSemantics, DisplayItem, NodeId, Oklch, Point, RawId, Rect, Role, SemanticNode,
-    Size, TextRun, Transform2D, ViewportId, media_layer,
+    media_layer, Arena, CollectionSemantics, DisplayItem, NodeId, Oklch, Point, RawId, Rect, Role,
+    SemanticNode, Size, TextRun, Transform2D, ViewportId,
 };
 use aqua_text::{LineMode, Selection, TextEditor, TextModel};
 use taffy::{AvailableSpace, LayoutInput, TaffyTree};
@@ -1050,6 +1050,25 @@ pub struct MotionGroups {
     pub translate: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ScrollSlot {
+    view: Rect,
+    window: Rect,
+    op: u32,
+    volatile: bool,
+    generation: u64,
+}
+
+const SCROLL_OVERSCAN_MIN: f32 = 160.0;
+const SCROLL_OVERSCAN_MAX: f32 = 480.0;
+
+fn rect_contains_rect(outer: Rect, inner: Rect) -> bool {
+    outer.x <= inner.x
+        && outer.y <= inner.y
+        && outer.right() >= inner.right()
+        && outer.bottom() >= inner.bottom()
+}
+
 pub struct UiTree {
     interaction: interaction::InteractionStore,
     gpui_paint: bool,
@@ -1107,6 +1126,10 @@ pub struct UiTree {
     /// Bumped by every paint- or layout-affecting mutation. Hosts gate
     /// scene re-emission on this (no per-frame whole-tree walks).
     content_version: u64,
+    scroll_patches: u64,
+    scroll_state: RefCell<HashMap<RawId, ScrollSlot>>,
+    scroll_active: RefCell<Vec<RawId>>,
+    emit_generation: std::cell::Cell<u64>,
     /// Viewport covered by the last committed rect set.
     last_viewport: Option<Size>,
     /// Statistics for the last layout + emit (dirty-tracking evidence).
@@ -1210,6 +1233,10 @@ impl UiTree {
             layout_version: 0,
             committed_layout: 0,
             content_version: 0,
+            scroll_patches: 0,
+            scroll_state: RefCell::new(HashMap::new()),
+            scroll_active: RefCell::new(Vec::new()),
+            emit_generation: std::cell::Cell::new(0),
             last_viewport: None,
             last_stats: FrameStats::default(),
             visited: std::cell::Cell::new(0),
@@ -3129,9 +3156,68 @@ impl UiTree {
             None => false,
         };
         if applied {
-            self.touch_paint(id);
+            match self.scroll_stays_in_window(id, clamped) {
+                true => {
+                    self.scroll_patches += 1;
+                    self.content_version += 1;
+                    let rev = self.content_version;
+                    if let Some(rec) = self.nodes.get_mut(id.raw()) {
+                        rec.paint_rev = rev;
+                    }
+                }
+                false => self.touch_paint(id),
+            }
         }
         applied
+    }
+
+    fn scroll_stays_in_window(&self, id: NodeId, offset: Point) -> bool {
+        let generation = self.emit_generation.get();
+        self.scroll_state
+            .borrow()
+            .get(&id.raw())
+            .is_some_and(|slot| {
+                slot.generation == generation
+                    && !slot.volatile
+                    && rect_contains_rect(slot.window, slot.view.translate(offset.x, offset.y))
+            })
+    }
+
+    #[must_use]
+    pub fn scene_version(&self) -> u64 {
+        self.content_version - self.scroll_patches
+    }
+
+    #[must_use]
+    pub fn scroll_revision(&self) -> u64 {
+        self.scroll_patches
+    }
+
+    #[must_use]
+    pub fn scroll_translate_op(&self, node: NodeId) -> Option<u32> {
+        let generation = self.emit_generation.get();
+        self.scroll_state
+            .borrow()
+            .get(&node.raw())
+            .filter(|slot| slot.generation == generation)
+            .map(|slot| slot.op)
+    }
+
+    pub fn scroll_translations(&self) -> Vec<(NodeId, DisplayItem)> {
+        let generation = self.emit_generation.get();
+        self.scroll_state
+            .borrow()
+            .iter()
+            .filter(|(_, slot)| slot.generation == generation)
+            .filter_map(|(raw, _)| {
+                let node = NodeId::from_raw(*raw);
+                let offset = self.scroll_offset(node)?;
+                Some((
+                    node,
+                    DisplayItem::PushTransform(Transform2D::translate(-offset.x, -offset.y)),
+                ))
+            })
+            .collect()
     }
 
     fn collect_dirty_layout(&self, root: NodeId) -> HashSet<RawId> {
@@ -3397,12 +3483,31 @@ impl UiTree {
             }
         }
         let mut out = Vec::new();
+        let generation = self.emit_generation.get() + 1;
+        self.emit_generation.set(generation);
         if let Some(root) = self.root {
-            self.emit_node(root, Point::ZERO, None, Transform2D::IDENTITY, &mut out);
+            self.emit_node(
+                root,
+                Point::ZERO,
+                None,
+                None,
+                Transform2D::IDENTITY,
+                &mut out,
+            );
         }
         for portal in &self.portal_order {
-            self.emit_node(*portal, Point::ZERO, None, Transform2D::IDENTITY, &mut out);
+            self.emit_node(
+                *portal,
+                Point::ZERO,
+                None,
+                None,
+                Transform2D::IDENTITY,
+                &mut out,
+            );
         }
+        self.scroll_state
+            .borrow_mut()
+            .retain(|_, slot| slot.generation == generation);
         self.last_stats.scene_ops = out.len();
         self.last_stats.content_version = self.content_version;
         out
@@ -3411,8 +3516,9 @@ impl UiTree {
     fn emit_node(
         &self,
         id: NodeId,
-        offset: Point,
+        scrolled: Point,
         clip: Option<Rect>,
+        cull: Option<Rect>,
         inherited_transform: Transform2D,
         out: &mut Vec<(NodeId, DisplayItem)>,
     ) {
@@ -3420,10 +3526,9 @@ impl UiTree {
             return;
         };
         self.visited.set(self.visited.get() + 1);
-        let Some(mut rect) = self.rects.get(&id.raw()).copied() else {
+        let Some(rect) = self.rects.get(&id.raw()).copied() else {
             return;
         };
-        rect = rect.translate(offset.x, offset.y);
         let paint = match &rec.kind {
             NodeKind::Box(content) => content.paint.clone(),
             _ => rec.paint().clone(),
@@ -3461,7 +3566,7 @@ impl UiTree {
             footprint
         };
         let visual_footprint = footprint.transform(world);
-        if clip.is_some_and(|clip| clip.intersect(visual_footprint).is_empty())
+        if cull.is_some_and(|cull| cull.intersect(visual_footprint).is_empty())
             && Some(id) != self.root
             && !paint.shadows.iter().any(|layer| !layer.inset)
             && !paint.gpui_shadows.iter().any(|layer| !layer.inset)
@@ -3471,6 +3576,7 @@ impl UiTree {
         {
             return;
         }
+        let start = out.len();
         if let Some(transform) = transform {
             out.push((id, DisplayItem::PushTransform(transform)));
         }
@@ -3612,6 +3718,49 @@ impl UiTree {
         } else {
             clip
         };
+        let scroll_offset = match &rec.kind {
+            NodeKind::Scroll(s) => Some(s.offset),
+            _ => None,
+        };
+        let (child_world, child_cull) = match scroll_offset {
+            Some(scroll) => {
+                let child_world = Transform2D::translate(-scroll.x, -scroll.y).then(world);
+                let visible = rect.translate(scroll.x, scroll.y);
+                let overscan = (rect.h * 0.5).clamp(SCROLL_OVERSCAN_MIN, SCROLL_OVERSCAN_MAX);
+                let generation = self.emit_generation.get();
+                let window = {
+                    let mut slots = self.scroll_state.borrow_mut();
+                    let window = slots
+                        .get(&id.raw())
+                        .map(|slot| slot.window)
+                        .filter(|window| rect_contains_rect(*window, visible))
+                        .unwrap_or_else(|| visible.inflate(overscan));
+                    slots.insert(
+                        id.raw(),
+                        ScrollSlot {
+                            view: rect,
+                            window,
+                            op: 0,
+                            volatile: false,
+                            generation,
+                        },
+                    );
+                    window
+                };
+                let window_screen = window.transform(child_world);
+                (
+                    child_world,
+                    Some(cull.map_or(window_screen, |c| c.intersect(window_screen))),
+                )
+            }
+            None => (
+                world,
+                match clips {
+                    true => Some(cull.map_or(visual_rect, |c| c.intersect(visual_rect))),
+                    false => cull,
+                },
+            ),
+        };
         if clips {
             out.push((
                 id,
@@ -3650,6 +3799,15 @@ impl UiTree {
                         radius: corners.top_left,
                     }
                 },
+            ));
+        }
+        if let Some(scroll) = scroll_offset {
+            if let Some(slot) = self.scroll_state.borrow_mut().get_mut(&id.raw()) {
+                slot.op = (out.len() - start) as u32;
+            }
+            out.push((
+                id,
+                DisplayItem::PushTransform(Transform2D::translate(-scroll.x, -scroll.y)),
             ));
         }
         match &rec.kind {
@@ -3773,8 +3931,24 @@ impl UiTree {
                     .painter
                     .and_then(|pid| self.painters.get(&pid).map(|painter| (pid, painter)))
                 {
+                    let scroll_canceled = scrolled != Point::ZERO;
+                    if scroll_canceled {
+                        for active in self.scroll_active.borrow().iter() {
+                            if let Some(slot) = self.scroll_state.borrow_mut().get_mut(active) {
+                                slot.volatile = true;
+                            }
+                        }
+                        out.push((
+                            id,
+                            DisplayItem::PushTransform(Transform2D::translate(
+                                scrolled.x, scrolled.y,
+                            )),
+                        ));
+                    }
                     let ops = match &painter.callback {
-                        CanvasPainter::Legacy(paint) => paint(rect),
+                        CanvasPainter::Legacy(paint) => {
+                            paint(rect.translate(-scrolled.x, -scrolled.y))
+                        }
                         CanvasPainter::Context(paint) => {
                             let corners = [
                                 rect.origin(),
@@ -3817,6 +3991,9 @@ impl UiTree {
                         }
                     };
                     out.extend(ops.into_iter().map(|op| (id, op)));
+                    if scroll_canceled {
+                        out.push((id, DisplayItem::PopTransform));
+                    }
                 }
             }
             NodeKind::Viewport3D(v) => {
@@ -3833,14 +4010,28 @@ impl UiTree {
                 }
             }
         }
-        let child_offset = match &rec.kind {
-            NodeKind::Scroll(s) => Point::new(offset.x - s.offset.x, offset.y - s.offset.y),
-            _ => offset,
+        let child_scrolled = match scroll_offset {
+            Some(scroll) => Point::new(scrolled.x + scroll.x, scrolled.y + scroll.y),
+            None => scrolled,
         };
+        if scroll_offset.is_some() {
+            self.scroll_active.borrow_mut().push(id.raw());
+        }
         for &child in &rec.children {
             if !self.is_portal(child) {
-                self.emit_node(child, child_offset, child_clip, world, out);
+                self.emit_node(
+                    child,
+                    child_scrolled,
+                    child_clip,
+                    child_cull,
+                    child_world,
+                    out,
+                );
             }
+        }
+        if scroll_offset.is_some() {
+            self.scroll_active.borrow_mut().pop();
+            out.push((id, DisplayItem::PopTransform));
         }
         if clips {
             out.push((id, DisplayItem::PopClip));
@@ -4513,13 +4704,11 @@ mod tests {
     #[test]
     fn kind_change_replaces_node() {
         let mut tree = UiTree::new();
-        let root = tree.mount_spec(column(vec![
-            NodeSpec::new(
-                NodeKind::Text(TextContent::label("x")),
-                LayoutStyle::default(),
-            )
-            .keyed("k"),
-        ]));
+        let root = tree.mount_spec(column(vec![NodeSpec::new(
+            NodeKind::Text(TextContent::label("x")),
+            LayoutStyle::default(),
+        )
+        .keyed("k")]));
         let before: Vec<NodeId> = tree.get(root).unwrap().children.clone();
         let after = tree.sync_children(
             root,
@@ -4585,10 +4774,9 @@ mod tests {
         tree.compute_layout(Size::new(100.0, 100.0), &NaiveMeasurer)
             .unwrap();
         let ops = tree.emit_scene();
-        assert!(
-            ops.iter()
-                .any(|(_, op)| matches!(op, DisplayItem::BackdropBlur { .. }))
-        );
+        assert!(ops
+            .iter()
+            .any(|(_, op)| matches!(op, DisplayItem::BackdropBlur { .. })));
     }
 
     #[test]

@@ -122,7 +122,7 @@ fn mounting_starts_no_motion() {
     assert!(rig.render.tracks().is_idle());
     assert_eq!(rig.render.tracks().len(), 0);
     assert!(rig.translations().iter().all(|ty| *ty == 0.0));
-    assert_eq!(rig.translations().len(), 1);
+    assert_eq!(rig.translations().len(), 2);
 }
 
 #[test]
@@ -308,4 +308,32 @@ fn closing_a_popup_removes_its_track_and_group() {
         rig.runtime.host_mut().tracks_mut().drain_commands(),
         vec![MotionCommand::Remove { track }]
     );
+}
+
+#[test]
+fn a_wheel_notch_inside_the_overscan_window_patches_one_scene_item() {
+    let mut rig = Rig::new(scroller());
+    rig.app_frame(0.0);
+    rig.app_frame(0.016);
+    let out = rig.wheel(1.0, 1.0);
+    let _ = out;
+    assert!(rig.runtime.frame_work().tree_scene_reused);
+    assert_eq!(rig.runtime.frame_work().scene_items_reconciled, 1);
+    assert!((offset(&rig) - 77.7).abs() < 1e-3);
+    assert!(rig.translations().contains(&-77.7));
+}
+
+#[test]
+fn a_wheel_past_the_overscan_window_re_emits_the_scene() {
+    let mut rig = Rig::new(scroller());
+    rig.app_frame(0.0);
+    rig.app_frame(0.016);
+    for step in 0..6 {
+        rig.wheel(1.0 + f64::from(step), 1.0);
+    }
+    assert!(!rig.runtime.frame_work().tree_scene_reused);
+    assert!(rig
+        .translations()
+        .iter()
+        .any(|ty| (*ty + 466.2).abs() < 1e-2));
 }

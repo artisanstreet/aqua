@@ -8,7 +8,7 @@ use aqua_core::InputEvent as CoreInputEvent;
 use aqua_core::Modifiers as CoreModifiers;
 use aqua_graph::Extent;
 use aqua_protocol::chrome::DragRegions;
-use aqua_protocol::prefs::{SystemPrefs as OsPreferences, prefers_opaque_frame};
+use aqua_protocol::prefs::{prefers_opaque_frame, SystemPrefs as OsPreferences};
 use aqua_protocol::{
     A11yActionRequest, A11yNode, AccessTreeUpdate, DialogOutcome, DialogSpec, GpuEvent, ImeCommand,
     ImeEvent, Instant, MotionCommand, MotionEvent, RenderCommand, RenderEvent, RequestId,
@@ -22,7 +22,7 @@ use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
 use aqua_runtime::Scheduler;
 use aqua_scene::Scene;
 use aqua_shell_win32::capability::query_preferences;
-use aqua_shell_win32::services::{Clipboard, ClipboardBackend, app_clipboard};
+use aqua_shell_win32::services::{app_clipboard, Clipboard, ClipboardBackend};
 
 use crate::config::AquaConfig;
 use crate::inbox::{AquaUserEvent, Inbox};
@@ -1778,7 +1778,7 @@ impl Aqua {
     }
 
     pub fn report_host_stats(&mut self) {
-        if self.frame_stats.is_none() {
+        if self.frame_stats.is_none() && !crate::mem_probe::memory_report_enabled() {
             return;
         }
         let due = self
@@ -1876,8 +1876,8 @@ mod desktop;
 mod tests {
     use super::*;
     use aqua_core::PointerKind;
-    use aqua_protocol::ShellEvent;
     use aqua_protocol::geometry::LogicalSize;
+    use aqua_protocol::ShellEvent;
 
     struct Probe {
         window_events: Vec<WindowEvent>,
@@ -2432,37 +2432,46 @@ mod tests {
             (800, 600)
         }
         fn set_title(&self, title: &str) {
-            self.0.0.borrow_mut().push(format!("title:{title}"));
+            self.0 .0.borrow_mut().push(format!("title:{title}"));
         }
         fn set_logical_size(&self, width: f64, height: f64) {
-            self.0.0.borrow_mut().push(format!("size:{width}x{height}"));
+            self.0
+                 .0
+                .borrow_mut()
+                .push(format!("size:{width}x{height}"));
         }
         fn set_visible(&self, visible: bool) {
-            self.0.0.borrow_mut().push(format!("visible:{visible}"));
+            self.0 .0.borrow_mut().push(format!("visible:{visible}"));
         }
         fn set_minimized(&self, minimized: bool) {
-            self.0.0.borrow_mut().push(format!("minimized:{minimized}"));
+            self.0
+                 .0
+                .borrow_mut()
+                .push(format!("minimized:{minimized}"));
         }
         fn set_maximized(&self, maximized: bool) {
-            self.0.0.borrow_mut().push(format!("maximized:{maximized}"));
+            self.0
+                 .0
+                .borrow_mut()
+                .push(format!("maximized:{maximized}"));
         }
         fn is_maximized(&self) -> bool {
             false
         }
         fn activate(&self) {
-            self.0.0.borrow_mut().push("activate".into());
+            self.0 .0.borrow_mut().push("activate".into());
         }
         fn set_outer_position(&self, x: i32, y: i32) {
-            self.0.0.borrow_mut().push(format!("position:{x},{y}"));
+            self.0 .0.borrow_mut().push(format!("position:{x},{y}"));
         }
         fn center(&self) {
-            self.0.0.borrow_mut().push("center".into());
+            self.0 .0.borrow_mut().push("center".into());
         }
         fn set_cursor(&self, cursor: aqua_core::CursorIcon) {
-            self.0.0.borrow_mut().push(format!("cursor:{cursor:?}"));
+            self.0 .0.borrow_mut().push(format!("cursor:{cursor:?}"));
         }
         fn set_drag_regions(&self, _regions: &DragRegions) {
-            self.0.0.borrow_mut().push("regions".into());
+            self.0 .0.borrow_mut().push("regions".into());
         }
         fn click_settings(&self) -> aqua_core::ClickSettings {
             aqua_core::ClickSettings::default()
@@ -2475,13 +2484,13 @@ mod tests {
             badge: Option<aqua_protocol::TaskbarBadge>,
         ) -> Result<(), aqua_protocol::BadgeError> {
             self.0
-                .0
+                 .0
                 .borrow_mut()
                 .push(format!("badge:{}", badge.map_or(0, |b| b.count)));
             Ok(())
         }
         fn destroy(&self) {
-            self.0.0.borrow_mut().push("destroy".into());
+            self.0 .0.borrow_mut().push("destroy".into());
         }
     }
 

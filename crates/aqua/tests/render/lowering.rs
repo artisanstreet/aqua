@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use aqua::UiApp;
 use aqua::render::lower::Lowering;
 use aqua::ui::Text;
+use aqua::UiApp;
 use aqua_core::geometry::{CornerRadii, Insets, Rect};
 use aqua_core::gpui_mesh::{GpuiMesh, GpuiMeshStyle, GpuiMeshVertex};
 use aqua_core::scene::{DisplayItem, GpuiShadowLayer, ShadowLayer, TextRasterMode};
@@ -522,13 +522,11 @@ fn trimming_everything_releases_pages_that_the_last_frame_did_not_use() {
         aqua_transport::Lowering::trim(&mut lowering, aqua_transport::TrimRequest::Everything);
     assert!(freed > 0);
     let after = lowered(&mut lowering, &empty);
-    assert!(
-        after
-            .uploads
-            .textures
-            .iter()
-            .any(|upload| matches!(upload.op, aqua_protocol::TextureOp::Release))
-    );
+    assert!(after
+        .uploads
+        .textures
+        .iter()
+        .any(|upload| matches!(upload.op, aqua_protocol::TextureOp::Release)));
 }
 
 fn resident_images(lowering: &Lowering) -> Vec<aqua_media::atlas::ImageKey> {
@@ -627,4 +625,31 @@ fn culling_while_walking_matches_culling_the_finished_commands() {
     assert_eq!(early, late);
     assert!(!early.is_empty());
     assert!(early.len() < walk(false).len());
+}
+
+#[test]
+fn leaves_outside_the_active_clip_are_not_lowered() {
+    let count = |offset: f32| {
+        let scene = scene_of(vec![
+            DisplayItem::PushClip {
+                bounds: rect(0.0, 0.0, 64.0, 48.0),
+                radius: 0.0,
+            },
+            DisplayItem::PushTransform(Transform2D::translate(0.0, offset)),
+            quad(rect(4.0, 4.0, 10.0, 10.0), CornerRadii::uniform(0.0)),
+            quad(rect(4.0, 200.0, 10.0, 10.0), CornerRadii::uniform(0.0)),
+            DisplayItem::PopTransform,
+            DisplayItem::PopClip,
+        ]);
+        let mut lowering = Lowering::new(SharedFonts::new(), SharedRuns::new());
+        lowering
+            .commands(&scene, SIZE, 1.0, aqua_protocol::Instant::ZERO)
+            .0
+            .len()
+    };
+    let unshifted = count(0.0);
+    let shifted = count(-196.0);
+    let hidden = count(-400.0);
+    assert_eq!(unshifted, shifted);
+    assert!(hidden < unshifted);
 }

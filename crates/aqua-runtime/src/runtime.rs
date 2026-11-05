@@ -98,6 +98,7 @@ enum SceneKey {
     CaretClipEnd { node: NodeId },
     CaretOpacityStart { node: NodeId },
     CaretOpacityEnd { node: NodeId },
+    ScrollOffset { node: NodeId },
     ScrollContentStart { node: NodeId },
     ScrollContentEnd { node: NodeId },
     PortalStart { node: NodeId, slot: u8 },
@@ -121,6 +122,7 @@ impl SceneKey {
             | Self::CaretClipEnd { node }
             | Self::CaretOpacityStart { node }
             | Self::CaretOpacityEnd { node }
+            | Self::ScrollOffset { node }
             | Self::ScrollContentStart { node }
             | Self::ScrollContentEnd { node }
             | Self::PortalStart { node, .. }
@@ -337,6 +339,7 @@ pub struct Runtime {
     native_paint_revisions: HashMap<NodeId, u64>,
     dynamic_order: Vec<SceneKey>,
     cached_version: Option<(u64, u32, u32, u32, u64)>,
+    scroll_revision: u64,
     frame_work: FrameWork,
     frame_work_window: Option<FrameWorkWindow>,
     diagnostics: Vec<String>,
@@ -354,14 +357,16 @@ impl Runtime {
             return None;
         }
         let fonts_revision = self.fonts.lock().font_revision();
-        if self.cached_version
-            != Some((
-                self.tree.content_version(),
-                self.scale.to_bits(),
-                self.viewport.w.to_bits(),
-                self.viewport.h.to_bits(),
-                fonts_revision,
-            ))
+        let presented = (
+            self.scale.to_bits(),
+            self.viewport.w.to_bits(),
+            self.viewport.h.to_bits(),
+            fonts_revision,
+        );
+        if self
+            .cached_version
+            .map(|(_, scale, width, height, fonts)| (scale, width, height, fonts))
+            != Some(presented)
         {
             return None;
         }
@@ -473,6 +478,7 @@ impl Runtime {
             native_paint_revisions: HashMap::new(),
             dynamic_order: Vec::new(),
             cached_version: None,
+            scroll_revision: 0,
             frame_work: FrameWork::default(),
             frame_work_window: None,
             diagnostics: Vec::new(),
@@ -856,6 +862,28 @@ impl Runtime {
             .map_err(RuntimeError::Mount)?;
         self.tree.drain_commands();
         Ok(())
+    }
+
+    pub fn refresh_subtree(
+        &mut self,
+        key: impl Into<aqua_ui::element::Key>,
+        element: Element,
+    ) -> Result<bool, RuntimeError> {
+        if self.disposed {
+            return Err(RuntimeError::Disposed);
+        }
+        let Some(view) = self.view.as_mut() else {
+            return Err(RuntimeError::NoViewMounted);
+        };
+        let hash = aqua_ui::tree::hash_key(key.into());
+        let Some(node) = self.tree.sole_node_with_key(hash) else {
+            return Ok(false);
+        };
+        let refreshed = view
+            .refresh_subtree(&mut self.tree, node, element)
+            .map_err(RuntimeError::Mount)?;
+        self.tree.drain_commands();
+        Ok(refreshed)
     }
 
     pub fn sync(&mut self) -> Result<(), RuntimeError> {
@@ -1269,7 +1297,7 @@ impl Runtime {
         self.host.reanchor_all(&mut self.tree);
         self.reconcile_motion();
         let version = (
-            self.tree.content_version(),
+            self.tree.scene_version(),
             self.scale.to_bits(),
             self.viewport.w.to_bits(),
             self.viewport.h.to_bits(),
@@ -1295,6 +1323,7 @@ impl Runtime {
         if changed {
             let _span = probe::span(Phase::Build);
             self.cached_scene = self.emit_keyed();
+            self.scroll_revision = self.tree.scroll_revision();
             aqua_core::checkpoint::reach();
             self.cached_text_nodes = self
                 .cached_scene
@@ -1322,6 +1351,7 @@ impl Runtime {
             self.cached_version = Some(version);
         } else {
             self.frame_work.tree_scene_reused = true;
+            self.patch_scroll_offsets();
         }
         aqua_core::checkpoint::reach();
         let selection_items = self.caret_selection_items();
@@ -1339,7 +1369,7 @@ impl Runtime {
             .collect();
         let dynamic_order: Vec<_> = dynamic.iter().map(|(key, _)| *key).collect();
         if !changed && self.dynamic_order == dynamic_order {
-            self.frame_work.scene_items_reconciled = dynamic.len();
+            self.frame_work.scene_items_reconciled += dynamic.len();
             for (key, item) in dynamic {
                 if let Some(id) = self.scene_map.get(&key).copied() {
                     self.scene.update(id, item);
@@ -1412,7 +1442,7 @@ impl Runtime {
     }
 
     fn text_rect(&self, node: NodeId) -> Option<Rect> {
-        let mut r = self.tree.rect(node)?;
+        let r = self.tree.rect(node)?;
         let mut parent = if self.tree.is_portal(node) {
             None
         } else {
@@ -1420,9 +1450,6 @@ impl Runtime {
         };
         while let Some(id) = parent {
             let record = self.tree.get(id)?;
-            if let NodeKind::Scroll(scroll) = &record.kind {
-                r = r.translate(-scroll.offset.x, -scroll.offset.y);
-            }
             if self.tree.is_portal(id) {
                 break;
             }
@@ -1703,6 +1730,24 @@ impl Runtime {
         }
     }
 
+    fn patch_scroll_offsets(&mut self) {
+        if self.scroll_revision == self.tree.scroll_revision() {
+            return;
+        }
+        self.scroll_revision = self.tree.scroll_revision();
+        for (node, item) in self.tree.scroll_translations() {
+            let key = SceneKey::ScrollOffset { node };
+            let Some(slot) = self.cached_scene.iter_mut().find(|(k, _)| *k == key) else {
+                continue;
+            };
+            slot.1 = item.clone();
+            if let Some(id) = self.scene_map.get(&key).copied() {
+                self.scene.update(id, item);
+            }
+            self.frame_work.scene_items_reconciled += 1;
+        }
+    }
+
     fn emit_keyed(&mut self) -> Vec<(SceneKey, DisplayItem)> {
         let items = self.emit_tree_keyed();
         self.wrap_motion_groups(items)
@@ -1714,8 +1759,16 @@ impl Runtime {
         self.motion_keys.clear();
         for (node, item) in self.tree.emit_scene() {
             let op = per_node.entry(node).or_insert(0);
-            let key = SceneKey::Tree { node, op: *op };
-            *op += 1;
+            let offset_slot = matches!(item, DisplayItem::PushTransform(_))
+                && self.tree.scroll_translate_op(node) == Some(*op);
+            let key = match offset_slot {
+                true => SceneKey::ScrollOffset { node },
+                false => {
+                    let key = SceneKey::Tree { node, op: *op };
+                    *op += 1;
+                    key
+                }
+            };
             let item = match item {
                 DisplayItem::Text {
                     mut at,
@@ -1753,7 +1806,9 @@ impl Runtime {
                 }
                 other => other,
             };
-            render_motion::note_motion_item(&mut self.motion_keys, node, key, &item);
+            if !offset_slot {
+                render_motion::note_motion_item(&mut self.motion_keys, node, key, &item);
+            }
             let clip_text = self
                 .tree
                 .get(node)
@@ -2714,7 +2769,7 @@ impl Runtime {
 mod style_decoration_tests {
     use super::*;
     use aqua_ui::element::ui::{Box as UiBox, Text as UiText};
-    use aqua_ui::style::{Style, px};
+    use aqua_ui::style::{px, Style};
 
     #[test]
     fn caret_respects_own_and_ancestor_style_opacity() {

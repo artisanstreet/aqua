@@ -1,0 +1,16 @@
+aqua: clipboard backend: System
+2026-11-05T04:01:37.257009Z  INFO tm: what="ext" ms=35.5283
+2026-11-05T04:01:37.333201Z  INFO tm: what="fc" ms=3.5934999999999997
+2026-11-05T04:01:37.370683Z  INFO tm: what="ext" ms=34.8326
+2026-11-05T04:01:37.384330Z  INFO tm: what="rebuild" ms=3.3777999999999997
+2026-11-05T04:01:37.384678Z  INFO tm: what="wake" ms=4.1157
+2026-11-05T04:01:37.414494Z  INFO tm: what="wake" ms=4.3092
+2026-11-05T04:01:37.811856Z  INFO tm: what="rebuild" ms=3.4605
+2026-11-05T04:01:37.812335Z  INFO tm: what="winev" ms=4.0613
+2026-11-05T04:01:37.816016Z  INFO tm: what="ext" ms=3.3182
+2026-11-05T04:01:37.833276Z  INFO tm: what="rebuild" ms=3.2326
+2026-11-05T04:01:37.833698Z  INFO tm: what="fc" ms=4.3957
+2026-11-05T04:01:49.286629Z  INFO tm: what="ext" ms=4.3659
+2026-11-05T04:01:49.306498Z  INFO tm: what="rebuild" ms=3.7017
+2026-11-05T04:01:49.306979Z  INFO tm: what="wake" ms=4.9755
+2026-11-05T04:03:05.748980Z  INFO tm: what="ext" ms=3.7494

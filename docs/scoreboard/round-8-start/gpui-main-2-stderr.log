@@ -1,0 +1,4 @@
+2026-11-05T04:07:48.033745Z  INFO gpui_ce_windows::directx_devices: Using GPU: AMD Radeon RX 9070 XT
+2026-11-05T04:07:48.034209Z  INFO gpui_ce_windows::directx_devices: Created device with Direct3D 11.1 feature level.
+2026-11-05T04:07:48.101510Z  WARN editor_conversation: can't open a thread on an unknown host host=mch_01M628PTAMADX6D3RQRRMNSBNH thread=bench-large
+2026-11-05T04:07:48.652285Z ERROR gpui::window: RefCell already borrowed

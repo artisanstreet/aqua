@@ -1,0 +1,74 @@
+aqua: clipboard backend: System
+2026-11-05T04:38:45.772163Z  INFO tm: what="rebuild" ms=3.993
+2026-11-05T04:38:45.772930Z  INFO tm: what="wake" ms=4.8346
+2026-11-05T04:38:46.095145Z  INFO tm: what="ext" ms=35.3015
+2026-11-05T04:38:46.137137Z  INFO tm: what="wake" ms=4.042
+2026-11-05T04:38:46.206330Z  INFO tm: what="rebuild" ms=4.0836
+2026-11-05T04:38:46.206791Z  INFO tm: what="fc" ms=5.8215
+2026-11-05T04:38:46.244154Z  INFO tm: what="ext" ms=34.1742
+2026-11-05T04:38:46.259534Z  INFO tm: what="rebuild" ms=3.8346999999999998
+2026-11-05T04:38:46.259924Z  INFO tm: what="wake" ms=5.742999999999999
+aqua-wakes: secs=1.01 turns[timer=1.0,window-message=7.9,inbox-wake=7.9] unpresented_ticks=16.9 messages[covered=1.0,focus=1.0,maximized=4.0,moved=3.0,redraw=10.9,resized=5.0] posts[messages@forge-net#host.rs:151=1.0,messages@forge-net#host.rs:98=6.0,messages@main#host.rs:98=23.8,render-events@aqua-render=6.0,window-requests@main=16.9]
+aqua-shell-wakes: secs=1.00 total=503.3 [loop:queue-send=323.5,wake=53.9,hook:AquaShell32:geticon=12.0,loop:queue-post=12.0,sent:geticon=12.0,hook:AquaShell32:paint=11.0,loop:queue-none=11.0,sent:paint=11.0,loop:queue-paint+send=8.0,hook:AquaShell32:0x0088=2.0,hook:AquaShell32:erasebkgnd=2.0,hook:AquaShell32:getminmaxinfo=2.0,hook:AquaShell32:nccalcsize=2.0,hook:AquaShell32:ncpaint=2.0,hook:AquaShell32:size=2.0,hook:AquaShell32:windowposchanged=2.0,hook:AquaShell32:windowposchanging=2.0,hook:IME:windowposchanging=2.0,hook:MSCTFIME UI:windowposchanging=2.0,loop:queue-post+send=2.0,paint=2.0,sent:0x0088=2.0,sent:erasebkgnd=2.0,sent:getminmaxinfo=2.0,sent:nccalcsize=2.0,sent:ncpaint=2.0,sent:size=2.0,sent:windowposchanged=2.0,sent:windowposchanging=2.0,0xc0ac=1.0,dwmncrenderingchanged=1.0,hook:AquaShell32:move=1.0,hook:IME:windowposchanged=1.0,hook:MSCTFIME UI:windowposchanged=1.0,loop:queue-timer=1.0,loop:timer=1.0,sent:move=1.0,timer=1.0]
+aqua-shell-wakes: secs=1.00 total=389.7 [loop:queue-send=389.7]
+aqua-render-runs: secs=2.51 [feedback=2.0 inbox+framed+presented=1.6 inbox+feedback+framed+presented=0.4 wake_due+framed+presented=0.4 forced+trim+framed+presented=0.4]
+aqua-render-damage: full=5 partial=1 culled_commands=0
+aqua-shell-wakes: secs=1.00 total=147.8 [loop:queue-send=147.8]
+aqua-shell-wakes: secs=1.10 total=357.7 [loop:queue-send=357.7]
+aqua-shell-wakes: secs=1.00 total=69.8 [loop:queue-send=69.8]
+aqua-shell-wakes: secs=1.00 total=500.3 [loop:queue-send=500.3]
+aqua-shell-wakes: secs=1.00 total=510.6 [loop:queue-send=509.6,loop:queue-none=1.0]
+aqua-shell-wakes: secs=2.23 total=40.4 [loop:queue-send=40.4]
+aqua-shell-wakes: secs=1.00 total=587.9 [loop:queue-send=587.9]
+aqua-shell-wakes: secs=1.00 total=453.9 [loop:queue-send=453.9]
+aqua-shell-wakes: secs=1.13 total=291.4 [loop:queue-send=291.4]
+aqua-shell-wakes: secs=1.02 total=165.9 [loop:queue-send=165.9]
+aqua-shell-wakes: secs=1.24 total=82.2 [loop:queue-send=82.2]
+aqua-shell-wakes: secs=1.00 total=214.8 [loop:queue-send=214.8]
+aqua-shell-wakes: secs=1.00 total=278.9 [loop:queue-send=278.9]
+aqua-shell-wakes: secs=1.06 total=314.7 [loop:queue-send=314.7]
+aqua-shell-wakes: secs=1.07 total=409.1 [loop:queue-send=409.1]
+aqua-shell-wakes: secs=1.00 total=169.9 [loop:queue-send=164.9,hook:AquaShell32:geticon=2.0,sent:geticon=2.0,loop:queue-none=1.0]
+aqua-shell-wakes: secs=1.43 total=90.1 [loop:queue-send=90.1]
+aqua-shell-wakes: secs=1.00 total=477.7 [loop:queue-send=477.7]
+aqua-shell-wakes: secs=2.29 total=55.8 [loop:queue-send=55.8]
+aqua-shell-wakes: secs=1.17 total=13.7 [loop:queue-send=13.7]
+aqua-shell-wakes: secs=1.00 total=105.8 [loop:queue-send=105.8]
+aqua-shell-wakes: secs=1.00 total=104.7 [loop:queue-send=104.7]
+aqua-shell-wakes: secs=1.00 total=89.9 [loop:queue-send=89.9]
+aqua-shell-wakes: secs=1.01 total=84.9 [loop:queue-send=84.9]
+aqua-shell-wakes: secs=1.04 total=295.9 [loop:queue-send=295.9]
+aqua-shell-wakes: secs=1.28 total=10.2 [loop:queue-send=10.2]
+aqua-shell-wakes: secs=1.07 total=19.6 [loop:queue-send=18.7,loop:queue-none=0.9]
+aqua-shell-wakes: secs=1.12 total=20.6 [loop:queue-send=20.6]
+aqua-shell-wakes: secs=1.13 total=8.9 [loop:queue-send=8.9]
+aqua-shell-wakes: secs=1.00 total=443.6 [loop:queue-send=443.6]
+2026-11-05T04:39:23.172357Z  INFO tm: what="rebuild" ms=6.0846
+2026-11-05T04:39:23.172844Z  INFO tm: what="winev" ms=7.061999999999999
+2026-11-05T04:39:23.181553Z  INFO tm: what="ext" ms=8.3775
+aqua-wakes: secs=36.48 turns[window-message=0.0] unpresented_ticks=0.0 messages[maximized=0.0,redraw=0.0,resized=0.0] posts[messages@forge-net#host.rs:98=0.0,messages@main#host.rs:98=0.1,window-requests@main=0.0]
+aqua-render-runs: secs=34.48 [inbox+framed+presented=0.0]
+aqua-render-damage: full=1 partial=0 culled_commands=0
+aqua-shell-wakes: secs=1.01 total=240.5 [loop:queue-send=218.6,hook:AquaShell32:0x0088=1.0,hook:AquaShell32:erasebkgnd=1.0,hook:AquaShell32:getminmaxinfo=1.0,hook:AquaShell32:nccalcsize=1.0,hook:AquaShell32:ncpaint=1.0,hook:AquaShell32:size=1.0,hook:AquaShell32:windowposchanged=1.0,hook:AquaShell32:windowposchanging=1.0,hook:IME:windowposchanged=1.0,hook:IME:windowposchanging=1.0,hook:MSCTFIME UI:windowposchanged=1.0,hook:MSCTFIME UI:windowposchanging=1.0,loop:queue-paint+send=1.0,paint=1.0,sent:0x0088=1.0,sent:erasebkgnd=1.0,sent:getminmaxinfo=1.0,sent:nccalcsize=1.0,sent:ncpaint=1.0,sent:size=1.0,sent:windowposchanged=1.0,sent:windowposchanging=1.0]
+aqua-shell-wakes: secs=1.48 total=30.5 [loop:queue-send=22.3,wake=3.4,hook:AquaShell32:geticon=2.0,sent:geticon=2.0,loop:queue-post=0.7]
+aqua-render-runs: secs=2.00 [feedback=0.5 forced+trim+framed+presented=0.5]
+aqua-render-damage: full=0 partial=1 culled_commands=0
+aqua-shell-wakes: secs=2.54 total=71.7 [loop:queue-send=71.7]
+aqua-shell-wakes: secs=1.18 total=417.9 [loop:queue-send=417.9]
+aqua-shell-wakes: secs=1.00 total=61.9 [loop:queue-send=61.9]
+aqua-shell-wakes: secs=1.00 total=188.9 [loop:queue-send=187.9,loop:queue-none=1.0]
+aqua-shell-wakes: secs=1.46 total=4.1 [loop:queue-send=4.1]
+aqua-shell-wakes: secs=1.27 total=13.4 [loop:queue-send=13.4]
+aqua-shell-wakes: secs=1.16 total=118.1 [loop:queue-send=118.1]
+aqua-shell-wakes: secs=1.00 total=154.7 [loop:queue-send=154.7]
+aqua-shell-wakes: secs=1.10 total=66.1 [loop:queue-send=66.1]
+aqua-shell-wakes: secs=1.00 total=158.9 [loop:queue-send=158.9]
+aqua-shell-wakes: secs=1.00 total=116.0 [loop:queue-send=116.0]
+aqua-shell-wakes: secs=1.00 total=196.7 [loop:queue-send=195.7,loop:queue-none=1.0]
+aqua-shell-wakes: secs=1.00 total=139.6 [loop:queue-send=139.6]
+aqua-shell-wakes: secs=1.00 total=125.5 [loop:queue-send=125.5]
+aqua-shell-wakes: secs=1.00 total=314.9 [loop:queue-send=311.9,loop:queue-none=3.0]
+aqua-shell-wakes: secs=1.00 total=439.4 [loop:queue-send=438.4,loop:queue-none=1.0]
+aqua-shell-wakes: secs=1.00 total=271.6 [loop:queue-send=267.6,hook:AquaShell32:geticon=2.0,sent:geticon=2.0]
+aqua-shell-wakes: secs=1.01 total=545.2 [loop:queue-send=545.2]
+aqua-shell-wakes: secs=1.10 total=64.3 [loop:queue-send=64.3]

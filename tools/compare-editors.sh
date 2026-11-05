@@ -31,7 +31,7 @@ RESIZE_COUNT=${AQUA_COMPARE_RESIZE_COUNT:-120}
 RUNS=${AQUA_COMPARE_RUNS:-3}
 TARGETS=${AQUA_COMPARE_TARGETS:-"aqua gpui"}
 PHASES=${AQUA_COMPARE_PHASES:-"main open stream keys wakesrc spikes"}
-DIAG_PHASES="wakesrc spikes memdiag"
+DIAG_PHASES="wakesrc spikes memdiag streamprof"
 SNAPSHOT_DIR=${AQUA_COMPARE_SNAPSHOT_DIR:-}
 MAX_SYSTEM_LOAD=${AQUA_COMPARE_MAX_SYSTEM_LOAD:-25}
 export AQUA_STATS_OVERRIDE=off
@@ -143,8 +143,8 @@ phase_args() {
   case $1 in
     main) echo "artisan://thread/$HOST_ID/$LARGE" ;;
     open) echo "artisan://new/$HOST_ID" ;;
-    stream) echo "artisan://thread/$HOST_ID/$STREAM" ;;
-    wakesrc|spikes|memdiag|idlegate) echo "artisan://thread/$HOST_ID/$LARGE" ;;
+    stream|streamprof) echo "artisan://thread/$HOST_ID/$STREAM" ;;
+    wakesrc|spikes|memdiag|idlegate|resize|resizeprof) echo "artisan://thread/$HOST_ID/$LARGE" ;;
   esac
 }
 
@@ -171,6 +171,12 @@ phase_steps() {
     spikes)
       echo "waitopen $LARGE 45 $SIDEBAR_THREAD 30; sleep 6; scrolllat spike_scroll $SCROLL_X $SCROLL_Y $DIAG_SCROLL_FRAMES $SCROLL_GAP_MS 120; sleep 2; scrolllat spike_scroll2 $SCROLL_X $SCROLL_Y $DIAG_SCROLL_FRAMES $SCROLL_GAP_MS 120"
       ;;
+    resize|resizeprof)
+      echo "waitopen $LARGE 45 $SIDEBAR_THREAD 30; sleep 5; cpu rs0; resizelat resize $RESIZE_COUNT 16; cpu rs1; sleep 1; cpu rs2; resizelat resize2 $RESIZE_COUNT 16; cpu rs3; sleep 2; shot final"
+      ;;
+    streamprof)
+      echo "waitopen $STREAM 45; sleep 3; cpu stream0; trigger $(win "$rundir")\\trigger; lat stream_latency 300 30; cpu stream1; wakes stream 10; cpu stream2; sleep 8"
+      ;;
     stream)
       echo "waitopen $STREAM 45; sleep 3; cpu stream0; trigger $(win "$rundir")\\trigger; lat stream_latency 300 30; cpu stream1; wakes stream 10; cpu stream2; sleep 8; shot streamed; gpumem stream"
       ;;
@@ -183,9 +189,11 @@ drive() {
   local stats=off profile=0
   [ "$phase" = wakesrc ] || [ "$phase" = idlegate ] && stats=wakes
   [ "$phase" = memdiag ] && stats=memory
-  [ "$phase" = spikes ] && { stats=profile; profile=1; }
+  [ "$phase" = spikes ] || [ "$phase" = resizeprof ] || [ "$phase" = streamprof ] && { stats=profile; profile=1; }
+  [ "$phase" = streamprof ] && stats=profilewakes
+  [ "$phase" = resizeprof ] && export AQUA_GAP_TRACE=1
   AQUA_STATS_OVERRIDE=$stats AQUA_PROFILE=$profile AQUA_PROFILE_SPIKE_MS=${AQUA_PROFILE_SPIKE_MS:-4} \
-    WSLENV="${WSLENV:+$WSLENV:}AQUA_STATS_OVERRIDE:AQUA_PROFILE:AQUA_PROFILE_SPIKE_MS:AQUA_REBUILD_STATS" \
+    WSLENV="${WSLENV:+$WSLENV:}AQUA_STATS_OVERRIDE:AQUA_PROFILE:AQUA_PROFILE_SPIKE_MS:AQUA_REBUILD_STATS:AQUA_GAP_TRACE" \
     AQUA_EDITOR_DIR=$FIXTURE_ROOT/editor-config AQUA_APP_ARGS=$(phase_args "$phase") AQUA_EVENTS=$rundir/events.jsonl \
     "$T/bin/win-app" "$exe" "$steps" "$BOOT" "$OUT" "$prefix"
 }
@@ -199,7 +207,7 @@ drive_keys() {
 verify_phase() {
   local log=$1 phase=$2 which=$3 prefix=$4
   local thread=$LARGE
-  [ "$phase" = stream ] && thread=$STREAM
+  [ "$phase" = stream ] || [ "$phase" = streamprof ] && thread=$STREAM
   grep -q "probe-exited" "$log" && die "$which exited early during $phase (see $log)"
   grep -q "probe-open thread=$thread " "$log" || die "$which is not showing fixture thread $thread in phase $phase: Forge never saw its first-paint read acknowledgement (see $log)"
   case $phase in
@@ -209,7 +217,7 @@ verify_phase() {
       local matched posts; matched=$(sed -n 's/.* matched=\([0-9]*\).*/\1/p' <<<"$line"); posts=$(sed -n 's/.* posts=\([0-9]*\).*/\1/p' <<<"$line")
       [ "${matched:-0}" -ge $(( ${posts:-1} * 8 / 10 )) ] || die "$which keys run matched only ${matched:-0} of ${posts:-0} keystrokes to presents (see $log)"
       ;;
-    wakesrc|spikes|memdiag) ;;
+    wakesrc|spikes|memdiag|resize|resizeprof|streamprof) ;;
     idlegate)
       local lines; lines=$(sed -n 's/.*probe-wakelines name=idle_gate .* lines=\([0-9]*\).*/\1/p' "$log" | tail -1)
       [ -n "$lines" ] || die "$which idle gate produced no probe-wakelines result (see $log)"
@@ -246,6 +254,41 @@ done
 exec 9>/tmp/aqua-scoreboard.lock
 echo "waiting for /tmp/aqua-scoreboard.lock (one scoreboard at a time)" >&2
 flock -w 7200 9 || die "another scoreboard run held /tmp/aqua-scoreboard.lock for two hours"
+
+exec 8>"/tmp/aqua-forge-port-$FIXTURE_PORT.lock"
+flock -w 120 8 || die "fixture Forge port $FIXTURE_PORT is locked by another run (/tmp/aqua-forge-port-$FIXTURE_PORT.lock)"
+ancestors=" "
+walk=$$
+while [ "$walk" -gt 1 ]; do
+  ancestors="$ancestors$walk "
+  walk=$(awk '{print $4}' "/proc/$walk/stat" 2>/dev/null || echo 1)
+done
+for other in $(pgrep -f 'compare-editors\.sh|key-latency\.sh' || true); do
+  case "$ancestors" in *" $other "*) continue ;; esac
+  [ -r "/proc/$other/cmdline" ] || continue
+  script=$(tr '\0' '\n' <"/proc/$other/cmdline" 2>/dev/null | sed -n 2p || true)
+  case "$(basename "${script:-none}")" in
+    compare-editors.sh|key-latency.sh) ;;
+    *) continue ;;
+  esac
+  holds=0
+  for fd in /proc/$other/fd/*; do
+    [ "$(readlink "$fd" 2>/dev/null)" = /tmp/aqua-scoreboard.lock ] && holds=1
+  done
+  if [ "$holds" != 1 ]; then
+    sleep 2
+    [ -d "/proc/$other" ] || continue
+    for fd in /proc/$other/fd/*; do
+      [ "$(readlink "$fd" 2>/dev/null)" = /tmp/aqua-scoreboard.lock ] && holds=1
+    done
+  fi
+  if [ "$holds" != 1 ]; then
+    waited_other=0
+    while [ -d "/proc/$other" ] && [ $waited_other -lt 600 ]; do sleep 5; waited_other=$((waited_other + 5)); done
+    [ -d "/proc/$other" ] || continue
+  fi
+  [ "$holds" = 1 ] || die "process $other runs an older scoreboard script that does not take /tmp/aqua-scoreboard.lock; it shares the fixture directory and Forge port $FIXTURE_PORT. Stop it first."
+done
 
 fixture_prepare
 mkdir -p "$OUT"
@@ -293,10 +336,15 @@ run_phase() {
   for attempt in 1 2; do
     if [ "$phase" = keys ]; then
       drive_keys "$which" "$exe" "$prefix" 2>&1 | tee "$OUT/$prefix.log" || true
-      grep -q "^foreground_changed=" "$OUT/$prefix.log" && break
+      grep -q "^foreground_changed=" "$OUT/$prefix.log" && ( verify_phase "$OUT/$prefix.log" "$phase" "$which" "$prefix" ) >/dev/null 2>&1 && break
     else
       start_forge "$rundir"
       drive "$which" "$exe" "$phase" "$rundir" "$prefix" 2>&1 | tee "$OUT/$prefix.log" || true
+      if [ "$phase" = stream ]; then
+        local grace=0
+        until grep -q '"stream_end"' "$rundir/events.jsonl" 2>/dev/null || [ $grace -ge 90 ]; do sleep 1; grace=$((grace + 1)); done
+        echo "stream grace wait ${grace}s"
+      fi
       cp "$rundir/events.jsonl" "$OUT/$prefix-events.jsonl" 2>/dev/null || true
       stop_forge
       if [ "$phase" = stream ] && ! grep -q '"stream_end"' "$OUT/$prefix-events.jsonl" 2>/dev/null; then
@@ -304,11 +352,16 @@ run_phase() {
         [ "$attempt" -lt 2 ] || break
         continue
       fi
-      grep -q "^foreground_changed=" "$OUT/$prefix.log" && break
+      grep -q "^foreground_changed=" "$OUT/$prefix.log" && ( verify_phase "$OUT/$prefix.log" "$phase" "$which" "$prefix" ) >/dev/null 2>&1 && break
     fi
     echo "WARNING: $which $phase run $run did not finish (host interop failure?); attempt $attempt of 2" >&2
     [ "$attempt" -lt 2 ] || die "$which $phase run $run never completed twice (see $OUT/$prefix.log)"
   done
+  if [ "$phase" = stream ] && ! grep -q '"stream_end"' "$OUT/$prefix-events.jsonl" 2>/dev/null; then
+    echo "WARNING: $which stream run $run is VOID: the Forge never finished the scenario in two attempts; its rows are missing for this run" >&2
+    mv "$OUT/$prefix.log" "$OUT/$prefix.void.log"
+    return 0
+  fi
   if [ "${DIAG_SOFT:-0}" = 1 ]; then
     ( verify_phase "$OUT/$prefix.log" "$phase" "$which" "$prefix" ) || { echo "WARNING: diagnostic phase $phase did not run cleanly; its report section is void" >&2; rm -f "$OUT/$prefix-stderr.log"; }
   else

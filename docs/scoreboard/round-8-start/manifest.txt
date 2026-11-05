@@ -1,0 +1,5 @@
+date 2026-11-05T04:20:20+01:00
+profile release runs 3 idle_seconds 30 scroll_frames 600
+aqua_git ab71e77 port_git 08f2e75f dirty_aqua=118
+aqua exe /home/sander/projects/artisanstreet/editor-aqua-port/target/editor-aqua-windows/x86_64-pc-windows-gnu/release/editor-aqua.exe built 2026-11-05T04:09:40+01:00 sha256 ac982eb9eb528db8 size 38705664
+gpui exe /home/sander/projects/artisanstreet/editor/target/x86_64-pc-windows-gnu/release/artisan-editor.exe built 2026-11-04T11:09:28+01:00 sha256 d0f3a99f1a3f6b3e size 40648704

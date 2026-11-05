@@ -1,0 +1,30 @@
+aqua: clipboard backend: System
+2026-11-05T03:43:44.695174Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T03:43:44.696309Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T03:43:44.696929Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T03:43:44.697903Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T03:43:44.699296Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T03:43:44.751151Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T03:43:45.058252Z  INFO tm: what="sd.events" ms=3.9816000000000003
+2026-11-05T03:43:45.064899Z  INFO tm: what="drain.shell" ms=10.639199999999999
+2026-11-05T03:43:45.070932Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T03:43:45.077376Z  INFO tm: what="rebuild" ms=7.3534999999999995
+2026-11-05T03:43:45.084969Z  INFO tm: what="wake" ms=30.752200000000002
+2026-11-05T03:43:45.089698Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T03:43:45.094278Z  INFO tm: what="rebuild" ms=4.6664
+2026-11-05T03:43:45.100832Z  INFO tm: what="wake" ms=11.3621
+2026-11-05T03:43:58.952551Z  INFO tm: what="input.drain" ms=3.0852000000000004
+2026-11-05T03:43:58.956951Z  INFO tm: what="input" ms=8.759599999999999
+2026-11-05T03:43:58.969960Z  INFO tm: what="wake" ms=3.1146
+2026-11-05T03:43:59.027029Z  INFO tm: what="ext" ms=50.1567
+2026-11-05T03:43:59.033857Z  INFO tm: what="fc" ms=3.9059
+2026-11-05T03:43:59.040601Z  INFO tm: what="rebuild" ms=3.317
+2026-11-05T03:43:59.041134Z  INFO tm: what="wake" ms=4.3358
+2026-11-05T03:43:59.091568Z  INFO tm: what="ext" ms=41.1826
+2026-11-05T03:43:59.097351Z  INFO tm: what="rebuild" ms=3.6591
+2026-11-05T03:43:59.100734Z  INFO tm: what="wake" ms=7.4668
+2026-11-05T03:43:59.119662Z  INFO tm: what="ext" ms=3.2577000000000003
+2026-11-05T03:43:59.127372Z  INFO tm: what="fc" ms=3.4562999999999997
+2026-11-05T03:43:59.134301Z  INFO tm: what="rebuild" ms=3.1898
+2026-11-05T03:43:59.134587Z  INFO tm: what="wake" ms=4.1599
+2026-11-05T03:43:59.486848Z  INFO tm: what="fc" ms=3.2245

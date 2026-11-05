@@ -1,0 +1,12 @@
+aqua: clipboard backend: System
+2026-11-05T03:54:12.758462Z  INFO tm: what="ext" ms=35.6283
+2026-11-05T03:54:12.949586Z  INFO tm: what="ext" ms=4.8022
+2026-11-05T03:54:12.969124Z  INFO tm: what="ext" ms=4.847899999999999
+2026-11-05T03:54:12.986600Z  INFO tm: what="sd.events" ms=3.215
+2026-11-05T03:54:12.987075Z  INFO tm: what="drain.shell" ms=3.696
+2026-11-05T03:54:12.988794Z  INFO tm: what="wake" ms=5.518000000000001
+2026-11-05T03:54:12.995718Z  INFO tm: what="ext" ms=4.658200000000001
+2026-11-05T03:54:24.853076Z  INFO tm: what="wake" ms=4.1604
+2026-11-05T03:54:24.856659Z  INFO tm: what="ext" ms=3.1616
+2026-11-05T03:54:26.939743Z  INFO tm: what="ext" ms=3.2902
+2026-11-05T03:54:28.205624Z  INFO tm: what="ext" ms=3.1228

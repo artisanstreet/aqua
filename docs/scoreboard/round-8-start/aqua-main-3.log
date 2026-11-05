@@ -1,0 +1,35 @@
+probe-launch unix_ms=1793852669724 pid=18944
+probe-startup window_ms=101 first_content_ms=609 nondominant=0.158
+probe-open thread=bench-large unix_ms=1793852670408 since_launch_ms=684 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:2560x1440@165Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=46.5
+probe-cpu name=boot unix_ms=1793852685557 cpu_ms=1156 user_ms=312 private_mb=142.9 working_set_mb=5.6 threads=22 handles=823
+probe-gpumem name=boot dedicated_mb=65.9
+probe-cpu name=idle0 unix_ms=1793852688598 cpu_ms=1188 user_ms=312 private_mb=142.9 working_set_mb=5.6 threads=22 handles=823
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=628.6 max=2291.7 top_threads=0=623,20=5,6=0,11=0 attempt=1
+probe-thread name=idle_threads tid=23860 thread='main' started_ms=0 module=aquarune7abdb22.exe start_rva=0x1440 ctx_per_s=997.8 cpu_ms_per_s=10.4
+probe-thread name=idle_threads tid=23224 thread='' started_ms=36 module=combase.dll start_rva=0x1aff021e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=16548 thread='' started_ms=562 module=amdxc64.dll start_rva=0x10b5f6fd0 ctx_per_s=5.3 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=23580 thread='' started_ms=37 module=ntdll.dll start_rva=0x1b1bb4990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=20836 thread='forge-net' started_ms=26 module=aquarune7abdb22.exe start_rva=0x1735370 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=5 total=18
+probe-cpu name=idle1 unix_ms=1793852736508 cpu_ms=1516 user_ms=375 private_mb=142.7 working_set_mb=6.5 threads=18 handles=818
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.11 p90_ms=1.657 p99_ms=2.943 max_ms=8.396 mean_ms=0.614 over4_ms=1 over8_ms=1 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/8,0.7/3,0.1/4
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.209 p90_ms=0.694 p99_ms=1.676 max_ms=2.798 mean_ms=0.307 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.3/1,0.2/2,0.1/2,0.2/2,0.3/3,0.1/1
+probe-changed name=pre pixels=357800 total=2135250 nondominant=0.238
+probe-cpu name=scroll1 unix_ms=1793852757420 cpu_ms=6062 user_ms=3688 private_mb=148.8 working_set_mb=54.9 threads=17 handles=816
+probe-cpu name=settle unix_ms=1793852761434 cpu_ms=6203 user_ms=3797 private_mb=143.5 working_set_mb=1.5 threads=17 handles=815
+probe-gpumem name=settle dedicated_mb=65.9
+probe-latency name=type kind=type samples=1 timeouts=39 p50_ms=36.159 p90_ms=36.159 p99_ms=36.159 max_ms=36.159 mean_ms=36.159 over4_ms=1 over8_ms=1 over16_ms=1 over50_ms=0 grab_p50_ms=14.1
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=7.887 p90_ms=25.98 p99_ms=29.266 max_ms=36.078 mean_ms=11.948 over4_ms=107 over8_ms=58 over16_ms=33 over50_ms=0 
+probe-cpu name=rs0 unix_ms=1793852834782 cpu_ms=8109 user_ms=4891 private_mb=144.8 working_set_mb=1.4 threads=19 handles=814
+probe-wakes name=after_resize seconds=30 context_switches_per_sec_avg=948.3 max=2350 top_threads=0=943,13=5,4=0,6=0 attempt=3
+probe-cpu name=rs1 unix_ms=1793852871306 cpu_ms=8328 user_ms=5062 private_mb=144.7 working_set_mb=4.1 threads=17 handles=812
+probe-thread name=after_resize_threads tid=19276 thread='forge-net' started_ms=27 module=aquarune7abdb22.exe start_rva=0x1735370 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=after_resize_threads tid=23860 thread='main' started_ms=0 module=aquarune7abdb22.exe start_rva=0x1440 ctx_per_s=240.7 cpu_ms_per_s=0
+probe-thread name=after_resize_threads tid=16548 thread='' started_ms=562 module=amdxc64.dll start_rva=0x10b5f6fd0 ctx_per_s=5.3 cpu_ms_per_s=0
+probe-threads-done name=after_resize_threads seconds=15 active=3 total=17
+probe-load name=end_load seconds=3 system_cpu_pct=12.7
+pid=18944 dpi=120 working_set_mb=4 private_mb=145
+foreground_changed=True foreground_stolen_by_app=False foreground_before_pid=15060 foreground_after_pid=15060
+--- frame stats (last 5) ---

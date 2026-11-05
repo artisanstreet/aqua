@@ -1,0 +1,13 @@
+aqua: clipboard backend: System
+2026-11-05T04:17:09.019059Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T04:17:09.022226Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T04:17:09.022704Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T04:17:09.023289Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T04:17:09.024314Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T04:17:09.049682Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T04:17:09.282518Z ERROR editor_aqua::shell::application: could not build Editor view error=new-thread Forge is unavailable
+2026-11-05T04:17:09.457126Z  INFO tm: what="sd.events" ms=5.9338999999999995
+2026-11-05T04:17:09.457717Z  INFO tm: what="drain.shell" ms=6.5337
+2026-11-05T04:17:09.458533Z  INFO tm: what="wake" ms=7.392799999999999
+2026-11-05T04:17:22.967418Z  INFO tm: what="ext" ms=30.908
+2026-11-05T04:17:22.996927Z  INFO tm: what="ext" ms=23.2888

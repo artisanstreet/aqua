@@ -1,0 +1,33 @@
+probe-launch unix_ms=1793849724604 pid=22508
+probe-startup window_ms=234 first_content_ms=356 nondominant=0.155
+probe-open thread=bench-large unix_ms=1793849725374 since_launch_ms=770 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:2560x1440@165Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=86.3
+probe-cpu name=boot unix_ms=1793849740602 cpu_ms=734 user_ms=297 private_mb=115.2 working_set_mb=124.1 threads=35 handles=1201
+probe-gpumem name=boot dedicated_mb=49.1
+probe-cpu name=idle0 unix_ms=1793849743637 cpu_ms=734 user_ms=297 private_mb=115.2 working_set_mb=124.1 threads=35 handles=1201
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=0.2 max=2 top_threads=1=0,29=0,23=0,22=0 attempt=1
+probe-thread name=idle_threads tid=18600 thread='' started_ms=183 module=combase.dll start_rva=0x1254521e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=12064 thread='' started_ms=183 module=ntdll.dll start_rva=0x127104990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=18956 thread='forge-net' started_ms=245 module=aquarun5d18b3b9.exe start_rva=0x1b7fc10 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=9188 thread='' started_ms=11 module=ntdll.dll start_rva=0x127104990 ctx_per_s=0.2 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=4 total=32
+probe-cpu name=idle1 unix_ms=1793849791998 cpu_ms=734 user_ms=297 private_mb=114.9 working_set_mb=124 threads=32 handles=1193
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.075 p90_ms=0.186 p99_ms=3.742 max_ms=5.962 mean_ms=0.323 over4_ms=1 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/6,0.1/4,0.1/4
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.339 p90_ms=3.03 p99_ms=4.738 max_ms=6.097 mean_ms=1.141 over4_ms=13 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.4/6,0.3/4,0.5/6,0.2/6,0.3/4,1.1/5
+probe-changed name=pre pixels=288147 total=2135250 nondominant=0.205
+probe-cpu name=scroll1 unix_ms=1793849813282 cpu_ms=9312 user_ms=6453 private_mb=120.6 working_set_mb=127.8 threads=34 handles=1197
+probe-cpu name=settle unix_ms=1793849817300 cpu_ms=9594 user_ms=6641 private_mb=118 working_set_mb=125.1 threads=34 handles=1194
+probe-gpumem name=settle dedicated_mb=51.1
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=38.973 p90_ms=46.566 p99_ms=60.402 max_ms=60.402 mean_ms=36.461 over4_ms=40 over8_ms=40 over16_ms=40 over50_ms=3 grab_p50_ms=21.4
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=8.287 p90_ms=22.328 p99_ms=34.561 max_ms=39.907 mean_ms=10.888 over4_ms=103 over8_ms=59 over16_ms=25 over50_ms=0 
+probe-cpu name=rs0 unix_ms=1793849833039 cpu_ms=11266 user_ms=7781 private_mb=118.5 working_set_mb=126 threads=34 handles=1194
+probe-wakes name=after_resize unavailable=The data in one of the performance counter samples is not valid. View the Status property for each PerformanceCounterSample object to make sure it contains valid data.
+probe-cpu name=rs1 unix_ms=1793849859542 cpu_ms=11266 user_ms=7781 private_mb=117.9 working_set_mb=125.4 threads=30 handles=1188
+probe-thread name=after_resize_threads tid=18956 thread='forge-net' started_ms=245 module=aquarun5d18b3b9.exe start_rva=0x1b7fc10 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=after_resize_threads tid=9188 thread='' started_ms=11 module=ntdll.dll start_rva=0x127104990 ctx_per_s=0.2 cpu_ms_per_s=0
+probe-threads-done name=after_resize_threads seconds=15 active=2 total=30
+probe-load name=end_load seconds=3 system_cpu_pct=67.7
+pid=22508 dpi=120 working_set_mb=125 private_mb=118
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=15060 foreground_after_pid=15060
+--- frame stats (last 5) ---

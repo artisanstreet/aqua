@@ -148,11 +148,11 @@ $env:ARTISAN_EDITOR_DATA = $dataDir
 if ($env:AQUA_RWC_OVERRIDE -eq "off") { Remove-Item Env:AQUA_RENDER_WHEN_COVERED -ErrorAction SilentlyContinue } else { $env:AQUA_RENDER_WHEN_COVERED = "1" }
 $keepProfile = $env:AQUA_PROFILE
 $override = $env:AQUA_STATS_OVERRIDE
-if ($override -in @("off","wakes","profile","memory")) {
+if ($override -in @("off","wakes","profile","profilewakes","memory")) {
   foreach ($n in @("AQUA_FRAME_STATS","AQUA_PERF","AQUA_WAKE_STATS","AQUA_PROFILE","AQUA_INPUT_LATENCY","AQUA_REBUILD_STATS","AQUA_MEMORY_REPORT")) { Remove-Item "Env:$n" -ErrorAction SilentlyContinue }
-  if ($override -eq "wakes") { $env:AQUA_WAKE_STATS = "1" }
+  if ($override -eq "wakes" -or $override -eq "profilewakes") { $env:AQUA_WAKE_STATS = "1" }
   if ($override -eq "memory") { $env:AQUA_MEMORY_REPORT = "1" }
-  if ($override -eq "profile") { $env:AQUA_PROFILE = $keepProfile }
+  if ($override -eq "profile" -or $override -eq "profilewakes") { $env:AQUA_PROFILE = $keepProfile }
 } elseif ($Stats -eq "1") { $env:AQUA_FRAME_STATS = "1"; $env:AQUA_PERF = "1"; $env:AQUA_WAKE_STATS = "1" } else { Remove-Item Env:AQUA_FRAME_STATS -ErrorAction SilentlyContinue }
 $errLog = Join-Path $Out "$Prefix-stderr.log"
 $outLog = Join-Path $Out "$Prefix-stdout.log"
@@ -349,21 +349,27 @@ public static class TD {
       }
       "wakes" {
         $secs = [int]$a[1]
-        $done = $false
-        for ($attempt = 1; $attempt -le 3 -and -not $done; $attempt++) {
-          try {
-            $pn = (Get-Process -Id $procId).ProcessName
-            $set = Get-Counter -Counter "\Thread($pn*)\Context Switches/sec" -SampleInterval 1 -MaxSamples $secs -ErrorAction Stop
-            $perSec = @($set | ForEach-Object { ($_.CounterSamples | Where-Object { $_.Path -like "*\thread($pn/*" -and $_.Status -eq 0 } | Measure-Object -Property CookedValue -Sum).Sum })
-            $avg = ($perSec | Measure-Object -Average).Average
-            $mx = ($perSec | Measure-Object -Maximum).Maximum
-            $perThread = @{}
-            foreach ($sample in $set) { foreach ($c in ($sample.CounterSamples | Where-Object { $_.Path -like "*\thread($pn/*" -and $_.Status -eq 0 })) { $perThread[$c.InstanceName] = [double]$perThread[$c.InstanceName] + $c.CookedValue } }
-            $top = ($perThread.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 4 | ForEach-Object { "$($_.Key -replace '^.*/','')=$([math]::Round($_.Value / $secs,0))" }) -join ","
-            "probe-wakes name=$($a[0]) seconds=$secs context_switches_per_sec_avg=$([math]::Round($avg,1)) max=$([math]::Round($mx,1)) top_threads=$top attempt=$attempt"
-            $done = $true
-          } catch { if ($attempt -eq 3) { "probe-wakes name=$($a[0]) unavailable=$($_.Exception.Message)" } }
+        $pn = (Get-Process -Id $procId).ProcessName
+        $snap = {
+          $m = @{}
+          Get-CimInstance Win32_PerfRawData_PerfProc_Thread -Filter "Name like '$pn/%'" -ErrorAction SilentlyContinue | Where-Object { $_.IDProcess -eq $procId } | ForEach-Object { $m[[int]$_.IDThread] = [double]$_.ContextSwitchesPersec }
+          $m
         }
+        $prev = & $snap
+        $perSec = @()
+        $perThread = @{}
+        for ($i = 0; $i -lt $secs; $i++) {
+          Start-Sleep -Milliseconds 1000
+          $cur = & $snap
+          $sum = 0.0
+          foreach ($id in $cur.Keys) { if ($prev.ContainsKey($id)) { $d = [math]::Max(0.0, $cur[$id] - $prev[$id]); $sum += $d; $perThread[$id] = [double]$perThread[$id] + $d } }
+          $perSec += $sum
+          $prev = $cur
+        }
+        $avg = ($perSec | Measure-Object -Average).Average
+        $mx = ($perSec | Measure-Object -Maximum).Maximum
+        $top = ($perThread.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 4 | ForEach-Object { "$($_.Key)=$([math]::Round($_.Value / $secs,0))" }) -join ","
+        "probe-wakes name=$($a[0]) seconds=$secs context_switches_per_sec_avg=$([math]::Round($avg,1)) max=$([math]::Round($mx,1)) top_threads=$top attempt=1"
       }
       "display" {
         try {
@@ -441,7 +447,7 @@ public static class TD {
       }
       "resizelat" {
         $count = [int]$a[1]; $gap = [double]$a[2]
-        $lat = New-Object System.Collections.Generic.List[double]; $timeouts = 0
+        $lat = New-Object System.Collections.Generic.List[double]; $timeouts = 0; $setpos = New-Object System.Collections.Generic.List[double]
         $wr0 = New-Object W+RECT; [void][W]::GetWindowRect($h, [ref]$wr0)
         $baseW = $wr0.R - $wr0.L; $baseH = $wr0.B - $wr0.T
         $total = [System.Diagnostics.Stopwatch]::StartNew()
@@ -451,6 +457,7 @@ public static class TD {
           $nw = [int]($baseW + $phase * 260 * $scale); $nh = [int]($baseH + $phase * 140 * $scale)
           $sw = [System.Diagnostics.Stopwatch]::StartNew()
           [void][W]::SetWindowPos($h, $(if ($env:AQUA_PLACE -eq "top") { [IntPtr](-1) } else { [IntPtr]1 }), 40, 40, $nw, $nh, 0x0010)
+          $setpos.Add($sw.Elapsed.TotalMilliseconds)
           $r = [IntPtr]::Zero
           $ok = [W]::SendMessageTimeout($h, 0, [IntPtr]::Zero, [IntPtr]::Zero, 3, 2000, [ref]$r)
           $sw.Stop()
@@ -459,6 +466,7 @@ public static class TD {
           if ($rest -gt 1) { Start-Sleep -Milliseconds ([int]$rest) }
         }
         [void][W]::SetWindowPos($h, $(if ($env:AQUA_PLACE -eq "top") { [IntPtr](-1) } else { [IntPtr]1 }), 40, 40, $baseW, $baseH, 0x0010)
+        Summarize-Latency ($a[0] + "_setpos") "resize" $setpos 0 ""
         Summarize-Latency $a[0] "resize" $lat $timeouts ""
       }
       "shot" { Start-Sleep -Milliseconds 400; [W]::Shot($h, (Join-Path $Out ("$Prefix-" + $a[0] + ".png"))) }

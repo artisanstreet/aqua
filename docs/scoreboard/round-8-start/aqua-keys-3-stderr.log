@@ -1,0 +1,8 @@
+aqua: clipboard backend: System
+2026-11-05T04:35:15.654211Z  INFO tm: what="ext" ms=38.8229
+2026-11-05T04:35:15.756883Z  INFO tm: what="fc" ms=3.6464000000000003
+2026-11-05T04:35:15.786147Z  INFO tm: what="ext" ms=26.2355
+2026-11-05T04:35:15.804546Z  INFO tm: what="rebuild" ms=3.6283000000000003
+2026-11-05T04:35:15.804975Z  INFO tm: what="wake" ms=5.1484
+2026-11-05T04:35:15.960819Z  INFO tm: what="drain.shell" ms=3.0438
+2026-11-05T04:35:15.963549Z  INFO tm: what="wake" ms=5.9845999999999995

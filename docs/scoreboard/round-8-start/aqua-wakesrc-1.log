@@ -1,0 +1,9 @@
+probe-launch unix_ms=1793853525613 pid=11036
+probe-startup window_ms=114 first_content_ms=636 nondominant=0.162
+probe-open thread=bench-large unix_ms=1793853526272 since_launch_ms=659 since_click_ms=-1
+probe-cpu name=wake0 unix_ms=1793853543122 cpu_ms=969 user_ms=422 private_mb=142.3 working_set_mb=5.8 threads=22 handles=823
+probe-cpu name=wake1 unix_ms=1793853563140 cpu_ms=1062 user_ms=422 private_mb=142.2 working_set_mb=6.2 threads=22 handles=823
+probe-cpu name=wake2 unix_ms=1793853587184 cpu_ms=1391 user_ms=562 private_mb=139.6 working_set_mb=5.1 threads=18 handles=816
+pid=11036 dpi=120 working_set_mb=5 private_mb=140
+foreground_changed=True foreground_stolen_by_app=False foreground_before_pid=15060 foreground_after_pid=11152
+--- frame stats (last 5) ---

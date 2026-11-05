@@ -1,0 +1,13 @@
+probe-launch unix_ms=1793836582182 pid=17632
+probe-startup window_ms=80 first_content_ms=422 nondominant=0.155
+probe-open thread=bench-stream unix_ms=1793836582622 since_launch_ms=440 since_click_ms=-1
+probe-cpu name=stream0 unix_ms=1793836594458 cpu_ms=453 user_ms=234 private_mb=129.2 working_set_mb=3.7 threads=22 handles=823
+probe-trigger unix_ms=1793836594466
+probe-latency name=stream_latency kind=idle samples=300 timeouts=0 p50_ms=0.063 p90_ms=0.122 p99_ms=0.766 max_ms=6.353 mean_ms=0.129 over4_ms=1 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/6,0.1/2,0.1/1
+probe-cpu name=stream1 unix_ms=1793836603933 cpu_ms=2125 user_ms=1469 private_mb=145.8 working_set_mb=54.8 threads=24 handles=825
+probe-wakes name=stream seconds=10 context_switches_per_sec_avg=360 max=431.6 top_threads=15=128,0=119,20=74,7=35 attempt=1
+probe-cpu name=stream2 unix_ms=1793836614287 cpu_ms=4531 user_ms=3375 private_mb=147.1 working_set_mb=56.8 threads=24 handles=825
+probe-gpumem name=stream dedicated_mb=65.2
+pid=17632 dpi=120 working_set_mb=1 private_mb=144
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=5908 foreground_after_pid=5908
+--- frame stats (last 5) ---

@@ -1,0 +1,8 @@
+probe-launch unix_ms=1793837577562 pid=6328
+probe-startup window_ms=85 first_content_ms=477 nondominant=0.162
+probe-open thread=bench-large unix_ms=1793837578116 since_launch_ms=554 since_click_ms=-1
+probe-latency name=spike_scroll kind=scroll samples=300 timeouts=0 p50_ms=0.253 p90_ms=0.501 p99_ms=1.597 max_ms=4.788 mean_ms=0.299 over4_ms=1 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.2/5,0.3/1,0.3/2
+probe-latency name=spike_scroll2 kind=scroll samples=300 timeouts=0 p50_ms=0.24 p90_ms=0.664 p99_ms=1.472 max_ms=2.084 mean_ms=0.326 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.2/2,0.3/2,0.2/2
+pid=6328 dpi=120 working_set_mb=63 private_mb=156
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=5908 foreground_after_pid=5908
+--- frame stats (last 5) ---

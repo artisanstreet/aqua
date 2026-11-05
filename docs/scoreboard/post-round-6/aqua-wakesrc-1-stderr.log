@@ -1,0 +1,18 @@
+aqua: clipboard backend: System
+2026-11-05T00:11:45.524742Z  INFO tm: what="ext" ms=28.34
+2026-11-05T00:11:45.557170Z  INFO tm: what="wake" ms=3.0333
+2026-11-05T00:11:45.581211Z  INFO tm: what="ext" ms=4.368
+2026-11-05T00:11:45.611561Z  INFO tm: what="ext" ms=20.042399999999997
+2026-11-05T00:11:45.633802Z  INFO tm: what="ext" ms=17.6435
+2026-11-05T00:11:45.878949Z  INFO tm: what="wake" ms=4.0633
+2026-11-05T00:11:46.004437Z  INFO tm: what="ext" ms=4.273
+aqua-render-runs: secs=2.46 [feedback=2.0 feedback+framed+presented=2.8 inbox+framed+presented=1.6 inbox+feedback+framed+presented=15.8 wake_due+framed+presented=0.4 forced+trim+framed+presented=0.4]
+aqua-render-damage: full=49 partial=2 culled_commands=0
+2026-11-05T00:12:22.458288Z  INFO tm: what="rebuild" ms=5.1754
+2026-11-05T00:12:22.458765Z  INFO tm: what="winev" ms=6.1586
+2026-11-05T00:12:22.467288Z  INFO tm: what="ext" ms=8.13
+aqua-wakes: secs=37.25 turns[window-message=0.2,inbox-wake=1.5] unpresented_ticks=1.7 messages[covered=0.0,focus=0.0,maximized=0.1,moved=0.1,redraw=0.2,resized=0.2] posts[messages@aqua-image-decode#application.rs:477=0.0,messages@forge-net#host.rs:151=0.0,messages@forge-net#host.rs:98=0.3,messages@main#host.rs:98=0.9,render-events@aqua-render=1.4,window-requests@main=0.5]
+aqua-render-runs: secs=34.43 [inbox+framed+presented=0.0]
+aqua-render-damage: full=1 partial=0 culled_commands=0
+aqua-render-runs: secs=2.01 [feedback=0.5 forced+trim+framed+presented=0.5]
+aqua-render-damage: full=0 partial=1 culled_commands=0

@@ -1,0 +1,35 @@
+probe-launch unix_ms=1793835469785 pid=8248
+probe-startup window_ms=89 first_content_ms=389 nondominant=0.155
+probe-open thread=bench-large unix_ms=1793835470267 since_launch_ms=482 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:2560x1440@165Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=88.8
+probe-cpu name=boot unix_ms=1793835485716 cpu_ms=594 user_ms=250 private_mb=150.1 working_set_mb=4.6 threads=22 handles=823
+probe-gpumem name=boot dedicated_mb=64.9
+probe-cpu name=idle0 unix_ms=1793835488745 cpu_ms=594 user_ms=250 private_mb=150.1 working_set_mb=4.6 threads=22 handles=823
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=10.2 max=15.8 top_threads=0=5,20=5,7=0,11=0 attempt=1
+probe-thread name=idle_threads tid=7792 thread='forge-net' started_ms=22 module=aquarun713441fd.exe start_rva=0x172bbe0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=23244 thread='' started_ms=356 module=amdxc64.dll start_rva=0x11f9c6fd0 ctx_per_s=5.3 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=6012 thread='' started_ms=28 module=ntdll.dll start_rva=0x1c5f84990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=19880 thread='' started_ms=28 module=combase.dll start_rva=0x1c42d21e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=4404 thread='main' started_ms=0 module=aquarun713441fd.exe start_rva=0x1440 ctx_per_s=6 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=5 total=18
+probe-cpu name=idle1 unix_ms=1793835535781 cpu_ms=594 user_ms=250 private_mb=149.9 working_set_mb=5.4 threads=18 handles=818
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.067 p90_ms=0.113 p99_ms=2.772 max_ms=5.694 mean_ms=0.288 over4_ms=1 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/6,0.1/3,0.1/3
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.229 p90_ms=0.56 p99_ms=1.639 max_ms=2.752 mean_ms=0.299 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.2/1,0.2/1,0.3/3,0.2/2,0.2/2,0.2/3
+probe-changed name=pre pixels=354137 total=2135250 nondominant=0.237
+probe-cpu name=scroll1 unix_ms=1793835556315 cpu_ms=17469 user_ms=15938 private_mb=153.9 working_set_mb=60.5 threads=17 handles=816
+probe-cpu name=settle unix_ms=1793835560322 cpu_ms=18172 user_ms=16578 private_mb=147.6 working_set_mb=2.3 threads=17 handles=815
+probe-gpumem name=settle dedicated_mb=65.2
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=29.016 p90_ms=36.846 p99_ms=42.793 max_ms=42.793 mean_ms=28.209 over4_ms=40 over8_ms=40 over16_ms=34 over50_ms=0 grab_p50_ms=15.3
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=2.841 p90_ms=4.44 p99_ms=5.205 max_ms=6 mean_ms=3.12 over4_ms=19 over8_ms=0 over16_ms=0 over50_ms=0 
+probe-cpu name=rs0 unix_ms=1793835575115 cpu_ms=20656 user_ms=18906 private_mb=150 working_set_mb=0.6 threads=19 handles=817
+probe-wakes name=after_resize unavailable=The data in one of the performance counter samples is not valid. View the Status property for each PerformanceCounterSample object to make sure it contains valid data.
+probe-cpu name=rs1 unix_ms=1793835604433 cpu_ms=20656 user_ms=18906 private_mb=149.8 working_set_mb=4.4 threads=15 handles=811
+probe-thread name=after_resize_threads tid=15760 thread='forge-net' started_ms=22 module=aquarun713441fd.exe start_rva=0x172bbe0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=after_resize_threads tid=23244 thread='' started_ms=356 module=amdxc64.dll start_rva=0x11f9c6fd0 ctx_per_s=5.2 cpu_ms_per_s=0
+probe-thread name=after_resize_threads tid=4404 thread='main' started_ms=0 module=aquarun713441fd.exe start_rva=0x1440 ctx_per_s=5.3 cpu_ms_per_s=0
+probe-threads-done name=after_resize_threads seconds=15 active=3 total=15
+probe-load name=end_load seconds=3 system_cpu_pct=20
+pid=8248 dpi=120 working_set_mb=5 private_mb=150
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=5908 foreground_after_pid=5908
+--- frame stats (last 5) ---

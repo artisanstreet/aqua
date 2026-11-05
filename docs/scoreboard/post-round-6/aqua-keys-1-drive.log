@@ -1,0 +1,9 @@
+probe-launch unix_ms=1793835949124 pid=1940
+probe-startup window_ms=92 first_content_ms=442 nondominant=0.155
+probe-open thread=bench-large unix_ms=1793835949627 since_launch_ms=503 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=1940
+probe-latency name=type kind=type samples=32 timeouts=28 p50_ms=28.673 p90_ms=33.662 p99_ms=38.469 max_ms=38.469 mean_ms=28.543 over4_ms=32 over8_ms=32 over16_ms=31 over50_ms=0 grab_p50_ms=13.2
+pid=1940 dpi=120 working_set_mb=52 private_mb=151
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=5908 foreground_after_pid=5908
+--- frame stats (last 5) ---
+key-latency target=aqua pid=1940 posts=145 matched=145 unmatched=0 p50_ms=2.44 p90_ms=2.99 p99_ms=3.31 max_ms=4.02 mean_ms=2.50 over8_3=0 over16_7=0

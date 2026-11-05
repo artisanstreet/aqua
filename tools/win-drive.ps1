@@ -146,7 +146,14 @@ $bin = Join-Path $run ("aquarun" + [Guid]::NewGuid().ToString("N").Substring(0, 
 Copy-Item -LiteralPath $Exe -Destination $bin
 $env:ARTISAN_EDITOR_DATA = $dataDir
 if ($env:AQUA_RWC_OVERRIDE -eq "off") { Remove-Item Env:AQUA_RENDER_WHEN_COVERED -ErrorAction SilentlyContinue } else { $env:AQUA_RENDER_WHEN_COVERED = "1" }
-if ($Stats -eq "1") { $env:AQUA_FRAME_STATS = "1"; $env:AQUA_PERF = "1"; $env:AQUA_WAKE_STATS = "1" } else { Remove-Item Env:AQUA_FRAME_STATS -ErrorAction SilentlyContinue }
+$keepProfile = $env:AQUA_PROFILE
+$override = $env:AQUA_STATS_OVERRIDE
+if ($override -in @("off","wakes","profile","memory")) {
+  foreach ($n in @("AQUA_FRAME_STATS","AQUA_PERF","AQUA_WAKE_STATS","AQUA_PROFILE","AQUA_INPUT_LATENCY","AQUA_REBUILD_STATS","AQUA_MEMORY_REPORT")) { Remove-Item "Env:$n" -ErrorAction SilentlyContinue }
+  if ($override -eq "wakes") { $env:AQUA_WAKE_STATS = "1" }
+  if ($override -eq "memory") { $env:AQUA_MEMORY_REPORT = "1" }
+  if ($override -eq "profile") { $env:AQUA_PROFILE = $keepProfile }
+} elseif ($Stats -eq "1") { $env:AQUA_FRAME_STATS = "1"; $env:AQUA_PERF = "1"; $env:AQUA_WAKE_STATS = "1" } else { Remove-Item Env:AQUA_FRAME_STATS -ErrorAction SilentlyContinue }
 $errLog = Join-Path $Out "$Prefix-stderr.log"
 $outLog = Join-Path $Out "$Prefix-stdout.log"
 $fg0 = [W]::GetForegroundWindow()
@@ -218,14 +225,14 @@ function Probe-Latency($name, $kind, $count, $gap, $scroll, $x, $y, $delta) {
   if ($v.Count -eq 0) { "probe-latency name=$name kind=$kind samples=0 timeouts=$timeouts"; return }
   function Pc($f) { $v[[int][math]::Min($v.Count - 1, [math]::Round(($v.Count - 1) * $f))] }
   $mean = ($v | Measure-Object -Average).Average
-  "probe-latency name=$name kind=$kind samples=$($v.Count) timeouts=$timeouts p50_ms=$([math]::Round((Pc 0.5),3)) p90_ms=$([math]::Round((Pc 0.9),3)) p99_ms=$([math]::Round((Pc 0.99),3)) max_ms=$([math]::Round($v[-1],3)) mean_ms=$([math]::Round($mean,3)) over8_ms=$(@($v | Where-Object { $_ -gt 8.3 }).Count) over16_ms=$(@($v | Where-Object { $_ -gt 16.7 }).Count) over50_ms=$(@($v | Where-Object { $_ -gt 50 }).Count) p50_max_per_100=$($series -join ',')"
+  "probe-latency name=$name kind=$kind samples=$($v.Count) timeouts=$timeouts p50_ms=$([math]::Round((Pc 0.5),3)) p90_ms=$([math]::Round((Pc 0.9),3)) p99_ms=$([math]::Round((Pc 0.99),3)) max_ms=$([math]::Round($v[-1],3)) mean_ms=$([math]::Round($mean,3)) over4_ms=$(@($v | Where-Object { $_ -gt 4 }).Count) over8_ms=$(@($v | Where-Object { $_ -gt 8.3 }).Count) over16_ms=$(@($v | Where-Object { $_ -gt 16.7 }).Count) over50_ms=$(@($v | Where-Object { $_ -gt 50 }).Count) p50_max_per_100=$($series -join ',')"
 }
   function Summarize-Latency($name, $kind, $lat, $timeouts, $extra) {
     $v = @($lat | Sort-Object)
     if ($v.Count -eq 0) { "probe-latency name=$name kind=$kind samples=0 timeouts=$timeouts"; return }
     function Pc2($f) { $v[[int][math]::Min($v.Count - 1, [math]::Round(($v.Count - 1) * $f))] }
     $mean = ($v | Measure-Object -Average).Average
-    "probe-latency name=$name kind=$kind samples=$($v.Count) timeouts=$timeouts p50_ms=$([math]::Round((Pc2 0.5),3)) p90_ms=$([math]::Round((Pc2 0.9),3)) p99_ms=$([math]::Round((Pc2 0.99),3)) max_ms=$([math]::Round($v[-1],3)) mean_ms=$([math]::Round($mean,3)) over8_ms=$(@($v | Where-Object { $_ -gt 8.3 }).Count) over16_ms=$(@($v | Where-Object { $_ -gt 16.7 }).Count) over50_ms=$(@($v | Where-Object { $_ -gt 50 }).Count) $extra"
+    "probe-latency name=$name kind=$kind samples=$($v.Count) timeouts=$timeouts p50_ms=$([math]::Round((Pc2 0.5),3)) p90_ms=$([math]::Round((Pc2 0.9),3)) p99_ms=$([math]::Round((Pc2 0.99),3)) max_ms=$([math]::Round($v[-1],3)) mean_ms=$([math]::Round($mean,3)) over4_ms=$(@($v | Where-Object { $_ -gt 4 }).Count) over8_ms=$(@($v | Where-Object { $_ -gt 8.3 }).Count) over16_ms=$(@($v | Where-Object { $_ -gt 16.7 }).Count) over50_ms=$(@($v | Where-Object { $_ -gt 50 }).Count) $extra"
   }
   $frames = @{}
   $lastClickMs = 0
@@ -237,6 +244,23 @@ function Probe-Latency($name, $kind, $count, $gap, $scroll, $x, $y, $delta) {
     switch ($cmd) {
       "" { }
       "sleep" { Start-Sleep -Milliseconds ([int]([double]$a[0] * 1000)) }
+      "wakelines" {
+        $secs = [double]$a[1]
+        $count = {
+          try {
+            $fs = [System.IO.File]::Open($errLog, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
+            $sr = New-Object System.IO.StreamReader($fs)
+            $text = $sr.ReadToEnd(); $sr.Dispose(); $fs.Dispose()
+            @($text -split "`n" | Where-Object { $_ -like "*aqua-wakes:*" })
+          } catch { @() }
+        }
+        $before = (& $count).Count
+        Start-Sleep -Milliseconds ([int]($secs * 1000))
+        $lines = & $count
+        $new = @($lines | Select-Object -Skip $before)
+        "probe-wakelines name=$($a[0]) seconds=$secs lines=$($new.Count)"
+        foreach ($l in $new) { "probe-wakeline name=$($a[0]) $($l.Trim())" }
+      }
       "move" { Post 0x200 0 (Pack ([double]$a[0]) ([double]$a[1])) }
       "click" { $lastClickMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); $l = Pack ([double]$a[0]) ([double]$a[1]); Post 0x200 0 $l; Start-Sleep -Milliseconds 80; Post 0x201 1 $l; Start-Sleep -Milliseconds 60; Post 0x202 0 $l }
       "rclick" { $l = Pack ([double]$a[0]) ([double]$a[1]); Post 0x200 0 $l; Start-Sleep -Milliseconds 80; Post 0x204 2 $l; Start-Sleep -Milliseconds 60; Post 0x205 0 $l }
@@ -312,27 +336,51 @@ public static class TD {
           $s0 = & $snap
           Start-Sleep -Seconds $secs
           $s1 = & $snap
+          $active = 0
           foreach ($id in $s1.Keys) {
             $b = $s0[$id]; $e = $s1[$id]
             if ($b) { $dc = $e.cs - $b.cs; $dm = $e.cpu - $b.cpu } else { $dc = $e.cs; $dm = $e.cpu }
             $started = ""; try { $started = [int](($proc.Threads | Where-Object { $_.Id -eq $id } | Select-Object -First 1).StartTime - $proc.StartTime).TotalMilliseconds } catch {}
+            if ($dc -gt 0 -or $dm -gt 0) { $active++ }
             if ($dc -gt 0 -or $dm -gt 0) { "probe-thread name=$($a[0]) tid=$id thread='$($e.name)' started_ms=$started module=$($e.module) start_rva=0x$([Convert]::ToString([int64]$e.start,16)) ctx_per_s=$([math]::Round($dc / $secs,1)) cpu_ms_per_s=$([math]::Round($dm / $secs,1))" }
           }
+        "probe-threads-done name=$($a[0]) seconds=$secs active=$active total=$($s1.Count)"
         } catch { "probe-threads name=$($a[0]) unavailable=$($_.Exception.Message)" }
       }
       "wakes" {
         $secs = [int]$a[1]
+        $done = $false
+        for ($attempt = 1; $attempt -le 3 -and -not $done; $attempt++) {
+          try {
+            $pn = (Get-Process -Id $procId).ProcessName
+            $set = Get-Counter -Counter "\Thread($pn*)\Context Switches/sec" -SampleInterval 1 -MaxSamples $secs -ErrorAction Stop
+            $perSec = @($set | ForEach-Object { ($_.CounterSamples | Where-Object { $_.Path -like "*\thread($pn/*" -and $_.Status -eq 0 } | Measure-Object -Property CookedValue -Sum).Sum })
+            $avg = ($perSec | Measure-Object -Average).Average
+            $mx = ($perSec | Measure-Object -Maximum).Maximum
+            $perThread = @{}
+            foreach ($sample in $set) { foreach ($c in ($sample.CounterSamples | Where-Object { $_.Path -like "*\thread($pn/*" -and $_.Status -eq 0 })) { $perThread[$c.InstanceName] = [double]$perThread[$c.InstanceName] + $c.CookedValue } }
+            $top = ($perThread.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 4 | ForEach-Object { "$($_.Key -replace '^.*/','')=$([math]::Round($_.Value / $secs,0))" }) -join ","
+            "probe-wakes name=$($a[0]) seconds=$secs context_switches_per_sec_avg=$([math]::Round($avg,1)) max=$([math]::Round($mx,1)) top_threads=$top attempt=$attempt"
+            $done = $true
+          } catch { if ($attempt -eq 3) { "probe-wakes name=$($a[0]) unavailable=$($_.Exception.Message)" } }
+        }
+      }
+      "display" {
         try {
-          $pn = (Get-Process -Id $procId).ProcessName
-          $set = Get-Counter -Counter "\Thread($pn*)\Context Switches/sec" -SampleInterval 1 -MaxSamples $secs -ErrorAction Stop
-          $perSec = @($set | ForEach-Object { ($_.CounterSamples | Where-Object { $_.Path -like "*\thread($pn/*" } | Measure-Object -Property CookedValue -Sum).Sum })
-          $avg = ($perSec | Measure-Object -Average).Average
-          $mx = ($perSec | Measure-Object -Maximum).Maximum
-          $perThread = @{}
-          foreach ($sample in $set) { foreach ($c in ($sample.CounterSamples | Where-Object { $_.Path -like "*\thread($pn/*" })) { $perThread[$c.InstanceName] = [double]$perThread[$c.InstanceName] + $c.CookedValue } }
-          $top = ($perThread.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 4 | ForEach-Object { "$($_.Key -replace '^.*/','')=$([math]::Round($_.Value / $secs,0))" }) -join ","
-          "probe-wakes name=$($a[0]) seconds=$secs context_switches_per_sec_avg=$([math]::Round($avg,1)) max=$([math]::Round($mx,1)) top_threads=$top"
-        } catch { "probe-wakes name=$($a[0]) unavailable=$($_.Exception.Message)" }
+          $vc = @(Get-CimInstance Win32_VideoController | Where-Object { $_.CurrentRefreshRate })
+          $plan = ((powercfg /getactivescheme) -join " ") -replace "^.*\((.*)\).*$", '$1'
+          $ac = (Get-CimInstance -Namespace root\wmi -ClassName BatteryStatus -ErrorAction SilentlyContinue | Select-Object -First 1)
+          $gpus = ($vc | ForEach-Object { "$($_.Name -replace ' ','_'):$($_.CurrentHorizontalResolution)x$($_.CurrentVerticalResolution)@$($_.CurrentRefreshRate)Hz" }) -join ","
+          "probe-display name=$($a[0]) gpus=$gpus power_plan=$($plan -replace ' ','_') ac_online=$(if ($ac) { $ac.PowerOnline } else { 'n/a' })"
+        } catch { "probe-display name=$($a[0]) unavailable=$($_.Exception.Message)" }
+      }
+      "load" {
+        $secs = [int]$a[1]
+        try {
+          $set = Get-Counter -Counter "\Processor(_Total)\% Processor Time" -SampleInterval 1 -MaxSamples $secs -ErrorAction Stop
+          $avg = ($set | ForEach-Object { $_.CounterSamples[0].CookedValue } | Measure-Object -Average).Average
+          "probe-load name=$($a[0]) seconds=$secs system_cpu_pct=$([math]::Round($avg,1))"
+        } catch { "probe-load name=$($a[0]) unavailable=$($_.Exception.Message)" }
       }
       "gpumem" {
         try {

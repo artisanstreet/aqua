@@ -1,0 +1,9 @@
+probe-launch unix_ms=1793837408012 pid=17232
+probe-startup window_ms=143 first_content_ms=223 nondominant=0.186
+probe-open thread=bench-large unix_ms=1793837408534 since_launch_ms=522 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=17232
+probe-latency name=type kind=type samples=32 timeouts=28 p50_ms=29.752 p90_ms=33.779 p99_ms=34.297 max_ms=34.297 mean_ms=30.384 over4_ms=32 over8_ms=32 over16_ms=32 over50_ms=0 grab_p50_ms=13.2
+pid=17232 dpi=120 working_set_mb=124 private_mb=115
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=5908 foreground_after_pid=5908
+--- frame stats (last 5) ---
+key-latency target=gpui pid=17232 posts=145 matched=145 unmatched=0 p50_ms=17.65 p90_ms=19.14 p99_ms=19.84 max_ms=35.47 mean_ms=18.04 over8_3=145 over16_7=145

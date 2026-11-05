@@ -4,6 +4,8 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 T=/home/sander/.local/share/aqua-port-tools
 W=/home/sander/projects/artisanstreet
 WHICH=${1:?aqua|gpui}
+PREFIX=${KEY_LATENCY_PREFIX:-$WHICH-keylat}
+INSTRUMENT=${KEY_LATENCY_INSTRUMENT:-0}
 MODE=${2:-keys}
 SIDEBAR_THREAD=${KEY_LATENCY_SIDEBAR_THREAD:-"136 118"}
 PROFILE=${KEY_LATENCY_PROFILE:-release}
@@ -23,9 +25,11 @@ case $WHICH in
   gpui) exe=$W/editor/target/x86_64-pc-windows-gnu/$PROFILE/artisan-editor.exe ;;
   *) echo "aqua|gpui" >&2; exit 2 ;;
 esac
+[ -n "${KEY_LATENCY_EXE:-}" ] && exe=$KEY_LATENCY_EXE
 [ -f "$exe" ] || { echo "missing $exe" >&2; exit 1; }
 [ -d "$FIXTURE_ROOT/template" ] || "$HERE/compare-editors.sh" fixture
 win() { wslpath -w "$1"; }
+if [ "${KEY_LATENCY_LOCKED:-0}" != 1 ]; then exec 9>/tmp/aqua-scoreboard.lock; flock -w 7200 9; fi
 mkdir -p "$OUT"
 rundir=$FIXTURE_ROOT/run-keys
 HOST_ID=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['last'])" "$FIXTURE_ROOT/editor-config/hosts.json")
@@ -66,11 +70,12 @@ tracerpt "$ETL" -o "$CSV" -of CSV -y | Out-Null
 PS
 ps() { powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(win "$1")" | tr -d '\r'; }
 [ "$MODE" = keys ] && ps "$OUT/etw-start.ps1"
-log=$OUT/$WHICH-keylat.log
-AQUA_RENDER_WHEN_COVERED=1 AQUA_REBUILD_STATS=1 AQUA_INPUT_LATENCY=${AQUA_INPUT_LATENCY:-2} \
-  WSLENV="${WSLENV:+$WSLENV:}AQUA_RENDER_WHEN_COVERED:AQUA_INPUT_LATENCY:AQUA_REBUILD_STATS:AQUA_PROFILE:AQUA_PROFILE_SPIKE_MS:AQUA_PROFILE_OUT:AQUA_OPEN_TIMING:AQUA_TM_MS" \
+log=$OUT/$PREFIX-drive.log
+if [ "$INSTRUMENT" = 1 ]; then stats=on; input_latency=${AQUA_INPUT_LATENCY:-2}; rebuild=1; else stats=off; input_latency=; rebuild=; fi
+AQUA_STATS_OVERRIDE=$stats AQUA_RENDER_WHEN_COVERED=1 AQUA_REBUILD_STATS=$rebuild AQUA_INPUT_LATENCY=$input_latency \
+  WSLENV="${WSLENV:+$WSLENV:}AQUA_STATS_OVERRIDE:AQUA_RENDER_WHEN_COVERED:AQUA_INPUT_LATENCY:AQUA_REBUILD_STATS:AQUA_PROFILE:AQUA_PROFILE_SPIKE_MS:AQUA_PROFILE_OUT:AQUA_OPEN_TIMING:AQUA_TM_MS" \
   AQUA_EDITOR_DIR=$rundir/editor-config AQUA_APP_ARGS="$app_args" AQUA_EVENTS=$rundir/events.jsonl \
-  "$T/bin/win-app" "$exe" "$steps" "$BOOT" "$OUT" "$WHICH-keylat" | tee "$log"
-if [ "$MODE" = open ]; then grep -h "probe-open\|open-timing" "$log" "$OUT/$WHICH-keylat-stderr.log" | grep -v "stage=rebuild" || true; exit 0; fi
+  "$T/bin/win-app" "$exe" "$steps" "$BOOT" "$OUT" "$PREFIX" | tee "$log"
+if [ "$MODE" = open ]; then grep -h "probe-open\|open-timing" "$log" "$OUT/$PREFIX-stderr.log" | grep -v "stage=rebuild" || true; exit 0; fi
 ps "$OUT/etw-stop.ps1"
-python3 "$HERE/key-latency-report.py" "$WHICH" "$log" "$OUT/$WHICH-keylat-keyposts.txt" /mnt/c/Users/sander/AppData/Local/Temp/aqua-key-latency.csv "$OUT/$WHICH-keylat-stderr.log"
+python3 "$HERE/key-latency-report.py" "$WHICH" "$log" "$OUT/$PREFIX-keyposts.txt" /mnt/c/Users/sander/AppData/Local/Temp/aqua-key-latency.csv "$OUT/$PREFIX-stderr.log" | tee -a "$log"

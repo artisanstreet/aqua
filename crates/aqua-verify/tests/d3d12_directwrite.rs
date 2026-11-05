@@ -3,8 +3,7 @@
 use aqua_core::Oklch;
 use aqua_gpu_d3d12::hal::tier::Tier;
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat, TierLimit};
-use aqua_gpu_ref::{conformance, RefBackend};
-use aqua_graph::tone::linear_to_srgb;
+use aqua_gpu_ref::{RefBackend, conformance};
 use aqua_graph::{Extent, FramePlan, GlyphInstance, PlanLimits, RenderGraph, TextureRef};
 use aqua_media::atlas::PageId;
 use aqua_media::residency::{Residency, ResidencyConfig};
@@ -88,11 +87,7 @@ fn encoded_rgb(pixels: &SurfacePixels) -> Vec<u8> {
         .as_chunks::<4>()
         .0
         .iter()
-        .flat_map(|texel| {
-            [0, 1, 2].map(|channel| {
-                (linear_to_srgb(f32::from(texel[channel]) / 255.0) * 255.0).round() as u8
-            })
-        })
+        .flat_map(|texel| [texel[0], texel[1], texel[2]])
         .collect()
 }
 

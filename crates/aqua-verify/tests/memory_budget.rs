@@ -73,13 +73,16 @@ fn run(
     preference: AdapterPreference,
     high_performance: bool,
     budget: Option<MemoryBudget>,
+    primed: bool,
 ) {
     exclusive::hold_exclusive();
     if std::env::var_os(PRIME_VARIABLE).is_some() {
         prime_driver_cache(preference);
         return;
     }
-    prime_in_a_child_process(test);
+    if primed {
+        prime_in_a_child_process(test);
+    }
     let mut stages = vec![stage("process", high_performance)];
     let mut backend = match OffscreenBackend::with_format(preference, SurfaceFormat::Bgra8Unorm) {
         Ok(backend) => backend,
@@ -194,6 +197,7 @@ fn hardware_adapter_steady_state_does_not_grow() {
         AdapterPreference::HighPerformance,
         true,
         Some(RENDERER_OFFSCREEN),
+        true,
     );
 }
 
@@ -204,5 +208,17 @@ fn warp_steady_state_does_not_grow() {
         AdapterPreference::Warp,
         false,
         None,
+        true,
+    );
+}
+
+#[test]
+fn hardware_adapter_unprimed_first_run_stays_in_budget() {
+    run(
+        "hardware_adapter_unprimed_first_run_stays_in_budget",
+        AdapterPreference::HighPerformance,
+        true,
+        Some(RENDERER_OFFSCREEN),
+        false,
     );
 }

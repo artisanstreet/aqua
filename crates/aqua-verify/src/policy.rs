@@ -15,6 +15,7 @@ pub const PURE_CRATES: &[&str] = &[
 ];
 
 pub const ADAPTER_CRATES: &[&str] = &[
+    "aqua-gpu-d3d11",
     "aqua-gpu-d3d12",
     "aqua-gpu-ref",
     "aqua-shell-win32",
@@ -49,6 +50,7 @@ pub const UNSAFE_AUDITED_CRATES: &[&str] = &["aqua-kernels"];
 
 pub const FORBIDDEN_ADAPTER_CRATES: &[&str] = &[
     "aqua",
+    "aqua-gpu-d3d11",
     "aqua-gpu-d3d12",
     "aqua-gpu-ref",
     "aqua-gpu-wgpu",
@@ -100,6 +102,7 @@ pub const KERNEL_TWIN_FN: &str = "pub fn reference";
 pub const REFERENCE_ONLY_KERNEL_USERS: &[&str] = &["aqua-gpu-ref"];
 
 pub const ADAPTER_PORT_IMPLS: &[(&str, &str)] = &[
+    ("aqua-gpu-d3d11", "GpuBackend"),
     ("aqua-gpu-d3d12", "GpuBackend"),
     ("aqua-gpu-ref", "GpuBackend"),
     ("aqua-ime-tsf", "ImeBackend"),
@@ -109,10 +112,24 @@ pub const ADAPTER_PORT_IMPLS: &[(&str, &str)] = &[
 
 pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
     (
+        "aqua-gpu-d3d11",
+        &[
+            "hal",
+            "half",
+            "ledger",
+            "lifetimes",
+            "pack",
+            "sprite",
+            "window",
+            "scene",
+        ],
+    ),
+    (
         "aqua-gpu-d3d12",
         &[
             "hal",
             "half",
+            "ledger",
             "pack",
             "placement",
             "policy",
@@ -152,6 +169,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "regions",
             "services",
             "timing",
+            "wake_trace",
             "Chrome",
             "FileDrag",
             "Handler",
@@ -236,7 +254,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "weight_distance_order",
         ],
     ),
-    ("aqua-shaders", &["Stage", "Blob", "find"]),
+    ("aqua-shaders", &["Stage", "Blob", "find", "find_dxbc"]),
     (
         "aqua-oracle-dwrite",
         &[

@@ -4,10 +4,10 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant as WallInstant};
 
+use aqua::UiApp;
 use aqua::render::host::{FrameTarget, GpuFrames, RenderStats};
 use aqua::render::link::{ExternalUpdate, InitFactory};
 use aqua::render::lower::Lowering;
-use aqua::UiApp;
 use aqua::{Aqua, AquaConfig};
 use aqua_core::{InputEvent, Point, PointerButton, PointerEvent, PointerKind, ScrollDelta};
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
@@ -142,7 +142,12 @@ pub fn open(kind: Kind) -> Option<Host> {
     let sink = Arc::new(Mutex::new(Captured::default()));
     let attached = aqua.attach_render(
         id,
-        factory(kind, aqua.fonts().clone(), aqua.runs().clone(), sink.clone()),
+        factory(
+            kind,
+            aqua.fonts().clone(),
+            aqua.runs().clone(),
+            sink.clone(),
+        ),
         Duration::from_millis(2),
     );
     assert!(attached);
@@ -174,8 +179,10 @@ impl Host {
         while WallInstant::now() < deadline {
             self.pump();
             let presented = self.aqua.presented_frames(self.id).unwrap_or(0);
-            if presented != last.0 {
-                last = (presented, WallInstant::now());
+            let executed = self.sink.lock().unwrap().hashes.len() as u64;
+            let progress = presented.wrapping_add(executed << 32);
+            if progress != last.0 {
+                last = (progress, WallInstant::now());
             }
             let quiet = last.1.elapsed() > Duration::from_millis(250);
             let idle = self.aqua.next_wake(self.aqua.clock()).is_none();

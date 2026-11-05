@@ -20,6 +20,14 @@ impl Bounds {
         self.right <= self.left || self.bottom <= self.top
     }
 
+    pub(crate) fn clip_to(self, to: Bounds) -> Bounds {
+        self.clip(to)
+    }
+
+    pub(crate) fn is_empty_area(self) -> bool {
+        self.is_empty()
+    }
+
     fn clip(self, to: Bounds) -> Bounds {
         Bounds {
             left: self.left.max(to.left),
@@ -65,32 +73,103 @@ pub fn covered(target: Bounds, above: &[Bounds]) -> bool {
     })
 }
 
+pub const QUIET_BEFORE_UNHOOK: std::time::Duration = std::time::Duration::from_millis(1500);
+pub const REFRESH_WHILE_ACTIVE: std::time::Duration = std::time::Duration::from_millis(250);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum Level {
+    #[default]
+    Off,
+    Narrow,
+    Full,
+}
+
+#[derive(Debug, Default)]
+pub struct Watch {
+    level: Level,
+    covered: bool,
+    quiet_since: Option<aqua_protocol::Instant>,
+    refreshed: Option<aqua_protocol::Instant>,
+}
+
+impl Watch {
+    pub fn step(
+        &mut self,
+        now: aqua_protocol::Instant,
+        active: bool,
+        covered: bool,
+    ) -> Option<Level> {
+        self.covered = covered;
+        let target = match active {
+            true => {
+                self.quiet_since = None;
+                Level::Full
+            }
+            false => {
+                let since = *self.quiet_since.get_or_insert(now);
+                match now.saturating_duration_since(since) >= QUIET_BEFORE_UNHOOK {
+                    true if covered => Level::Narrow,
+                    true => Level::Off,
+                    false => self.level,
+                }
+            }
+        };
+        (target != self.level).then(|| {
+            self.level = target;
+            target
+        })
+    }
+
+    pub fn refresh_due(&mut self, now: aqua_protocol::Instant) -> bool {
+        let due = self.level == Level::Full
+            && self
+                .refreshed
+                .is_none_or(|last| now.saturating_duration_since(last) >= REFRESH_WHILE_ACTIVE);
+        if due {
+            self.refreshed = Some(now);
+        }
+        due
+    }
+
+    pub fn next_check(&self) -> Option<aqua_protocol::Instant> {
+        let settling = match self.level {
+            Level::Full => true,
+            Level::Narrow => !self.covered,
+            Level::Off => false,
+        };
+        settling
+            .then_some(self.quiet_since)
+            .flatten()
+            .map(|since| since + QUIET_BEFORE_UNHOOK)
+    }
+}
+
 #[cfg(windows)]
-pub(crate) use native::{is_covered, pump, watch};
+pub(crate) use native::{is_covered, pump, refresh, set_level};
 
 #[cfg(windows)]
 mod native {
     use super::{Bounds, covered};
     use crate::event::ShellEvent;
     use crate::state;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::Graphics::Dwm::{
         DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute,
     };
     use windows::Win32::Graphics::Gdi::{GetWindowRgnBox, RGN_ERROR};
-    use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
+    use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GW_HWNDPREV, GWL_EXSTYLE, GetWindow, GetWindowLongW, GetWindowRect, IsIconic,
-        IsWindowVisible, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+        GW_HWNDPREV, GWL_EXSTYLE, GetWindow, GetWindowLongW, GetWindowRect,
+        GetWindowThreadProcessId, IsIconic, IsWindowVisible, WS_EX_LAYERED, WS_EX_TRANSPARENT,
     };
 
     const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
     const EVENT_SYSTEM_MINIMIZESTART: u32 = 0x0016;
     const EVENT_SYSTEM_MINIMIZEEND: u32 = 0x0017;
+    const EVENT_OBJECT_DESTROY: u32 = 0x8001;
     const EVENT_OBJECT_SHOW: u32 = 0x8002;
     const EVENT_OBJECT_HIDE: u32 = 0x8003;
-    const EVENT_OBJECT_LOCATIONCHANGE: u32 = 0x800B;
     const EVENT_OBJECT_CLOAKED: u32 = 0x8017;
     const EVENT_OBJECT_UNCLOAKED: u32 = 0x8018;
     const WINEVENT_OUTOFCONTEXT: u32 = 0;
@@ -98,16 +177,36 @@ mod native {
 
     thread_local! {
         static DIRTY: Cell<bool> = const { Cell::new(true) };
-        static HOOK: Cell<bool> = const { Cell::new(false) };
+        static HOOKS: RefCell<Vec<HWINEVENTHOOK>> = const { RefCell::new(Vec::new()) };
+        static LEVEL: Cell<super::Level> = const { Cell::new(super::Level::Off) };
     }
+
+    const FULL: [(u32, u32); 5] = [
+        (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+        (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
+        (EVENT_OBJECT_DESTROY, EVENT_OBJECT_DESTROY),
+        (EVENT_OBJECT_SHOW, EVENT_OBJECT_HIDE),
+        (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
+    ];
+
+    const SYSTEM_NARROW: [(u32, u32); 2] = [
+        (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+        (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
+    ];
+
+    const OCCLUDER_NARROW: [(u32, u32); 3] = [
+        (EVENT_OBJECT_DESTROY, EVENT_OBJECT_DESTROY),
+        (EVENT_OBJECT_HIDE, EVENT_OBJECT_HIDE),
+        (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
+    ];
 
     const RELEVANT: [u32; 8] = [
         EVENT_SYSTEM_FOREGROUND,
         EVENT_SYSTEM_MINIMIZESTART,
         EVENT_SYSTEM_MINIMIZEEND,
+        EVENT_OBJECT_DESTROY,
         EVENT_OBJECT_SHOW,
         EVENT_OBJECT_HIDE,
-        EVENT_OBJECT_LOCATIONCHANGE,
         EVENT_OBJECT_CLOAKED,
         EVENT_OBJECT_UNCLOAKED,
     ];
@@ -126,22 +225,94 @@ mod native {
         }
     }
 
-    pub(crate) fn watch() {
-        if HOOK.replace(true) {
-            return;
-        }
-        let _ = unsafe {
+    fn hook(first: u32, last: u32, process: u32) -> Option<HWINEVENTHOOK> {
+        let hook = unsafe {
             SetWinEventHook(
-                EVENT_SYSTEM_FOREGROUND,
-                EVENT_OBJECT_UNCLOAKED,
+                first,
+                last,
                 None,
                 Some(on_event),
-                0,
+                process,
                 0,
                 WINEVENT_OUTOFCONTEXT,
             )
         };
+        (!hook.is_invalid()).then_some(hook)
+    }
+
+    fn occluder_processes() -> Vec<u32> {
+        let own = std::process::id();
+        let targets: Vec<isize> = state::with(|s| s.windows.keys().copied().collect());
+        let mut processes: Vec<u32> = targets
+            .into_iter()
+            .flat_map(|raw| {
+                let target = crate::wndproc::hwnd_from(raw);
+                let bounds = frame_bounds(target);
+                let mut found = Vec::new();
+                let mut cursor = target;
+                while let Ok(previous) = unsafe { GetWindow(cursor, GW_HWNDPREV) } {
+                    if previous.0.is_null() {
+                        break;
+                    }
+                    cursor = previous;
+                    let overlaps = bounds.zip(frame_bounds(previous)).is_some_and(|(a, b)| {
+                        !super::Bounds::new(a.left, a.top, a.right, a.bottom)
+                            .clip_to(b)
+                            .is_empty_area()
+                    });
+                    if overlaps && opaque_in_flow(previous) {
+                        let mut process = 0u32;
+                        unsafe { GetWindowThreadProcessId(previous, Some(&mut process)) };
+                        found.push(process);
+                    }
+                }
+                found
+            })
+            .filter(|process| *process != 0 && *process != own)
+            .collect();
+        processes.sort_unstable();
+        processes.dedup();
+        processes
+    }
+
+    pub(crate) fn refresh() {
         DIRTY.set(true);
+    }
+
+    pub(crate) fn set_level(level: super::Level) {
+        LEVEL.set(level);
+        HOOKS.with(|hooks| {
+            let mut hooks = hooks.borrow_mut();
+            hooks.drain(..).for_each(|hook| {
+                let _ = unsafe { UnhookWinEvent(hook) };
+            });
+            match level {
+                super::Level::Off => {}
+                super::Level::Full => {
+                    hooks.extend(
+                        FULL.iter()
+                            .filter_map(|(first, last)| hook(*first, *last, 0)),
+                    );
+                }
+                super::Level::Narrow => {
+                    hooks.extend(
+                        SYSTEM_NARROW
+                            .iter()
+                            .filter_map(|(first, last)| hook(*first, *last, 0)),
+                    );
+                    for process in occluder_processes() {
+                        hooks.extend(
+                            OCCLUDER_NARROW
+                                .iter()
+                                .filter_map(|(first, last)| hook(*first, *last, process)),
+                        );
+                    }
+                }
+            }
+            if level != super::Level::Off {
+                DIRTY.set(true);
+            }
+        });
     }
 
     fn cloaked(hwnd: HWND) -> bool {
@@ -230,6 +401,10 @@ mod native {
             state::window(raw, |w| w.covered = now);
             state::emit(raw, ShellEvent::Covered(now));
         });
+        if LEVEL.get() == super::Level::Narrow {
+            set_level(super::Level::Narrow);
+            DIRTY.set(false);
+        }
     }
 }
 

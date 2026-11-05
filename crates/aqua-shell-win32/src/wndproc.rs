@@ -428,6 +428,7 @@ pub(crate) unsafe extern "system" fn wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     let raw = hwnd.0 as isize;
+    crate::wake_trace::record_sent(msg);
     if !state::with(|s| s.windows.contains_key(&raw)) {
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     }

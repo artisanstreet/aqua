@@ -10,6 +10,7 @@ pub mod pointer;
 pub mod regions;
 pub mod services;
 pub mod timing;
+pub mod wake_trace;
 
 mod event;
 
@@ -26,6 +27,8 @@ mod composition;
 pub mod dialogs;
 #[cfg(windows)]
 mod drop_target;
+#[cfg(windows)]
+mod gaps;
 #[cfg(windows)]
 mod handle;
 #[cfg(windows)]

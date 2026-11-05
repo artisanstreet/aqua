@@ -118,7 +118,6 @@ fn outer_size(
 impl Window {
     pub fn create(options: &WindowOptions) -> Result<Window, ShellError> {
         init();
-        crate::occlusion::watch();
         unsafe {
             let style = style_for(options);
             let ex = ex_style_for(options);

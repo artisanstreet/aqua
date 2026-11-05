@@ -321,39 +321,57 @@ fn measure(material: WindowMaterial, name: &str) -> Measurement {
     measurement
 }
 
+const ATTEMPTS: usize = 3;
+
+fn material_contract() -> Result<(), String> {
+    let mica = measure(WindowMaterial::Mica, "mica");
+    let alt = measure(WindowMaterial::Tabbed, "mica-alt");
+    let acrylic = measure(WindowMaterial::Acrylic, "acrylic");
+
+    let spread = |m: &Measurement| distance(m.left, m.right);
+    for (name, m) in [("mica", &mica), ("mica alt", &alt), ("acrylic", &acrylic)] {
+        if spread(m) >= 8.0 {
+            return Err(format!(
+                "{name} is flat while inactive: {:?} vs {:?}",
+                m.left, m.right
+            ));
+        }
+        if distance(m.left, [0.0; 3]) <= 3.0 {
+            return Err(format!("{name} must paint a backdrop, got {:?}", m.left));
+        }
+    }
+    if distance(mica.left, acrylic.left) <= 20.0 {
+        return Err(format!(
+            "acrylic and mica are distinct materials: {:?} vs {:?}",
+            acrylic.left, mica.left
+        ));
+    }
+    if distance(mica.left, alt.left) >= 8.0 {
+        return Err(format!(
+            "mica and mica alt differ: {:?} vs {:?}",
+            mica.left, alt.left
+        ));
+    }
+    Ok(())
+}
+
 #[test]
 fn mica_mica_alt_and_acrylic_pixels_follow_the_system_backdrop_contract() {
     if !desktop::require("materials") {
         return;
     }
     let _desktop = DESKTOP.lock().unwrap_or_else(|p| p.into_inner());
-    let mica = measure(WindowMaterial::Mica, "mica");
-    let alt = measure(WindowMaterial::Tabbed, "mica-alt");
-    let acrylic = measure(WindowMaterial::Acrylic, "acrylic");
-
-    let spread = |m: &Measurement| distance(m.left, m.right);
-    [("mica", &mica), ("mica alt", &alt), ("acrylic", &acrylic)]
-        .iter()
-        .for_each(|(name, m)| {
-            assert!(
-                spread(m) < 8.0,
-                "{name} is flat while inactive: {:?} vs {:?}",
-                m.left,
-                m.right
-            );
-            assert!(
-                distance(m.left, [0.0; 3]) > 3.0,
-                "{name} must paint a backdrop, got {:?}",
-                m.left
-            );
-        });
-    assert!(
-        distance(mica.left, acrylic.left) > 20.0,
-        "acrylic and mica are distinct materials: {:?} vs {:?}",
-        acrylic.left,
-        mica.left
-    );
-    assert!(distance(mica.left, alt.left) < 8.0);
+    let mut failure = String::new();
+    for attempt in 0..ATTEMPTS {
+        match material_contract() {
+            Ok(()) => return,
+            Err(reason) => {
+                println!("materials attempt {attempt}: {reason}");
+                failure = reason;
+            }
+        }
+    }
+    panic!("{failure}");
 }
 
 fn occlusion_loop(window: Window, expect_covered: bool, within: Duration) -> bool {

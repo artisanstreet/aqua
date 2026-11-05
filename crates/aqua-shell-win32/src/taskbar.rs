@@ -1,12 +1,12 @@
 use aqua_protocol::{BadgeError, TaskbarBadge};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{HSTRING, PCWSTR};
 
 struct Dc(HDC);
 
@@ -108,7 +108,7 @@ pub fn set_badge(
 fn raster_icon(badge: TaskbarBadge, size: i32) -> windows::core::Result<HICON> {
     unsafe {
         let dc = Dc(CreateCompatibleDC(None));
-        if dc.0.0.is_null() {
+        if dc.0 .0.is_null() {
             return Err(windows::core::Error::from_thread());
         }
         let info = BITMAPINFO {

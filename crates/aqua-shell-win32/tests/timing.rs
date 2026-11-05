@@ -25,3 +25,15 @@ fn timeouts_round_up_to_whole_milliseconds() {
     assert!(!due(at(4), Some(at(5))));
     assert!(!due(at(4), None));
 }
+
+#[test]
+fn near_deadlines_stay_precise_and_far_ones_get_bounded_leeway() {
+    assert_eq!(plan(at(0), at(16)), TimerPlan::Precise);
+    assert_eq!(plan(at(0), at(100)), TimerPlan::Precise);
+    assert_eq!(plan(at(0), at(500)), TimerPlan::Coarse { leeway_ms: 50 });
+    assert_eq!(
+        plan(at(0), at(60_000)),
+        TimerPlan::Coarse { leeway_ms: 250 }
+    );
+    assert_eq!(plan(at(9), at(3)), TimerPlan::Precise);
+}

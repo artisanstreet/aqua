@@ -15,7 +15,7 @@ pub mod wake_trace;
 mod event;
 
 pub use event::{Chrome, FileDrag, Handler, ShellError, ShellEvent, WindowKind, WindowOptions};
-pub use hooks::{MessageHook, RawMessage, set_message_hook};
+pub use hooks::{set_message_hook, MessageHook, RawMessage};
 
 #[cfg(windows)]
 mod apartment;
@@ -51,7 +51,7 @@ mod wndproc;
 #[cfg(windows)]
 pub use handle::NativeHandle;
 #[cfg(windows)]
-pub use looping::{Waker, now, pump_sent_messages, quit, run, schedule, set_waitables};
+pub use looping::{now, pump_sent_messages, quit, run, schedule, set_waitables, Waker};
 #[cfg(windows)]
 pub use material::MaterialOutcome;
 #[cfg(windows)]

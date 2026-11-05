@@ -94,7 +94,10 @@ fn clipboard_window_messages_become_control_shortcuts() {
     let paste = clipboard_shortcut(WM_PASTE).expect("paste");
     assert_eq!(paste.key, Key::Char('v'));
     assert_eq!(paste.modifiers, Modifiers::CONTROL);
-    assert_eq!(clipboard_shortcut(WM_COPY).expect("copy").key, Key::Char('c'));
+    assert_eq!(
+        clipboard_shortcut(WM_COPY).expect("copy").key,
+        Key::Char('c')
+    );
     assert_eq!(clipboard_shortcut(WM_CUT).expect("cut").key, Key::Char('x'));
     assert_eq!(clipboard_shortcut(0x0100), None);
 }

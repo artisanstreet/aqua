@@ -23,9 +23,7 @@ mod scripted {
         let title = wide(title);
         let started = Instant::now();
         while started.elapsed() < within {
-            if let Ok(found) =
-                unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) }
-            {
+            if let Ok(found) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
                 if !found.0.is_null() {
                     return Some(found);
                 }
@@ -55,7 +53,13 @@ mod scripted {
             id: id as i32,
             found: None,
         };
-        let _ = unsafe { EnumChildWindows(Some(dialog), Some(each), LPARAM(&mut search as *mut _ as isize)) };
+        let _ = unsafe {
+            EnumChildWindows(
+                Some(dialog),
+                Some(each),
+                LPARAM(&mut search as *mut _ as isize),
+            )
+        };
         search.found
     }
 
@@ -69,10 +73,10 @@ mod scripted {
                         unsafe { PostMessageW(Some(control), BM_CLICK, WPARAM(0), LPARAM(0)) }
                             .is_ok()
                     }
-                    None => unsafe {
-                        PostMessageW(Some(dialog), WM_COMMAND, WPARAM(button), LPARAM(0))
+                    None => {
+                        unsafe { PostMessageW(Some(dialog), WM_COMMAND, WPARAM(button), LPARAM(0)) }
+                            .is_ok()
                     }
-                    .is_ok(),
                 }
             }
             None => false,

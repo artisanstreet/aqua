@@ -16,19 +16,11 @@ impl Bounds {
         }
     }
 
-    fn is_empty(self) -> bool {
+    pub(crate) fn is_empty(self) -> bool {
         self.right <= self.left || self.bottom <= self.top
     }
 
-    pub(crate) fn clip_to(self, to: Bounds) -> Bounds {
-        self.clip(to)
-    }
-
-    pub(crate) fn is_empty_area(self) -> bool {
-        self.is_empty()
-    }
-
-    fn clip(self, to: Bounds) -> Bounds {
+    pub(crate) fn clip(self, to: Bounds) -> Bounds {
         Bounds {
             left: self.left.max(to.left),
             top: self.top.max(to.top),
@@ -144,24 +136,39 @@ impl Watch {
     }
 }
 
+pub fn reconcile<K: Eq + Clone>(installed: &[K], desired: &[K]) -> (Vec<K>, Vec<K>) {
+    let stale = installed
+        .iter()
+        .filter(|key| !desired.contains(key))
+        .cloned()
+        .collect();
+    let missing = desired
+        .iter()
+        .enumerate()
+        .filter(|(index, key)| !installed.contains(key) && !desired[..*index].contains(key))
+        .map(|(_, key)| key.clone())
+        .collect();
+    (stale, missing)
+}
+
 #[cfg(windows)]
 pub(crate) use native::{is_covered, pump, refresh, set_level};
 
 #[cfg(windows)]
 mod native {
-    use super::{Bounds, covered};
+    use super::{covered, Bounds};
     use crate::event::ShellEvent;
     use crate::state;
     use std::cell::{Cell, RefCell};
     use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::Graphics::Dwm::{
-        DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute,
+        DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
     };
     use windows::Win32::Graphics::Gdi::{GetWindowRgnBox, RGN_ERROR};
-    use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
+    use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GW_HWNDPREV, GWL_EXSTYLE, GetWindow, GetWindowLongW, GetWindowRect,
-        GetWindowThreadProcessId, IsIconic, IsWindowVisible, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+        GetWindow, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, IsIconic,
+        IsWindowVisible, GWL_EXSTYLE, GW_HWNDPREV, WS_EX_LAYERED, WS_EX_TRANSPARENT,
     };
 
     const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
@@ -177,9 +184,11 @@ mod native {
 
     thread_local! {
         static DIRTY: Cell<bool> = const { Cell::new(true) };
-        static HOOKS: RefCell<Vec<HWINEVENTHOOK>> = const { RefCell::new(Vec::new()) };
+        static HOOKS: RefCell<Vec<(HookKey, HWINEVENTHOOK)>> = const { RefCell::new(Vec::new()) };
         static LEVEL: Cell<super::Level> = const { Cell::new(super::Level::Off) };
     }
+
+    type HookKey = (u32, u32, u32, u32);
 
     const FULL: [(u32, u32); 5] = [
         (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
@@ -220,12 +229,14 @@ mod native {
         _thread: u32,
         _time: u32,
     ) {
-        if object == OBJID_WINDOW && child == 0 && RELEVANT.contains(&event) {
+        let relevant = object == OBJID_WINDOW && child == 0 && RELEVANT.contains(&event);
+        crate::wake_trace::record(crate::wake_trace::Source::WinEvent { event, relevant });
+        if relevant {
             DIRTY.set(true);
         }
     }
 
-    fn hook(first: u32, last: u32, process: u32) -> Option<HWINEVENTHOOK> {
+    fn hook(first: u32, last: u32, process: u32, thread: u32) -> Option<HWINEVENTHOOK> {
         let hook = unsafe {
             SetWinEventHook(
                 first,
@@ -233,21 +244,22 @@ mod native {
                 None,
                 Some(on_event),
                 process,
-                0,
+                thread,
                 WINEVENT_OUTOFCONTEXT,
             )
         };
         (!hook.is_invalid()).then_some(hook)
     }
 
-    fn occluder_processes() -> Vec<u32> {
+    fn occluder_threads() -> Vec<(u32, u32)> {
         let own = std::process::id();
         let targets: Vec<isize> = state::with(|s| s.windows.keys().copied().collect());
-        let mut processes: Vec<u32> = targets
+        let mut occluders: Vec<(u32, u32)> = targets
             .into_iter()
             .flat_map(|raw| {
                 let target = crate::wndproc::hwnd_from(raw);
                 let bounds = frame_bounds(target);
+                let rough = outer_bounds(target);
                 let mut found = Vec::new();
                 let mut cursor = target;
                 while let Ok(previous) = unsafe { GetWindow(cursor, GW_HWNDPREV) } {
@@ -255,60 +267,77 @@ mod native {
                         break;
                     }
                     cursor = previous;
-                    let overlaps = bounds.zip(frame_bounds(previous)).is_some_and(|(a, b)| {
-                        !super::Bounds::new(a.left, a.top, a.right, a.bottom)
-                            .clip_to(b)
-                            .is_empty_area()
-                    });
-                    if overlaps && opaque_in_flow(previous) {
+                    let candidate = rough.is_some_and(|rough| may_occlude(previous, rough));
+                    let overlaps = candidate
+                        && bounds.zip(frame_bounds(previous)).is_some_and(|(a, b)| {
+                            !super::Bounds::new(a.left, a.top, a.right, a.bottom)
+                                .clip(b)
+                                .is_empty()
+                        });
+                    if overlaps && occludes(previous) {
                         let mut process = 0u32;
-                        unsafe { GetWindowThreadProcessId(previous, Some(&mut process)) };
-                        found.push(process);
+                        let thread =
+                            unsafe { GetWindowThreadProcessId(previous, Some(&mut process)) };
+                        found.push((process, thread));
                     }
                 }
                 found
             })
-            .filter(|process| *process != 0 && *process != own)
+            .filter(|(process, thread)| *process != 0 && *thread != 0 && *process != own)
             .collect();
-        processes.sort_unstable();
-        processes.dedup();
-        processes
+        occluders.sort_unstable();
+        occluders.dedup();
+        occluders
     }
 
     pub(crate) fn refresh() {
         DIRTY.set(true);
     }
 
-    pub(crate) fn set_level(level: super::Level) {
-        LEVEL.set(level);
-        HOOKS.with(|hooks| {
-            let mut hooks = hooks.borrow_mut();
-            hooks.drain(..).for_each(|hook| {
-                let _ = unsafe { UnhookWinEvent(hook) };
-            });
-            match level {
-                super::Level::Off => {}
-                super::Level::Full => {
-                    hooks.extend(
-                        FULL.iter()
-                            .filter_map(|(first, last)| hook(*first, *last, 0)),
-                    );
-                }
-                super::Level::Narrow => {
-                    hooks.extend(
-                        SYSTEM_NARROW
-                            .iter()
-                            .filter_map(|(first, last)| hook(*first, *last, 0)),
-                    );
-                    for process in occluder_processes() {
-                        hooks.extend(
+    fn desired_hooks(level: super::Level) -> Vec<HookKey> {
+        match level {
+            super::Level::Off => Vec::new(),
+            super::Level::Full => FULL
+                .iter()
+                .map(|(first, last)| (*first, *last, 0, 0))
+                .collect(),
+            super::Level::Narrow => SYSTEM_NARROW
+                .iter()
+                .map(|(first, last)| (*first, *last, 0, 0))
+                .chain(
+                    occluder_threads()
+                        .into_iter()
+                        .flat_map(|(process, thread)| {
                             OCCLUDER_NARROW
                                 .iter()
-                                .filter_map(|(first, last)| hook(*first, *last, process)),
-                        );
+                                .map(move |(first, last)| (*first, *last, process, thread))
+                        }),
+                )
+                .collect(),
+        }
+    }
+
+    pub(crate) fn set_level(level: super::Level) {
+        LEVEL.set(level);
+        let desired = crate::wake_trace::timed("occluders", || desired_hooks(level));
+        HOOKS.with(|hooks| {
+            let mut hooks = hooks.borrow_mut();
+            let installed: Vec<HookKey> = hooks.iter().map(|(key, _)| *key).collect();
+            let (stale, missing) = super::reconcile(&installed, &desired);
+            crate::wake_trace::timed("unhook", || {
+                hooks.retain(|(key, hook)| {
+                    let keep = !stale.contains(key);
+                    if !keep {
+                        let _ = unsafe { UnhookWinEvent(*hook) };
                     }
-                }
-            }
+                    keep
+                })
+            });
+            crate::wake_trace::timed("hook", || {
+                hooks.extend(missing.into_iter().filter_map(|key| {
+                    hook(key.0, key.1, key.2, key.3).map(|installed| (key, installed))
+                }))
+            });
             if level != super::Level::Off {
                 DIRTY.set(true);
             }
@@ -348,20 +377,30 @@ mod native {
         ))
     }
 
-    fn opaque_in_flow(hwnd: HWND) -> bool {
+    fn outer_bounds(hwnd: HWND) -> Option<Bounds> {
+        let mut rect = RECT::default();
+        unsafe { GetWindowRect(hwnd, &mut rect) }
+            .is_ok()
+            .then_some(Bounds::new(rect.left, rect.top, rect.right, rect.bottom))
+    }
+
+    fn may_occlude(hwnd: HWND, rough: Bounds) -> bool {
         let ex = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) } as u32;
         unsafe { IsWindowVisible(hwnd) }.as_bool()
             && !unsafe { IsIconic(hwnd) }.as_bool()
             && ex & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0) == 0
-            && !cloaked(hwnd)
-            && unsafe { GetWindowRgnBox(hwnd, &mut RECT::default()) }.0 == RGN_ERROR.0
+            && outer_bounds(hwnd).is_some_and(|outer| !outer.clip(rough).is_empty())
+    }
+
+    fn occludes(hwnd: HWND) -> bool {
+        !cloaked(hwnd) && unsafe { GetWindowRgnBox(hwnd, &mut RECT::default()) }.0 == RGN_ERROR.0
     }
 
     pub(crate) fn is_covered(hwnd: HWND) -> bool {
         if cloaked(hwnd) {
             return true;
         }
-        let Some(target) = frame_bounds(hwnd) else {
+        let (Some(target), Some(rough)) = (frame_bounds(hwnd), outer_bounds(hwnd)) else {
             return false;
         };
         let mut above = Vec::new();
@@ -371,7 +410,7 @@ mod native {
                 break;
             }
             cursor = previous;
-            if opaque_in_flow(previous) {
+            if may_occlude(previous, rough) && occludes(previous) {
                 above.extend(frame_bounds(previous));
             }
         }
@@ -389,14 +428,16 @@ mod native {
                 .map(|(raw, w)| (*raw, w.covered))
                 .collect()
         });
-        let changes: Vec<(isize, bool)> = known
-            .into_iter()
-            .filter_map(|(raw, was)| {
-                let hwnd = crate::wndproc::hwnd_from(raw);
-                let now = unsafe { IsWindowVisible(hwnd) }.as_bool() && is_covered(hwnd);
-                (now != was).then_some((raw, now))
-            })
-            .collect();
+        let changes: Vec<(isize, bool)> = crate::wake_trace::timed("covered", || {
+            known
+                .into_iter()
+                .filter_map(|(raw, was)| {
+                    let hwnd = crate::wndproc::hwnd_from(raw);
+                    let now = unsafe { IsWindowVisible(hwnd) }.as_bool() && is_covered(hwnd);
+                    (now != was).then_some((raw, now))
+                })
+                .collect()
+        });
         changes.into_iter().for_each(|(raw, now)| {
             state::window(raw, |w| w.covered = now);
             state::emit(raw, ShellEvent::Covered(now));

@@ -11,6 +11,8 @@ pub enum Source {
     Timeout,
     Other(u32),
     Queue(u32),
+    WinEvent { event: u32, relevant: bool },
+    Slow { step: &'static str, millis: u32 },
 }
 
 #[derive(Debug, Default)]
@@ -123,6 +125,11 @@ impl Source {
             Self::Waitable => "loop:waitable".into(),
             Self::Timeout => "loop:timeout".into(),
             Self::Queue(flags) => format!("loop:queue-{}", queue_flags(*flags)),
+            Self::WinEvent { event, relevant } => format!(
+                "winevent:0x{event:04x}{}",
+                if *relevant { "" } else { ":ignored" }
+            ),
+            Self::Slow { step, millis } => format!("slow:{step}:{millis}ms"),
             Self::Other(code) => format!("loop:wait-result-{code}"),
         }
     }
@@ -135,6 +142,10 @@ impl Tally {
 
     pub fn is_empty(&self) -> bool {
         self.counts.is_empty()
+    }
+
+    pub fn has_slow(&self) -> bool {
+        self.counts.keys().any(|label| label.starts_with("slow:"))
     }
 
     pub fn total(&self) -> u32 {
@@ -163,10 +174,14 @@ impl Tally {
 
 const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
+const BURST_THRESHOLD: u32 = 30;
+
 struct Trace {
     tally: Tally,
     since: std::time::Instant,
     dispatching: bool,
+    threshold: u32,
+    hooked: bool,
 }
 
 thread_local! {
@@ -174,15 +189,27 @@ thread_local! {
 }
 
 pub fn enable_from_env() {
-    if std::env::var_os("AQUA_WAKE_STATS").is_some_and(|value| value == "1") {
+    let mode = std::env::var("AQUA_WAKE_STATS").ok();
+    let settings = match mode.as_deref() {
+        Some("1") => Some((0, true)),
+        Some("burst") => Some((BURST_THRESHOLD, false)),
+        _ => None,
+    };
+    if let Some((threshold, hooked)) = settings {
         TRACE.with(|trace| {
             *trace.borrow_mut() = Some(Trace {
                 tally: Tally::default(),
                 since: std::time::Instant::now(),
                 dispatching: false,
+                threshold,
+                hooked,
             });
         });
     }
+}
+
+pub fn hooked() -> bool {
+    TRACE.with(|trace| trace.borrow().as_ref().is_some_and(|trace| trace.hooked))
 }
 
 pub fn enabled() -> bool {
@@ -220,8 +247,20 @@ pub fn flush_if_due() {
         if let Some(trace) = trace.borrow_mut().as_mut() {
             let elapsed = trace.since.elapsed();
             if elapsed >= REPORT_INTERVAL {
-                if !trace.tally.is_empty() {
-                    eprintln!("{}", trace.tally.render(elapsed));
+                if !trace.tally.is_empty()
+                    && (trace.tally.total() >= trace.threshold || trace.tally.has_slow())
+                {
+                    let unix_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |since| since.as_millis());
+                    eprintln!(
+                        "{}",
+                        trace.tally.render(elapsed).replacen(
+                            "aqua-shell-wakes:",
+                            &format!("aqua-shell-wakes: unix_ms={unix_ms}"),
+                            1
+                        )
+                    );
                 }
                 trace.tally.clear();
                 trace.since = std::time::Instant::now();
@@ -229,3 +268,20 @@ pub fn flush_if_due() {
         }
     });
 }
+
+pub fn timed<T>(step: &'static str, body: impl FnOnce() -> T) -> T {
+    match enabled() {
+        false => body(),
+        true => {
+            let started = std::time::Instant::now();
+            let value = body();
+            let millis = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
+            if millis >= SLOW_STEP_MS {
+                record(Source::Slow { step, millis });
+            }
+            value
+        }
+    }
+}
+
+const SLOW_STEP_MS: u32 = 2;

@@ -1,5 +1,5 @@
 use aqua_protocol::Instant;
-use aqua_shell_win32::occlusion::{Level, QUIET_BEFORE_UNHOOK, Watch};
+use aqua_shell_win32::occlusion::{Level, Watch, QUIET_BEFORE_UNHOOK};
 use std::time::Duration;
 
 fn at(ms: u64) -> Instant {
@@ -64,4 +64,13 @@ fn coverage_is_refreshed_at_most_every_quarter_second_while_hooks_are_full() {
     watch.step(at(2000), false, true);
     watch.step(at(2000) + QUIET_BEFORE_UNHOOK, false, true);
     assert!(!watch.refresh_due(at(9000)));
+}
+
+#[test]
+fn reconcile_unhooks_only_stale_keys_and_hooks_only_missing_ones() {
+    use aqua_shell_win32::occlusion::reconcile;
+    assert_eq!(reconcile(&[1, 2, 3], &[1, 2, 3]), (vec![], vec![]));
+    assert_eq!(reconcile(&[1, 2, 3], &[2, 3, 4]), (vec![1], vec![4]));
+    assert_eq!(reconcile::<u32>(&[], &[5, 5, 6]), (vec![], vec![5, 6]));
+    assert_eq!(reconcile(&[7, 8], &[]), (vec![7, 8], vec![]));
 }

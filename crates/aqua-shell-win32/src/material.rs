@@ -1,10 +1,10 @@
 use crate::prefs;
+use aqua_protocol::material::{decide, DwmSystemBackdrop, MaterialDecision};
 use aqua_protocol::WindowMaterial;
-use aqua_protocol::material::{DwmSystemBackdrop, MaterialDecision, decide};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{
-    DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
-    DWMWCP_ROUND, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute,
+    DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE,
+    DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
 };
 use windows::Win32::UI::Controls::MARGINS;
 

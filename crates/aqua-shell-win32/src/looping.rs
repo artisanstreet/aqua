@@ -1,13 +1,14 @@
 use crate::event::{Handler, ShellError, ShellEvent};
-use crate::state::{self, HANDLER, IN_HANDLER, ORIGIN, Queued};
+use crate::state::{self, Queued, HANDLER, IN_HANDLER, ORIGIN};
 use crate::timing;
 use crate::wake_trace::{self, Source};
-use crate::wndproc::{WM_WAKE, hwnd_from};
+use crate::wndproc::{hwnd_from, WM_WAKE};
 use aqua_protocol::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::{HANDLE, LPARAM, LRESULT, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM};
 use windows::Win32::System::Threading::{
-    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CancelWaitableTimer, CreateWaitableTimerExW,
-    SetWaitableTimer,
+    CancelWaitableTimer, CreateWaitableTimerExW, SetWaitableTimerEx,
+    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -24,15 +25,31 @@ impl Waker {
     }
 
     pub fn wake(&self) {
-        let _ = unsafe {
-            PostMessageW(
-                Some(hwnd_from(self.hwnd)),
-                WM_WAKE,
-                Default::default(),
-                Default::default(),
-            )
-        };
+        post_wake(self.hwnd);
     }
+}
+
+static WAKE_PENDING: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn post_wake(hwnd: isize) {
+    if WAKE_PENDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let posted = unsafe {
+        PostMessageW(
+            Some(hwnd_from(hwnd)),
+            WM_WAKE,
+            Default::default(),
+            Default::default(),
+        )
+    };
+    if posted.is_err() {
+        WAKE_PENDING.store(false, Ordering::Release);
+    }
+}
+
+pub(crate) fn wake_delivered() {
+    WAKE_PENDING.store(false, Ordering::Release);
 }
 
 unsafe impl Send for Waker {}
@@ -80,7 +97,7 @@ unsafe extern "system" fn trace_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
 }
 
 fn install_trace_hook() {
-    if wake_trace::enabled() {
+    if wake_trace::hooked() {
         let _ = unsafe {
             SetWindowsHookExW(
                 WH_CALLWNDPROC,
@@ -129,8 +146,8 @@ pub(crate) fn turn() {
         return;
     };
     let pending = state::with(|s| !s.queue.is_empty() || timing::due(now(), s.wake_at));
-    watch_occlusion(pending);
-    crate::occlusion::pump();
+    wake_trace::timed("watch", || watch_occlusion(pending));
+    wake_trace::timed("pump", crate::occlusion::pump);
     crate::gaps::turn_started();
     IN_HANDLER.set(true);
     let handler = unsafe { &mut *handler };
@@ -138,15 +155,17 @@ pub(crate) fn turn() {
     while let Some(item) = state::with(|s| s.queue.pop_front()) {
         worked = true;
         match item {
-            Queued::Window(id, event) => handler.window_event(id, event),
-            Queued::Waitable(index) => handler.waitable(index),
-            Queued::Wake => handler.woken(),
+            Queued::Window(id, event) => {
+                wake_trace::timed("window", || handler.window_event(id, event))
+            }
+            Queued::Waitable(index) => wake_trace::timed("waitable", || handler.waitable(index)),
+            Queued::Wake => wake_trace::timed("woken", || handler.woken()),
         }
     }
     let current = now();
     let due = state::with(|s| timing::due(current, s.wake_at));
     if worked || due {
-        let next = handler.tick(current);
+        let next = wake_trace::timed("tick", || handler.tick(current));
         state::with(|s| s.wake_at = next);
     }
     let redraws: Vec<_> = state::with(|s| {
@@ -156,7 +175,7 @@ pub(crate) fn turn() {
             .collect()
     });
     for id in redraws {
-        handler.window_event(id, ShellEvent::Redraw);
+        wake_trace::timed("redraw", || handler.window_event(id, ShellEvent::Redraw));
     }
     crate::gaps::turn_ended();
     IN_HANDLER.set(false);
@@ -185,6 +204,7 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
         )
     }
     .ok();
+    let coarse = unsafe { CreateWaitableTimerExW(None, None, 0, TIMER_ALL_ACCESS) }.ok();
     let mut armed: Option<Instant> = None;
     loop {
         let mut msg = MSG::default();
@@ -221,23 +241,42 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
         let (handler_wake, waitables) = state::with(|s| (s.wake_at, s.waitables.clone()));
         let wake_at = [handler_wake, watch_deadline()].into_iter().flatten().min();
         let mut handles: Vec<HANDLE> = Vec::with_capacity(waitables.len() + 1);
-        if let Some(timer) = timer {
-            if armed != wake_at {
-                match wake_at {
-                    Some(at) => {
+        if armed != wake_at {
+            let plan = wake_at.map(|at| timing::plan(current, at));
+            let arm = |timer: Option<HANDLE>, leeway_ms: Option<u32>| {
+                let Some(timer) = timer else {
+                    return;
+                };
+                match (wake_at, leeway_ms) {
+                    (Some(at), Some(leeway)) => {
                         let due = timing::relative_due_time_100ns(current, at);
-                        let _ = unsafe { SetWaitableTimer(timer, &due, 0, None, None, false) };
+                        let _ =
+                            unsafe { SetWaitableTimerEx(timer, &due, 0, None, None, None, leeway) };
                     }
-                    None => {
+                    _ => {
                         let _ = unsafe { CancelWaitableTimer(timer) };
                     }
                 }
-                armed = wake_at;
-            }
-            handles.push(timer);
+            };
+            let (precise_leeway, coarse_leeway) = match plan {
+                Some(timing::TimerPlan::Precise) => (Some(0), None),
+                Some(timing::TimerPlan::Coarse { leeway_ms }) if coarse.is_some() => {
+                    (None, Some(leeway_ms))
+                }
+                Some(timing::TimerPlan::Coarse { .. }) => (Some(0), None),
+                None => (None, None),
+            };
+            arm(timer, precise_leeway);
+            arm(coarse, coarse_leeway);
+            armed = wake_at;
         }
+        timer
+            .iter()
+            .chain(coarse.iter())
+            .for_each(|t| handles.push(*t));
         let offset = handles.len();
         handles.extend(waitables.iter().map(|h| HANDLE(*h as *mut _)));
+        let timers = offset;
         let timeout = match (redraw_pending(), timer.is_some()) {
             (true, _) => 0,
             (false, true) => INFINITE_WAIT,
@@ -247,10 +286,8 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
             MsgWaitForMultipleObjectsEx(Some(&handles), timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
         };
         let index = waited.0.wrapping_sub(WAIT_OBJECT_0.0) as usize;
-        match (
-            timer.is_some() && index == 0,
-            index >= offset && index < handles.len(),
-        ) {
+        let timer_fired = index < timers;
+        match (timer_fired, index >= offset && index < handles.len()) {
             (true, _) => wake_trace::record(Source::Timer),
             (_, true) => wake_trace::record(Source::Waitable),
             _ if waited.0 == WAIT_TIMEOUT.0 => wake_trace::record(Source::Timeout),
@@ -260,7 +297,7 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
             }
             _ => wake_trace::record(Source::Other(waited.0)),
         }
-        if timer.is_some() && index == 0 {
+        if timer_fired {
             armed = None;
         }
         if index < handles.len() && index >= offset {

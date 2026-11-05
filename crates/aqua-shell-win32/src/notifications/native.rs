@@ -1,16 +1,16 @@
 use super::{
-    AppIdentity, Notification, NotificationError, NotificationResponse, ResponseHandler, native_tag,
+    native_tag, AppIdentity, Notification, NotificationError, NotificationResponse, ResponseHandler,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use windows::core::{h, IInspectable, Interface, HSTRING};
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::Foundation::TypedEventHandler;
+use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 use windows::UI::Notifications::{
     ToastActivatedEventArgs, ToastDismissedEventArgs, ToastFailedEventArgs, ToastNotification,
     ToastNotificationManager, ToastNotifier,
 };
-use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
-use windows::core::{HSTRING, IInspectable, Interface, h};
 
 type Active = Arc<Mutex<HashMap<String, (u64, ToastNotification)>>>;
 

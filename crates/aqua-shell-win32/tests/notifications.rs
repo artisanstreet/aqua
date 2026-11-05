@@ -102,7 +102,11 @@ fn protocol_activation_urls_round_trip_hostile_tags_and_actions() {
         "aqua-toast://app/a/b/c/d",
         "aqua-toast://app/a/%FF",
     ] {
-        assert_eq!(parse_activation_url(bad), Err(ActivationUrlError::Malformed), "{bad}");
+        assert_eq!(
+            parse_activation_url(bad),
+            Err(ActivationUrlError::Malformed),
+            "{bad}"
+        );
     }
 }
 
@@ -129,5 +133,8 @@ fn protocol_toasts_carry_activation_urls_for_the_body_and_every_action() {
         action.attribute("arguments").unwrap(),
     )
     .unwrap();
-    assert_eq!(parsed.response.action_id.as_deref(), Some(notification.actions[0].id.as_str()));
+    assert_eq!(
+        parsed.response.action_id.as_deref(),
+        Some(notification.actions[0].id.as_str())
+    );
 }

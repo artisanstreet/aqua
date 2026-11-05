@@ -3,11 +3,12 @@ use crate::hooks::{self, RawMessage};
 use crate::input::{self, PointerButtonSource};
 use crate::looping::turn;
 use crate::pointer::{self, Device};
-use crate::regions::{self, Geometry, ht};
+use crate::regions::{self, ht, Geometry};
 use crate::state::{self, Queued};
 use aqua_core::{CursorIcon, InputEvent, KeyEvent, Modifiers, Point, PointerEvent, PointerKind};
-use aqua_protocol::CaptionControl;
 use aqua_protocol::chrome::RectI;
+use aqua_protocol::CaptionControl;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{ClientToScreen, PtInRect, ScreenToClient, ValidateRect};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
@@ -15,15 +16,14 @@ use windows::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, GetDpiForWindow, GetSystemMetricsForDpi,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, GetKeyboardLayout, GetKeyboardState, ReleaseCapture, SetCapture, TME_LEAVE,
-    TME_NONCLIENT, TRACKMOUSEEVENT, ToUnicodeEx, TrackMouseEvent,
+    GetKeyState, GetKeyboardLayout, GetKeyboardState, ReleaseCapture, SetCapture, ToUnicodeEx,
+    TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
 };
 use windows::Win32::UI::Input::Pointer::{
     GetPointerInfo, GetPointerPenInfo, GetPointerType, POINTER_INFO, POINTER_PEN_INFO,
 };
 use windows::Win32::UI::Input::{GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTHEADER, RID_INPUT};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::PCWSTR;
 
 pub(crate) static CLASS_NAME: [u16; 12] = {
     let text = *b"AquaShell32";
@@ -458,6 +458,7 @@ pub(crate) unsafe extern "system" fn wndproc(
             Some(LRESULT(0))
         }
         WM_WAKE => {
+            crate::looping::wake_delivered();
             state::with(|s| s.queue.push_back(Queued::Wake));
             Some(LRESULT(0))
         }
@@ -633,6 +634,7 @@ pub(crate) unsafe extern "system" fn wndproc(
         }
         WM_DESTROY => {
             crate::drop_target::revoke(hwnd);
+            crate::looping::wake_delivered();
             state::emit(raw, ShellEvent::Destroyed);
             let empty = state::with(|s| {
                 s.windows.remove(&raw);

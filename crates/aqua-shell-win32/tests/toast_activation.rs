@@ -23,10 +23,13 @@ mod scripted {
 
     fn click(url: &str) {
         let wide: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
-        let result = unsafe {
-            ShellExecuteW(None, w!("open"), PCWSTR(wide.as_ptr()), None, None, SW_HIDE)
-        };
-        assert!(result.0 as isize > 32, "protocol launch failed: {:?}", result.0);
+        let result =
+            unsafe { ShellExecuteW(None, w!("open"), PCWSTR(wide.as_ptr()), None, None, SW_HIDE) };
+        assert!(
+            result.0 as isize > 32,
+            "protocol launch failed: {:?}",
+            result.0
+        );
     }
 
     fn next(receiver: &Receiver<NotificationResponse>) -> NotificationResponse {
@@ -36,13 +39,17 @@ mod scripted {
             if let Ok(response) = receiver.try_recv() {
                 return response;
             }
-            assert!(started.elapsed() < Duration::from_secs(20), "no activation arrived");
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "no activation arrived"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
     }
 
     pub fn run() {
-        let identity = AppIdentity::new("Aqua.ToastActivationTest", "Aqua toast activation").unwrap();
+        let identity =
+            AppIdentity::new("Aqua.ToastActivationTest", "Aqua toast activation").unwrap();
         let (sender, receiver) = channel();
         let sender = Arc::new(Mutex::new(sender));
         let center = NotificationCenter::new(

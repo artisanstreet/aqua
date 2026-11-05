@@ -1252,6 +1252,7 @@ impl Runtime {
             let _span = probe::span(Phase::Layout);
             self.layout().map_err(RuntimeError::Build)?;
         }
+        aqua_core::checkpoint::reach();
         if self.advance_text_selection() {
             let _span = probe::span(Phase::Layout);
             self.layout().map_err(RuntimeError::Build)?;
@@ -1275,6 +1276,7 @@ impl Runtime {
             let _span = probe::span(Phase::Text);
             self.sync_text_runs();
         }
+        aqua_core::checkpoint::reach();
         let focused_scroll = |runtime: &Self| {
             runtime
                 .tree
@@ -2703,7 +2705,7 @@ impl Runtime {
 mod style_decoration_tests {
     use super::*;
     use aqua_ui::element::ui::{Box as UiBox, Text as UiText};
-    use aqua_ui::style::{px, Style};
+    use aqua_ui::style::{Style, px};
 
     #[test]
     fn caret_respects_own_and_ancestor_style_opacity() {

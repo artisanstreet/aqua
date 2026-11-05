@@ -1,7 +1,7 @@
 use std::ops::Range;
 
-use icu_segmenter::options::LineBreakOptions;
 use icu_segmenter::LineSegmenter;
+use icu_segmenter::options::LineBreakOptions;
 use unicode_bidi::{Level, ParagraphBidiInfo};
 
 use crate::shape::{Cluster, ShapedParagraph};
@@ -98,6 +98,7 @@ pub(crate) struct PlacedGlyph {
     pub level: u8,
 }
 
+#[derive(Clone)]
 pub(crate) struct PlacedLine {
     pub clusters: Range<usize>,
     pub glyphs: Vec<PlacedGlyph>,

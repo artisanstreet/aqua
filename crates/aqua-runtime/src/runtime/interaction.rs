@@ -7,12 +7,12 @@ use aqua_core::{
     InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Point, PointerButton, Rect,
 };
 use aqua_text::{
+    CaretAffinity, CaretPosition, Selection,
     document::{
         SelectionDocument, SelectionDocumentId, SelectionSource, SelectionSourceError,
         SelectionSourceId, SourcePosition, SourceSlice,
     },
     navigation::SelectionUnit,
-    CaretAffinity, CaretPosition, Selection,
 };
 use aqua_ui::{
     collection_runtime::{CollectionRowRegistration, SelectionBatchOwner},

@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use aqua_fonts_system::{FaceBytes, FontDatabase, Query, Stretch, Style, Weight, ID};
-use skrifa::raw::TableProvider;
+use aqua_fonts_system::{FaceBytes, FontDatabase, ID, Query, Stretch, Style, Weight};
 use skrifa::MetadataProvider;
+use skrifa::raw::TableProvider;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::fallback::{Coverage, FallbackIndex};
@@ -427,6 +427,11 @@ impl FontManager {
 
     pub fn load_font_bytes(&mut self, data: Vec<u8>) {
         self.database.load_bytes(data);
+        self.invalidate();
+    }
+
+    pub fn load_font_static(&mut self, data: &'static [u8]) {
+        self.database.load_static(data);
         self.invalidate();
     }
 

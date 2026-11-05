@@ -221,6 +221,9 @@ pub trait CollectionSource {
     }
     /// Stable identity for row `index` (drives keyed reuse + anchors).
     fn key(&self, index: usize) -> Key;
+    fn row_revision(&self, _index: usize) -> Option<u64> {
+        None
+    }
     /// Width plan for `available_width`.
     fn layout(&self, available_width: f32) -> CollectionLayout;
     /// Row element for `index` under `layout` (key applied by the runtime —
@@ -317,6 +320,7 @@ pub struct CollectionDescriptor {
     pub fixed_row_height: bool,
     pub measured_uniform_rows: bool,
     pub width_probe: Option<usize>,
+    pub shape_epoch: Option<u64>,
 }
 
 impl CollectionDescriptor {
@@ -343,6 +347,7 @@ impl CollectionDescriptor {
             fixed_row_height: false,
             measured_uniform_rows: false,
             width_probe: None,
+            shape_epoch: None,
         }
     }
 }
@@ -361,6 +366,7 @@ impl Clone for CollectionDescriptor {
             fixed_row_height: self.fixed_row_height,
             measured_uniform_rows: self.measured_uniform_rows,
             width_probe: self.width_probe,
+            shape_epoch: self.shape_epoch,
         }
     }
 }
@@ -717,6 +723,10 @@ impl CollectionState {
     /// back to the new estimate with zero margins. Full `O(n)` key passes —
     /// structural refreshes pay linear work once; steady-state scrolling
     /// stays `O(log n + mounted)`.
+    pub fn adopt_source(&mut self, desc: CollectionDescriptor) {
+        self.desc = desc;
+    }
+
     pub fn refresh(&mut self, desc: CollectionDescriptor) -> Result<(), CollectionError> {
         validate_descriptor(&desc)?;
         validate_snapshot(desc.source.as_ref())?;

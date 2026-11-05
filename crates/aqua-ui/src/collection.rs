@@ -114,6 +114,7 @@ type BatchedFactory<T> = Box<dyn Fn(&T) -> Result<BatchedCollectionRow, Collecti
 type WidthBatchedFactory<T> =
     Box<dyn Fn(&T, &CollectionLayout) -> Result<BatchedCollectionRow, CollectionError>>;
 type KeyFactory<T> = Box<dyn Fn(&T) -> Key>;
+type RevisionFactory<T> = Box<dyn Fn(&T) -> Option<u64>>;
 
 // ---------------------------------------------------------------------------
 // Table tracks: fixed px lengths or proportional fr shares (table-only)
@@ -660,6 +661,7 @@ fn outer_cell(
 pub struct List<T> {
     items: Vec<T>,
     key_fn: Option<KeyFactory<T>>,
+    revision_fn: Option<RevisionFactory<T>>,
     row_fn: Option<ElementFactory<T>>,
     prepared_row_fn: Option<PreparedFactory<T>>,
     batched_row_fn: Option<BatchedFactory<T>>,
@@ -673,6 +675,7 @@ pub struct List<T> {
     initial_height: Option<Rc<dyn Fn(usize) -> f32>>,
     measured_uniform_rows: bool,
     width_probe: Option<usize>,
+    shape_epoch: Option<u64>,
 }
 
 impl<T> List<T> {
@@ -681,6 +684,7 @@ impl<T> List<T> {
         Self {
             items: Vec::new(),
             key_fn: None,
+            revision_fn: None,
             row_fn: None,
             prepared_row_fn: None,
             batched_row_fn: None,
@@ -694,6 +698,7 @@ impl<T> List<T> {
             initial_height: None,
             measured_uniform_rows: false,
             width_probe: None,
+            shape_epoch: None,
         }
     }
 
@@ -711,6 +716,11 @@ impl<T> List<T> {
         K: Into<Key>,
     {
         self.key_fn = Some(Box::new(move |v| f(v).into()));
+        self
+    }
+
+    pub fn revision(mut self, f: impl Fn(&T) -> Option<u64> + 'static) -> Self {
+        self.revision_fn = Some(Box::new(f));
         self
     }
 
@@ -807,6 +817,11 @@ impl<T> List<T> {
         self
     }
 
+    pub fn shape_epoch(mut self, epoch: u64) -> Self {
+        self.shape_epoch = Some(epoch);
+        self
+    }
+
     pub fn initial_height(mut self, height: impl Fn(usize) -> f32 + 'static) -> Self {
         self.initial_height = Some(Rc::new(height));
         self
@@ -863,6 +878,7 @@ impl<T> List<T> {
         let source: Rc<dyn CollectionSource> = Rc::new(ListSource {
             items: self.items,
             key_fn: self.key_fn,
+            revision_fn: self.revision_fn,
             row_fn: self.row_fn,
             prepared_row_fn: self.prepared_row_fn,
             batched_row_fn: self.batched_row_fn,
@@ -881,6 +897,7 @@ impl<T> List<T> {
         descriptor.initial_height = self.initial_height;
         descriptor.measured_uniform_rows = self.measured_uniform_rows;
         descriptor.width_probe = self.width_probe;
+        descriptor.shape_epoch = self.shape_epoch;
         descriptor
     }
 }
@@ -895,6 +912,7 @@ impl<T> Default for List<T> {
 pub struct ListSource<T> {
     items: Vec<T>,
     key_fn: Option<KeyFactory<T>>,
+    revision_fn: Option<RevisionFactory<T>>,
     row_fn: Option<ElementFactory<T>>,
     prepared_row_fn: Option<PreparedFactory<T>>,
     batched_row_fn: Option<BatchedFactory<T>>,
@@ -905,6 +923,11 @@ pub struct ListSource<T> {
 impl<T> CollectionSource for ListSource<T> {
     fn len(&self) -> usize {
         self.items.len()
+    }
+
+    fn row_revision(&self, index: usize) -> Option<u64> {
+        let revision = self.revision_fn.as_ref()?;
+        revision(self.items.get(index)?)
     }
 
     fn width_sensitive(&self) -> bool {

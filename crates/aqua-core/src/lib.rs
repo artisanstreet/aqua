@@ -5,12 +5,14 @@
 //! resources through IDs and descriptors, never through native handles.
 
 pub mod arena;
+pub mod checkpoint;
 pub mod click;
 pub mod color;
 pub mod cursor;
 pub mod event;
 pub mod geometry;
 pub mod gpui_mesh;
+pub mod hash;
 pub mod id;
 pub mod image;
 pub mod scene;

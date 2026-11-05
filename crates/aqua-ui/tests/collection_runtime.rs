@@ -17,7 +17,7 @@ use aqua_ui::binding::View;
 use aqua_ui::collection_runtime::{
     CollectionDescriptor, CollectionError, CollectionLayout, CollectionRole, CollectionSource,
 };
-use aqua_ui::element::{ui, Element, Key};
+use aqua_ui::element::{Element, Key, ui};
 use aqua_ui::layout::NaiveMeasurer;
 use aqua_ui::tree::{ActionEvent, ActionKind, NodeKind, UiTree};
 
@@ -264,14 +264,15 @@ fn prepared_rows_fail_before_registration_and_remain_bounded_on_retry() {
         registered.set(registered.get() + sources.len());
         Ok(())
     };
-    assert!(view
-        .compute_layout_with_row_sources(
+    assert!(
+        view.compute_layout_with_row_sources(
             &mut tree,
             Size::new(200.0, 160.0),
             &NaiveMeasurer,
             &mut register
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(registrations.get(), 0);
     assert!(row_texts(&tree).is_empty());
     failing.set(false);
@@ -1333,25 +1334,29 @@ fn table_horizontal_scroll_moves_header_and_body_together() {
         use aqua_ui::style::{Length, Style};
         view.set_content(
             &mut tree,
-            vec![Table::new()
-                .items(items)
-                .key(|it: &TCell| it.key)
-                .columns([
-                    ColumnBuilder::new("name")
-                        .header(|| ui::Text::builder().arg("Name").build())
-                        .cell(|it: &TCell| ui::Text::builder().arg(it.name.clone()).build())
-                        .width(Length::Px(400.0))
-                        .build(),
-                    ColumnBuilder::new("value")
-                        .header(|| ui::Text::builder().arg("Value").build())
-                        .cell(|it: &TCell| ui::Text::builder().arg(format!("{}", it.value)).build())
-                        .width(Length::Px(400.0))
-                        .build(),
-                ])
-                .header_styles([Style::new().gap(6.0)])
-                .row_styles([Style::new().gap(6.0)])
-                .virtualize()
-                .build()],
+            vec![
+                Table::new()
+                    .items(items)
+                    .key(|it: &TCell| it.key)
+                    .columns([
+                        ColumnBuilder::new("name")
+                            .header(|| ui::Text::builder().arg("Name").build())
+                            .cell(|it: &TCell| ui::Text::builder().arg(it.name.clone()).build())
+                            .width(Length::Px(400.0))
+                            .build(),
+                        ColumnBuilder::new("value")
+                            .header(|| ui::Text::builder().arg("Value").build())
+                            .cell(|it: &TCell| {
+                                ui::Text::builder().arg(format!("{}", it.value)).build()
+                            })
+                            .width(Length::Px(400.0))
+                            .build(),
+                    ])
+                    .header_styles([Style::new().gap(6.0)])
+                    .row_styles([Style::new().gap(6.0)])
+                    .virtualize()
+                    .build(),
+            ],
         )
         .unwrap();
     }
@@ -1501,9 +1506,10 @@ fn aligned_view_reveal_waits_for_a_committed_viewport() {
         10,
         CollectionRevealAlignment::Start
     ));
-    assert!(view
-        .collection_index_target_aligned(&tree, root, 10, CollectionRevealAlignment::Start)
-        .is_none());
+    assert!(
+        view.collection_index_target_aligned(&tree, root, 10, CollectionRevealAlignment::Start)
+            .is_none()
+    );
     drive(&mut view, &mut tree, 200.0, 160.0);
     let original = tree.scroll_offset(root).unwrap();
     assert_eq!(tree.content_size(root).unwrap().h, 3200.0);
@@ -1645,4 +1651,211 @@ fn viewport_callback_waits_for_a_real_viewport() {
     assert!(reports.borrow().is_empty());
     state.set_viewport(400.0, 96.0);
     assert!(!reports.borrow().is_empty());
+}
+
+struct RetentionHarness {
+    tree: UiTree,
+    view: View,
+    _runtime: Runtime,
+    built: Rc<std::cell::RefCell<Vec<u64>>>,
+}
+
+impl RetentionHarness {
+    fn new() -> Self {
+        let tree = UiTree::new();
+        let runtime = Runtime::new();
+        let view = View::new(runtime.create_scope(), tree.command_sink());
+        Self {
+            tree,
+            view,
+            _runtime: runtime,
+            built: Rc::default(),
+        }
+    }
+
+    fn list(&self, items: Vec<(u64, Option<u64>)>) -> Element {
+        self.list_with(items, None, Rc::default())
+    }
+
+    fn list_with(
+        &self,
+        items: Vec<(u64, Option<u64>)>,
+        epoch: Option<u64>,
+        key_calls: Rc<Cell<usize>>,
+    ) -> Element {
+        use aqua_ui::collection::{BatchedCollectionRow, List};
+        use aqua_ui::style::{Length, Style};
+        let built = Rc::clone(&self.built);
+        let mut list = List::new();
+        if let Some(epoch) = epoch {
+            list = list.shape_epoch(epoch);
+        }
+        Element::collection(
+            list.items(items)
+                .key(move |(key, _)| {
+                    key_calls.set(key_calls.get() + 1);
+                    *key
+                })
+                .revision(|(_, revision)| *revision)
+                .try_batched_row_with_layout(move |(key, _), _| {
+                    built.borrow_mut().push(*key);
+                    Ok(BatchedCollectionRow {
+                        element: ui::Box::builder()
+                            .height(32.0)
+                            .child(ui::Text::builder().arg(format!("row-{key}")).build())
+                            .build(),
+                        batches: Vec::new(),
+                    })
+                })
+                .style(
+                    Style::new()
+                        .width(Length::Pct(100.0))
+                        .height(Length::Px(200.0)),
+                )
+                .virtualize()
+                .descriptor(),
+        )
+    }
+
+    fn settle(&mut self) {
+        for _ in 0..3 {
+            drive(&mut self.view, &mut self.tree, 600.0, 400.0);
+        }
+    }
+
+    fn node_of(&self, key: u64) -> Option<NodeId> {
+        text_node(&self.tree, &format!("row-{key}"))
+    }
+}
+
+#[test]
+fn refresh_keeps_mounted_rows_with_equal_revisions() {
+    let mut harness = RetentionHarness::new();
+    let items: Vec<_> = (0..100u64).map(|key| (key, Some(key))).collect();
+    let content = harness.list(items.clone());
+    harness
+        .view
+        .set_content(&mut harness.tree, vec![content])
+        .unwrap();
+    harness.settle();
+    let mounted: Vec<u64> = harness.built.borrow().clone();
+    assert!(mounted.len() >= 4 && mounted.len() < 40);
+    let before: Vec<_> = mounted
+        .iter()
+        .map(|key| harness.node_of(*key).unwrap())
+        .collect();
+    harness.built.borrow_mut().clear();
+
+    let mut next: Vec<_> = (1000..1005u64).map(|key| (key, Some(key))).collect();
+    next.extend(items);
+    let content = harness.list(next);
+    harness
+        .view
+        .set_content(&mut harness.tree, vec![content])
+        .unwrap();
+    harness.settle();
+    assert!(
+        harness
+            .built
+            .borrow()
+            .iter()
+            .all(|key| *key >= 1000 || !mounted.contains(key)),
+        "rows mounted before the refresh were rebuilt: {:?}",
+        harness.built.borrow()
+    );
+    let after: Vec<_> = mounted
+        .iter()
+        .map(|key| harness.node_of(*key).unwrap())
+        .collect();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn refresh_rebuilds_rows_whose_revision_changed_or_is_unknown() {
+    let mut harness = RetentionHarness::new();
+    let items: Vec<_> = (0..100u64).map(|key| (key, Some(key))).collect();
+    let content = harness.list(items.clone());
+    harness
+        .view
+        .set_content(&mut harness.tree, vec![content])
+        .unwrap();
+    harness.settle();
+    harness.built.borrow_mut().clear();
+
+    let mut next = items;
+    next[1].1 = Some(9_000);
+    next[2].1 = None;
+    let kept = harness.node_of(0).unwrap();
+    let content = harness.list(next);
+    harness
+        .view
+        .set_content(&mut harness.tree, vec![content])
+        .unwrap();
+    harness.settle();
+    let mut rebuilt = harness.built.borrow().clone();
+    rebuilt.sort_unstable();
+    assert_eq!(rebuilt, vec![1, 2]);
+    assert_eq!(harness.node_of(0), Some(kept));
+}
+
+#[test]
+fn refresh_without_revisions_rebuilds_every_mounted_row() {
+    let mut harness = RetentionHarness::new();
+    let items: Vec<_> = (0..100u64).map(|key| (key, None)).collect();
+    let content = harness.list(items.clone());
+    harness
+        .view
+        .set_content(&mut harness.tree, vec![content])
+        .unwrap();
+    harness.settle();
+    let mounted = harness.built.borrow().len();
+    harness.built.borrow_mut().clear();
+    let content = harness.list(items);
+    harness
+        .view
+        .set_content(&mut harness.tree, vec![content])
+        .unwrap();
+    harness.settle();
+    assert_eq!(harness.built.borrow().len(), mounted);
+}
+
+#[test]
+fn matching_shape_epoch_skips_the_snapshot_refresh_and_still_checks_revisions() {
+    let mut harness = RetentionHarness::new();
+    let items: Vec<_> = (0..500u64).map(|key| (key, Some(key))).collect();
+    let calls = Rc::new(Cell::new(0));
+    let content = harness.list_with(items.clone(), Some(1), Rc::clone(&calls));
+    harness
+        .view
+        .set_content(&mut harness.tree, vec![content])
+        .unwrap();
+    harness.settle();
+    let kept = harness.node_of(0).unwrap();
+    harness.built.borrow_mut().clear();
+    calls.set(0);
+
+    let mut next = items.clone();
+    next[1].1 = Some(9_000);
+    let content = harness.list_with(next, Some(1), Rc::clone(&calls));
+    harness
+        .view
+        .set_content(&mut harness.tree, vec![content])
+        .unwrap();
+    harness.settle();
+    assert!(
+        calls.get() < 100,
+        "refresh scanned the snapshot: {}",
+        calls.get()
+    );
+    assert_eq!(*harness.built.borrow(), vec![1]);
+    assert_eq!(harness.node_of(0), Some(kept));
+
+    calls.set(0);
+    let content = harness.list_with(items, Some(2), Rc::clone(&calls));
+    harness
+        .view
+        .set_content(&mut harness.tree, vec![content])
+        .unwrap();
+    harness.settle();
+    assert!(calls.get() >= 500);
 }

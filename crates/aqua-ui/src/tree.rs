@@ -45,8 +45,8 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use aqua_core::{
-    media_layer, Arena, CollectionSemantics, DisplayItem, NodeId, Oklch, Point, RawId, Rect, Role,
-    SemanticNode, Size, TextRun, Transform2D, ViewportId,
+    Arena, CollectionSemantics, DisplayItem, NodeId, Oklch, Point, RawId, Rect, Role, SemanticNode,
+    Size, TextRun, Transform2D, ViewportId, media_layer,
 };
 use aqua_text::{LineMode, Selection, TextEditor, TextModel};
 use taffy::{AvailableSpace, LayoutInput, TaffyTree};
@@ -59,6 +59,41 @@ pub type PrepaintCallback = Box<dyn Fn(&UiTree, NodeId)>;
 /// Keyed-identity marker for reconciliation. Keys hash to `u64` with a fixed
 /// seed so equal keys match within and across runs.
 pub type KeyHash = u64;
+
+enum KeySlot {
+    One(NodeId),
+    Many(Vec<NodeId>),
+}
+
+impl KeySlot {
+    fn push(&mut self, id: NodeId) {
+        match self {
+            Self::One(first) => *self = Self::Many(vec![*first, id]),
+            Self::Many(ids) => ids.push(id),
+        }
+    }
+
+    fn first(&self) -> NodeId {
+        match self {
+            Self::One(id) => *id,
+            Self::Many(ids) => ids[0],
+        }
+    }
+
+    fn last(&self) -> NodeId {
+        match self {
+            Self::One(id) => *id,
+            Self::Many(ids) => ids[ids.len() - 1],
+        }
+    }
+
+    fn to_vec(&self) -> Vec<NodeId> {
+        match self {
+            Self::One(id) => vec![*id],
+            Self::Many(ids) => ids.clone(),
+        }
+    }
+}
 
 /// Hash a user key with a fixed seed (deterministic within and across runs).
 #[must_use]
@@ -943,7 +978,7 @@ impl fmt::Debug for NodeRecord {
 #[derive(Debug, Clone, Default)]
 pub struct LeafCtx {
     /// Text measurement input (`None` for non-text leaves).
-    pub text: Option<LeafText>,
+    pub text: Option<Box<LeafText>>,
 }
 
 /// Text measurement input owned by the UI tree.
@@ -1015,7 +1050,7 @@ pub struct UiTree {
     taffy: TaffyTree<LeafCtx>,
     gpui_layout_scale: Option<f32>,
     layout_styles_dirty: bool,
-    key_index: RefCell<Option<HashMap<KeyHash, Vec<NodeId>>>>,
+    key_index: RefCell<Option<HashMap<KeyHash, KeySlot>>>,
     structure_epoch: u64,
     /// UI node (raw id) to Taffy node.
     tmap: HashMap<RawId, taffy::NodeId>,
@@ -1882,8 +1917,26 @@ impl UiTree {
         self.exiting.contains(&node) && self.remove(node)
     }
 
+    fn paint_transform(&self, id: NodeId) -> Option<Option<Transform2D>> {
+        self.get(id).map(|rec| match &rec.kind {
+            NodeKind::Box(b) => b.paint.transform,
+            _ => rec.paint.transform,
+        })
+    }
+
     pub fn visual_transform(&self, node: NodeId) -> Option<Transform2D> {
-        let mut path = Vec::new();
+        thread_local! {
+            static PATH: RefCell<Vec<NodeId>> = const { RefCell::new(Vec::new()) };
+        }
+        let mut path = PATH.with(|path| std::mem::take(&mut *path.borrow_mut()));
+        path.clear();
+        let result = self.visual_transform_along(node, &mut path);
+        path.clear();
+        PATH.with(|slot| *slot.borrow_mut() = path);
+        result
+    }
+
+    fn visual_transform_along(&self, node: NodeId, path: &mut Vec<NodeId>) -> Option<Transform2D> {
         let mut current = Some(node);
         while let Some(id) = current {
             path.push(id);
@@ -1895,11 +1948,11 @@ impl UiTree {
         let mut offset = Point::ZERO;
         let mut world = Transform2D::IDENTITY;
         let mut origin = Point::ZERO;
-        for id in path.into_iter().rev() {
+        for &id in path.iter().rev() {
             let record = self.get(id)?;
             let rect = self.rect(id)?.translate(offset.x, offset.y);
             origin = rect.origin();
-            if let Some(transform) = self.paint(id)?.transform {
+            if let Some(transform) = self.paint_transform(id)? {
                 let anchored = Transform2D::translate(-rect.x, -rect.y)
                     .then(transform)
                     .then(Transform2D::translate(rect.x, rect.y));
@@ -2104,6 +2157,12 @@ impl UiTree {
             built.insert(anchor.map_or(0, |at| at + 1), *node);
         }
         built.extend(portals.into_iter().filter(|node| self.get(*node).is_some()));
+        if self
+            .get(parent)
+            .is_some_and(|record| record.children == built)
+        {
+            return content;
+        }
         if let Some(&pt) = self.tmap.get(&parent.raw()) {
             let attached: Vec<taffy::NodeId> = self
                 .get(parent)
@@ -2324,14 +2383,14 @@ impl UiTree {
             });
         let ctx = match kind {
             NodeKind::Text(ref t) => LeafCtx {
-                text: Some(LeafText {
+                text: Some(Box::new(LeafText {
                     text: t.display_text(),
                     font_size: t.font_size,
                     text_style: t.effective_text_style(),
                     spans: t.shaping_spans().to_vec(),
                     multiline: t.multiline(),
                     memo: None,
-                }),
+                })),
             },
             _ => LeafCtx { text: None },
         };
@@ -2802,14 +2861,14 @@ impl UiTree {
             )
         };
         if let Some(ctx) = self.taffy.get_node_context_mut(t) {
-            ctx.text = Some(LeafText {
+            ctx.text = Some(Box::new(LeafText {
                 text: display,
                 font_size,
                 text_style,
                 spans,
                 multiline,
                 memo: None,
-            });
+            }));
         }
         self.mark_layout_dirty(id);
         self.touch_paint(id);
@@ -2946,14 +3005,14 @@ impl UiTree {
             return false;
         };
         if let Some(ctx) = self.taffy.get_node_context_mut(t) {
-            ctx.text = Some(LeafText {
+            ctx.text = Some(Box::new(LeafText {
                 text: tc.display_text(),
                 font_size: tc.font_size,
                 text_style: tc.effective_text_style(),
                 spans: tc.shaping_spans().to_vec(),
                 multiline: tc.multiline(),
                 memo: None,
-            });
+            }));
         }
         self.mark_layout_dirty(id);
         true
@@ -3135,6 +3194,7 @@ impl UiTree {
                 },
                 |input: LayoutInput, _node, ctx, style| {
                     measured.set(measured.get() + 1);
+                    aqua_core::checkpoint::reach();
                     taffy::compute_leaf_layout(
                         input,
                         style,
@@ -3820,22 +3880,45 @@ impl UiTree {
         self.structure_epoch
     }
 
-    pub fn nodes_with_key(&self, key: KeyHash) -> Vec<NodeId> {
+    fn with_key_slot<R>(&self, key: KeyHash, read: impl FnOnce(Option<&KeySlot>) -> R) -> R {
         let mut index = self.key_index.borrow_mut();
         let map = index.get_or_insert_with(|| {
-            let mut map: HashMap<KeyHash, Vec<NodeId>> = HashMap::new();
-            for id in self.traverse() {
+            let ids = self.traverse();
+            let mut map: HashMap<KeyHash, KeySlot> = HashMap::with_capacity(ids.len() / 4);
+            for id in ids {
                 if let Some(key) = self.nodes.get(id.raw()).and_then(|record| record.key) {
-                    map.entry(key).or_default().push(id);
+                    match map.entry(key) {
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert(KeySlot::One(id));
+                        }
+                        std::collections::hash_map::Entry::Occupied(mut entry) => {
+                            entry.get_mut().push(id);
+                        }
+                    }
                 }
             }
             map
         });
-        map.get(&key).cloned().unwrap_or_default()
+        read(map.get(&key))
+    }
+
+    pub fn nodes_with_key(&self, key: KeyHash) -> Vec<NodeId> {
+        self.with_key_slot(key, |slot| slot.map_or_else(Vec::new, KeySlot::to_vec))
+    }
+
+    pub fn last_node_with_key(&self, key: KeyHash) -> Option<NodeId> {
+        self.with_key_slot(key, |slot| slot.map(KeySlot::last))
+    }
+
+    pub fn sole_node_with_key(&self, key: KeyHash) -> Option<NodeId> {
+        self.with_key_slot(key, |slot| match slot {
+            Some(KeySlot::One(id)) => Some(*id),
+            _ => None,
+        })
     }
 
     pub fn find_by_key(&self, key: KeyHash) -> Option<NodeId> {
-        self.nodes_with_key(key).into_iter().next()
+        self.with_key_slot(key, |slot| slot.map(KeySlot::first))
     }
 
     /// Depth-first traversal in paint order (for focus order, debugging).
@@ -3899,18 +3982,15 @@ fn measure_leaf(
         width: known_dimensions.width.unwrap_or(0.0),
         height: known_dimensions.height.unwrap_or(0.0),
     };
-    if let Some(LeafCtx {
-        text:
-            Some(LeafText {
-                text,
-                font_size: _,
-                text_style,
-                spans,
-                multiline,
-                memo,
-            }),
-    }) = ctx
-    {
+    if let Some(LeafCtx { text: Some(leaf) }) = ctx {
+        let LeafText {
+            text,
+            font_size: _,
+            text_style,
+            spans,
+            multiline,
+            memo,
+        } = leaf.as_mut();
         let max_width = if *multiline {
             match available_space.width {
                 AvailableSpace::Definite(w) => Some(w),
@@ -4360,11 +4440,13 @@ mod tests {
     #[test]
     fn kind_change_replaces_node() {
         let mut tree = UiTree::new();
-        let root = tree.mount_spec(column(vec![NodeSpec::new(
-            NodeKind::Text(TextContent::label("x")),
-            LayoutStyle::default(),
-        )
-        .keyed("k")]));
+        let root = tree.mount_spec(column(vec![
+            NodeSpec::new(
+                NodeKind::Text(TextContent::label("x")),
+                LayoutStyle::default(),
+            )
+            .keyed("k"),
+        ]));
         let before: Vec<NodeId> = tree.get(root).unwrap().children.clone();
         let after = tree.sync_children(
             root,
@@ -4430,9 +4512,10 @@ mod tests {
         tree.compute_layout(Size::new(100.0, 100.0), &NaiveMeasurer)
             .unwrap();
         let ops = tree.emit_scene();
-        assert!(ops
-            .iter()
-            .any(|(_, op)| matches!(op, DisplayItem::BackdropBlur { .. })));
+        assert!(
+            ops.iter()
+                .any(|(_, op)| matches!(op, DisplayItem::BackdropBlur { .. }))
+        );
     }
 
     #[test]

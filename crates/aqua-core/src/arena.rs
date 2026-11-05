@@ -32,10 +32,13 @@ fn bump_generation(current: u32) -> (u32, bool) {
     (next, !overflowed)
 }
 
+const CHUNK: usize = 32;
+
 /// Storage with stable generational handles.
 #[derive(Debug)]
 pub struct Arena<T> {
-    entries: Vec<Entry<T>>,
+    chunks: Vec<Vec<Entry<T>>>,
+    slots: usize,
     free: Vec<u32>,
     live: usize,
     /// Slots permanently retired by generation wrap (never reused).
@@ -53,7 +56,8 @@ impl<T> Arena<T> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            entries: Vec::new(),
+            chunks: Vec::new(),
+            slots: 0,
             free: Vec::new(),
             live: 0,
             retired: 0,
@@ -64,11 +68,20 @@ impl<T> Arena<T> {
     #[must_use]
     pub fn with_capacity(cap: usize) -> Self {
         Self {
-            entries: Vec::with_capacity(cap),
+            chunks: Vec::with_capacity(cap.div_ceil(CHUNK)),
+            slots: 0,
             free: Vec::new(),
             live: 0,
             retired: 0,
         }
+    }
+
+    fn entry(&self, index: usize) -> Option<&Entry<T>> {
+        self.chunks.get(index / CHUNK)?.get(index % CHUNK)
+    }
+
+    fn entry_mut(&mut self, index: usize) -> Option<&mut Entry<T>> {
+        self.chunks.get_mut(index / CHUNK)?.get_mut(index % CHUNK)
     }
 
     /// Number of live occupants.
@@ -86,14 +99,16 @@ impl<T> Arena<T> {
     /// Slot high-water mark (live plus vacant reusable slots).
     #[must_use]
     pub fn capacity_slots(&self) -> usize {
-        self.entries.len()
+        self.slots
     }
 
     /// Insert a value, returning a handle valid until removed.
     pub fn insert(&mut self, value: T) -> RawId {
         self.live += 1;
         if let Some(index) = self.free.pop() {
-            let entry = &mut self.entries[index as usize];
+            let entry = self
+                .entry_mut(index as usize)
+                .expect("free list holds issued slots");
             debug_assert!(entry.value.is_none());
             debug_assert!(!entry.retired);
             entry.value = Some(value);
@@ -102,14 +117,16 @@ impl<T> Arena<T> {
                 generation: entry.generation,
             };
         }
-        let index = self.entries.len() as u32;
-        // Generations start at 0 (agreed with aqua-render's scene store).
-        // `INVALID` uses index u32::MAX, which is never issued.
-        self.entries.push(Entry {
+        let index = self.slots as u32;
+        if self.chunks.last().is_none_or(|chunk| chunk.len() == CHUNK) {
+            self.chunks.push(Vec::with_capacity(CHUNK));
+        }
+        self.chunks.last_mut().expect("chunk exists").push(Entry {
             generation: 0,
             value: Some(value),
             retired: false,
         });
+        self.slots += 1;
         RawId {
             index,
             generation: 0,
@@ -119,24 +136,20 @@ impl<T> Arena<T> {
     /// Remove the occupant behind `id`, returning it.
     pub fn remove(&mut self, id: RawId) -> Result<T, ArenaError> {
         let entry = self
-            .entries
-            .get_mut(id.index as usize)
+            .entry_mut(id.index as usize)
             .ok_or(ArenaError::OutOfRange)?;
         if entry.generation != id.generation || entry.value.is_none() {
             let found = entry.generation;
-            return Err(if id.index as usize >= self.entries.len() {
-                ArenaError::OutOfRange
-            } else {
-                ArenaError::Stale {
-                    expected: id.generation,
-                    found,
-                }
+            return Err(ArenaError::Stale {
+                expected: id.generation,
+                found,
             });
         }
         // Bump generation so outstanding handles go stale. If the counter
         // wraps, the slot is retired permanently instead of reused: no new
         // handle may ever alias an outstanding one.
         let (next, ok) = bump_generation(entry.generation);
+        let value = entry.value.take().expect("checked above");
         if ok {
             entry.generation = next;
             self.free.push(id.index);
@@ -145,7 +158,7 @@ impl<T> Arena<T> {
             self.retired += 1;
         }
         self.live -= 1;
-        Ok(entry.value.take().expect("checked above"))
+        Ok(value)
     }
 
     /// Whether `id` currently addresses a live occupant.
@@ -157,7 +170,7 @@ impl<T> Arena<T> {
     /// Shared access; `None` for stale or out-of-range handles.
     #[must_use]
     pub fn get(&self, id: RawId) -> Option<&T> {
-        let entry = self.entries.get(id.index as usize)?;
+        let entry = self.entry(id.index as usize)?;
         if entry.generation == id.generation {
             entry.value.as_ref()
         } else {
@@ -167,7 +180,7 @@ impl<T> Arena<T> {
 
     /// Exclusive access; `None` for stale or out-of-range handles.
     pub fn get_mut(&mut self, id: RawId) -> Option<&mut T> {
-        let entry = self.entries.get_mut(id.index as usize)?;
+        let entry = self.entry_mut(id.index as usize)?;
         if entry.generation == id.generation {
             entry.value.as_mut()
         } else {
@@ -177,40 +190,48 @@ impl<T> Arena<T> {
 
     /// Iterate live `(handle, value)` pairs in slot order.
     pub fn iter(&self) -> impl Iterator<Item = (RawId, &T)> {
-        self.entries.iter().enumerate().filter_map(|(i, e)| {
-            e.value.as_ref().map(|v| {
-                (
-                    RawId {
-                        index: i as u32,
-                        generation: e.generation,
-                    },
-                    v,
-                )
+        self.chunks
+            .iter()
+            .flatten()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                e.value.as_ref().map(|v| {
+                    (
+                        RawId {
+                            index: i as u32,
+                            generation: e.generation,
+                        },
+                        v,
+                    )
+                })
             })
-        })
     }
 
     /// Iterate live `(handle, value)` pairs mutably in slot order.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (RawId, &mut T)> {
-        self.entries.iter_mut().enumerate().filter_map(|(i, e)| {
-            let generation = e.generation;
-            e.value.as_mut().map(|v| {
-                (
-                    RawId {
-                        index: i as u32,
-                        generation,
-                    },
-                    v,
-                )
+        self.chunks
+            .iter_mut()
+            .flatten()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                let generation = e.generation;
+                e.value.as_mut().map(|v| {
+                    (
+                        RawId {
+                            index: i as u32,
+                            generation,
+                        },
+                        v,
+                    )
+                })
             })
-        })
     }
 
     /// Remove all occupants, invalidating every outstanding handle.
     /// Slots whose generation wraps are retired, not reused (see `remove`).
     pub fn clear(&mut self) {
         self.free.clear();
-        for (i, entry) in self.entries.iter_mut().enumerate() {
+        for (i, entry) in self.chunks.iter_mut().flatten().enumerate() {
             entry.value = None;
             let (next, ok) = bump_generation(entry.generation);
             if ok {
@@ -318,5 +339,26 @@ mod tests {
         arena.remove(a).unwrap();
         let values: Vec<i32> = arena.iter().map(|(_, &v)| v).collect();
         assert_eq!(values, vec![2, 3]);
+    }
+
+    #[test]
+    fn handles_survive_growth_across_chunks_and_reuse_in_slot_order() {
+        let mut arena = Arena::new();
+        let ids: Vec<_> = (0..CHUNK * 3 + 5).map(|n| arena.insert(n)).collect();
+        assert_eq!(arena.capacity_slots(), ids.len());
+        assert!(
+            ids.iter()
+                .enumerate()
+                .all(|(n, id)| arena.get(*id) == Some(&n))
+        );
+        let victim = ids[CHUNK + 1];
+        assert_eq!(arena.remove(victim), Ok(CHUNK + 1));
+        let reused = arena.insert(1000);
+        assert_eq!(reused.index, victim.index);
+        assert_ne!(reused.generation, victim.generation);
+        assert_eq!(arena.capacity_slots(), ids.len());
+        let order: Vec<u32> = arena.iter().map(|(id, _)| id.index).collect();
+        assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(order.len(), ids.len());
     }
 }

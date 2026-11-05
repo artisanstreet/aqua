@@ -283,6 +283,10 @@ impl FontDatabase {
         self.insert(Arc::new(data), Source::Memory);
     }
 
+    pub fn load_static(&mut self, data: &'static [u8]) {
+        self.insert(Arc::new(data), Source::Memory);
+    }
+
     pub fn load_file(&mut self, path: impl AsRef<Path>) -> Result<(), std::io::Error> {
         let path = path.as_ref();
         let file = std::fs::File::open(path)?;

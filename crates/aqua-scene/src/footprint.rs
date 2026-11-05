@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use aqua_core::geometry::{Point, Transform2D};
+use aqua_core::hash::FastMap;
 
 use crate::damage::DamageTracker;
 use crate::scene::{DisplayItem, NodeId, Rect, Scene, TextRun};
@@ -24,8 +24,8 @@ struct Entry {
 
 #[derive(Clone, Debug, Default)]
 pub struct Footprints {
-    entries: HashMap<NodeId, Entry>,
-    groups: HashMap<NodeId, Rect>,
+    entries: FastMap<NodeId, Entry>,
+    groups: FastMap<NodeId, Rect>,
 }
 
 struct Open {
@@ -94,8 +94,8 @@ fn local_rect(item: &DisplayItem, ink: &dyn Fn(&TextRun) -> Option<Rect>) -> Kin
 impl Footprints {
     pub fn of_scene(scene: &Scene, ink: &dyn Fn(&TextRun) -> Option<Rect>) -> Self {
         let mut out = Footprints {
-            entries: HashMap::with_capacity(scene.len()),
-            groups: HashMap::new(),
+            entries: FastMap::with_capacity_and_hasher(scene.len(), Default::default()),
+            groups: FastMap::default(),
         };
         let mut stack: Vec<Open> = Vec::new();
         let mut chain: Arc<[NodeId]> = Arc::from([]);

@@ -7,7 +7,7 @@ use crate::font::FontManager;
 use crate::lines;
 use aqua_media::hash::FastHasher;
 
-use crate::shape::{scaled_line_height, shape_paragraph, ShapeContext, ShapedParagraph, SpanText};
+use crate::shape::{ShapeContext, ShapedParagraph, SpanText, scaled_line_height, shape_paragraph};
 use crate::shape_cache::paragraph_key;
 use crate::style::{LineMode, StyledSpan, TextAlign, TextStyle, WrapMode};
 
@@ -126,6 +126,7 @@ pub struct TextLayout {
     gpui_wrap: bool,
     mask: Option<char>,
     shaped: Option<ShapedCache>,
+    placed: HashMap<usize, PlacedParagraph>,
     reshapes: u64,
     last_key: Option<InputKey>,
     cached: Option<Arc<LaidOut>>,
@@ -158,12 +159,189 @@ struct ShapedCache {
     paragraphs: Vec<Arc<ShapedParagraph>>,
 }
 
+#[derive(Clone)]
 struct PendingLine {
-    paragraph: usize,
     placed: lines::PlacedLine,
     height: f32,
     ascent: f32,
     descent: f32,
+}
+
+#[derive(Clone, PartialEq)]
+struct FinishKey {
+    container_bits: u32,
+    align: TextAlign,
+    justify: bool,
+    background_metrics: bool,
+    colors: u64,
+}
+
+struct FinishedParagraph {
+    key: FinishKey,
+    lines: Vec<LaidLine>,
+    height: f32,
+    max_width: f32,
+}
+
+struct PlacedParagraph {
+    paragraph: Arc<ShapedParagraph>,
+    wrap: WrapMode,
+    limit_bits: Option<u32>,
+    lines: Vec<PendingLine>,
+    content_width: f32,
+    finished: Option<FinishedParagraph>,
+}
+
+fn place_paragraph(
+    paragraph: &Arc<ShapedParagraph>,
+    display: &str,
+    wrap: WrapMode,
+    limit: Option<f32>,
+) -> PlacedParagraph {
+    let breaks = paragraph.breaks.get_or_init(|| {
+        lines::break_opportunities(&display[paragraph.start..paragraph.end], paragraph.start)
+    });
+    let ranges = lines::break_lines(&paragraph.clusters, breaks, wrap, limit);
+    let last = ranges.len() - 1;
+    let lines: Vec<PendingLine> = ranges
+        .into_iter()
+        .enumerate()
+        .map(|(index, range)| {
+            let placed = lines::place_line(paragraph, range, index == last);
+            let (height, ascent, descent) = line_metrics(paragraph, &placed.clusters);
+            PendingLine {
+                placed,
+                height,
+                ascent,
+                descent,
+            }
+        })
+        .collect();
+    let content_width = lines
+        .iter()
+        .map(|line| line.placed.content_width)
+        .fold(0.0f32, f32::max);
+    PlacedParagraph {
+        paragraph: Arc::clone(paragraph),
+        wrap,
+        limit_bits: limit.map(f32::to_bits),
+        lines,
+        content_width,
+        finished: None,
+    }
+}
+
+fn finish_paragraph(
+    paragraph: &ShapedParagraph,
+    pending: &[PendingLine],
+    key: FinishKey,
+    container: f32,
+    cluster_map: &[(usize, usize)],
+    colors: &SpanColors,
+    needs_background_metrics: bool,
+) -> FinishedParagraph {
+    let mut lines_out = Vec::with_capacity(pending.len());
+    let mut max_w = 0.0f32;
+    let mut total_h = 0.0f32;
+    for line in pending {
+        let mut line = line.clone();
+        if key.justify {
+            lines::justify(&mut line.placed, paragraph, container);
+        }
+        let offset = lines::alignment_offset(&line.placed, key.align, container);
+        let y_top = total_h;
+        let baseline_y = y_top + (line.height - (line.ascent + line.descent)) / 2.0 + line.ascent;
+        let mut glyphs = Vec::with_capacity(line.placed.glyphs.len());
+        for placed in &line.placed.glyphs {
+            let cluster = &paragraph.clusters[placed.cluster];
+            let run = &paragraph.runs[cluster.run];
+            let Some(entry) = &run.entry else { continue };
+            let glyph = &run.glyphs[placed.glyph];
+            if glyph.glyph_id == 3 && entry.is_emoji() {
+                continue;
+            }
+            let (src_start, src_end) =
+                display_range_to_source(cluster_map, cluster.start, cluster.end);
+            let (color_srgb, color_hsla, source_color_hsla) = colors.at(src_start);
+            glyphs.push(LaidGlyph {
+                display_byte_start: cluster.start,
+                display_byte_end: cluster.end,
+                src_byte_start: src_start,
+                src_byte_end: src_end,
+                font_id: entry.id(),
+                font_weight: entry.weight(),
+                font_stretch: entry.stretch(),
+                synthetic_italic: entry.fake_italic(),
+                glyph_id: glyph.glyph_id,
+                font_size_px: run.size_px,
+                x: offset + placed.x,
+                y: 0.0,
+                x_offset: glyph.x_offset,
+                y_offset: glyph.y_offset,
+                w: placed.advance,
+                bidi_level: placed.level,
+                color_srgb,
+                color_hsla,
+                source_color_hsla,
+                font_max_width: needs_background_metrics
+                    .then(|| entry.max_width_em() * run.size_px)
+                    .filter(|width| *width > 0.0),
+            });
+        }
+        let display_range = match line.placed.clusters.is_empty() {
+            true => paragraph.start..paragraph.start,
+            false => {
+                paragraph.clusters[line.placed.clusters.start].start
+                    ..paragraph.clusters[line.placed.clusters.end - 1].end
+            }
+        };
+        max_w = max_w.max(line.placed.content_width);
+        total_h = y_top + line.height;
+        lines_out.push(LaidLine {
+            paragraph: 0,
+            display_range,
+            y_top,
+            height: line.height,
+            baseline_y,
+            width: line.placed.content_width,
+            rtl: line.placed.rtl,
+            glyphs,
+        });
+    }
+    FinishedParagraph {
+        key,
+        lines: lines_out,
+        height: total_h,
+        max_width: max_w,
+    }
+}
+
+fn color_signature(colors: &SpanColors, start: usize, end: usize) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = FastHasher::default();
+    let mut from = start;
+    let mut index = colors.ends.partition_point(|span_end| *span_end <= start);
+    loop {
+        let to = colors
+            .ends
+            .get(index)
+            .map_or(end, |span_end| (*span_end).min(end));
+        to.saturating_sub(from).hash(&mut hasher);
+        let (srgb, hsla, source) = colors
+            .colors
+            .get(index)
+            .copied()
+            .unwrap_or((None, None, None));
+        srgb.hash(&mut hasher);
+        hsla.map(|v| v.map(f32::to_bits)).hash(&mut hasher);
+        source.map(|v| v.map(f32::to_bits)).hash(&mut hasher);
+        if to >= end || index >= colors.ends.len() {
+            break;
+        }
+        from = to;
+        index += 1;
+    }
+    hasher.finish()
 }
 
 impl InputKey {
@@ -288,6 +466,7 @@ impl TextLayout {
             gpui_wrap: false,
             mask: None,
             shaped: None,
+            placed: HashMap::new(),
             reshapes: 0,
             last_key: None,
             cached: None,
@@ -427,7 +606,7 @@ impl TextLayout {
         mode: crate::overflow::OverflowMode,
     ) -> Arc<LaidOut> {
         use crate::overflow::{
-            single_line_overflow_with_spacing, EllipsisPosition, OverflowCluster,
+            EllipsisPosition, OverflowCluster, single_line_overflow_with_spacing,
         };
         let natural = self.layout(fonts);
         if self.line_mode != LineMode::Single
@@ -689,108 +868,78 @@ impl TextLayout {
         let width_px = self.max_width.map(|w| (w * self.scale).max(1.0));
         let limit = width_px.filter(|_| wrap != WrapMode::None);
 
-        let mut pending: Vec<PendingLine> = Vec::new();
-        for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {
-            let breaks = paragraph.breaks.get_or_init(|| {
-                lines::break_opportunities(
-                    &display[paragraph.start..paragraph.end],
-                    paragraph.start,
-                )
+        let cacheable = self.mask.is_none() && cluster_map.is_empty();
+        let mut previous = std::mem::take(&mut self.placed);
+        let mut placed_paragraphs: Vec<PlacedParagraph> = Vec::with_capacity(paragraphs.len());
+        for paragraph in paragraphs.iter() {
+            let reused = cacheable
+                .then(|| previous.remove(&(Arc::as_ptr(paragraph) as usize)))
+                .flatten()
+                .filter(|entry| entry.wrap == wrap && entry.limit_bits == limit.map(f32::to_bits));
+            placed_paragraphs.push(match reused {
+                Some(entry) => entry,
+                None => place_paragraph(paragraph, &display, wrap, limit),
             });
-            let ranges = lines::break_lines(&paragraph.clusters, breaks, wrap, limit);
-            let last = ranges.len() - 1;
-            for (index, range) in ranges.into_iter().enumerate() {
-                let placed = lines::place_line(paragraph, range, index == last);
-                let (height, ascent, descent) = line_metrics(paragraph, &placed.clusters);
-                pending.push(PendingLine {
-                    paragraph: paragraph_index,
-                    placed,
-                    height,
-                    ascent,
-                    descent,
-                });
-            }
         }
 
-        let max_content = pending
+        let max_content = placed_paragraphs
             .iter()
-            .map(|line| line.placed.content_width)
+            .map(|entry| entry.content_width)
             .fold(0.0f32, f32::max);
         let container = width_px.unwrap_or(max_content);
         let colors = span_colors(&self.spans);
         let needs_background_metrics = self.spans.iter().any(|span| span.background_hsla.is_some());
+        let finish_key = |paragraph: &ShapedParagraph| FinishKey {
+            container_bits: container.to_bits(),
+            align: self.align,
+            justify: self.align == TextAlign::Justify && width_px.is_some(),
+            background_metrics: needs_background_metrics,
+            colors: color_signature(&colors, paragraph.start, paragraph.end),
+        };
 
-        let mut lines_out = Vec::with_capacity(pending.len());
+        let mut lines_out = Vec::new();
         let mut max_w = 0.0f32;
         let mut total_h = 0.0f32;
         let mut first_baseline_y = None;
-        for mut line in pending {
-            let paragraph = &paragraphs[line.paragraph];
-            if self.align == TextAlign::Justify && width_px.is_some() {
-                lines::justify(&mut line.placed, paragraph, container);
+        for (paragraph_index, entry) in placed_paragraphs.iter_mut().enumerate() {
+            let paragraph = Arc::clone(&entry.paragraph);
+            let key = finish_key(&paragraph);
+            let reusable = cacheable
+                && entry
+                    .finished
+                    .as_ref()
+                    .is_some_and(|finished| finished.key == key);
+            if !reusable {
+                let finished = finish_paragraph(
+                    &paragraph,
+                    &entry.lines,
+                    key,
+                    container,
+                    &cluster_map,
+                    &colors,
+                    needs_background_metrics,
+                );
+                entry.finished = Some(finished);
             }
-            let offset = lines::alignment_offset(&line.placed, self.align, container);
-            let y_top = total_h;
-            let baseline_y =
-                y_top + (line.height - (line.ascent + line.descent)) / 2.0 + line.ascent;
-            let mut glyphs = Vec::with_capacity(line.placed.glyphs.len());
-            for placed in &line.placed.glyphs {
-                let cluster = &paragraph.clusters[placed.cluster];
-                let run = &paragraph.runs[cluster.run];
-                let Some(entry) = &run.entry else { continue };
-                let glyph = &run.glyphs[placed.glyph];
-                if glyph.glyph_id == 3 && entry.is_emoji() {
-                    continue;
-                }
-                let (src_start, src_end) =
-                    display_range_to_source(&cluster_map, cluster.start, cluster.end);
-                let (color_srgb, color_hsla, source_color_hsla) = colors.at(src_start);
-                glyphs.push(LaidGlyph {
-                    display_byte_start: cluster.start,
-                    display_byte_end: cluster.end,
-                    src_byte_start: src_start,
-                    src_byte_end: src_end,
-                    font_id: entry.id(),
-                    font_weight: entry.weight(),
-                    font_stretch: entry.stretch(),
-                    synthetic_italic: entry.fake_italic(),
-                    glyph_id: glyph.glyph_id,
-                    font_size_px: run.size_px,
-                    x: offset + placed.x,
-                    y: 0.0,
-                    x_offset: glyph.x_offset,
-                    y_offset: glyph.y_offset,
-                    w: placed.advance,
-                    bidi_level: placed.level,
-                    color_srgb,
-                    color_hsla,
-                    source_color_hsla,
-                    font_max_width: needs_background_metrics
-                        .then(|| entry.max_width_em() * run.size_px)
-                        .filter(|width| *width > 0.0),
-                });
+            let finished = entry.finished.as_ref().expect("finished paragraph present");
+            for line in &finished.lines {
+                let mut line = line.clone();
+                line.paragraph = paragraph_index;
+                line.y_top += total_h;
+                line.baseline_y += total_h;
+                first_baseline_y.get_or_insert(line.baseline_y);
+                lines_out.push(line);
             }
-            let display_range = match line.placed.clusters.is_empty() {
-                true => paragraph.start..paragraph.start,
-                false => {
-                    paragraph.clusters[line.placed.clusters.start].start
-                        ..paragraph.clusters[line.placed.clusters.end - 1].end
-                }
-            };
-            first_baseline_y.get_or_insert(baseline_y);
-            max_w = max_w.max(line.placed.content_width);
-            total_h = y_top + line.height;
-            lines_out.push(LaidLine {
-                paragraph: line.paragraph,
-                display_range,
-                y_top,
-                height: line.height,
-                baseline_y,
-                width: line.placed.content_width,
-                rtl: line.placed.rtl,
-                glyphs,
-            });
+            max_w = max_w.max(finished.max_width);
+            total_h += finished.height;
         }
+        self.placed = match placed_paragraphs.len() > 1 {
+            true => placed_paragraphs
+                .into_iter()
+                .map(|entry| (Arc::as_ptr(&entry.paragraph) as usize, entry))
+                .collect(),
+            false => HashMap::new(),
+        };
 
         let mut lines = lines_out;
         if self.gpui_wrap && self.line_mode == LineMode::Multi && self.wrap != WrapMode::None {

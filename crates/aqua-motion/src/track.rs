@@ -1,6 +1,6 @@
 use crate::curve::{
-    launch_segments, resolve_kind, rest_segments, spring_targets, MotionError, MotionKind,
-    MotionValue, ReducedMotion, Seconds, SpringRegime, SpringSegment, SPRING_MAX_DURATION_SECS,
+    MotionError, MotionKind, MotionValue, ReducedMotion, SPRING_MAX_DURATION_SECS, Seconds,
+    SpringRegime, SpringSegment, launch_segments, resolve_kind, rest_segments, spring_targets,
 };
 
 #[derive(Clone, Debug)]

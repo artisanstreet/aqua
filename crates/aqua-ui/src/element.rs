@@ -6,7 +6,7 @@ use aqua_core::{CollectionSemantics, DisplayItem, NodeId, Oklch, Point, Rect, Ro
 use aqua_reactive::{ReadSignal, WriteSignal};
 
 use crate::collection_runtime::{
-    validate_descriptor, validate_snapshot, CollectionDescriptor, CollectionError, CollectionRole,
+    CollectionDescriptor, CollectionError, CollectionRole, validate_descriptor, validate_snapshot,
 };
 use crate::controls::{
     Control, SelectControl, SelectOption, SliderControl, SliderRange, TabsControl,
@@ -14,9 +14,9 @@ use crate::controls::{
 use crate::input::{EventPhase, InputCallback, InputKind, InputResponse, RoutedEvent, Shortcut};
 use crate::style::{Axis, LayoutStyle, Length, Paint, Style, Typography};
 use crate::tree::{
-    hash_key, ActionCallback, ActionEvent, ActionKind, BoxContent, CanvasContent,
-    CanvasPaintCallback, MediaContent, NodeKind, NodeSpec, ScrollContent, TextAppearance,
-    TextBacking, TextContent, TextInlineGlyph, UiTree, ViewportContent,
+    ActionCallback, ActionEvent, ActionKind, BoxContent, CanvasContent, CanvasPaintCallback,
+    MediaContent, NodeKind, NodeSpec, ScrollContent, TextAppearance, TextBacking, TextContent,
+    TextInlineGlyph, UiTree, ViewportContent, hash_key,
 };
 use aqua_text::document::{SelectionBinding, SelectionDocumentId, SourceSlice};
 use aqua_text::{LineMode, Selection};
@@ -2918,7 +2918,7 @@ impl Element {
         if !preserve_editing {
             tree.set_text(id, initial);
         }
-        tree.sync_text_leaf(id);
+        tree.sync_text_leaf_if_changed(id);
     }
 
     fn tree_discriminant(kind: &NodeKind) -> u8 {
@@ -3192,7 +3192,9 @@ fn lower_collection(
         return Err(LowerError::CollectionChildren);
     }
     validate_descriptor(desc).map_err(LowerError::Collection)?;
-    validate_snapshot(desc.source.as_ref()).map_err(LowerError::Collection)?;
+    if desc.shape_epoch.is_none() {
+        validate_snapshot(desc.source.as_ref()).map_err(LowerError::Collection)?;
+    }
     let (layout, paint) = container_style(desc);
     check_paint(&paint)?;
     let key = el.key.clone().map(hash_key);
@@ -3500,13 +3502,13 @@ pub mod ui {
     pub use super::Viewport3D;
     pub use crate::controls::ResizeHandle;
     pub use crate::style::Axis;
-    pub use crate::style::{auto, pct, px, Length, Style, Typography};
+    pub use crate::style::{Length, Style, Typography, auto, pct, px};
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::{auto, px, Style};
+    use crate::style::{Style, auto, px};
 
     fn label_spec(text: &str) -> NodeSpec {
         NodeSpec::new(

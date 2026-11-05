@@ -137,3 +137,55 @@ fn restyling_under_the_editor_scale_matches_a_tree_built_with_that_style() {
     fresh.compute_layout(VIEWPORT, &NaiveMeasurer).unwrap();
     assert_eq!(restyled.rect(node), fresh.rect(expected));
 }
+
+fn labelled(text: &str) -> aqua_ui::element::Element {
+    use aqua_ui::element::{Box as UiBox, Text};
+    UiBox::new()
+        .layout("column")
+        .child(Text::new("stable heading").build())
+        .child(Text::new(text).build())
+        .build()
+}
+
+#[test]
+fn refreshing_identical_elements_keeps_layout_clean_until_a_label_changes() {
+    use aqua_reactive::Runtime;
+    use aqua_ui::binding::View;
+    let runtime = Runtime::new();
+    let mut tree = UiTree::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    view.set_content(&mut tree, vec![labelled("first")])
+        .unwrap();
+    tree.compute_layout(VIEWPORT, &NaiveMeasurer).unwrap();
+    view.set_content(&mut tree, vec![labelled("first")])
+        .unwrap();
+    tree.compute_layout(VIEWPORT, &NaiveMeasurer).unwrap();
+    assert!(tree.last_stats().layout_skipped);
+    view.set_content(&mut tree, vec![labelled("second")])
+        .unwrap();
+    tree.compute_layout(VIEWPORT, &NaiveMeasurer).unwrap();
+    assert!(!tree.last_stats().layout_skipped);
+}
+
+#[test]
+fn refreshing_identical_elements_does_not_remeasure_unchanged_labels() {
+    use aqua_reactive::Runtime;
+    use aqua_ui::binding::View;
+    let measurer = CountingMeasurer::new(Some(1));
+    let runtime = Runtime::new();
+    let mut tree = UiTree::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    view.set_content(&mut tree, vec![labelled("first")])
+        .unwrap();
+    tree.compute_layout(VIEWPORT, &measurer).unwrap();
+    let initial = measurer.calls.get();
+    assert!(initial > 0);
+    view.set_content(&mut tree, vec![labelled("first")])
+        .unwrap();
+    tree.compute_layout(VIEWPORT, &measurer).unwrap();
+    assert_eq!(measurer.calls.get(), initial);
+    view.set_content(&mut tree, vec![labelled("second")])
+        .unwrap();
+    tree.compute_layout(VIEWPORT, &measurer).unwrap();
+    assert!(measurer.calls.get() > initial);
+}

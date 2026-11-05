@@ -44,6 +44,7 @@ pub struct Scheduler {
     pulse_deadlines: HashMap<WindowId, Instant>,
     in_flight: HashMap<WindowId, u32>,
     pacing_gate: HashMap<WindowId, Instant>,
+    resize_gate: HashMap<WindowId, Instant>,
     stats: FrameStats,
 }
 
@@ -63,6 +64,7 @@ impl Scheduler {
             pulse_deadlines: HashMap::new(),
             in_flight: HashMap::new(),
             pacing_gate: HashMap::new(),
+            resize_gate: HashMap::new(),
             stats: FrameStats::default(),
         }
     }
@@ -210,7 +212,7 @@ impl Scheduler {
             {
                 reasons |= FrameReason::GPUI_PULSE;
             }
-            if reasons.is_empty() {
+            if reasons.is_empty() || self.resize_blocked(id, reasons, now) {
                 continue;
             }
             let flying = self.in_flight.get(&id).copied().unwrap_or(0);
@@ -252,6 +254,20 @@ impl Scheduler {
         }
     }
 
+    pub fn defer_resize_frames(&mut self, window: WindowId, until: Instant) {
+        let gate = self.resize_gate.entry(window).or_insert(until);
+        *gate = (*gate).max(until);
+    }
+
+    pub fn resize_gate(&self, window: WindowId) -> Option<Instant> {
+        self.resize_gate.get(&window).copied()
+    }
+
+    fn resize_blocked(&self, id: WindowId, reasons: FrameReason, now: Instant) -> bool {
+        reasons.contains(FrameReason::RESIZE)
+            && self.resize_gate.get(&id).is_some_and(|gate| now < *gate)
+    }
+
     pub fn mark_presented(&mut self, window: WindowId) {
         if let Some(n) = self.in_flight.get_mut(&window) {
             *n = n.saturating_sub(1);
@@ -289,9 +305,15 @@ impl Scheduler {
                     _ => {}
                 }
             }
-            match self.pacing_gate.get(id) {
-                Some(g) if *g > now => consider(*g),
-                _ => return Some(now),
+            let pacing = self.pacing_gate.get(id).copied().filter(|g| *g > now);
+            let resize = self
+                .resize_gate
+                .get(id)
+                .copied()
+                .filter(|g| *g > now && p.reasons.contains(FrameReason::RESIZE));
+            match pacing.into_iter().chain(resize).max() {
+                Some(gate) => consider(gate),
+                None => return Some(now),
             }
         }
         for (id, deadline) in &self.pulse_deadlines {
@@ -312,6 +334,7 @@ impl Scheduler {
         self.pulse_deadlines.remove(&window);
         self.in_flight.remove(&window);
         self.pacing_gate.remove(&window);
+        self.resize_gate.remove(&window);
         self.window_fps.remove(&window);
     }
 

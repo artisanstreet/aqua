@@ -87,13 +87,21 @@ pub fn spawn_prewarm(fonts: SharedFonts, styles: Vec<TextStyle>) -> Option<JoinH
     std::thread::Builder::new()
         .name("aqua-prewarm".into())
         .spawn(move || {
+            let started = std::time::Instant::now();
             let jobs = fonts.lock().prewarm_jobs(&styles);
+            let queued = jobs.len();
             let installed = jobs
                 .into_iter()
                 .filter_map(aqua_text::PrewarmJob::build)
                 .filter(|entry| fonts.lock().install_prewarmed(entry.clone()))
                 .count();
             save_fallback_index(&fonts);
+            if crate::profile::enabled() {
+                eprintln!(
+                    "aqua-startup prewarm queued={queued} installed={installed} ms={:.1}",
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+            }
             installed
         })
         .ok()

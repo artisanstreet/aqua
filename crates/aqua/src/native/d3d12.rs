@@ -21,7 +21,7 @@ use aqua_text::{SharedFonts, SharedRuns};
 use crate::render::host::{DamageSlot, FrameTarget, GpuFrames, RenderStats, Repaint};
 use crate::render::link::{CompositionSink, InitFactory, RenderContext};
 use crate::render::lower::{Lowering, RecoverySignal};
-use crate::render::namespace::{namespace_plan, namespace_uploads, Namespaces};
+use crate::render::namespace::{Namespaces, namespace_plan, namespace_uploads};
 use crate::render::persist::{self, PipelineCacheSaver};
 
 static TEXT_SERVICES: Once = Once::new();
@@ -180,7 +180,7 @@ impl WindowHandle {
         let (compiled, loaded, before) = self.profile_mark.get();
         self.profile_mark
             .set((pipelines.compiled, pipelines.loaded, resident));
-        use aqua_protocol::probe::{count, Metric};
+        use aqua_protocol::probe::{Metric, count};
         count(
             Metric::PsoCompiled,
             u64::from(pipelines.compiled.saturating_sub(compiled)),
@@ -233,6 +233,10 @@ impl WindowHandle {
         }
     }
 
+    fn repaint_bounds(&self, surface: SurfaceId, damage: &[Rect]) -> Option<Rect> {
+        self.hub.backend.borrow().repaint_bounds(surface, damage)
+    }
+
     fn service_budget(&self) -> bool {
         match self.hub.backend.borrow_mut().service_budget() {
             Ok(Some(status)) => status.applied.evict_idle_resources,
@@ -242,6 +246,10 @@ impl WindowHandle {
                 false
             }
         }
+    }
+
+    fn finish_startup(&self) {
+        self.hub.backend.borrow_mut().finish_startup();
     }
 
     fn pipeline_cache(&self) -> Option<Vec<u8>> {
@@ -441,6 +449,7 @@ impl FrameTarget for WindowTarget {
                 since_process_start().map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
             );
         }
+        self.frames.backend().finish_startup();
         self.frames.backend().profile_backend();
         self.stats
             .device_sharers
@@ -513,6 +522,9 @@ pub fn factory(
             let shared_stats = stats.clone();
             let frames = GpuFrames::new(handle, surface, extent, lowering, externals, stats)
                 .with_damage(damage, runs)
+                .with_repaint_probe(|backend: &WindowHandle, surface, damage: &[Rect]| {
+                    backend.repaint_bounds(surface, damage)
+                })
                 .with_pressure(|backend: &mut WindowHandle| backend.service_budget())
                 .with_visibility(|backend: &mut WindowHandle, hidden| backend.set_hidden(hidden))
                 .with_maintenance(move |backend: &mut WindowHandle| {

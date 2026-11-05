@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use aqua_core::{ImageId, ImageRef, RawId};
-use aqua_media::decode::animation::{decode_animation, AnimationBudget, DecodedAnimation};
+use aqua_media::decode::animation::{AnimationBudget, DecodedAnimation, decode_animation};
 
 static NEXT_IMAGE_INDEX: AtomicU32 = AtomicU32::new(0x8000_0000);
 
@@ -162,13 +162,23 @@ impl Data {
 enum Phase {
     Pending,
     Ready(Data),
+    Retired,
     Failed(ImageAssetError),
+}
+struct Retention {
+    encoded: Arc<[u8]>,
+    width: u32,
+    height: u32,
 }
 struct Slot {
     generation: u32,
     phase: Option<Phase>,
     preview: bool,
+    retention: Option<Retention>,
+    ready_at: Option<std::time::Instant>,
 }
+const RETIRE_MIN_BYTES: u64 = 256 * 1024;
+pub(crate) const RETIRE_IDLE: std::time::Duration = std::time::Duration::from_secs(2);
 struct DecodeJob {
     id: ImageId,
     encoded: Arc<[u8]>,
@@ -176,6 +186,8 @@ struct DecodeJob {
     _guard: Option<Box<dyn Send>>,
 }
 
+#[cfg(test)]
+static TEST_SERIAL: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 type DecodeStarted = Arc<dyn Fn(ImageId) + Send + Sync>;
 #[cfg(test)]
@@ -226,6 +238,8 @@ impl State {
                         generation: 0,
                         phase: None,
                         preview: false,
+                        retention: None,
+                        ready_at: None,
                     },
                 );
                 index
@@ -234,6 +248,7 @@ impl State {
         let slot = self.slots.get_mut(&index).unwrap();
         slot.phase = Some(phase);
         slot.preview = preview;
+        slot.retention = None;
         self.stats.images += 1;
         self.revision = self.revision.wrapping_add(1);
         Ok(ImageId::from_raw(RawId {
@@ -433,6 +448,81 @@ impl ImageAssets {
             _ => None,
         }
     }
+    fn has_data(&self, id: ImageId) -> bool {
+        lock(&self.state).slot(id).is_some_and(|slot| {
+            matches!(slot.phase, Some(Phase::Ready(_) | Phase::Retired))
+                || (matches!(slot.phase, Some(Phase::Pending)) && slot.retention.is_some())
+        })
+    }
+    fn retire(&self, id: ImageId) {
+        let mut state = lock(&self.state);
+        let Some(slot) = state.slot_mut(id) else {
+            return;
+        };
+        let retired = match (&slot.phase, &slot.retention) {
+            (Some(Phase::Ready(data @ Data::Still(_))), Some(_))
+                if data.bytes() >= RETIRE_MIN_BYTES =>
+            {
+                Some(data.bytes())
+            }
+            _ => None,
+        };
+        if let Some(bytes) = retired {
+            slot.phase = Some(Phase::Retired);
+            state.stats.decoded_bytes -= bytes;
+        }
+    }
+    fn retire_idle(&self, keep: &std::collections::HashSet<ImageId>, idle: std::time::Duration) {
+        let candidates: Vec<ImageId> = {
+            let state = lock(&self.state);
+            state
+                .slots
+                .iter()
+                .filter(|(_, slot)| {
+                    matches!(slot.phase, Some(Phase::Ready(Data::Still(_))))
+                        && slot.retention.is_some()
+                        && slot.ready_at.is_some_and(|at| at.elapsed() >= idle)
+                })
+                .map(|(index, slot)| {
+                    ImageId::from_raw(RawId {
+                        index: *index,
+                        generation: slot.generation,
+                    })
+                })
+                .filter(|id| !keep.contains(id))
+                .collect()
+        };
+        candidates.into_iter().for_each(|id| self.retire(id));
+    }
+    fn revive(&self, id: ImageId) {
+        let start = {
+            let mut state = lock(&self.state);
+            let Some(slot) = state.slot_mut(id) else {
+                return;
+            };
+            let (Some(Phase::Retired), Some(retention)) = (&slot.phase, &slot.retention) else {
+                return;
+            };
+            let encoded = retention.encoded.clone();
+            let preview = slot.preview;
+            slot.phase = Some(Phase::Pending);
+            state.stats.pending_bytes += encoded.len();
+            state.queue.push_back(DecodeJob {
+                id,
+                encoded,
+                preview,
+                _guard: None,
+            });
+            let start = state.stats.workers < state.budget.workers;
+            if start {
+                state.stats.workers += 1;
+            }
+            start
+        };
+        if start {
+            spawn_worker(&self.state);
+        }
+    }
     fn is_preview(&self, id: ImageId) -> bool {
         lock(&self.state).slot(id).is_some_and(|slot| slot.preview)
     }
@@ -479,67 +569,71 @@ fn spawn_worker(shared: &Arc<Mutex<State>>) {
     let weak = Arc::downgrade(shared);
     let worker = std::thread::Builder::new()
         .name("aqua-image-decode".into())
-        .spawn(move || loop {
-            let (job, budget, fonts) = {
-                let Some(shared) = weak.upgrade() else {
-                    return;
+        .spawn(move || {
+            loop {
+                let (job, budget, fonts) = {
+                    let Some(shared) = weak.upgrade() else {
+                        return;
+                    };
+                    let mut state = lock(&shared);
+                    let Some(job) = state.queue.pop_front() else {
+                        state.stats.workers -= 1;
+                        return;
+                    };
+                    (job, state.budget.decoded_bytes, state.fonts.clone())
                 };
-                let mut state = lock(&shared);
-                let Some(job) = state.queue.pop_front() else {
-                    state.stats.workers -= 1;
-                    return;
-                };
-                (job, state.budget.decoded_bytes, state.fonts.clone())
-            };
-            #[cfg(test)]
-            let callback = DECODE_STARTED
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .clone();
-            #[cfg(test)]
-            if let Some(callback) = callback {
-                callback(job.id);
-            }
-            let result = if job.preview && job.encoded.len() > 32 * 1024 * 1024 {
-                Err(ImageAssetError::Decode(
-                    "image source exceeds 32 MiB".into(),
-                ))
-            } else if aqua_media::decode::is_svg(&job.encoded) {
-                let source = match &fonts {
-                    Some(fonts) => aqua_text::svg::outline_text(&job.encoded, &mut fonts.lock()),
-                    None => std::borrow::Cow::Borrowed(&job.encoded[..]),
-                };
-                aqua_media::decode::decode_svg(&source, budget)
-                    .map(|image| Data::Still(Arc::new(image)))
-                    .map_err(|error| ImageAssetError::Decode(error.to_string()))
-            } else if job.preview && !aqua_media::decode::is_gif(&job.encoded) {
-                aqua_media::decode::decode_preview_still(&job.encoded, budget)
-                    .map(|image| Data::Still(Arc::new(image)))
-                    .map_err(|error| ImageAssetError::Decode(error.to_string()))
-            } else {
-                let result = if job.preview {
-                    aqua_media::decode::animation::decode_preview_gif(&job.encoded, budget)
-                } else {
-                    decode_animation(
-                        &job.encoded,
-                        AnimationBudget {
-                            max_bytes: budget.min(64 * 1024 * 1024),
-                            ..Default::default()
-                        },
-                    )
-                };
-                result
-                    .map(|animation| {
-                        if animation.frames().len() == 1 {
-                            Data::Still(Arc::new(animation.frames()[0].image.clone()))
-                        } else {
-                            Data::Animation(Arc::new(animation))
+                #[cfg(test)]
+                let callback = DECODE_STARTED
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .clone();
+                #[cfg(test)]
+                if let Some(callback) = callback {
+                    callback(job.id);
+                }
+                let result = if job.preview && job.encoded.len() > 32 * 1024 * 1024 {
+                    Err(ImageAssetError::Decode(
+                        "image source exceeds 32 MiB".into(),
+                    ))
+                } else if aqua_media::decode::is_svg(&job.encoded) {
+                    let source = match &fonts {
+                        Some(fonts) => {
+                            aqua_text::svg::outline_text(&job.encoded, &mut fonts.lock())
                         }
-                    })
-                    .map_err(|error| ImageAssetError::Decode(error.to_string()))
-            };
-            if let Some(shared) = weak.upgrade() {
-                complete(&shared, job.id, job.encoded.len(), result);
+                        None => std::borrow::Cow::Borrowed(&job.encoded[..]),
+                    };
+                    aqua_media::decode::decode_svg(&source, budget)
+                        .map(|image| Data::Still(Arc::new(image)))
+                        .map_err(|error| ImageAssetError::Decode(error.to_string()))
+                } else if job.preview && !aqua_media::decode::is_gif(&job.encoded) {
+                    aqua_media::decode::decode_preview_still(&job.encoded, budget)
+                        .map(|image| Data::Still(Arc::new(image)))
+                        .map_err(|error| ImageAssetError::Decode(error.to_string()))
+                } else {
+                    let result = if job.preview {
+                        aqua_media::decode::animation::decode_preview_gif(&job.encoded, budget)
+                    } else {
+                        decode_animation(
+                            &job.encoded,
+                            AnimationBudget {
+                                max_bytes: budget.min(64 * 1024 * 1024),
+                                ..Default::default()
+                            },
+                        )
+                    };
+                    result
+                        .map(|animation| {
+                            if animation.frames().len() == 1 {
+                                Data::Still(Arc::new(animation.frames()[0].image.clone()))
+                            } else {
+                                Data::Animation(Arc::new(animation))
+                            }
+                        })
+                        .map_err(|error| ImageAssetError::Decode(error.to_string()))
+                };
+                if let Some(shared) = weak.upgrade() {
+                    complete(&shared, job.id, job.encoded, result);
+                }
             }
         });
     if let Err(error) = worker {
@@ -563,12 +657,12 @@ fn spawn_worker(shared: &Arc<Mutex<State>>) {
 fn complete(
     shared: &Mutex<State>,
     id: ImageId,
-    pending: usize,
+    encoded: Arc<[u8]>,
     result: Result<Data, ImageAssetError>,
 ) {
     let wake = {
         let mut state = lock(shared);
-        state.stats.pending_bytes -= pending;
+        state.stats.pending_bytes -= encoded.len();
         let result = result.and_then(|data| {
             if state.stats.decoded_bytes.saturating_add(data.bytes()) <= state.budget.decoded_bytes
             {
@@ -578,6 +672,14 @@ fn complete(
             }
         });
         if state.slot(id).is_some() {
+            let retention = match &result {
+                Ok(Data::Still(image)) => Some(Retention {
+                    encoded,
+                    width: image.width(),
+                    height: image.height(),
+                }),
+                _ => None,
+            };
             let phase = match result {
                 Ok(data) => {
                     state.stats.decoded_bytes += data.bytes();
@@ -585,7 +687,10 @@ fn complete(
                 }
                 Err(error) => Phase::Failed(error),
             };
-            state.slot_mut(id).unwrap().phase = Some(phase);
+            let slot = state.slot_mut(id).unwrap();
+            slot.phase = Some(phase);
+            slot.retention = retention;
+            slot.ready_at = Some(std::time::Instant::now());
             state.revision = state.revision.wrapping_add(1);
             state.wake.clone()
         } else {
@@ -613,6 +718,11 @@ impl ImageHandle {
         let state = lock(&shared);
         match state.slot(self.id())?.phase.as_ref()? {
             Phase::Ready(data) => Some(data.bytes()),
+            Phase::Retired => state
+                .slot(self.id())?
+                .retention
+                .as_ref()
+                .map(|retention| u64::from(retention.width) * u64::from(retention.height) * 4),
             Phase::Pending | Phase::Failed(_) => None,
         }
     }
@@ -630,8 +740,24 @@ impl ImageHandle {
             return ImageStatus::Cancelled;
         };
         let state = lock(&shared);
+        let retention = state
+            .slot(self.id())
+            .and_then(|slot| slot.retention.as_ref());
         match state.slot(self.id()).and_then(|slot| slot.phase.as_ref()) {
-            Some(Phase::Pending) => ImageStatus::Pending,
+            Some(Phase::Pending) => match retention {
+                Some(retention) => ImageStatus::Ready {
+                    width: retention.width,
+                    height: retention.height,
+                },
+                None => ImageStatus::Pending,
+            },
+            Some(Phase::Retired) => match retention {
+                Some(retention) => ImageStatus::Ready {
+                    width: retention.width,
+                    height: retention.height,
+                },
+                None => ImageStatus::Pending,
+            },
             Some(Phase::Ready(data)) => {
                 let first = data.first();
                 ImageStatus::Ready {
@@ -681,3 +807,7 @@ impl Drop for Lease {
 #[cfg(test)]
 #[path = "../tests/images/guard.rs"]
 mod guard_tests;
+
+#[cfg(test)]
+#[path = "../tests/images/retire.rs"]
+mod retire_tests;

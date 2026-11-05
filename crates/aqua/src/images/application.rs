@@ -278,13 +278,14 @@ impl ImageState {
         images: &ImageAssets,
         other_bytes: u64,
         now: Instant,
+        keep: &mut HashSet<ImageId>,
     ) -> Result<Vec<ImageFrame>, ImageAssetError> {
         self.collect_visible(rt);
         let budget = images.budget();
         let released: Vec<_> = self
             .resident
             .keys()
-            .filter(|id| !self.visible.contains(id) || images.ready(self.source_id(**id)).is_none())
+            .filter(|id| !self.visible.contains(id) || !images.has_data(self.source_id(**id)))
             .copied()
             .collect();
         for id in released {
@@ -296,6 +297,9 @@ impl ImageState {
         for id in visible {
             let source = self.source_id(id);
             let Some(data) = images.ready(source) else {
+                if !self.resident.contains_key(&id) {
+                    images.revive(source);
+                }
                 continue;
             };
             let (index, _) = self.selected_frame(id, &data, now);
@@ -329,8 +333,11 @@ impl ImageState {
                 rgba: Arc::from(image.pixels()),
             });
             self.resident.insert(id, (index, bytes));
+            images.retire(source);
         }
-        self.started.retain(|id, _| images.ready(*id).is_some());
+        self.started.retain(|id, _| images.has_data(*id));
+        keep.extend(self.visible.iter().map(|id| self.source_id(*id)));
+        keep.extend(self.resident.keys().map(|id| self.source_id(*id)));
         match failure {
             Some(error) if frames.is_empty() => Err(error),
             _ => Ok(frames),
@@ -433,10 +440,20 @@ impl ManagedUiApp {
         let Some(rt) = runtime_of(ui, key) else {
             return Ok(Vec::new());
         };
-        states
+        let mut keep = HashSet::new();
+        let frames = states
             .entry(key)
             .or_default()
-            .synchronize(rt, images, other, now)
+            .synchronize(rt, images, other, now, &mut keep);
+        states
+            .iter()
+            .filter(|(other_key, _)| **other_key != key)
+            .for_each(|(_, state)| {
+                keep.extend(state.visible.iter().map(|id| state.source_id(*id)));
+                keep.extend(state.resident.keys().map(|id| state.source_id(*id)));
+            });
+        images.retire_idle(&keep, super::RETIRE_IDLE);
+        frames
     }
 }
 

@@ -135,6 +135,7 @@ pub struct Summary {
     started: Instant,
     samples: Vec<u64>,
     phase_max: [u64; Phase::ALL.len()],
+    phase_sum: [u64; Phase::ALL.len()],
     over_4: u32,
     over_8: u32,
     over_16: u32,
@@ -148,6 +149,7 @@ impl Summary {
             started: Instant::now(),
             samples: Vec::with_capacity(512),
             phase_max: [0; Phase::ALL.len()],
+            phase_sum: [0; Phase::ALL.len()],
             over_4: 0,
             over_8: 0,
             over_16: 0,
@@ -161,6 +163,7 @@ impl Summary {
         for phase in Phase::ALL {
             let index = phase.index();
             self.phase_max[index] = self.phase_max[index].max(frame.nanos[index]);
+            self.phase_sum[index] += frame.nanos[index];
         }
         self.over_4 += u32::from(work > 4_000_000);
         self.over_8 += u32::from(work > 8_333_000);
@@ -204,7 +207,21 @@ impl Summary {
             first = false;
             let _ = write!(line, "{}:{:.2}", phase.name(), millis(nanos));
         }
+        line.push_str("} phase_avg_ms={");
+        let mut first = true;
+        for phase in Phase::ALL {
+            let nanos = self.phase_sum[phase.index()] / count.max(1) as u64;
+            if self.phase_max[phase.index()] == 0 {
+                continue;
+            }
+            if !first {
+                line.push(',');
+            }
+            first = false;
+            let _ = write!(line, "{}:{:.3}", phase.name(), millis(nanos));
+        }
         line.push('}');
+        self.phase_sum = [0; Phase::ALL.len()];
         self.samples.clear();
         self.phase_max = [0; Phase::ALL.len()];
         self.over_4 = 0;

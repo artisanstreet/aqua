@@ -5,12 +5,12 @@ use std::time::Instant;
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
 use aqua_gpu_ref::conformance::assets::standard_uploads;
 use aqua_gpu_ref::conformance::cases::hex;
-use aqua_graph::{plan_paint, Extent};
+use aqua_graph::{Extent, plan_paint};
 use aqua_protocol::{FrameInputs, GpuBackend, SurfaceTarget};
-use aqua_verify::budget::{Measured, MemoryBudget, MIB, RENDERER_OFFSCREEN};
-use aqua_verify::heap::{live_bytes, CountingAllocator};
+use aqua_verify::budget::{MIB, Measured, MemoryBudget, RENDERER_OFFSCREEN};
+use aqua_verify::heap::{CountingAllocator, live_bytes};
 use aqua_verify::process::{sample, video_memory};
-use aqua_verify::stats::{jank, Distribution};
+use aqua_verify::stats::{Distribution, jank};
 use aqua_verify::workload::editor_workload;
 
 #[path = "support/exclusive.rs"]
@@ -44,8 +44,42 @@ fn stage(name: &'static str, high_performance: bool) -> Stage {
     }
 }
 
-fn run(preference: AdapterPreference, high_performance: bool, budget: Option<MemoryBudget>) {
+const PRIME_VARIABLE: &str = "AQUA_MEMORY_BUDGET_PRIME";
+
+fn prime_driver_cache(preference: AdapterPreference) {
+    let mut backend = OffscreenBackend::with_format(preference, SurfaceFormat::Bgra8Unorm)
+        .unwrap_or_else(|error| panic!("no adapter {preference:?}: {error}"));
+    let surface = backend
+        .create_surface(SurfaceTarget::Offscreen(SURFACE))
+        .unwrap();
+    backend.upload(standard_uploads()).unwrap();
+    let plan = plan_paint(SURFACE, hex("#000000", 1.0), &editor_workload(SURFACE)).unwrap();
+    backend.execute(&plan, &FrameInputs { surface }).unwrap();
+}
+
+fn prime_in_a_child_process(test: &str) {
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([test, "--exact", "--test-threads=1"])
+        .env(PRIME_VARIABLE, "1")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "driver cache priming run failed");
+}
+
+fn run(
+    test: &str,
+    preference: AdapterPreference,
+    high_performance: bool,
+    budget: Option<MemoryBudget>,
+) {
     exclusive::hold_exclusive();
+    if std::env::var_os(PRIME_VARIABLE).is_some() {
+        prime_driver_cache(preference);
+        return;
+    }
+    prime_in_a_child_process(test);
     let mut stages = vec![stage("process", high_performance)];
     let mut backend = match OffscreenBackend::with_format(preference, SurfaceFormat::Bgra8Unorm) {
         Ok(backend) => backend,
@@ -156,6 +190,7 @@ fn run(preference: AdapterPreference, high_performance: bool, budget: Option<Mem
 #[test]
 fn hardware_adapter_steady_state_does_not_grow() {
     run(
+        "hardware_adapter_steady_state_does_not_grow",
         AdapterPreference::HighPerformance,
         true,
         Some(RENDERER_OFFSCREEN),
@@ -164,5 +199,10 @@ fn hardware_adapter_steady_state_does_not_grow() {
 
 #[test]
 fn warp_steady_state_does_not_grow() {
-    run(AdapterPreference::Warp, false, None);
+    run(
+        "warp_steady_state_does_not_grow",
+        AdapterPreference::Warp,
+        false,
+        None,
+    );
 }

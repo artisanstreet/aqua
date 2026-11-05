@@ -4,6 +4,7 @@ use std::sync::Arc;
 use aqua_core::geometry::Rect;
 use aqua_core::scene::{GpuiTextColorMap, GpuiTextOpacityRange, GpuiTextShimmer, TextColorMap};
 use aqua_core::{GpuiHsla, GpuiTextColor, Oklch};
+use aqua_motion::{Cycle, CycleSet};
 use aqua_text::layout::LaidGlyph;
 
 use super::color::{self, Srgba};
@@ -191,68 +192,36 @@ impl TextStack {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Clock {
-    since: f64,
-    duration: f64,
-    delay: f64,
-    waiting: bool,
-}
-
 #[derive(Debug, Default)]
 pub struct ShimmerClocks {
-    clocks: HashMap<u64, Clock>,
-    seen: Vec<u64>,
+    cycles: CycleSet<u64>,
     phases: HashMap<u64, f32>,
 }
 
 impl ShimmerClocks {
     pub fn begin_frame(&mut self) {
         self.phases.clear();
-        self.seen.clear();
+        self.cycles.begin_frame();
     }
 
     pub fn end_frame(&mut self) {
-        let seen = &self.seen;
-        self.clocks.retain(|key, _| seen.contains(key));
+        self.cycles.end_frame();
     }
 
     #[must_use]
     pub fn active(&self) -> bool {
-        !self.clocks.is_empty()
+        self.cycles.active()
     }
 
     pub fn phase(&mut self, shimmer: &GpuiTextShimmer, now: f64) -> f32 {
         if let Some(phase) = self.phases.get(&shimmer.key) {
             return *phase;
         }
-        self.seen.push(shimmer.key);
-        let duration = shimmer.duration.as_secs_f64();
-        let delay = shimmer.delay.as_secs_f64();
-        let clock = self.clocks.entry(shimmer.key).or_insert(Clock {
-            since: now,
-            duration,
-            delay,
-            waiting: delay > 0.0,
-        });
-        clock.duration = duration;
-        clock.delay = delay;
-        let elapsed = (now - clock.since).max(0.0);
-        match (clock.waiting, elapsed) {
-            (true, elapsed) if elapsed >= clock.delay => {
-                clock.waiting = false;
-                clock.since = now;
-            }
-            (false, elapsed) if elapsed >= clock.duration => {
-                clock.since = now;
-                clock.waiting = clock.delay > 0.0;
-            }
-            _ => {}
-        }
-        let phase = match clock.waiting || clock.duration <= 0.0 {
-            true => 0.0,
-            false => ((now - clock.since).max(0.0) / clock.duration).min(1.0) as f32,
+        let cycle = Cycle::Sweep {
+            delay: shimmer.delay.as_secs_f64(),
+            duration: shimmer.duration.as_secs_f64(),
         };
+        let phase = self.cycles.sample(shimmer.key, cycle, now);
         self.phases.insert(shimmer.key, phase);
         phase
     }

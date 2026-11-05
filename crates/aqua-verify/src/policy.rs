@@ -169,6 +169,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "taskbar",
             "NativeHandle",
             "now",
+            "pump_sent_messages",
             "quit",
             "run",
             "schedule",

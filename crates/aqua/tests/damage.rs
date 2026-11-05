@@ -190,25 +190,127 @@ fn moving_a_group_damages_both_extents() {
     let Plan::Regions(regions) = plan else {
         panic!("group move should stay partial");
     };
-    assert!(regions
-        .iter()
-        .all(|r| !(r.x < 300.0 && r.right() > 300.0 && r.y < 200.0 && r.bottom() > 200.0)));
+    assert!(
+        regions
+            .iter()
+            .all(|r| !(r.x < 300.0 && r.right() > 300.0 && r.y < 200.0 && r.bottom() > 200.0))
+    );
 }
 
-#[test]
-fn blurred_scenes_repaint_fully_when_anything_changes() {
-    let mut rig = rig();
-    rig.scene.insert(DisplayItem::BackdropBlur {
+fn blur_at(x: f32, y: f32) -> DisplayItem {
+    DisplayItem::BackdropBlur {
         bounds: Rect {
-            x: 200.0,
-            y: 200.0,
+            x,
+            y,
             w: 50.0,
             h: 50.0,
         },
         radius: 8.0,
-    });
+    }
+}
+
+#[test]
+fn damage_that_reaches_a_backdrop_blur_repaints_fully() {
+    let mut rig = rig();
+    rig.scene.insert(blur_at(200.0, 200.0));
+    settle(&mut rig, 1.0);
+    rig.scene.update(rig.blocks[0], block(200.0, 190.0));
+    assert_eq!(settle(&mut rig, 1.0), Plan::Full);
+}
+
+#[test]
+fn damage_far_from_a_backdrop_blur_stays_partial() {
+    let mut rig = rig();
+    rig.scene.insert(blur_at(200.0, 200.0));
     settle(&mut rig, 1.0);
     rig.scene.update(rig.blocks[0], block(0.0, 100.0));
+    assert!(matches!(settle(&mut rig, 1.0), Plan::Regions(_)));
+}
+
+fn pulse() -> DisplayItem {
+    DisplayItem::PushGpuiQuadPulse(aqua_core::scene::GpuiQuadPulse {
+        start_ms: 0,
+        period_ms: 1600,
+        min_opacity: 0.4,
+    })
+}
+
+fn quad(x: f32, y: f32) -> DisplayItem {
+    DisplayItem::Quad {
+        bounds: Rect {
+            x,
+            y,
+            w: 30.0,
+            h: 30.0,
+        },
+        corners: Default::default(),
+        fill: Oklch::from_hex("#ff8800").unwrap(),
+        border_widths: Default::default(),
+        border_color: Oklch::TRANSPARENT,
+        dashed: false,
+    }
+}
+
+#[test]
+fn a_pulsing_quad_damages_only_its_own_footprint_every_frame() {
+    let mut rig = rig();
+    rig.scene.insert(pulse());
+    rig.scene.insert(quad(300.0, 200.0));
+    rig.scene.insert(DisplayItem::PopGpuiQuadPulse);
+    assert_eq!(settle(&mut rig, 1.0), Plan::Full);
+    let plan = settle(&mut rig, 1.0);
+    let Plan::Regions(regions) = &plan else {
+        panic!("expected regions, got {plan:?}")
+    };
+    assert!(covers(
+        &plan,
+        Rect {
+            x: 300.0,
+            y: 200.0,
+            w: 30.0,
+            h: 30.0
+        }
+    ));
+    let area: f32 = regions.iter().map(|r| r.w * r.h).sum();
+    assert!(area < 40.0 * 40.0, "{area}");
+    assert!(
+        regions
+            .iter()
+            .all(|r| !(r.x < 100.0 && r.right() > 100.0 && r.y < 50.0 && r.bottom() > 50.0))
+    );
+}
+
+#[test]
+fn a_pulse_under_a_transform_damages_the_transformed_footprint() {
+    let mut rig = rig();
+    rig.scene
+        .insert(DisplayItem::PushTransform(Transform2D::translate(5.0, 7.0)));
+    rig.scene.insert(pulse());
+    rig.scene.insert(quad(300.0, 200.0));
+    rig.scene.insert(DisplayItem::PopGpuiQuadPulse);
+    rig.scene.insert(DisplayItem::PopTransform);
+    settle(&mut rig, 1.0);
+    let plan = settle(&mut rig, 1.0);
+    assert!(matches!(plan, Plan::Regions(_)), "{plan:?}");
+    assert!(covers(
+        &plan,
+        Rect {
+            x: 305.0,
+            y: 207.0,
+            w: 30.0,
+            h: 30.0
+        }
+    ));
+}
+
+#[test]
+fn a_pulse_behind_a_blur_repaints_fully() {
+    let mut rig = rig();
+    rig.scene.insert(blur_at(290.0, 190.0));
+    rig.scene.insert(pulse());
+    rig.scene.insert(quad(300.0, 200.0));
+    rig.scene.insert(DisplayItem::PopGpuiQuadPulse);
+    settle(&mut rig, 1.0);
     assert_eq!(settle(&mut rig, 1.0), Plan::Full);
 }
 
@@ -217,7 +319,7 @@ mod differential {
     use aqua_core::geometry::Transform2D;
     use aqua_core::{DisplayItem, NodeId, Oklch, Rect, Size};
     use aqua_gpu_ref::RefBackend;
-    use aqua_graph::{plan_paint, Extent};
+    use aqua_graph::{Extent, plan_paint};
     use aqua_protocol::{FrameInputs, GpuBackend, GpuReadback, PresentHint, SurfaceTarget};
     use aqua_scene::Scene;
     use aqua_text::SharedRuns;

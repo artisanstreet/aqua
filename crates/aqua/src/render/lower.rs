@@ -1,30 +1,32 @@
+use aqua_core::hash::FastMap;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, LazyLock};
 use std::time::Instant as WallInstant;
 
-use aqua_core::geometry::{snap_device_pixel, snap_device_stroke, CornerRadii, Rect};
+use aqua_core::geometry::{CornerRadii, Rect, snap_device_pixel, snap_device_stroke};
 use aqua_core::image::ImagePlacement;
-use aqua_core::scene::{DisplayItem, GpuiQuadPulse, ShadowLayer, TextRasterMode};
+use aqua_core::scene::{DisplayItem, ShadowLayer, TextRasterMode};
 use aqua_core::{GpuiBackground, GpuiHsla, Oklch, Point, Size, Transform2D};
 use aqua_graph::tone::luminance;
 use aqua_graph::{
-    plan_paint_with, BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientQuad,
-    GradientStop, Image, Linear2, PaintCommand, PlanError, PlanLimits, Quad, Shadow, SlugInstance,
-    SlugRun,
+    BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientQuad, GradientStop, Image,
+    Linear2, PaintCommand, PlanError, PlanLimits, Quad, Shadow, SlugInstance, SlugRun,
+    plan_paint_with,
 };
 use aqua_media::atlas::{AtlasConfig, ImageKey, PageId, Placement, Slot, StreamBudget};
 use aqua_media::reduce::{reduce, reduction_level};
 use aqua_media::residency::{GlyphSlot, Residency, ResidencyConfig, VectorMode};
 use aqua_media::upload::texture_handle;
+use aqua_motion::{Cycle, CycleSet};
 use aqua_protocol::{Instant, UploadBatch};
 use aqua_scene::Scene;
 use aqua_text::layout::LaidOut;
-use aqua_text::raster::{quantize_size, quantize_x, raster_key, SUBPIXEL_STEPS};
+use aqua_text::raster::{SUBPIXEL_STEPS, quantize_size, quantize_x, raster_key};
 use aqua_text::residency::GlyphResolver;
 use aqua_text::runs::RunId;
-use aqua_text::slug::{SlugCache, SlugStore, StoreLookup, STORE_HANDLE};
+use aqua_text::slug::{STORE_HANDLE, SlugCache, SlugStore, StoreLookup};
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_transport::{LowerContext, Lowered as Commands, TrimRequest};
 
@@ -36,7 +38,7 @@ use super::mesh;
 use super::shape::{self, Border, Fidelity, Paint, Radii, ShadowSpec, Sides};
 use super::text::{ShimmerClocks, TextScope, TextStack};
 use super::transition::{Phase, Settings, Transition};
-use super::vector::{gradient_axis, rotation_steps, VectorCache};
+use super::vector::{VectorCache, gradient_axis, rotation_steps};
 
 const MESH_TAG: u64 = 0xC000_0000_0000_0000;
 const ROUNDED_CLIP_AREA_CAP: f32 = 0.75;
@@ -45,13 +47,6 @@ const OPAQUE_FILL: f32 = 0.98;
 const FILL_MEMORY: usize = 256;
 const FILL_SEARCH: usize = 64;
 const RUN_CACHE_BYTES: usize = 3 << 20;
-
-static PULSE_EPOCH: LazyLock<WallInstant> = LazyLock::new(WallInstant::now);
-
-#[must_use]
-pub fn gpui_pulse_clock_ms() -> u32 {
-    PULSE_EPOCH.elapsed().as_millis() as u32
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Unsupported {
@@ -76,6 +71,7 @@ pub struct LowerReport {
     pub glyph_rasterized: u32,
     pub slug_created: u32,
     pub slug_upload_bytes: u64,
+    pub culled: u32,
     pub pulsing: bool,
     pub shimmering: bool,
     pub skipped: BTreeMap<Unsupported, u32>,
@@ -138,7 +134,7 @@ struct RunEntry {
 
 #[derive(Default)]
 struct RunCache {
-    entries: HashMap<u64, RunEntry>,
+    entries: FastMap<u64, RunEntry>,
     bytes: usize,
 }
 
@@ -211,7 +207,8 @@ struct Walk {
     report: LowerReport,
     surface: Rect,
     now_secs: f64,
-    pulses: Vec<GpuiQuadPulse>,
+    pulses: Vec<f32>,
+    item: (u32, u32),
     lifted: bool,
     fills: Vec<(Rect, f32)>,
     clear_luminance: Option<f32>,
@@ -291,15 +288,11 @@ impl Walk {
 
     fn pulse_factor(&mut self) -> f32 {
         match self.pulses.last().copied() {
-            Some(pulse) if pulse.period_ms != 0 => {
+            Some(factor) => {
                 self.report.pulsing = true;
-                let elapsed = gpui_pulse_clock_ms().wrapping_sub(pulse.start_ms) % pulse.period_ms;
-                let progress = elapsed as f32 / pulse.period_ms as f32;
-                let swing = (progress * std::f32::consts::TAU).cos() * 0.5 + 0.5;
-                let minimum = pulse.min_opacity.clamp(0.0, 1.0);
-                minimum + (1.0 - minimum) * swing
+                factor
             }
-            _ => 1.0,
+            None => 1.0,
         }
     }
 }
@@ -319,6 +312,7 @@ pub struct Lowering {
     text: TextStack,
     run_cache: RunCache,
     shimmer: ShimmerClocks,
+    pulse_cycles: CycleSet<(u32, u32)>,
     externals: Option<Receiver<ExternalUpdate>>,
     recovery: RecoverySignal,
     stats: Option<Arc<RenderStats>>,
@@ -326,7 +320,9 @@ pub struct Lowering {
     clear: Oklch,
     last_now: Instant,
     last_report: LowerReport,
+    cull: Option<Rect>,
     last_commands: Vec<PaintCommand>,
+    spare_commands: Vec<PaintCommand>,
     begun: Option<Settings>,
     transition: Option<Transition>,
     outline_text: bool,
@@ -508,6 +504,7 @@ impl Lowering {
             text: TextStack::default(),
             run_cache: RunCache::default(),
             shimmer: ShimmerClocks::default(),
+            pulse_cycles: CycleSet::new(),
             externals: None,
             recovery: RecoverySignal::default(),
             stats: None,
@@ -515,7 +512,9 @@ impl Lowering {
             clear: Oklch::TRANSPARENT,
             last_now: Instant::ZERO,
             last_report: LowerReport::default(),
+            cull: None,
             last_commands: Vec::new(),
+            spare_commands: Vec::new(),
             begun: None,
             transition: None,
             outline_text: false,
@@ -603,6 +602,10 @@ impl Lowering {
         &self.residency
     }
 
+    pub fn set_cull(&mut self, region: Option<Rect>) {
+        self.cull = region;
+    }
+
     pub fn at(&mut self, now: Instant) -> &mut Self {
         self.last_now = now;
         self
@@ -618,15 +621,19 @@ impl Lowering {
         let started = WallInstant::now();
         self.last_now = now;
         let mut previous = std::mem::take(&mut self.last_commands);
+        let mut buffer = std::mem::take(&mut self.spare_commands);
+        buffer.clear();
+        buffer.reserve(scene.len() * 2);
         self.residency.begin_frame();
         self.shimmer.begin_frame();
+        self.pulse_cycles.begin_frame();
         self.text.clear();
         let extent = physical_extent(size, scale);
         let mut walk = Walk {
             base: Affine::device(scale),
             transforms: Vec::new(),
             open: Vec::new(),
-            out: Vec::with_capacity(scene.len() * 2),
+            out: buffer,
             report: LowerReport::default(),
             surface: Rect {
                 x: 0.0,
@@ -636,6 +643,7 @@ impl Lowering {
             },
             now_secs: now.as_secs_f64(),
             pulses: Vec::new(),
+            item: (0, 0),
             lifted: false,
             fills: Vec::new(),
             clear_luminance: Some(self.clear)
@@ -645,8 +653,9 @@ impl Lowering {
                     luminance([r, g, b])
                 }),
         };
-        for (_, item) in scene.ordered() {
+        for (id, item) in scene.ordered() {
             walk.report.items += 1;
+            walk.item = (id.raw().index, id.raw().generation);
             self.emit(item, &mut walk);
         }
         while let Some(kind) = walk.open.pop() {
@@ -658,9 +667,21 @@ impl Lowering {
         }
         walk.report.shimmering = self.shimmer.active();
         self.shimmer.end_frame();
+        self.pulse_cycles.end_frame();
         self.adopt_previous(&previous);
-        previous.clone_from(&walk.out);
-        self.last_commands = previous;
+        if self.transition.is_some() {
+            self.last_commands.clone_from(&walk.out);
+        }
+        previous.clear();
+        self.spare_commands = previous;
+        if let Some(region) = self.cull {
+            walk.report.culled = super::cull::cull(&mut walk.out, region);
+            if let Some(stats) = &self.stats {
+                stats
+                    .culled_commands
+                    .fetch_add(u64::from(walk.report.culled), Ordering::Relaxed);
+            }
+        }
         walk.report.shimmering |= self.overlay_transition(&mut walk.out, walk.surface, now);
         walk.report.commands = walk.out.len() as u32;
         let inserts_before = self.glyph_inserts;
@@ -698,7 +719,10 @@ impl Lowering {
                     self.slug_store.texel_count() * 16,
                     self.slug_store.resident_bytes(),
                     resident.retained_source_bytes,
-                    self.retained.values().map(|image| image.premultiplied.len()).sum::<usize>(),
+                    self.retained
+                        .values()
+                        .map(|image| image.premultiplied.len())
+                        .sum::<usize>(),
                     resident.streaming_bytes,
                 );
             }
@@ -729,7 +753,9 @@ impl Lowering {
     ) -> Result<Lowered, PlanError> {
         let now = self.last_now;
         let (commands, uploads, report) = self.commands(scene, size, scale, now);
-        let plan = plan_paint_with(physical_extent(size, scale), self.clear, &commands, limits)?;
+        let planned = plan_paint_with(physical_extent(size, scale), self.clear, &commands, limits);
+        self.retain_frame(commands);
+        let plan = planned?;
         Ok(Lowered {
             uploads,
             plan,
@@ -1039,7 +1065,14 @@ impl Lowering {
                 mesh,
                 style,
             } => self.emit_mesh(snapped(at.rect(*bounds)), *corners, mesh, style, s, walk),
-            DisplayItem::PushGpuiQuadPulse(pulse) => walk.pulses.push(*pulse),
+            DisplayItem::PushGpuiQuadPulse(pulse) => {
+                let cycle = Cycle::Pulse {
+                    period: f64::from(pulse.period_ms) / 1000.0,
+                    floor: pulse.min_opacity,
+                };
+                let factor = self.pulse_cycles.sample(walk.item, cycle, walk.now_secs);
+                walk.pulses.push(factor)
+            }
             DisplayItem::PopGpuiQuadPulse => {
                 if walk.pulses.pop().is_none() {
                     walk.skip(Unsupported::UnbalancedScope);
@@ -1574,6 +1607,12 @@ impl Lowering {
         self.transition.is_some() || self.begun.is_some()
     }
 
+    pub fn retain_frame(&mut self, commands: Vec<PaintCommand>) {
+        if self.transition.is_none() {
+            self.last_commands = commands;
+        }
+    }
+
     fn adopt_previous(&mut self, previous: &[PaintCommand]) {
         if let Some(settings) = self.begun.take() {
             self.transition = Some(Transition::begin(previous.to_vec(), settings));
@@ -1746,6 +1785,10 @@ impl aqua_transport::Lowering for Lowering {
 
     fn sync(&mut self) {
         self.drain_externals();
+    }
+
+    fn reclaim(&mut self, commands: Vec<PaintCommand>) {
+        self.retain_frame(commands);
     }
 
     fn device_recovered(&mut self) {

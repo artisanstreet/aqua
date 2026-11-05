@@ -24,7 +24,7 @@ use super::hook::TsfHook;
 use super::inspector::HostInspector;
 use super::wakes::{self, WakeLedger};
 use super::window::{UiaSink, Win32Window};
-use crate::coalesce::{merge, Coalescible, Held, Merge};
+use crate::coalesce::{Coalescible, Held, Merge, merge};
 use crate::inbox::AquaUserEvent;
 use crate::runtime::{Application, Aqua, ExternalFileDrag};
 
@@ -37,6 +37,7 @@ struct Host<A: Application> {
     dialogs: Vec<(AquaWindowId, RequestId, DialogJob)>,
     inspector: Option<HostInspector>,
     pending: Option<Held>,
+    resizes: HashMap<AquaWindowId, (u32, u32)>,
     occlusion: HashMap<AquaWindowId, Occlusion>,
     wakes: Option<WakeLedger>,
 }
@@ -341,6 +342,27 @@ impl<A: Application + 'static> Host<A> {
         }
     }
 
+    fn dispatch_resizes(&mut self, gated_at: Option<Instant>) {
+        let ids: Vec<AquaWindowId> = self.resizes.keys().copied().collect();
+        for id in ids {
+            let gated = gated_at.is_some_and(|now| {
+                self.aqua
+                    .scheduler
+                    .resize_gate(id)
+                    .is_some_and(|gate| now < gate)
+            });
+            if gated {
+                continue;
+            }
+            let Some((width, height)) = self.resizes.remove(&id) else {
+                continue;
+            };
+            let scale = self.shell.get(&id).map_or(1.0, |window| window.scale());
+            let size = LogicalSize::new(f64::from(width) / scale, f64::from(height) / scale);
+            self.window_event(id, WindowEvent::Resized(id, size));
+        }
+    }
+
     fn queue(&mut self, next: Held) {
         match self.pending.take() {
             None => self.pending = Some(next),
@@ -386,10 +408,23 @@ impl<A: Application + 'static> Handler for Host<A> {
         if let Some(ledger) = &mut self.wakes {
             ledger.message(message_label(&event));
         }
+        if !matches!(
+            event,
+            ShellEvent::Resized { .. }
+                | ShellEvent::Maximized(_)
+                | ShellEvent::Moved { .. }
+                | ShellEvent::Redraw
+                | ShellEvent::Covered(_)
+                | ShellEvent::Minimized(_)
+                | ShellEvent::PointerEntered
+                | ShellEvent::PointerLeft
+                | ShellEvent::RawMouse { .. }
+        ) {
+            self.dispatch_resizes(None);
+        }
         match event {
             ShellEvent::Resized { width, height } if width > 0 && height > 0 => {
-                let size = LogicalSize::new(f64::from(width) / scale, f64::from(height) / scale);
-                self.window_event(id, WindowEvent::Resized(id, size));
+                self.resizes.insert(id, (width, height));
             }
             ShellEvent::Resized { .. } => {}
             ShellEvent::ScaleChanged { scale } => {
@@ -398,6 +433,7 @@ impl<A: Application + 'static> Handler for Host<A> {
             ShellEvent::CloseRequested => self.window_event(id, WindowEvent::CloseRequested(id)),
             ShellEvent::Destroyed => {
                 self.occlusion.remove(&id);
+                self.resizes.remove(&id);
                 self.window_event(id, WindowEvent::Destroyed(id))
             }
             ShellEvent::Focused(focused) => {
@@ -443,6 +479,7 @@ impl<A: Application + 'static> Handler for Host<A> {
         self.aqua.wakeups += 1;
         let presented_before = self.aqua.frames_presented;
         self.flush_pending();
+        self.dispatch_resizes(Some(now));
         self.aqua.drain_text(&mut self.app);
         self.aqua.draw_input_frames(&mut self.app, now);
         self.aqua.pump_inbox(&mut self.app);
@@ -472,7 +509,12 @@ impl<A: Application + 'static> Handler for Host<A> {
             .smoke_deadline
             .map(|deadline| now + deadline.saturating_duration_since(std::time::Instant::now()));
         let dialogs = (!self.dialogs.is_empty()).then(|| now + Duration::from_millis(50));
-        let next = [self.aqua.next_wake(now), smoke, dialogs]
+        let resize_gate = self
+            .resizes
+            .keys()
+            .filter_map(|id| self.aqua.scheduler.resize_gate(*id))
+            .min();
+        let next = [self.aqua.next_wake(now), smoke, dialogs, resize_gate]
             .into_iter()
             .flatten()
             .min();
@@ -489,6 +531,7 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
         return Ok(());
     }
     d3d12::prewarm();
+    aqua_core::checkpoint::install(aqua_shell_win32::pump_sent_messages);
     super::opt_out_of_throttling();
     super::raise_thread_priority();
     aqua.mark_native_loop();
@@ -502,6 +545,7 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
         dialogs: Vec::new(),
         inspector: HostInspector::from_env(),
         pending: None,
+        resizes: HashMap::new(),
         occlusion: HashMap::new(),
         wakes: wakes::enabled().then(|| WakeLedger::new(inbox)),
     };

@@ -20,6 +20,7 @@ pub struct RunCause {
 
 struct Ledger {
     window: Instant,
+    baseline: [u64; 3],
     runs: BTreeMap<RunCause, u32>,
 }
 
@@ -52,7 +53,7 @@ fn flags(cause: &RunCause) -> String {
     .join("+")
 }
 
-pub fn record(cause: RunCause) {
+pub fn record(cause: RunCause, totals: [u64; 3]) {
     if !enabled() {
         return;
     }
@@ -60,6 +61,7 @@ pub fn record(cause: RunCause) {
         let mut slot = cell.borrow_mut();
         let ledger = slot.get_or_insert_with(|| Ledger {
             window: Instant::now(),
+            baseline: totals,
             runs: BTreeMap::new(),
         });
         *ledger.runs.entry(cause).or_default() += 1;
@@ -74,6 +76,9 @@ pub fn record(cause: RunCause) {
             .map(|(cause, count)| format!("{}={:.1}", flags(cause), f64::from(*count) / secs))
             .collect();
         eprintln!("aqua-render-runs: secs={secs:.2} [{}]", causes.join(" "));
+        let [full, partial, culled] = [0, 1, 2].map(|i| totals[i] - ledger.baseline[i]);
+        eprintln!("aqua-render-damage: full={full} partial={partial} culled_commands={culled}");
+        ledger.baseline = totals;
         ledger.runs.clear();
         ledger.window = Instant::now();
     });

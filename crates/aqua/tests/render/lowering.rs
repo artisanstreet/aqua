@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use aqua::UiApp;
 use aqua::render::lower::Lowering;
 use aqua::ui::Text;
-use aqua::UiApp;
 use aqua_core::geometry::{CornerRadii, Insets, Rect};
 use aqua_core::gpui_mesh::{GpuiMesh, GpuiMeshStyle, GpuiMeshVertex};
 use aqua_core::scene::{DisplayItem, GpuiShadowLayer, ShadowLayer};
@@ -509,11 +509,13 @@ fn trimming_everything_releases_pages_that_the_last_frame_did_not_use() {
         aqua_transport::Lowering::trim(&mut lowering, aqua_transport::TrimRequest::Everything);
     assert!(freed > 0);
     let after = lowered(&mut lowering, &empty);
-    assert!(after
-        .uploads
-        .textures
-        .iter()
-        .any(|upload| matches!(upload.op, aqua_protocol::TextureOp::Release)));
+    assert!(
+        after
+            .uploads
+            .textures
+            .iter()
+            .any(|upload| matches!(upload.op, aqua_protocol::TextureOp::Release))
+    );
 }
 
 fn resident_images(lowering: &Lowering) -> Vec<aqua_media::atlas::ImageKey> {
@@ -546,11 +548,20 @@ fn image_item(bounds: Rect) -> DisplayItem {
 fn images_drawn_small_upload_a_reduced_copy_and_release_every_level() {
     let mut lowering = Lowering::new(SharedFonts::new(), SharedRuns::new());
     lowering.register_image(7, 128, 128, &vec![200; 128 * 128 * 4]);
-    lowered(&mut lowering, &scene_of(vec![image_item(rect(0.0, 0.0, 16.0, 16.0))]));
+    lowered(
+        &mut lowering,
+        &scene_of(vec![image_item(rect(0.0, 0.0, 16.0, 16.0))]),
+    );
     let small = resident_images(&lowering);
     assert_eq!(small.len(), 1);
-    assert_eq!((small[0].frame, small[0].width, small[0].height), (3, 16, 16));
-    lowered(&mut lowering, &scene_of(vec![image_item(rect(0.0, 0.0, 128.0, 128.0))]));
+    assert_eq!(
+        (small[0].frame, small[0].width, small[0].height),
+        (3, 16, 16)
+    );
+    lowered(
+        &mut lowering,
+        &scene_of(vec![image_item(rect(0.0, 0.0, 128.0, 128.0))]),
+    );
     let both = resident_images(&lowering);
     assert!(both.iter().any(|key| key.frame == 0 && key.width == 128));
     assert!(both.iter().any(|key| key.frame == 3));

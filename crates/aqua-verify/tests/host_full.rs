@@ -4,10 +4,10 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant as WallInstant};
 
+use aqua::UiApp;
 use aqua::render::host::{FrameTarget, GpuFrames};
 use aqua::render::link::InitFactory;
 use aqua::render::lower::Lowering;
-use aqua::UiApp;
 use aqua::{Aqua, AquaConfig};
 use aqua_core::{InputEvent, Point, PointerButton, PointerEvent, PointerKind, ScrollDelta};
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
@@ -21,12 +21,12 @@ use aqua_protocol::{
 use aqua_runtime::RenderSide;
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_verify::fingerprint;
-use aqua_verify::heap::{measure, CountingAllocator};
+use aqua_verify::heap::{CountingAllocator, measure};
 
 #[path = "support/ui.rs"]
 mod ui;
 
-use ui::{editor_like, observed, ROW};
+use ui::{ROW, editor_like, observed};
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -35,6 +35,7 @@ const WIDTH: u32 = 640;
 const HEIGHT: u32 = 480;
 const NOTCH_UNITS: f32 = 16.0;
 const PROBE_COLUMN: usize = 600;
+const FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -170,7 +171,7 @@ fn open(kind: Kind) -> Option<Host> {
             aqua.runs().clone(),
             sink.clone(),
         ),
-        Duration::from_millis(2),
+        FRAME_INTERVAL,
     );
     assert!(attached);
     aqua.dispatch_window_event(
@@ -406,6 +407,7 @@ fn scroll_glide_on_the_full_host_advances_monotonically_without_jumps() {
         host.wheel(NOTCH_UNITS);
         assert!(host.settle(Duration::from_secs(20)));
         let frames = host.since(from);
+        let measured = host.since(from - 1);
         let counted = host
             .aqua
             .render_stats(host.id)
@@ -413,7 +415,11 @@ fn scroll_glide_on_the_full_host_advances_monotonically_without_jumps() {
             .frames
             .load(Ordering::Relaxed)
             - counted_from;
-        assert_eq!(counted, frames.len() as u64, "{kind:?}: frame counters disagree");
+        assert_eq!(
+            counted,
+            frames.len() as u64,
+            "{kind:?}: frame counters disagree"
+        );
         let paced = kind != Kind::Reference;
         assert!(
             !paced || (5..=30).contains(&frames.len()),
@@ -421,7 +427,7 @@ fn scroll_glide_on_the_full_host_advances_monotonically_without_jumps() {
             frames.len()
         );
         eprintln!("after transition {:?}", transition(&host.last().column));
-        let steps: Vec<f32> = glide_steps(&frames)
+        let steps: Vec<f32> = glide_steps(&measured)
             .into_iter()
             .filter(|step| step.abs() > 0.0)
             .collect();

@@ -1,6 +1,6 @@
+use aqua::UiApp;
 use aqua::render::lower::{Lowering, RecoverySignal};
 use aqua::ui::Text;
-use aqua::UiApp;
 use aqua_core::geometry::{CornerRadii, Insets, Rect};
 use aqua_core::scene::{DisplayItem, ShadowLayer};
 use aqua_core::{Oklch, Size};
@@ -11,7 +11,7 @@ use aqua_protocol::{
     Instant, PresentHint, PresentTimes, RecoveryReport, RenderCommand, RenderInput, SceneDiff,
     SurfaceId, SurfacePixels, SurfaceTarget, UploadBatch,
 };
-use aqua_runtime::{emit_scene_diff, RenderSide};
+use aqua_runtime::{RenderSide, emit_scene_diff};
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_transport::{GpuRenderHost, HostConfig, Inspector, RenderHost, SharedClock};
 

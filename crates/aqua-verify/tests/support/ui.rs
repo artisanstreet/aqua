@@ -5,7 +5,7 @@ use aqua_core::Oklch;
 use aqua_protocol::geometry::{AquaWindowId, LogicalSize};
 use aqua_protocol::window::ObservedWindowState;
 use aqua_ui::element::ui::{Box as UiBox, Scroll, Text as UiText};
-use aqua_ui::style::{px, Axis, Style};
+use aqua_ui::style::{Axis, Style, px};
 
 pub const ROW: f32 = 64.0;
 pub const ROWS: usize = 400;

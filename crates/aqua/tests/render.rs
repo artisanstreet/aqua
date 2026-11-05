@@ -1,5 +1,9 @@
+#[path = "render/animation.rs"]
+mod animation;
 #[path = "render/color.rs"]
 mod color;
+#[path = "render/cull.rs"]
+mod cull;
 #[path = "render/host.rs"]
 mod host;
 #[path = "render/lowering.rs"]

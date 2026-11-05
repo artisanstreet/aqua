@@ -10,6 +10,7 @@ struct Slot {
     key: AtomicU32,
     live: AtomicI64,
     allocations: AtomicU64,
+    blocks: AtomicI64,
     frames: [AtomicUsize; DEPTH],
 }
 
@@ -18,6 +19,7 @@ static TABLE: [Slot; SLOTS] = [const {
         key: AtomicU32::new(0),
         live: AtomicI64::new(0),
         allocations: AtomicU64::new(0),
+        blocks: AtomicI64::new(0),
         frames: [const { AtomicUsize::new(0) }; DEPTH],
     }
 }; SLOTS];
@@ -92,6 +94,7 @@ fn account(key: u32, size: usize, sign: i64) {
     }
     if let Some((slot, _)) = slot_for(key) {
         slot.live.fetch_add(sign * size as i64, Ordering::Relaxed);
+        slot.blocks.fetch_add(sign, Ordering::Relaxed);
         if sign > 0 {
             slot.allocations.fetch_add(1, Ordering::Relaxed);
         }
@@ -115,22 +118,22 @@ pub fn site_report() -> String {
             (
                 slot.live.load(Ordering::Relaxed),
                 slot.allocations.load(Ordering::Relaxed),
+                slot.blocks.load(Ordering::Relaxed),
                 frames,
             )
         })
         .collect::<Vec<_>>();
-    rows.sort_by_key(|(live, _, _)| std::cmp::Reverse(*live));
+    rows.sort_by_key(|(live, _, _, _)| std::cmp::Reverse(*live));
     let header = format!(
-        "aqua-heap-chains probe_live={} live_total={} base={base:x}",
+        "aqua-heap-chains probe_live={} live_total={} live_blocks={} base={base:x}",
         PROBE_LIVE.load(Ordering::Relaxed),
-        LIVE.load(Ordering::Relaxed)
+        LIVE.load(Ordering::Relaxed),
+        rows.iter().map(|(_, _, blocks, _)| *blocks).sum::<i64>()
     );
     std::iter::once(header)
-        .chain(
-            rows.into_iter().map(|(live, count, frames)| {
-                format!("chain live={live} allocs={count} rel={frames}")
-            }),
-        )
+        .chain(rows.into_iter().map(|(live, count, blocks, frames)| {
+            format!("chain live={live} allocs={count} blocks={blocks} rel={frames}")
+        }))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -246,7 +249,7 @@ pub struct ProcessHeap {
 
 #[cfg(windows)]
 pub fn process_heap() -> Option<ProcessHeap> {
-    use windows::Win32::System::Memory::{GetProcessHeap, HeapSummary, HEAP_SUMMARY};
+    use windows::Win32::System::Memory::{GetProcessHeap, HEAP_SUMMARY, HeapSummary};
     let heap = unsafe { GetProcessHeap() }.ok()?;
     let mut summary = HEAP_SUMMARY {
         cb: std::mem::size_of::<HEAP_SUMMARY>() as u32,
@@ -271,7 +274,7 @@ pub fn memory_report_enabled() -> bool {
 #[cfg(windows)]
 pub fn return_memory_to_os() {
     use windows::Win32::System::Memory::{
-        GetProcessHeap, HeapCompact, HeapOptimizeResources, HeapSetInformation, HEAP_FLAGS,
+        GetProcessHeap, HEAP_FLAGS, HeapCompact, HeapOptimizeResources, HeapSetInformation,
     };
     #[repr(C)]
     struct HeapOptimizeResourcesInformation {
@@ -311,7 +314,7 @@ pub fn return_memory_to_os() {
 #[cfg(windows)]
 fn trim_working_set() {
     use windows::Win32::System::Memory::{
-        SetProcessWorkingSetSizeEx, SETPROCESSWORKINGSETSIZEEX_FLAGS,
+        SETPROCESSWORKINGSETSIZEEX_FLAGS, SetProcessWorkingSetSizeEx,
     };
     use windows::Win32::System::Threading::GetCurrentProcess;
     let _ = unsafe {
@@ -345,8 +348,8 @@ pub struct AddressSpaceReport {
 #[cfg(windows)]
 pub fn address_space() -> AddressSpaceReport {
     use windows::Win32::System::Memory::{
-        GetProcessHeaps, HeapSummary, VirtualQuery, HEAP_SUMMARY, MEMORY_BASIC_INFORMATION,
-        MEM_COMMIT, MEM_PRIVATE,
+        GetProcessHeaps, HEAP_SUMMARY, HeapSummary, MEM_COMMIT, MEM_PRIVATE,
+        MEMORY_BASIC_INFORMATION, VirtualQuery,
     };
     let mut regions = Vec::new();
     let mut cursor = 0usize;
@@ -403,6 +406,98 @@ pub fn address_space() -> AddressSpaceReport {
 #[cfg(not(windows))]
 pub fn address_space() -> AddressSpaceReport {
     AddressSpaceReport::default()
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HeapWalkClass {
+    pub blocks: u64,
+    pub bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HeapWalkReport {
+    pub busy: HeapWalkClass,
+    pub free_by_size: [HeapWalkClass; 6],
+    pub uncommitted: HeapWalkClass,
+    pub regions: u64,
+}
+
+pub const FREE_BUCKET_LIMITS: [u64; 5] = [64, 512, 4096, 65536, 1048576];
+
+pub fn free_bucket(size: u64) -> usize {
+    FREE_BUCKET_LIMITS
+        .iter()
+        .position(|limit| size <= *limit)
+        .unwrap_or(FREE_BUCKET_LIMITS.len())
+}
+
+#[cfg(windows)]
+pub fn heap_walk() -> Option<HeapWalkReport> {
+    use windows::Win32::System::Memory::{
+        GetProcessHeap, HeapLock, HeapUnlock, HeapWalk, PROCESS_HEAP_ENTRY,
+    };
+    const REGION: u16 = 0x1;
+    const UNCOMMITTED: u16 = 0x2;
+    const BUSY: u16 = 0x4;
+    let heap = unsafe { GetProcessHeap() }.ok()?;
+    if unsafe { HeapLock(heap) }.is_err() {
+        return None;
+    }
+    let mut report = HeapWalkReport::default();
+    let mut entry = PROCESS_HEAP_ENTRY::default();
+    while unsafe { HeapWalk(heap, &mut entry) }.is_ok() {
+        let size = u64::from(entry.cbData);
+        match entry.wFlags {
+            flags if flags & REGION != 0 => report.regions += 1,
+            flags if flags & UNCOMMITTED != 0 => {
+                report.uncommitted.blocks += 1;
+                report.uncommitted.bytes += size;
+            }
+            flags if flags & BUSY != 0 => {
+                report.busy.blocks += 1;
+                report.busy.bytes += size;
+            }
+            _ => {
+                let class = &mut report.free_by_size[free_bucket(size)];
+                class.blocks += 1;
+                class.bytes += size;
+            }
+        }
+    }
+    unsafe { HeapUnlock(heap) }.ok();
+    Some(report)
+}
+
+#[cfg(not(windows))]
+pub fn heap_walk() -> Option<HeapWalkReport> {
+    None
+}
+
+pub fn heap_walk_summary() -> String {
+    let Some(report) = heap_walk() else {
+        return "aqua-heapwalk: unavailable".to_string();
+    };
+    let free = report
+        .free_by_size
+        .iter()
+        .zip(["<=64", "<=512", "<=4K", "<=64K", "<=1M", ">1M"])
+        .map(|(class, label)| {
+            format!(
+                "{label}:{}x/{:.2}MiB",
+                class.blocks,
+                class.bytes as f64 / 1048576.0
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "aqua-heapwalk: regions={} busy={}x/{:.2}MiB uncommitted={}x/{:.2}MiB free {free}",
+        report.regions,
+        report.busy.blocks,
+        report.busy.bytes as f64 / 1048576.0,
+        report.uncommitted.blocks,
+        report.uncommitted.bytes as f64 / 1048576.0,
+    )
 }
 
 pub fn address_space_summary() -> String {

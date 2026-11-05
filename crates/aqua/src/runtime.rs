@@ -8,7 +8,7 @@ use aqua_core::InputEvent as CoreInputEvent;
 use aqua_core::Modifiers as CoreModifiers;
 use aqua_graph::Extent;
 use aqua_protocol::chrome::DragRegions;
-use aqua_protocol::prefs::{prefers_opaque_frame, SystemPrefs as OsPreferences};
+use aqua_protocol::prefs::{SystemPrefs as OsPreferences, prefers_opaque_frame};
 use aqua_protocol::{
     A11yActionRequest, A11yNode, AccessTreeUpdate, DialogOutcome, DialogSpec, GpuEvent, ImeCommand,
     ImeEvent, Instant, MotionCommand, MotionEvent, RenderCommand, RenderEvent, RequestId,
@@ -22,7 +22,7 @@ use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
 use aqua_runtime::Scheduler;
 use aqua_scene::Scene;
 use aqua_shell_win32::capability::query_preferences;
-use aqua_shell_win32::services::{app_clipboard, Clipboard, ClipboardBackend};
+use aqua_shell_win32::services::{Clipboard, ClipboardBackend, app_clipboard};
 
 use crate::config::AquaConfig;
 use crate::inbox::{AquaUserEvent, Inbox};
@@ -444,6 +444,9 @@ fn options_from_spec(spec: &aqua_protocol::WindowSpec) -> WindowOptions {
         ..WindowOptions::default()
     }
 }
+
+const RESIZE_COST_CAP: Duration = Duration::from_millis(30);
+const RESIZE_IDLE_RATIO: f64 = 1.5;
 
 pub fn frame_reason(event: &WindowEvent) -> Option<FrameReason> {
     match event {
@@ -1602,9 +1605,16 @@ impl Aqua {
             }
             crate::profile::begin_frame();
             crate::profile::note(|| format!("rebuild_reason={reasons:?}"));
+            let started = WallInstant::now();
             self.produce_frame(app, id, now);
+            let cost = started.elapsed();
             crate::profile::end_frame(crate::profile::Role::App, id.raw());
             self.scheduler.mark_presented(id);
+            if reasons.contains(FrameReason::RESIZE) {
+                let cost = cost.min(RESIZE_COST_CAP);
+                self.scheduler
+                    .defer_resize_frames(id, now + cost + cost.mul_f64(RESIZE_IDLE_RATIO));
+            }
         }
     }
 
@@ -1636,6 +1646,7 @@ impl Aqua {
         if let Some(link) = self.windows.get(&id).and_then(|r| r.link.as_ref()) {
             updates.into_iter().for_each(|update| link.external(update));
         }
+        aqua_core::checkpoint::reach();
         self.sync_access_client(app, id);
         let build_started = WallInstant::now();
         let build_span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Build);
@@ -1645,6 +1656,7 @@ impl Aqua {
             self.scheduler.request_animation_deadline(id, deadline);
         }
         self.flush_output(app, id);
+        aqua_core::checkpoint::reach();
         let build_time = build_started.elapsed();
         if let Some(probe) = self.input_latency.as_mut() {
             probe.build_finished();
@@ -1822,6 +1834,7 @@ impl Aqua {
             if crate::mem_probe::memory_report_enabled() {
                 eprintln!("aqua-heap: {:?}", crate::mem_probe::process_heap());
                 eprintln!("{}", crate::mem_probe::address_space_summary());
+                eprintln!("{}", crate::mem_probe::heap_walk_summary());
                 #[cfg(feature = "probe-allocator")]
                 {
                     eprintln!("aqua-heap-summary: {}", crate::mem_probe::summary());
@@ -1859,8 +1872,8 @@ mod desktop;
 mod tests {
     use super::*;
     use aqua_core::PointerKind;
-    use aqua_protocol::geometry::LogicalSize;
     use aqua_protocol::ShellEvent;
+    use aqua_protocol::geometry::LogicalSize;
 
     struct Probe {
         window_events: Vec<WindowEvent>,
@@ -2415,46 +2428,37 @@ mod tests {
             (800, 600)
         }
         fn set_title(&self, title: &str) {
-            self.0 .0.borrow_mut().push(format!("title:{title}"));
+            self.0.0.borrow_mut().push(format!("title:{title}"));
         }
         fn set_logical_size(&self, width: f64, height: f64) {
-            self.0
-                 .0
-                .borrow_mut()
-                .push(format!("size:{width}x{height}"));
+            self.0.0.borrow_mut().push(format!("size:{width}x{height}"));
         }
         fn set_visible(&self, visible: bool) {
-            self.0 .0.borrow_mut().push(format!("visible:{visible}"));
+            self.0.0.borrow_mut().push(format!("visible:{visible}"));
         }
         fn set_minimized(&self, minimized: bool) {
-            self.0
-                 .0
-                .borrow_mut()
-                .push(format!("minimized:{minimized}"));
+            self.0.0.borrow_mut().push(format!("minimized:{minimized}"));
         }
         fn set_maximized(&self, maximized: bool) {
-            self.0
-                 .0
-                .borrow_mut()
-                .push(format!("maximized:{maximized}"));
+            self.0.0.borrow_mut().push(format!("maximized:{maximized}"));
         }
         fn is_maximized(&self) -> bool {
             false
         }
         fn activate(&self) {
-            self.0 .0.borrow_mut().push("activate".into());
+            self.0.0.borrow_mut().push("activate".into());
         }
         fn set_outer_position(&self, x: i32, y: i32) {
-            self.0 .0.borrow_mut().push(format!("position:{x},{y}"));
+            self.0.0.borrow_mut().push(format!("position:{x},{y}"));
         }
         fn center(&self) {
-            self.0 .0.borrow_mut().push("center".into());
+            self.0.0.borrow_mut().push("center".into());
         }
         fn set_cursor(&self, cursor: aqua_core::CursorIcon) {
-            self.0 .0.borrow_mut().push(format!("cursor:{cursor:?}"));
+            self.0.0.borrow_mut().push(format!("cursor:{cursor:?}"));
         }
         fn set_drag_regions(&self, _regions: &DragRegions) {
-            self.0 .0.borrow_mut().push("regions".into());
+            self.0.0.borrow_mut().push("regions".into());
         }
         fn click_settings(&self) -> aqua_core::ClickSettings {
             aqua_core::ClickSettings::default()
@@ -2467,13 +2471,13 @@ mod tests {
             badge: Option<aqua_protocol::TaskbarBadge>,
         ) -> Result<(), aqua_protocol::BadgeError> {
             self.0
-                 .0
+                .0
                 .borrow_mut()
                 .push(format!("badge:{}", badge.map_or(0, |b| b.count)));
             Ok(())
         }
         fn destroy(&self) {
-            self.0 .0.borrow_mut().push("destroy".into());
+            self.0.0.borrow_mut().push("destroy".into());
         }
     }
 

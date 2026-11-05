@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::Arc;
 use std::time::{Duration, Instant as WallInstant};
 
 use aqua_core::Rect;
@@ -28,6 +28,7 @@ pub enum Repaint {
     #[default]
     Settled,
     NextFrame,
+    Animating,
     Poll(Duration),
 }
 
@@ -68,6 +69,7 @@ pub struct RenderStats {
     pub waits: AtomicU64,
     pub arrivals: AtomicU64,
     pub forced: AtomicU64,
+    pub culled_commands: AtomicU64,
     pub partial_frames: AtomicU64,
     pub full_frames: AtomicU64,
     pub damaged_pixels: AtomicU64,
@@ -110,6 +112,7 @@ impl RenderStats {
     }
 }
 
+type RepaintProbe<B> = Box<dyn Fn(&B, SurfaceId, &[Rect]) -> Option<Rect>>;
 type Maintenance<B> = Box<dyn FnMut(&mut B)>;
 type Pressure<B> = Box<dyn FnMut(&mut B) -> bool>;
 type Visibility<B> = Box<dyn FnMut(&mut B, bool) -> bool>;
@@ -127,6 +130,7 @@ pub struct GpuFrames<B: GpuBackend<Error = GpuError> + 'static> {
     hint: PresentHint,
     maintenance: Option<Maintenance<B>>,
     pressure: Option<Pressure<B>>,
+    probe: Option<RepaintProbe<B>>,
     visibility: Option<Visibility<B>>,
     since_maintenance: u64,
     counted: HostCounters,
@@ -158,6 +162,7 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
             hint: PresentHint::Vsync,
             maintenance: None,
             pressure: None,
+            probe: None,
             visibility: None,
             since_maintenance: 0,
             counted: HostCounters::default(),
@@ -186,6 +191,14 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
 
     pub fn with_maintenance(mut self, maintenance: impl FnMut(&mut B) + 'static) -> Self {
         self.maintenance = Some(Box::new(maintenance));
+        self
+    }
+
+    pub fn with_repaint_probe(
+        mut self,
+        probe: impl Fn(&B, SurfaceId, &[Rect]) -> Option<Rect> + 'static,
+    ) -> Self {
+        self.probe = Some(Box::new(probe));
         self
     }
 
@@ -241,6 +254,11 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
                     .fetch_add(pixels as u64, Ordering::Relaxed);
             }
         }
+        let region = match (&plan, &self.probe) {
+            (Plan::Regions(rects), Some(probe)) => probe(self.host.backend(), self.surface, rects),
+            _ => None,
+        };
+        self.host.lowering_mut().set_cull(region);
         *stage.slot.borrow_mut() = match plan {
             Plan::Full => None,
             Plan::Regions(rects) => Some(rects),
@@ -346,6 +364,9 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
         if self.stats.trim.swap(false, Ordering::AcqRel) {
             self.host.trim_handle().request();
             self.stats.trims.fetch_add(1, Ordering::Relaxed);
+            if let Some(maintenance) = self.maintenance.as_mut() {
+                maintenance(self.host.backend_mut());
+            }
         }
         self.stage_damage(side);
         let feedback = self.host.execute(side, frame);
@@ -376,10 +397,16 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
 
     fn repaint(&self) -> Repaint {
         let report = self.host.lowering().last_report();
-        match (report.pulsing || report.shimmering, report.pending > 0) {
-            (true, _) => Repaint::NextFrame,
-            (false, true) => Repaint::Poll(PENDING_POLL),
-            (false, false) => Repaint::Settled,
+        let transition = self.host.lowering().transition_active();
+        match (
+            report.pulsing || report.shimmering,
+            transition,
+            report.pending > 0,
+        ) {
+            (true, true, _) => Repaint::NextFrame,
+            (true, false, _) => Repaint::Animating,
+            (false, _, true) => Repaint::Poll(PENDING_POLL),
+            (false, _, false) => Repaint::Settled,
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use aqua::render::vector::{gradient_axis, rotated_svg, rotation_steps, VectorCache};
+use aqua::render::vector::{VectorCache, gradient_axis, rotated_svg, rotation_steps};
 use aqua_core::geometry::Rect;
 use aqua_core::vector::{FillRule, GpuiPath, GpuiPathStyle, PathCommand};
 use aqua_core::{GpuiBackground, GpuiHsla, Point, Transform2D};

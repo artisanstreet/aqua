@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant as WallInstant};
@@ -11,11 +11,12 @@ use aqua_protocol::{
 use aqua_runtime::RenderSide;
 use aqua_transport::{Notify, Receiver, RecvError, Sender};
 
-use super::host::{epoch_ns, Clock, FrameTarget, RenderStats, Repaint, TargetInit};
+use super::host::{Clock, FrameTarget, RenderStats, Repaint, TargetInit, epoch_ns};
 
 const DRAIN_LIMIT: usize = 4096;
 const MAX_PENDING_POLLS: u32 = 60;
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(3);
+const ANIMATION_PERIOD: Duration = Duration::from_millis(15);
 
 fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
@@ -179,6 +180,7 @@ struct Slot {
     wake: RenderWake,
     pending: Pending,
     polls: u32,
+    quiet: bool,
     not_before: Option<WallInstant>,
     presented_last: bool,
     paced: bool,
@@ -224,6 +226,7 @@ impl Slot {
             wake: RenderWake::NextFrame,
             pending: Pending::Settled,
             polls: 0,
+            quiet: false,
             not_before: None,
             presented_last: false,
             paced: false,
@@ -395,13 +398,14 @@ impl Slot {
             if forced {
                 self.stats.forced.fetch_add(1, Ordering::Relaxed);
             }
-            let feedback = self.execute(frame, arrived || (forced && !trim));
+            let silent = forced && !trim && !arrived && repaint && self.quiet;
+            let feedback = self.execute(frame, arrived || (forced && !trim && !silent));
             let maintenance = forced && trim;
             self.presented_last = maintenance
                 || feedback
                     .iter()
                     .any(|item| matches!(item, Feedback::Presented(_)));
-            self.feedback = match maintenance {
+            self.feedback = match maintenance || silent {
                 true => feedback
                     .into_iter()
                     .filter(|item| !matches!(item, Feedback::Presented(_)))
@@ -433,12 +437,20 @@ impl Slot {
                 self.presented_last
             )
         });
-        super::runs::record(super::runs::RunCause {
-            forced,
-            framed: frame.is_some(),
-            presented: self.presented_last,
-            ..self.cause
-        });
+        let totals = [
+            self.stats.full_frames.load(Ordering::Relaxed),
+            self.stats.partial_frames.load(Ordering::Relaxed),
+            self.stats.culled_commands.load(Ordering::Relaxed),
+        ];
+        super::runs::record(
+            super::runs::RunCause {
+                forced,
+                framed: frame.is_some(),
+                presented: self.presented_last,
+                ..self.cause
+            },
+            totals,
+        );
         crate::profile::end_frame(crate::profile::Role::Render, self.id);
         self.not_before = match self.paced || !self.presented_last {
             true => Some(started + self.interval),
@@ -453,10 +465,18 @@ impl Slot {
         };
         self.pending = match repaint {
             Repaint::Settled => {
+                self.quiet = false;
                 self.polls = 0;
                 Pending::Settled
             }
-            Repaint::NextFrame => Pending::Continuous,
+            Repaint::NextFrame => {
+                self.quiet = false;
+                Pending::Continuous
+            }
+            Repaint::Animating => {
+                self.quiet = true;
+                Pending::At(now + ANIMATION_PERIOD)
+            }
             Repaint::Poll(delay) => match self.polls < MAX_PENDING_POLLS {
                 true => {
                     self.polls += 1;

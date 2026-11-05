@@ -1,15 +1,34 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use aqua::profile::recorder::{Recorder, Role};
 use aqua_core::{DisplayItem, Oklch, Rect};
+use aqua_protocol::probe::{self, Event, Metric, Phase};
 use aqua_protocol::{Instant, RenderCommand, RenderInput, SceneDiff};
-use aqua_runtime::{emit_scene_diff, FrameWork, RenderSide, Runtime};
+use aqua_runtime::{FrameWork, RenderSide, Runtime, emit_scene_diff};
 use aqua_scene::Scene;
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::element::ui::{Box as UiBox, Text as UiText};
-use aqua_ui::style::{px, Axis, Style};
-use aqua_verify::heap::{measure, CountingAllocator, HeapGate};
+use aqua_ui::style::{Axis, Style, px};
+use aqua_verify::heap::{CountingAllocator, HeapGate, measure};
 use aqua_verify::wake::WakeTally;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+static SPANS: AtomicU64 = AtomicU64::new(0);
+static COUNTS: AtomicU64 = AtomicU64::new(0);
+
+fn counting_sink(event: Event) {
+    match event {
+        Event::Enter(_) => SPANS.fetch_add(1, Ordering::Relaxed),
+        Event::Exit(_) => 0,
+        Event::Count(..) => COUNTS.fetch_add(1, Ordering::Relaxed),
+    };
+}
+
+fn probed() {
+    probe::install(counting_sink);
+}
 
 const PARAGRAPH: &str = "Aqua keeps retained text, layout and scene state between frames so that an unchanged transcript costs nothing, while a streaming message only reshapes the run that changed.";
 
@@ -18,6 +37,7 @@ fn row_text(index: usize) -> String {
 }
 
 fn mounted_runtime(rows: usize) -> Runtime {
+    probed();
     let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
     runtime.set_viewport(1200.0, 800.0, 1.0);
     runtime
@@ -90,6 +110,7 @@ fn cold_mount_shapes_each_run_exactly_once() {
 }
 
 fn populated_render_side(items: usize) -> RenderSide {
+    probed();
     let mut app_scene = Scene::new();
     for index in 0..items {
         app_scene.insert(DisplayItem::Rect {
@@ -163,4 +184,51 @@ fn emitting_an_unchanged_scene_allocates_nothing() {
     let (second, counts) = measure(|| emit_scene_diff(&mut scene));
     assert!(second.is_empty());
     assert_eq!(counts.heap_events(), 0);
+}
+
+#[test]
+fn an_active_probe_sink_adds_no_allocations_to_idle_frames() {
+    let mut runtime = mounted_runtime(400);
+    runtime.build_frame().unwrap();
+    runtime.build_frame().unwrap();
+    assert!(probe::active());
+    let spans = SPANS.load(Ordering::Relaxed);
+    let counts = COUNTS.load(Ordering::Relaxed);
+    let mut worst = 0;
+    for frame in 0..20 {
+        runtime.advance_clock(frame as f64 / 60.0);
+        let (_, measured) = measure(|| runtime.build_frame().unwrap());
+        worst = worst.max(measured.heap_events());
+    }
+    assert!(
+        SPANS.load(Ordering::Relaxed) > spans && COUNTS.load(Ordering::Relaxed) > counts,
+        "the sink saw no spans or counts, so the gate measured nothing"
+    );
+    assert_eq!(worst, 0);
+}
+
+#[test]
+fn the_profile_recorder_allocates_nothing_per_event_or_per_frame() {
+    let mut recorder = Recorder::new();
+    recorder.begin();
+    recorder.event(Event::Enter(Phase::Build));
+    recorder.event(Event::Exit(Phase::Build));
+    drop(recorder.finish(Role::App, 0));
+    let (finished, counts) = measure(|| {
+        let mut last = None;
+        for frame in 0..200u64 {
+            recorder.begin();
+            for phase in Phase::ALL {
+                recorder.event(Event::Enter(phase));
+                recorder.event(Event::Enter(Phase::Text));
+                recorder.event(Event::Count(Metric::TextRunsShaped, 3));
+                recorder.event(Event::Exit(Phase::Text));
+                recorder.event(Event::Exit(phase));
+            }
+            last = Some(recorder.finish(Role::App, frame));
+        }
+        last.unwrap()
+    });
+    assert_eq!(counts.heap_events(), 0);
+    assert!(finished.metrics[Metric::TextRunsShaped.index()] > 0);
 }

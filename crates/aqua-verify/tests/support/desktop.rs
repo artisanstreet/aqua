@@ -50,7 +50,9 @@ pub fn require(test: &str) -> bool {
     match unlocked() {
         true => true,
         false => {
-            eprintln!("SKIP-SESSION-LOCKED {test}: the user session is locked, so desktop capture reads black");
+            eprintln!(
+                "SKIP-SESSION-LOCKED {test}: the user session is locked, so desktop capture reads black"
+            );
             false
         }
     }

@@ -1,8 +1,8 @@
 use aqua::render::shape::{
-    dashes, emit_box, emit_shadow, pieces, Border, Fidelity, Paint, Radii, ShadowSpec, Sides,
+    Border, Fidelity, Paint, Radii, ShadowSpec, Sides, dashes, emit_box, emit_shadow, pieces,
 };
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
+use aqua_core::geometry::Rect;
 use aqua_graph::PaintCommand;
 
 fn bounds() -> Rect {
@@ -93,9 +93,11 @@ fn dashes_are_evenly_spaced_and_fill_two_thirds_of_each_period() {
     assert_eq!(found.len(), 3);
     let period = found[1].0 - found[0].0;
     assert!((period - 30.0).abs() < 1e-4);
-    assert!(found
-        .iter()
-        .all(|(_, length)| (*length - 20.0).abs() < 1e-4));
+    assert!(
+        found
+            .iter()
+            .all(|(_, length)| (*length - 20.0).abs() < 1e-4)
+    );
     assert!(dashes(5.0, 5.0, 2.0).is_empty());
 }
 

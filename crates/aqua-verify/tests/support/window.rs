@@ -1,13 +1,13 @@
 #![allow(dead_code, unsafe_code)]
 
 use aqua_graph::Extent;
-use windows::core::w;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, DispatchMessageW, GetClientRect, PeekMessageW, SetWindowPos,
-    ShowWindow, TranslateMessage, HWND_BOTTOM, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE, WS_POPUP,
+    CreateWindowExW, DestroyWindow, DispatchMessageW, GetClientRect, HWND_BOTTOM, MSG, PM_REMOVE,
+    PeekMessageW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+    ShowWindow, TranslateMessage, WS_EX_NOACTIVATE, WS_POPUP,
 };
+use windows::core::w;
 
 pub struct Window(pub HWND);
 

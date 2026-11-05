@@ -96,6 +96,14 @@ fn link(service: &RenderService, probe: &Arc<Probe>) -> RenderLink {
     link
 }
 
+fn settled_link(service: &RenderService, probe: &Arc<Probe>) -> RenderLink {
+    let mut link = link(service, probe);
+    wait_until("the viewport frame", || {
+        presented_events(&mut link) >= 1 && probe.presents.load(Relaxed) >= 1
+    });
+    link
+}
+
 fn scene_with(color: &str) -> Scene {
     let mut scene = Scene::new();
     scene.insert(DisplayItem::Rect {
@@ -144,10 +152,11 @@ fn windows_share_one_thread_and_idle_windows_do_nothing() {
     let mut second = link(&service, &b);
     let mut scene_a = scene_with("#ff0000");
     let mut scene_b = scene_with("#00ff00");
+    let bases = (a.presents.load(Relaxed), b.presents.load(Relaxed));
     first.push_scene(&mut scene_a);
     second.push_scene(&mut scene_b);
     wait_until("both windows to present", || {
-        a.presents.load(Relaxed) >= 1 && b.presents.load(Relaxed) >= 1
+        a.presents.load(Relaxed) > bases.0 && b.presents.load(Relaxed) > bases.1
     });
     assert_eq!(a.thread.load(Relaxed), b.thread.load(Relaxed));
     std::thread::sleep(Duration::from_millis(80));
@@ -165,16 +174,17 @@ fn windows_share_one_thread_and_idle_windows_do_nothing() {
 fn pending_content_is_repainted_until_it_settles() {
     let service = RenderService::new().unwrap();
     let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
     *probe.script.lock().unwrap() = vec![
         Repaint::Poll(Duration::from_millis(3)),
         Repaint::Poll(Duration::from_millis(3)),
         Repaint::Poll(Duration::from_millis(3)),
     ];
-    let mut link = link(&service, &probe);
     link.push_scene(&mut scene_with("#336699"));
-    wait_until("four presents", || probe.presents.load(Relaxed) >= 4);
+    wait_until("four presents", || probe.presents.load(Relaxed) >= base + 4);
     std::thread::sleep(Duration::from_millis(100));
-    assert_eq!(probe.presents.load(Relaxed), 4);
+    assert_eq!(probe.presents.load(Relaxed), base + 4);
     assert_eq!(stats_of(&link).forced.load(Relaxed), 3);
     assert_eq!(
         probe.invalidations.load(Relaxed),
@@ -182,29 +192,67 @@ fn pending_content_is_repainted_until_it_settles() {
         "items that were pending need a full repaint"
     );
     let frames = probe.frames.lock().unwrap().clone();
-    assert!(frames.windows(2).all(|pair| pair[0] == pair[1]));
+    assert!(
+        frames[base as usize..]
+            .windows(2)
+            .all(|pair| pair[0] == pair[1])
+    );
 }
 
 #[test]
 fn continuous_animation_keeps_presenting_until_it_stops() {
     let service = RenderService::new().unwrap();
     let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
     *probe.script.lock().unwrap() = vec![Repaint::NextFrame; 12];
-    let mut link = link(&service, &probe);
     link.push_scene(&mut scene_with("#336699"));
-    wait_until("thirteen presents", || probe.presents.load(Relaxed) >= 13);
+    wait_until("thirteen presents", || {
+        probe.presents.load(Relaxed) >= base + 13
+    });
     std::thread::sleep(Duration::from_millis(100));
-    assert_eq!(probe.presents.load(Relaxed), 13);
+    assert_eq!(probe.presents.load(Relaxed), base + 13);
     assert_eq!(presented_events(&mut link), 13);
+}
+
+#[test]
+fn an_animating_scene_repaints_at_a_capped_rate_without_waking_the_app_or_the_damage_baseline() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    link.push_scene(&mut scene_with("#336699"));
+    wait_until("the scene frame", || probe.presents.load(Relaxed) >= 2);
+    std::thread::sleep(Duration::from_millis(50));
+    presented_events(&mut link);
+    let base = probe.presents.load(Relaxed);
+    let invalidations = probe.invalidations.load(Relaxed);
+    *probe.script.lock().unwrap() = vec![Repaint::Animating; 100];
+    link.set_viewport(Size { w: 100.0, h: 101.0 }, 1.0);
+    std::thread::sleep(Duration::from_millis(300));
+    let presents = probe.presents.load(Relaxed) - base;
+    assert!(
+        (10..=25).contains(&presents),
+        "{presents} animation presents in 300 ms"
+    );
+    assert_eq!(
+        probe.invalidations.load(Relaxed),
+        invalidations,
+        "animation repaints must keep the damage baseline"
+    );
+    assert!(
+        presented_events(&mut link) <= 1,
+        "animation repaints must not report to the app"
+    );
 }
 
 #[test]
 fn an_arriving_image_forces_one_full_repaint() {
     let service = RenderService::new().unwrap();
     let probe = Arc::new(Probe::default());
-    let mut link = link(&service, &probe);
+    let mut link = settled_link(&service, &probe);
+    let first = probe.presents.load(Relaxed);
     link.push_scene(&mut scene_with("#336699"));
-    wait_until("the first present", || probe.presents.load(Relaxed) >= 1);
+    wait_until("the first present", || probe.presents.load(Relaxed) > first);
     std::thread::sleep(Duration::from_millis(50));
     let before = probe.presents.load(Relaxed);
     link.external(ExternalUpdate::Image {
@@ -228,9 +276,10 @@ fn an_arriving_image_forces_one_full_repaint() {
 fn a_trim_request_runs_without_a_scene_change() {
     let service = RenderService::new().unwrap();
     let probe = Arc::new(Probe::default());
-    let mut link = link(&service, &probe);
+    let mut link = settled_link(&service, &probe);
+    let first = probe.presents.load(Relaxed);
     link.push_scene(&mut scene_with("#336699"));
-    wait_until("the first present", || probe.presents.load(Relaxed) >= 1);
+    wait_until("the first present", || probe.presents.load(Relaxed) > first);
     std::thread::sleep(Duration::from_millis(50));
     let before = probe.presents.load(Relaxed);
     link.request_trim();
@@ -246,8 +295,8 @@ fn a_trim_request_runs_without_a_scene_change() {
 fn closing_one_window_leaves_the_others_running() {
     let service = RenderService::new().unwrap();
     let (a, b) = (Arc::new(Probe::default()), Arc::new(Probe::default()));
-    let first = link(&service, &a);
-    let mut second = link(&service, &b);
+    let first = settled_link(&service, &a);
+    let mut second = settled_link(&service, &b);
     drop(first);
     second.push_scene(&mut scene_with("#336699"));
     wait_until("the survivor to present", || b.presents.load(Relaxed) >= 1);

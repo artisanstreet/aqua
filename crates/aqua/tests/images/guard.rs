@@ -1,7 +1,7 @@
-use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::Duration;
 
-use super::{ImageAssetBudget, ImageAssets, DECODE_STARTED};
+use super::{DECODE_STARTED, ImageAssetBudget, ImageAssets, TEST_SERIAL};
 
 struct Guard {
     id: u8,
@@ -16,6 +16,9 @@ impl Drop for Guard {
 
 #[test]
 fn queued_cancel_releases_guard_while_active_cancel_waits_for_decode() {
+    let _serial = TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (started, active) = mpsc::channel();
     let barrier = Arc::new((Mutex::new(false), Condvar::new()));
     let worker_barrier = barrier.clone();

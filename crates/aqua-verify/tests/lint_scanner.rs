@@ -66,25 +66,25 @@ fn metadata_breach_reports_the_shortest_path_and_ignores_dev_dependencies() {
         "packages": [
             {"id": "core 1", "name": "core", "manifest_path": "/w/core/Cargo.toml"},
             {"id": "mid 1", "name": "mid", "manifest_path": "/w/mid/Cargo.toml"},
-            {"id": "wgpu 1", "name": "wgpu", "manifest_path": "/r/wgpu/Cargo.toml"},
-            {"id": "winit 1", "name": "winit", "manifest_path": "/r/winit/Cargo.toml"}
+            {"id": "banned_gpu 1", "name": "banned_gpu", "manifest_path": "/r/banned_gpu/Cargo.toml"},
+            {"id": "banned_window 1", "name": "banned_window", "manifest_path": "/r/banned_window/Cargo.toml"}
         ],
         "workspace_members": ["core 1", "mid 1"],
         "resolve": {"nodes": [
             {"id": "core 1", "deps": [
                 {"pkg": "mid 1", "dep_kinds": [{"kind": null}]},
-                {"pkg": "winit 1", "dep_kinds": [{"kind": "dev"}]}
+                {"pkg": "banned_window 1", "dep_kinds": [{"kind": "dev"}]}
             ]},
-            {"id": "mid 1", "deps": [{"pkg": "wgpu 1", "dep_kinds": [{"kind": null}]}]},
-            {"id": "wgpu 1", "deps": []},
-            {"id": "winit 1", "deps": []}
+            {"id": "mid 1", "deps": [{"pkg": "banned_gpu 1", "dep_kinds": [{"kind": null}]}]},
+            {"id": "banned_gpu 1", "deps": []},
+            {"id": "banned_window 1", "deps": []}
         ]}
     });
     let workspace = parse(json.to_string().as_bytes()).unwrap();
-    let banned = |name: &str| name == "wgpu" || name == "winit";
+    let banned = |name: &str| name == "banned_gpu" || name == "banned_window";
     let found = breaches(&workspace, "core", &banned, &|_, _| false);
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].path, vec!["core", "mid", "wgpu"]);
+    assert_eq!(found[0].path, vec!["core", "mid", "banned_gpu"]);
 }
 
 #[test]
@@ -93,17 +93,17 @@ fn an_allowed_edge_is_not_followed() {
         "packages": [
             {"id": "text 1", "name": "text", "manifest_path": "/w/text/Cargo.toml"},
             {"id": "fonts 1", "name": "fonts", "manifest_path": "/w/fonts/Cargo.toml"},
-            {"id": "winit 1", "name": "winit", "manifest_path": "/r/winit/Cargo.toml"}
+            {"id": "banned_window 1", "name": "banned_window", "manifest_path": "/r/banned_window/Cargo.toml"}
         ],
         "workspace_members": ["text 1", "fonts 1"],
         "resolve": {"nodes": [
             {"id": "text 1", "deps": [{"pkg": "fonts 1", "dep_kinds": [{"kind": null}]}]},
-            {"id": "fonts 1", "deps": [{"pkg": "winit 1", "dep_kinds": [{"kind": null}]}]},
-            {"id": "winit 1", "deps": []}
+            {"id": "fonts 1", "deps": [{"pkg": "banned_window 1", "dep_kinds": [{"kind": null}]}]},
+            {"id": "banned_window 1", "deps": []}
         ]}
     });
     let workspace = parse(json.to_string().as_bytes()).unwrap();
-    let banned = |name: &str| name == "fonts" || name == "winit";
+    let banned = |name: &str| name == "fonts" || name == "banned_window";
     assert_eq!(
         breaches(&workspace, "text", &banned, &|_, _| false).len(),
         1

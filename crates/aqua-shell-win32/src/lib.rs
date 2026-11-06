@@ -15,7 +15,7 @@ pub mod wake_trace;
 mod event;
 
 pub use event::{Chrome, FileDrag, Handler, ShellError, ShellEvent, WindowKind, WindowOptions};
-pub use hooks::{set_message_hook, MessageHook, RawMessage};
+pub use hooks::{add_message_hook, set_message_hook, MessageHook, RawMessage};
 
 #[cfg(windows)]
 mod apartment;
@@ -37,6 +37,8 @@ pub mod local_time;
 mod looping;
 #[cfg(windows)]
 mod material;
+#[cfg(windows)]
+mod null_trace;
 #[cfg(windows)]
 pub mod pointer_source;
 #[cfg(windows)]

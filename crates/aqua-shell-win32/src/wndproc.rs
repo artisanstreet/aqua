@@ -412,6 +412,18 @@ pub(crate) unsafe extern "system" fn wndproc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    match msg == WM_NULL && crate::null_trace::enabled() {
+        true => {
+            let entry = crate::null_trace::qpc();
+            let result = unsafe { dispatch(hwnd, msg, wparam, lparam) };
+            crate::null_trace::record(entry, crate::null_trace::qpc());
+            result
+        }
+        false => unsafe { dispatch(hwnd, msg, wparam, lparam) },
+    }
+}
+
+unsafe fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let raw = hwnd.0 as isize;
     crate::wake_trace::record_sent(msg);
     if !state::with(|s| s.windows.contains_key(&raw)) {

@@ -237,6 +237,7 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
         }
         turn();
         wake_trace::flush_if_due();
+        crate::null_trace::flush_if_due();
         let current = now();
         let (handler_wake, waitables) = state::with(|s| (s.wake_at, s.waitables.clone()));
         let wake_at = [handler_wake, watch_deadline()].into_iter().flatten().min();
@@ -285,6 +286,7 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
         let waited = unsafe {
             MsgWaitForMultipleObjectsEx(Some(&handles), timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
         };
+        crate::null_trace::waited();
         let index = waited.0.wrapping_sub(WAIT_OBJECT_0.0) as usize;
         let timer_fired = index < timers;
         match (timer_fired, index >= offset && index < handles.len()) {

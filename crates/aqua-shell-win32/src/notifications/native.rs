@@ -14,15 +14,36 @@ use windows::UI::Notifications::{
 
 type Active = Arc<Mutex<HashMap<String, (u64, ToastNotification)>>>;
 
+struct Native {
+    notifier: ToastNotifier,
+    _apartment: crate::apartment::Apartment,
+}
+
 pub struct NotificationCenter {
     app: AppIdentity,
     identity: HSTRING,
-    notifier: ToastNotifier,
+    native: Option<Native>,
     active: Active,
     generation: u64,
     response: ResponseHandler,
     _receiver: super::activation::Receiver,
-    _apartment: crate::apartment::Apartment,
+}
+
+const EVER_SHOWN: &str = "EverShown";
+
+fn registry_path(identifier: &str) -> String {
+    format!(r"Software\Classes\AppUserModelId\{identifier}")
+}
+
+fn ever_shown(identifier: &str) -> bool {
+    windows_registry::CURRENT_USER
+        .open(registry_path(identifier))
+        .and_then(|key| key.get_u32(EVER_SHOWN))
+        .is_ok_and(|value| value != 0)
+}
+
+fn needs_history_clear(native_ready: bool, had_active: bool, ever_shown: bool) -> bool {
+    native_ready || had_active || ever_shown
 }
 
 fn native_error(error: impl std::fmt::Display) -> NotificationError {
@@ -55,12 +76,8 @@ impl NotificationCenter {
         identity: AppIdentity,
         response: ResponseHandler,
     ) -> Result<Self, NotificationError> {
-        let apartment = crate::apartment::Apartment::new().map_err(native_error)?;
         let key = windows_registry::CURRENT_USER
-            .create(format!(
-                r"Software\Classes\AppUserModelId\{}",
-                identity.identifier()
-            ))
+            .create(registry_path(identity.identifier()))
             .map_err(native_error)?;
         key.set_string("DisplayName", identity.name())
             .map_err(native_error)?;
@@ -71,22 +88,40 @@ impl NotificationCenter {
         let app = identity.clone();
         let identity = HSTRING::from(identity.identifier());
         unsafe { SetCurrentProcessExplicitAppUserModelID(&identity) }.map_err(native_error)?;
-        let notifier =
-            ToastNotificationManager::CreateToastNotifierWithId(&identity).map_err(native_error)?;
         Ok(Self {
             app,
             identity,
-            notifier,
+            native: None,
             active: Arc::new(Mutex::new(HashMap::new())),
             generation: 0,
             response,
             _receiver: receiver,
-            _apartment: apartment,
         })
+    }
+
+    fn notifier(&mut self) -> Result<ToastNotifier, NotificationError> {
+        if self.native.is_none() {
+            let apartment = crate::apartment::Apartment::new().map_err(native_error)?;
+            let notifier = ToastNotificationManager::CreateToastNotifierWithId(&self.identity)
+                .map_err(native_error)?;
+            self.native = Some(Native {
+                notifier,
+                _apartment: apartment,
+            });
+        }
+        self.native
+            .as_ref()
+            .map(|native| native.notifier.clone())
+            .ok_or_else(|| NotificationError::Native("notifier unavailable".into()))
     }
 
     pub fn show(&mut self, notification: Notification) -> Result<(), NotificationError> {
         let xml = notification.xml_for(Some(&self.app))?;
+        let notifier = self.notifier()?;
+        if let Ok(key) = windows_registry::CURRENT_USER.create(registry_path(self.app.identifier()))
+        {
+            let _ = key.set_u32(EVER_SHOWN, 1);
+        }
         {
             let active = self
                 .active
@@ -171,13 +206,13 @@ impl NotificationCenter {
             .unwrap_or_else(|error| error.into_inner())
             .remove(&notification.tag);
         if let Some((_, toast)) = previous {
-            self.notifier.Hide(&toast).map_err(native_error)?;
+            notifier.Hide(&toast).map_err(native_error)?;
         }
         self.active
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .insert(notification.tag.clone(), (generation, toast.clone()));
-        if let Err(error) = self.notifier.Show(&toast) {
+        if let Err(error) = notifier.Show(&toast) {
             remove_current(&self.active, &notification.tag, generation);
             return Err(native_error(error));
         }
@@ -190,8 +225,15 @@ impl NotificationCenter {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .remove(tag);
+        if !needs_history_clear(
+            self.native.is_some(),
+            previous.is_some(),
+            ever_shown(self.app.identifier()),
+        ) {
+            return Ok(());
+        }
         let hidden = match previous {
-            Some((_, toast)) => self.notifier.Hide(&toast),
+            Some((_, toast)) => self.notifier()?.Hide(&toast),
             None => Ok(()),
         };
         let history = ToastNotificationManager::History().and_then(|history| {

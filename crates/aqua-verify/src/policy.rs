@@ -182,6 +182,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "WindowKind",
             "WindowOptions",
             "set_message_hook",
+            "add_message_hook",
             "MessageHook",
             "RawMessage",
             "clipboard",
@@ -236,6 +237,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "A11yTree",
             "AttachError",
             "UiaAdapter",
+            "UiaRouter",
         ],
     ),
     (

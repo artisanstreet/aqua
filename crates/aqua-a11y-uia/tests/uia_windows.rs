@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use aqua_a11y_uia::{Connection, UiaAdapter};
+use std::cell::{Cell, RefCell};
+
+use aqua_a11y_uia::{Connection, UiaAdapter, UiaRouter};
 use aqua_core::NumericRangeSemantics;
 use aqua_core::{NodeId, RawId, Rect, Role, SemanticNode};
 use aqua_protocol::{
@@ -27,9 +29,38 @@ use windows::Win32::UI::Accessibility::{
     UIA_ValuePatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, PostMessageW, ShowWindow,
-    TranslateMessage, MSG, SW_SHOWNA, WINDOW_EX_STYLE, WM_APP, WS_POPUP,
+    CallWindowProcW, CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, PostMessageW,
+    SetWindowLongPtrW, ShowWindow, TranslateMessage, GWLP_WNDPROC, MSG, SW_SHOWNA, WINDOW_EX_STYLE,
+    WM_APP, WNDPROC, WS_POPUP,
 };
+
+thread_local! {
+    static ROUTER: RefCell<Option<UiaRouter>> = const { RefCell::new(None) };
+    static PREVIOUS: Cell<isize> = const { Cell::new(0) };
+}
+
+extern "system" fn routed_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    let routed = ROUTER
+        .with(|router| {
+            router
+                .borrow()
+                .as_ref()
+                .and_then(|router| router.handle(message, wparam.0, lparam.0))
+        })
+        .map(windows::Win32::Foundation::LRESULT);
+    match routed {
+        Some(result) => result,
+        None => {
+            let previous: WNDPROC = unsafe { std::mem::transmute(PREVIOUS.get()) };
+            unsafe { CallWindowProcW(previous, hwnd, message, wparam, lparam) }
+        }
+    }
+}
 
 const WM_SET_VERSION: u32 = WM_APP + 1;
 const WM_STOP: u32 = WM_APP + 2;
@@ -151,7 +182,11 @@ fn spawn_host() -> Host {
                 )
             };
         });
-        let mut adapter = UiaAdapter::attach(raw, waker).unwrap();
+        let (mut adapter, router) = UiaAdapter::attach_routed(raw, waker).unwrap();
+        ROUTER.with(|slot| *slot.borrow_mut() = Some(router));
+        PREVIOUS.set(unsafe {
+            SetWindowLongPtrW(hwnd, GWLP_WNDPROC, routed_proc as *const () as isize)
+        });
         ready_tx.send((raw, adapter.connection())).unwrap();
         unsafe {
             let _ = ShowWindow(hwnd, SW_SHOWNA);

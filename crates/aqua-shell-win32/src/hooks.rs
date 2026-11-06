@@ -16,35 +16,47 @@ pub trait MessageHook: 'static {
     fn window_message(&mut self, _message: &RawMessage) -> Option<isize> {
         None
     }
+
+    fn retired(&self) -> bool {
+        false
+    }
 }
 
 thread_local! {
-    static HOOK: RefCell<Option<Box<dyn MessageHook>>> = const { RefCell::new(None) };
+    static HOOKS: RefCell<Vec<Box<dyn MessageHook>>> = const { RefCell::new(Vec::new()) };
 }
 
 pub fn set_message_hook(hook: impl MessageHook) {
-    HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    HOOKS.with(|slot| *slot.borrow_mut() = vec![Box::new(hook)]);
+}
+
+pub fn add_message_hook(hook: impl MessageHook) {
+    HOOKS.with(|slot| slot.borrow_mut().push(Box::new(hook)));
 }
 
 #[cfg(windows)]
-fn with_hook<R>(call: impl FnOnce(&mut dyn MessageHook) -> R) -> Option<R> {
-    let mut taken = HOOK.with(|slot| slot.borrow_mut().take())?;
-    let result = call(taken.as_mut());
-    HOOK.with(|slot| {
+fn with_hooks<R>(call: impl FnOnce(&mut [Box<dyn MessageHook>]) -> R) -> R {
+    let mut taken = HOOKS.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+    let result = call(&mut taken);
+    taken.retain(|hook| !hook.retired());
+    HOOKS.with(|slot| {
         let mut slot = slot.borrow_mut();
-        if slot.is_none() {
-            *slot = Some(taken);
-        }
+        taken.append(&mut slot);
+        *slot = taken;
     });
-    Some(result)
+    result
 }
 
 #[cfg(windows)]
 pub(crate) fn pre_translate(message: &RawMessage) -> bool {
-    with_hook(|hook| hook.pre_translate(message)).unwrap_or(false)
+    with_hooks(|hooks| hooks.iter_mut().any(|hook| hook.pre_translate(message)))
 }
 
 #[cfg(windows)]
 pub(crate) fn window_message(message: &RawMessage) -> Option<isize> {
-    with_hook(|hook| hook.window_message(message)).flatten()
+    with_hooks(|hooks| {
+        hooks
+            .iter_mut()
+            .find_map(|hook| hook.window_message(message))
+    })
 }

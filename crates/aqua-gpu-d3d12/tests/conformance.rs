@@ -3,8 +3,8 @@
 mod support;
 
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
+use aqua_gpu_ref::conformance::{run_suite, SuiteConfig, Tolerance};
 use aqua_gpu_ref::RefBackend;
-use aqua_gpu_ref::conformance::{SuiteConfig, Tolerance, run_suite};
 
 fn run(preference: AdapterPreference, format: SurfaceFormat, tolerance: Tolerance) {
     let mut backend = match OffscreenBackend::with_format(preference, format) {

@@ -7,18 +7,18 @@ use aqua_protocol::{
     GpuError, GpuReadback, PresentHint, PresentTimes, RecoveryReport, SurfaceId, SurfacePixels,
     SurfaceTarget, UploadBatch,
 };
+use windows::core::Interface;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
-use windows::core::Interface;
+use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
 
-use super::Error;
-use super::device::{AdapterPreference, Selected, select};
+use super::device::{select, AdapterPreference, Selected};
 use super::persistent::PersistentTextures;
 use super::renderer::{SceneRenderer, SceneTarget};
 use super::tiers::{SceneOptions, TierLimit};
 use super::util::*;
+use super::Error;
 use crate::hal::tier::Tier;
 use crate::half::{bgra8_rows_to_rgba8, rgba16f_rows_to_rgba8};
 

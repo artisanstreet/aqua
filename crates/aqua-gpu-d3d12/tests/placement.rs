@@ -1,4 +1,4 @@
-use aqua_gpu_d3d12::placement::{Planned, place};
+use aqua_gpu_d3d12::placement::{place, Planned};
 
 const KB64: u64 = 64 * 1024;
 

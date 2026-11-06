@@ -1,10 +1,10 @@
 use std::time::{Duration, Instant};
 
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
+use aqua_core::Oklch;
 use aqua_gpu_d3d12::hal::selection::AdapterPreference;
 use aqua_gpu_d3d12::window::WindowBackend;
-use aqua_graph::{Extent, FramePlan, PaintCommand, Quad, plan_paint};
+use aqua_graph::{plan_paint, Extent, FramePlan, PaintCommand, Quad};
 use aqua_protocol::{FrameInputs, GpuBackend, NativeSurface, PresentHint, SurfaceTarget, WindowId};
 
 use crate::backend::{backend, options};
@@ -302,12 +302,12 @@ fn startup_cold_and_cached() {
 #[test]
 fn startup_breakdown() {
     use aqua_gpu_d3d12::hal::{
-        BudgetMonitor, CpuHeap, FrameRing, ShaderVisibleHeap, Timeline, create_factory,
+        create_factory, BudgetMonitor, CpuHeap, FrameRing, ShaderVisibleHeap, Timeline,
     };
+    use windows::core::Interface;
     use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
     use windows::Win32::Graphics::Direct3D12::*;
     use windows::Win32::Graphics::Dxgi::*;
-    use windows::core::Interface;
     crate::support::hold_software();
     let mut lap = Instant::now();
     let mut note = |name: &str| {

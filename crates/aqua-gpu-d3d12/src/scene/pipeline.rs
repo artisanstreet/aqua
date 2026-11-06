@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::mem::transmute_copy;
 
+use windows::core::{s, Interface, PCSTR, PCWSTR};
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::core::{Interface, PCSTR, PCWSTR, s};
 
-use super::Error;
 use super::bindless::{self, Binding};
+use super::Error;
 
 pub const CONSTANT_DWORDS: u32 = 16;
 pub const MATRIX_DWORDS: u32 = 20;

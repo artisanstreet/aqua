@@ -7,18 +7,18 @@ use aqua_gpu_d3d12::hal::{create_factory, list_adapters};
 use aqua_gpu_d3d12::window::WindowBackend;
 use aqua_graph::Extent;
 use aqua_protocol::GpuBackend;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, HMODULE};
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
 };
 use windows::Win32::System::LibraryLoader::{
-    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-    GetModuleFileNameW, GetModuleHandleExW,
+    GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
 };
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, GetCurrentThreadId, GetThreadTimes, OpenThread, THREAD_QUERY_INFORMATION,
 };
-use windows::core::PCWSTR;
 
 use crate::backend::{frame, open, options, scene};
 use crate::test_window::TestWindow;

@@ -9,19 +9,19 @@ use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use super::Error;
 use super::barriers::Emitter;
 use super::compute::{self, ComputePipelines};
 use super::custom::{self, CustomDraw, CustomPipelines};
 use super::formats::{dxgi, state_for};
 use super::pipeline::{Kind, PipelineStats, Pipelines};
 use super::sprites;
-use super::tiers::{Active, SceneOptions, resolve};
+use super::tiers::{resolve, Active, SceneOptions};
 use super::timestamps::{PassTime, Timestamps};
 use super::transients::Transients;
 use super::util::*;
+use super::Error;
 use crate::ledger::{self, Token};
-use crate::pack::{QUAD_STRIDE, SHADOW_STRIDE, pack_quad, pack_shadow};
+use crate::pack::{pack_quad, pack_shadow, QUAD_STRIDE, SHADOW_STRIDE};
 use crate::sprite::{glyph_packer, pack_image, pack_slug};
 
 const INITIAL_UPLOAD_BYTES: u64 = 1 << 16;

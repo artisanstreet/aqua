@@ -1,12 +1,12 @@
+use windows::core::Interface;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, RECT, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Threading::WaitForSingleObjectEx;
-use windows::core::Interface;
 
 use super::error::Error;
-use crate::ledger::{Kind, Token, record};
+use crate::ledger::{record, Kind, Token};
 
 pub const RENDER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 const BUFFER_COUNT: u32 = 2;

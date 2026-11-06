@@ -5,10 +5,10 @@ use aqua_protocol::{TextureOp, UploadBatch};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use super::Error;
 use super::renderer::PersistentView;
 use super::util::*;
-use crate::ledger::{Kind as LedgerKind, Token, record};
+use super::Error;
+use crate::ledger::{record, Kind as LedgerKind, Token};
 
 const PITCH_ALIGNMENT: u64 = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT as u64;
 const PLACEMENT_ALIGNMENT: u64 = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT as u64;

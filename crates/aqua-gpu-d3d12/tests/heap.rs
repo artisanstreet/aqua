@@ -30,7 +30,13 @@ fn record_site() {
         let trace = std::backtrace::Backtrace::force_capture().to_string();
         let frames: Vec<&str> = trace
             .lines()
-            .filter(|line| line.trim_start().starts_with(|c: char| c.is_ascii_digit()) && !line.contains("heap::") && !line.contains("std::") && !line.contains("core::") && !line.contains("alloc::"))
+            .filter(|line| {
+                line.trim_start().starts_with(|c: char| c.is_ascii_digit())
+                    && !line.contains("heap::")
+                    && !line.contains("std::")
+                    && !line.contains("core::")
+                    && !line.contains("alloc::")
+            })
             .take(10)
             .collect();
         SITES.lock().unwrap().push(frames.join(" <- "));

@@ -1,11 +1,11 @@
 use std::cell::RefCell;
-use std::mem::{ManuallyDrop, transmute_copy};
+use std::mem::{transmute_copy, ManuallyDrop};
 
-use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
+use windows::Win32::Graphics::Direct3D12::*;
 
-use super::Error;
 use super::util::{aliasing, transition, unordered_barrier};
+use super::Error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BarrierMode {

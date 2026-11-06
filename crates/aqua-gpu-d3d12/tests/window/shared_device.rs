@@ -72,11 +72,9 @@ fn closing_or_resizing_one_window_leaves_the_other_untouched() {
     assert_eq!(backend.buffer_age(second_id), age);
     frame(&mut backend, &first, first_id, &scene(resized, 0.5));
     backend.destroy_surface(first_id).unwrap();
-    assert!(
-        backend
-            .execute(&scene(first_extent, 0.0), &FrameInputs::new(first_id))
-            .is_err()
-    );
+    assert!(backend
+        .execute(&scene(first_extent, 0.0), &FrameInputs::new(first_id))
+        .is_err());
     for index in 0..6 {
         frame(
             &mut backend,
@@ -106,11 +104,9 @@ fn device_loss_rebuilds_every_window_on_the_new_device() {
         frame(&mut backend, &second, second_id, &scene(second_extent, 0.4));
     }
     backend.inject_device_removal().unwrap();
-    assert!(
-        backend
-            .execute(&scene(first_extent, 0.1), &FrameInputs::new(first_id))
-            .is_err()
-    );
+    assert!(backend
+        .execute(&scene(first_extent, 0.1), &FrameInputs::new(first_id))
+        .is_err());
     let report = backend.recover().unwrap();
     assert_eq!(report.rebuilt_surfaces, 2);
     frame(&mut backend, &first, first_id, &scene(first_extent, 0.6));

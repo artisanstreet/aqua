@@ -4,8 +4,8 @@ mod support;
 
 use aqua_core::Oklch;
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
+use aqua_gpu_ref::conformance::cases::{build, quad, STANDARD};
 use aqua_gpu_ref::conformance::Session;
-use aqua_gpu_ref::conformance::cases::{STANDARD, build, quad};
 
 fn exercise(preference: AdapterPreference) {
     let Ok(first) =

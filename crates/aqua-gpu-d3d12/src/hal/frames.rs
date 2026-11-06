@@ -6,7 +6,7 @@ use super::error::Error;
 use super::ring::{RingError, RingLayout};
 use super::timeline::Timeline;
 use super::util::*;
-use crate::ledger::{Kind, Token, record};
+use crate::ledger::{record, Kind, Token};
 
 pub const INITIAL_UPLOAD_BYTES: u64 = 1 << 16;
 

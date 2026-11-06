@@ -1,4 +1,4 @@
-use aqua_gpu_d3d12::ledger::{Kind, record, snapshot};
+use aqua_gpu_d3d12::ledger::{record, snapshot, Kind};
 
 #[test]
 fn tokens_count_while_alive_and_release_on_drop() {

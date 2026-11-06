@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use windows::Win32::Graphics::Direct3D12::*;
 
-use super::Error;
 use super::util::{create_buffer, map_whole};
-use crate::ledger::{Kind, Token, record};
+use super::Error;
+use crate::ledger::{record, Kind, Token};
 use crate::policy::ticks_to_duration;
 
 const STAMPS_PER_SLOT: u32 = 64;

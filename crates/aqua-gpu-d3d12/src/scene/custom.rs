@@ -7,13 +7,14 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use super::Error;
 use super::compile::{compile, linear_clamp_sampler, serialize_root};
+use super::Error;
 
 pub const MAX_INPUTS: u32 = 8;
 pub const PARAMETER_ALIGNMENT: usize = 256;
 
-const VERTEX_SOURCE: &str = "struct Output { float4 position : SV_Position; float2 uv : TEXCOORD0; };\n\
+const VERTEX_SOURCE: &str =
+    "struct Output { float4 position : SV_Position; float2 uv : TEXCOORD0; };\n\
 Output vs_custom(uint vertex : SV_VertexID)\n\
 {\n\
     float2 corner = float2(vertex & 1, vertex >> 1);\n\

@@ -1,9 +1,9 @@
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
+use aqua_core::Oklch;
 use aqua_gpu_d3d12::hal::budget::{Trim, Visibility};
 use aqua_gpu_d3d12::hal::selection::AdapterPreference;
 use aqua_gpu_d3d12::window::MemoryBreakdown;
-use aqua_graph::{Extent, FramePlan, PaintCommand, Quad, plan_paint};
+use aqua_graph::{plan_paint, Extent, FramePlan, PaintCommand, Quad};
 
 use crate::backend::{backend, frame, open, scene};
 use crate::test_window::TestWindow;

@@ -3,7 +3,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::error::Error;
 use super::ring::{RingError, RingLayout, SlotAllocator};
 use super::timeline::Timeline;
-use crate::ledger::{Kind, Token, record};
+use crate::ledger::{record, Kind, Token};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Descriptor {

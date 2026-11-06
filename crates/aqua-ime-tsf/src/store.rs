@@ -2,23 +2,23 @@ use crate::model::{EditError, Model, Notify, Selection, TextChange};
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
+use windows::core::{implement, Error, Interface, Ref, Result, BOOL, GUID, HRESULT, PWSTR};
 use windows::Win32::Foundation::{
     E_FAIL, E_INVALIDARG, E_NOTIMPL, E_UNEXPECTED, HWND, POINT, RECT, S_OK,
 };
 use windows::Win32::Graphics::Gdi::ClientToScreen;
-use windows::Win32::System::Com::{FORMATETC, IDataObject};
+use windows::Win32::System::Com::{IDataObject, FORMATETC};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::TextServices::{
-    ITextStoreACP, ITextStoreACP_Impl, ITextStoreACPSink, ITfCompositionView,
+    ITextStoreACP, ITextStoreACPSink, ITextStoreACP_Impl, ITfCompositionView,
     ITfContextOwnerCompositionSink, ITfContextOwnerCompositionSink_Impl, ITfRange, ITfRangeACP,
     TEXT_STORE_LOCK_FLAGS, TEXT_STORE_TEXT_CHANGE_FLAGS, TS_AE_END, TS_AE_START,
     TS_AS_LAYOUT_CHANGE, TS_AS_SEL_CHANGE, TS_AS_TEXT_CHANGE, TS_ATTRVAL, TS_E_INVALIDPOS,
     TS_E_NOLOCK, TS_E_NOSELECTION, TS_E_READONLY, TS_E_SYNCHRONOUS, TS_IAS_QUERYONLY, TS_LC_CHANGE,
-    TS_LF_SYNC, TS_RT_PLAIN, TS_RUNINFO, TS_S_ASYNC, TS_SELECTION_ACP, TS_SELECTIONSTYLE,
-    TS_SS_NOHIDDENTEXT, TS_STATUS, TS_TEXTCHANGE,
+    TS_LF_SYNC, TS_RT_PLAIN, TS_RUNINFO, TS_SELECTIONSTYLE, TS_SELECTION_ACP, TS_SS_NOHIDDENTEXT,
+    TS_STATUS, TS_S_ASYNC, TS_TEXTCHANGE,
 };
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
-use windows::core::{BOOL, Error, GUID, HRESULT, Interface, PWSTR, Ref, Result, implement};
 
 const CONNECT_E_NOCONNECTION: HRESULT = HRESULT(0x80040200_u32 as i32);
 const CONNECT_E_ADVISELIMIT: HRESULT = HRESULT(0x80040201_u32 as i32);

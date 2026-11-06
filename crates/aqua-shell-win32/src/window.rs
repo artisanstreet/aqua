@@ -176,7 +176,6 @@ impl Window {
                 )
             });
             let window = Window { hwnd: raw };
-            let _ = crate::drop_target::register(hwnd);
             if dpi != system_dpi {
                 let (width, height) = outer_size(options, style, ex, dpi)?;
                 let _ = SetWindowPos(
@@ -220,6 +219,10 @@ impl Window {
 
     fn hwnd(self) -> HWND {
         hwnd_from(self.hwnd)
+    }
+
+    pub fn enable_file_drop(self) {
+        let _ = crate::drop_target::register(self.hwnd());
     }
 
     pub fn id(self) -> WindowId {

@@ -3,6 +3,7 @@ use crate::hooks::{self, RawMessage};
 use crate::input::{self, PointerButtonSource};
 use crate::looping::turn;
 use crate::pointer::{self, Device};
+use crate::pointer_source;
 use crate::regions::{self, ht, Geometry};
 use crate::state::{self, Queued};
 use aqua_core::{CursorIcon, InputEvent, KeyEvent, Modifiers, Point, PointerEvent, PointerKind};
@@ -18,9 +19,6 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, GetKeyboardLayout, GetKeyboardState, ReleaseCapture, SetCapture, ToUnicodeEx,
     TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
-};
-use windows::Win32::UI::Input::Pointer::{
-    GetPointerInfo, GetPointerPenInfo, GetPointerType, POINTER_INFO, POINTER_PEN_INFO,
 };
 use windows::Win32::UI::Input::{GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTHEADER, RID_INPUT};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -209,34 +207,21 @@ fn key(raw: isize, wparam: WPARAM, lparam: LPARAM, pressed: bool) {
     );
 }
 
-fn touch_or_pen(pointer_id: u32) -> Option<Device> {
-    let mut kind = POINTER_INPUT_TYPE::default();
-    unsafe { GetPointerType(pointer_id, &mut kind) }.ok()?;
-    Device::from_pointer_type(kind.0)
-}
-
 fn pointer_contact(hwnd: HWND, raw: isize, wparam: WPARAM) -> Option<LRESULT> {
     let id = (wparam.0 & 0xFFFF) as u32;
-    let device = touch_or_pen(id)?;
-    let mut info = POINTER_INFO::default();
-    unsafe { GetPointerInfo(id, &mut info) }.ok()?;
-    let pen_flags = match device {
-        Device::Pen => {
-            let mut pen = POINTER_PEN_INFO::default();
-            unsafe { GetPointerPenInfo(id, &mut pen) }
-                .map(|_| pen.penFlags)
-                .unwrap_or(0)
-        }
-        Device::Touch => 0,
+    let device = pointer_source::kind_of(id)?;
+    let reading = pointer_source::read(id, device)?;
+    let mut at = POINT {
+        x: reading.screen.0,
+        y: reading.screen.1,
     };
-    let mut at = info.ptPixelLocation;
     let _ = unsafe { ScreenToClient(hwnd, &mut at) };
     sync_modifiers(raw);
     let sample = pointer::Sample {
         id,
         device,
-        flags: info.pointerFlags.0,
-        pen_flags,
+        flags: reading.flags,
+        pen_flags: reading.pen_flags,
         position: logical(raw, (at.x, at.y)),
     };
     let previous = state::window(raw, |w| w.touch_buttons.get(&id).copied().unwrap_or(0))?;

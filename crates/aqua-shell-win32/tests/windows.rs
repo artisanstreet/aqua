@@ -265,6 +265,7 @@ fn file_drag_and_drop_reaches_the_handler_in_logical_coordinates() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let log: Log = Default::default();
     let window = Window::create(&hidden()).expect("window");
+    window.enable_file_drop();
     let scale = window.scale();
     let exe = std::env::temp_dir().join("aqua-shell-drop-probe.txt");
     std::fs::write(&exe, b"probe").expect("probe file");
@@ -487,6 +488,7 @@ impl IDataObject_Impl for TextOnly_Impl {
 }
 
 fn drop_target_of(window: Window) -> IDropTarget {
+    window.enable_file_drop();
     let raw = unsafe { GetPropW(hwnd(window), w!("OleDropTargetInterface")) };
     unsafe { IDropTarget::from_raw_borrowed(&raw.0) }
         .expect("drop target registered")

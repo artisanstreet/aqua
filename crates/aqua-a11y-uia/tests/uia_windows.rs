@@ -18,11 +18,13 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation8, IUIAutomation, IUIAutomationInvokePattern, IUIAutomationRangeValuePattern,
-    IUIAutomationTextPattern, IUIAutomationTogglePattern, IUIAutomationValuePattern,
-    ToggleState_Off, ToggleState_On, TreeScope_Descendants, UIA_ButtonControlTypeId,
-    UIA_CheckBoxControlTypeId, UIA_InvokePatternId, UIA_RangeValuePatternId, UIA_TextControlTypeId,
-    UIA_TextPatternId, UIA_TogglePatternId, UIA_ValuePatternId,
+    CUIAutomation8, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
+    IUIAutomationRangeValuePattern, IUIAutomationTextPattern, IUIAutomationTextRange,
+    IUIAutomationTogglePattern, IUIAutomationValuePattern, TextPatternRangeEndpoint_End,
+    TextPatternRangeEndpoint_Start, TextUnit_Character, ToggleState_Off, ToggleState_On,
+    TreeScope_Descendants, UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId, UIA_InvokePatternId,
+    UIA_RangeValuePatternId, UIA_TextControlTypeId, UIA_TextPatternId, UIA_TogglePatternId,
+    UIA_ValuePatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, PostMessageW, ShowWindow,
@@ -87,6 +89,8 @@ fn tree(version: usize) -> AccessTreeUpdate {
         value: 4.0,
         step: 1.0,
     });
+    let mut locked = item(6, Role::Button, "Locked", vec![]);
+    locked.semantic.disabled = true;
     AccessTreeUpdate {
         root: id(0),
         focus: id(1),
@@ -95,13 +99,14 @@ fn tree(version: usize) -> AccessTreeUpdate {
                 0,
                 Role::Group,
                 "Aqua test",
-                vec![id(1), id(2), id(3), id(4), id(5)],
+                vec![id(1), id(2), id(3), id(4), id(5), id(6)],
             ),
             item(1, Role::Button, run_label, vec![]),
             item(2, Role::Text, "Status ready", vec![]),
             checkbox,
             field,
             slider,
+            locked,
         ],
     }
 }
@@ -402,5 +407,138 @@ fn uia_toggle_value_range_and_text_patterns_work() {
             })
             .then_some(())
     });
+    stop(host);
+}
+
+fn collect_actions(host: &Host, received: &mut Vec<A11yActionRequest>) {
+    received.extend(host.actions.try_iter());
+}
+
+#[test]
+fn uia_exposes_hierarchy_focusability_and_enabled_state() {
+    let host = spawn_host();
+    let client = automation();
+    let button = element_named(&client, &host, "Run");
+    let locked = element_named(&client, &host, "Locked");
+    let status = element_named(&client, &host, "Status ready");
+
+    let walker = unsafe { client.ControlViewWalker() }.unwrap();
+    let parent: IUIAutomationElement = unsafe { walker.GetParentElement(&button) }.unwrap();
+    assert_eq!(
+        unsafe { parent.CurrentName() }.unwrap().to_string(),
+        "Aqua test"
+    );
+    let first = unsafe { walker.GetFirstChildElement(&parent) }.unwrap();
+    assert_eq!(unsafe { first.CurrentName() }.unwrap().to_string(), "Run");
+    let second = unsafe { walker.GetNextSiblingElement(&first) }.unwrap();
+    assert_eq!(
+        unsafe { second.CurrentName() }.unwrap().to_string(),
+        "Status ready"
+    );
+    let last = unsafe { walker.GetLastChildElement(&parent) }.unwrap();
+    assert_eq!(unsafe { last.CurrentName() }.unwrap().to_string(), "Locked");
+    let children = unsafe {
+        parent.FindAll(
+            windows::Win32::UI::Accessibility::TreeScope_Children,
+            &client.CreateTrueCondition().unwrap(),
+        )
+    }
+    .unwrap();
+    assert_eq!(unsafe { children.Length() }.unwrap(), 6);
+
+    assert!(unsafe { button.CurrentIsEnabled() }.unwrap().as_bool());
+    assert!(!unsafe { locked.CurrentIsEnabled() }.unwrap().as_bool());
+    assert!(unsafe { button.CurrentIsKeyboardFocusable() }
+        .unwrap()
+        .as_bool());
+    assert!(!unsafe { status.CurrentIsKeyboardFocusable() }
+        .unwrap()
+        .as_bool());
+
+    let field = element_named(&client, &host, "Name");
+    unsafe { field.SetFocus() }.unwrap();
+    let mut received = Vec::new();
+    wait_for(|| {
+        collect_actions(&host, &mut received);
+        received
+            .iter()
+            .any(|action| action.node == id(4) && action.action == A11yAction::Focus)
+            .then_some(())
+    });
+    stop(host);
+}
+
+fn text_of(range: &IUIAutomationTextRange) -> String {
+    unsafe { range.GetText(-1) }.unwrap().to_string()
+}
+
+#[test]
+fn uia_text_ranges_move_by_character_over_multibyte_text_and_select() {
+    let host = spawn_host();
+    let client = automation();
+    let field = element_named(&client, &host, "Name");
+    let text: IUIAutomationTextPattern =
+        unsafe { field.GetCurrentPatternAs(UIA_TextPatternId) }.unwrap();
+    let document = unsafe { text.DocumentRange() }.unwrap();
+    let range = unsafe { document.Clone() }.unwrap();
+    unsafe {
+        range.MoveEndpointByRange(
+            TextPatternRangeEndpoint_End,
+            &range,
+            TextPatternRangeEndpoint_Start,
+        )
+    }
+    .unwrap();
+    assert_eq!(text_of(&range), "");
+    let moved = unsafe { range.Move(TextUnit_Character, 1) }.unwrap();
+    assert_eq!(moved, 1);
+    unsafe { range.ExpandToEnclosingUnit(TextUnit_Character) }.unwrap();
+    assert_eq!(text_of(&range), "é");
+    let moved = unsafe { range.Move(TextUnit_Character, 3) }.unwrap();
+    assert_eq!(moved, 3);
+    unsafe { range.ExpandToEnclosingUnit(TextUnit_Character) }.unwrap();
+    assert_eq!(text_of(&range), "o");
+    let past = unsafe { range.Move(TextUnit_Character, 4) }.unwrap();
+    assert_eq!(past, 1);
+
+    let accent = unsafe { document.Clone() }.unwrap();
+    unsafe {
+        accent.MoveEndpointByRange(
+            TextPatternRangeEndpoint_End,
+            &accent,
+            TextPatternRangeEndpoint_Start,
+        )
+    }
+    .unwrap();
+    unsafe { accent.Move(TextUnit_Character, 1) }.unwrap();
+    unsafe { accent.ExpandToEnclosingUnit(TextUnit_Character) }.unwrap();
+    unsafe { accent.Select() }.unwrap();
+    let mut received = Vec::new();
+    wait_for(|| {
+        collect_actions(&host, &mut received);
+        received
+            .iter()
+            .any(|action| {
+                action.node == id(4)
+                    && matches!(
+                        action.data,
+                        A11yActionData::TextSelection { .. }
+                            | A11yActionData::TextByteSelection { .. }
+                    )
+            })
+            .then_some(())
+    });
+    let selection = received
+        .iter()
+        .find_map(|action| match &action.data {
+            A11yActionData::TextByteSelection {
+                anchor_byte,
+                focus_byte,
+                ..
+            } => Some((*anchor_byte, *focus_byte)),
+            _ => None,
+        })
+        .expect("byte selection");
+    assert_eq!(selection, (1, 3));
     stop(host);
 }

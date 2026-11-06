@@ -1,5 +1,5 @@
 use accesskit::{Action, ActionData, NodeId as AkNodeId, TextPosition, TextSelection, TreeId};
-use aqua_a11y_uia::{A11yBridge, A11yTree, BridgeActivationHandler, Connection, pack_node_id};
+use aqua_a11y_uia::{pack_node_id, A11yBridge, A11yTree, BridgeActivationHandler, Connection};
 use aqua_core::{NodeId, RawId, Rect, Role, SemanticNode};
 use aqua_protocol::{A11yActionData, A11yNode, A11yText, A11yTextRun, AccessTreeUpdate};
 
@@ -90,8 +90,8 @@ fn text_run_ids_are_stable_reserved_and_stale_generations_reject_actions() {
 #[test]
 fn bridge_stays_dormant_until_a_client_activates_then_wakes_for_every_inbound_event() {
     use accesskit::ActivationHandler;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     let wakes = Arc::new(AtomicUsize::new(0));
     let count = wakes.clone();

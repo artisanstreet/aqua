@@ -38,6 +38,8 @@ mod looping;
 #[cfg(windows)]
 mod material;
 #[cfg(windows)]
+pub mod pointer_source;
+#[cfg(windows)]
 pub mod prefs;
 #[cfg(windows)]
 mod state;

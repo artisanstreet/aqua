@@ -1,5 +1,5 @@
+use aqua_gpu_ref::conformance::{self, run_suite, SuiteConfig, Tolerance};
 use aqua_gpu_ref::RefBackend;
-use aqua_gpu_ref::conformance::{self, SuiteConfig, Tolerance, run_suite};
 
 #[test]
 fn reference_passes_its_own_suite_exactly() {

@@ -730,3 +730,53 @@ fn rotated_and_skewed_subtrees_hit_test_exactly_and_report_the_bounding_box() {
     assert!((back.x - local.x).abs() < 1e-3 && (back.y - local.y).abs() < 1e-3);
     let _ = child;
 }
+
+#[test]
+fn activation_fires_for_a_button_inside_a_scrolled_container() {
+    use aqua_ui::style::Axis;
+    use aqua_ui::tree::ScrollContent;
+    let sized = |width, height| LayoutStyle {
+        width: Length::Px(width),
+        height: Length::Px(height),
+        axis: Axis::Column,
+        flex_shrink: 0.0,
+        ..Default::default()
+    };
+    let mut tree = UiTree::new();
+    let root = tree.mount_spec(
+        NodeSpec::new(
+            NodeKind::Scroll(ScrollContent::default()),
+            sized(100.0, 100.0),
+        )
+        .child(NodeSpec::new(
+            NodeKind::Box(BoxContent::default()),
+            sized(100.0, 300.0),
+        ))
+        .child(NodeSpec::new(
+            NodeKind::Box(BoxContent::default()),
+            sized(100.0, 40.0),
+        )),
+    );
+    tree.compute_layout(Size::new(100.0, 100.0), &NaiveMeasurer)
+        .unwrap();
+    let button = tree.get(root).unwrap().children[1];
+    tree.set_focusable(button, true);
+    let fired = Rc::new(Cell::new(0));
+    let sink = fired.clone();
+    tree.set_action_callback(
+        button,
+        ActionKind::Activate,
+        Box::new(move |_| sink.set(sink.get() + 1)),
+    );
+    assert!(tree.scroll_to(root, Point::new(0.0, 240.0)));
+    let at = Point::new(10.0, 70.0);
+    dispatch_input(
+        &mut tree,
+        &InputEvent::PointerDown(pointer(at.x, at.y, 1), PointerButton::Primary),
+    );
+    dispatch_input(
+        &mut tree,
+        &InputEvent::PointerUp(pointer(at.x, at.y, 0), PointerButton::Primary),
+    );
+    assert_eq!(fired.get(), 1);
+}

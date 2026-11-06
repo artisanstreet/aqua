@@ -58,6 +58,21 @@ pub fn to_taffy(s: &LayoutStyle) -> taffy::Style {
     } else {
         Display::Flex
     };
+    let grid_style = (s.grid_columns.is_some() || s.grid_rows.is_some()).then(|| {
+        Box::new(taffy::style::GridStyle {
+            grid_template_columns: s
+                .grid_columns
+                .as_ref()
+                .map(|tracks| tracks.iter().map(|t| track(*t)).collect())
+                .unwrap_or_default(),
+            grid_template_rows: s
+                .grid_rows
+                .as_ref()
+                .map(|tracks| tracks.iter().map(|t| track(*t)).collect())
+                .unwrap_or_default(),
+            ..Default::default()
+        })
+    });
     taffy::Style {
         display,
         size: taffy::geometry::Size {
@@ -98,16 +113,7 @@ pub fn to_taffy(s: &LayoutStyle) -> taffy::Style {
             top: LengthPercentageAuto::length(s.margin.top),
             bottom: LengthPercentageAuto::length(s.margin.bottom),
         },
-        grid_template_columns: s
-            .grid_columns
-            .as_ref()
-            .map(|tracks| tracks.iter().map(|t| track(*t)).collect())
-            .unwrap_or_default(),
-        grid_template_rows: s
-            .grid_rows
-            .as_ref()
-            .map(|tracks| tracks.iter().map(|t| track(*t)).collect())
-            .unwrap_or_default(),
+        grid: grid_style,
         position: if s.absolute.is_some() {
             Position::Absolute
         } else {

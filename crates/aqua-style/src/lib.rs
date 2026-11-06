@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-
 pub mod motion;
 
 use aqua_core::{CornerRadii, Insets, Oklch, Transform2D};
@@ -149,7 +148,6 @@ pub const fn pct(p: f32) -> Length {
 pub const fn auto() -> Length {
     Length::Auto
 }
-
 
 const fn px_only(len: Length) -> f32 {
     match len {
@@ -364,7 +362,6 @@ impl Style {
             && self.text_wrap.is_none()
     }
 
-
     #[must_use]
     pub const fn width(mut self, w: Length) -> Self {
         self.width = Some(w);
@@ -400,7 +397,6 @@ impl Style {
         self.max_height = Some(h);
         self
     }
-
 
     #[must_use]
     pub const fn flex_grow(mut self, g: f32) -> Self {
@@ -492,7 +488,6 @@ impl Style {
         self
     }
 
-
     #[must_use]
     pub const fn padding(mut self, pad: Length) -> Self {
         self.padding = Some(Insets::uniform(px_only(pad)));
@@ -516,7 +511,6 @@ impl Style {
         self.margin = Some(m);
         self
     }
-
 
     #[must_use]
     pub fn grid_columns(mut self, tracks: Vec<Length>) -> Self {
@@ -561,7 +555,6 @@ impl Style {
         self
     }
 
-
     #[must_use]
     pub const fn absolute(mut self, absolute: Absolute) -> Self {
         self.absolute = Some(Some(absolute));
@@ -590,7 +583,6 @@ impl Style {
         self.absolute = Some(None);
         self
     }
-
 
     #[must_use]
     pub const fn background(mut self, color: Oklch) -> Self {
@@ -806,7 +798,6 @@ impl Style {
         self
     }
 
-
     #[must_use]
     pub const fn font_size(mut self, size: f32) -> Self {
         self.font_size = Some(size);
@@ -883,7 +874,6 @@ impl Style {
     pub fn text_wrap_opt(&self) -> Option<bool> {
         self.text_wrap
     }
-
 
     pub fn merge(&mut self, other: &Self) {
         macro_rules! take {
@@ -966,7 +956,6 @@ impl Style {
         }
         out
     }
-
 
     pub fn apply_to(&self, layout: &mut LayoutStyle, paint: &mut Paint) {
         if let Some(v) = self.width {

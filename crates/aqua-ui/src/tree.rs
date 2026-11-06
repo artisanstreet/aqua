@@ -3503,7 +3503,7 @@ impl UiTree {
     /// commands first. Skips Taffy entirely when the viewport and layout
     /// version are unchanged (paint-only updates cost no layout work).
     /// `measurer` supplies text metrics; production uses
-    /// [`CosmicMeasurer`](crate::layout::CosmicMeasurer) over the shared
+    /// [`ShapedMeasurer`](crate::layout::ShapedMeasurer) over the shared
     /// fonts, tests use [`NaiveMeasurer`].
     pub fn compute_layout(
         &mut self,

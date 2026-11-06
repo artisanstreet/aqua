@@ -709,6 +709,8 @@ pub fn dispatch_default(tree: &mut UiTree, event: &InputEvent) -> bool {
             let Some(rect) = tree.rect(armed) else {
                 return true;
             };
+            let inside = crate::input::local_position(tree, armed, pe.position)
+                .is_some_and(|local| Rect::from_edges(0.0, 0.0, rect.w, rect.h).contains(local));
             if tree.is_disabled(armed) {
                 return true;
             }
@@ -729,9 +731,7 @@ pub fn dispatch_default(tree: &mut UiTree, event: &InputEvent) -> bool {
                     click_count: tree.interaction_click_count(pe, button),
                 })
             };
-            if rect.contains(pe.position)
-                && (pe.kind != aqua_core::PointerKind::Touch || source.is_some())
-            {
+            if inside && (pe.kind != aqua_core::PointerKind::Touch || source.is_some()) {
                 tree.fire_action(ActionEvent {
                     source,
                     node: armed,

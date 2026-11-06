@@ -1,5 +1,11 @@
 pub fn reference(a: &[u8], b: &[u8]) -> Option<u8> {
-    (a.len() == b.len()).then(|| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0))
+    (a.len() == b.len()).then(|| {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| x.abs_diff(*y))
+            .max()
+            .unwrap_or(0)
+    })
 }
 
 #[cfg(target_arch = "x86_64")]

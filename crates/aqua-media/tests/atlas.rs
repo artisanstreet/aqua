@@ -429,7 +429,9 @@ fn small_icons_open_a_small_first_page() {
             width: 22,
             height: 22,
         };
-        atlas.insert(key, 22, 22, [0, 0], vec![0; 22 * 22 * 4]).unwrap();
+        atlas
+            .insert(key, 22, 22, [0, 0], vec![0; 22 * 22 * 4])
+            .unwrap();
     }
     assert_eq!(atlas.resident_bytes(), 256 * 256 * 4);
 }

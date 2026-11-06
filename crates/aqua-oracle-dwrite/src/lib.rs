@@ -3,6 +3,6 @@
 mod oracle;
 
 pub use oracle::{
-    BlendParams, Canvas, ColorCanvas, FontSource, StrikeImage, GlyphRunSpec, Oracle, OracleError, RenderMode, ShapedGlyph,
-    SystemRendering,
+    BlendParams, Canvas, ColorCanvas, FontSource, GlyphRunSpec, Oracle, OracleError, RenderMode,
+    ShapedGlyph, StrikeImage, SystemRendering,
 };

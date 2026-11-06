@@ -45,9 +45,18 @@ fn ours(
 ) -> Option<Vec<u8>> {
     let placement = place_glyph(glyph, pen_x, baseline, true);
     let (key, shift) = match policy {
-        Policy::FloorBin0 => (aqua_text::raster::RasterKey { subpixel: 0, ..placement.key }, 0),
+        Policy::FloorBin0 => (
+            aqua_text::raster::RasterKey {
+                subpixel: 0,
+                ..placement.key
+            },
+            0,
+        ),
         Policy::NearestBin0 => (
-            aqua_text::raster::RasterKey { subpixel: 0, ..placement.key },
+            aqua_text::raster::RasterKey {
+                subpixel: 0,
+                ..placement.key
+            },
             placement.color_x() - placement.x,
         ),
         Policy::PhasedBins => (placement.key, 0),
@@ -89,7 +98,11 @@ fn measure(policy: Policy) -> Totals {
             let entry = fonts
                 .entry_with(glyph.font_id, glyph.font_weight, glyph.font_stretch, false)
                 .expect("emoji face");
-            assert!(entry.postscript_name().starts_with("SegoeUIEmoji"), "{}", entry.postscript_name());
+            assert!(
+                entry.postscript_name().starts_with("SegoeUIEmoji"),
+                "{}",
+                entry.postscript_name()
+            );
             let source = FontSource {
                 data: entry.data(),
                 face_index: entry.face_index(),
@@ -113,8 +126,16 @@ fn measure(policy: Policy) -> Totals {
                         [0.0; 3],
                     )
                     .unwrap();
-                let mine = ours(&mut rasterizer, &mut fonts, &glyph, pen_x - glyph.x, baseline, extent, policy)
-                    .expect("aqua color raster");
+                let mine = ours(
+                    &mut rasterizer,
+                    &mut fonts,
+                    &glyph,
+                    pen_x - glyph.x,
+                    baseline,
+                    extent,
+                    policy,
+                )
+                .expect("aqua color raster");
                 let (Some((native_x, native_ink)), Some((our_x, our_ink))) = (
                     centroid(&native.premultiplied_rgba, extent.0),
                     centroid(&mine, extent.0),
@@ -137,7 +158,11 @@ fn whole_pixel_color_glyph_policies_against_directwrite_layers() {
     let floor = measure(Policy::FloorBin0);
     let nearest = measure(Policy::NearestBin0);
     let phased = measure(Policy::PhasedBins);
-    for (name, totals) in [("floor", &floor), ("nearest", &nearest), ("phased", &phased)] {
+    for (name, totals) in [
+        ("floor", &floor),
+        ("nearest", &nearest),
+        ("phased", &phased),
+    ] {
         println!(
             "{name}: mean centroid error {:.3} px, worst {:.3} px, mean ink ratio {:.3} over {} glyph placements",
             totals.centroid_error / totals.samples,
@@ -147,7 +172,10 @@ fn whole_pixel_color_glyph_policies_against_directwrite_layers() {
         );
     }
     let mean = |totals: &Totals| totals.centroid_error / totals.samples;
-    assert!(mean(&phased) < 0.2, "phased bitmaps track DirectWrite subpixel placement");
+    assert!(
+        mean(&phased) < 0.2,
+        "phased bitmaps track DirectWrite subpixel placement"
+    );
     assert!(mean(&nearest) < 0.3 && nearest.worst_centroid_error < 0.8);
     assert!(mean(&nearest) < mean(&floor) && mean(&phased) * 2.0 < mean(&nearest));
     for totals in [&floor, &nearest, &phased] {

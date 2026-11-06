@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use aqua_motion::{Easing, MotionKind, SpringParams};
 use aqua_style::motion::{
-    AnimatedProperty, Animate, Motion, MotionRef, MotionSpec, MotionTheme, MotionToken, Presence,
+    Animate, AnimatedProperty, Motion, MotionRef, MotionSpec, MotionTheme, MotionToken, Presence,
 };
 
 const SLOW: MotionToken = MotionToken::new("slow");
@@ -45,7 +45,10 @@ fn animate_lists_only_declared_properties() {
         .into_iter()
         .map(|(property, _)| property)
         .collect();
-    assert_eq!(declared, vec![AnimatedProperty::Fill, AnimatedProperty::Frame]);
+    assert_eq!(
+        declared,
+        vec![AnimatedProperty::Fill, AnimatedProperty::Frame]
+    );
     assert_eq!(
         animate.motion_of(AnimatedProperty::Frame),
         Some(MotionRef::Token(SLOW))

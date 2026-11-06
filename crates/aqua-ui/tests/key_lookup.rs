@@ -4,7 +4,7 @@ use aqua_ui::binding::View;
 use aqua_ui::element::{Box, Key};
 use aqua_ui::hash_key;
 use aqua_ui::layout::NaiveMeasurer;
-use aqua_ui::style::{Axis, Style, px};
+use aqua_ui::style::{px, Axis, Style};
 use aqua_ui::tree::UiTree;
 
 fn leaf(key: &'static str) -> aqua_ui::element::Element {

@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use aqua_core::NodeId;
 use aqua_core::id::RawId;
+use aqua_core::NodeId;
 use aqua_motion::{
     AppMotion, Completion, Easing, MotionCommand, MotionEvent, MotionKind, MotionValue,
     ReducedMotion, TrackSet,

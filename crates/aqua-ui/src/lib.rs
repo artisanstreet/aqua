@@ -27,7 +27,7 @@ pub mod style;
 pub mod tree;
 pub mod virtualization;
 
-pub use layout::{CosmicMeasurer, NaiveMeasurer, TextMeasurer};
+pub use layout::{NaiveMeasurer, ShapedMeasurer, TextMeasurer};
 pub use taffy::style::{
     AlignContent, AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent,
 };

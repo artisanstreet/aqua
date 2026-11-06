@@ -136,7 +136,7 @@ impl Runtime {
             focus_root: options.focus != PopupFocus::Preserve,
         };
         let overlay = if measure_content {
-            let measurer = aqua_ui::layout::ProfiledCosmicMeasurer {
+            let measurer = aqua_ui::layout::ProfiledMeasurer {
                 fonts: self.fonts.clone(),
                 scale: self.scale,
                 gpui_line_height: self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded,

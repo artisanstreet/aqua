@@ -218,7 +218,7 @@ pub trait GridContainerStyle: CoreStyle {
     /// Controls how items get placed into the grid for auto-placed items
     #[inline(always)]
     fn grid_auto_flow(&self) -> GridAutoFlow {
-        Style::<Self::CustomIdent>::DEFAULT.grid_auto_flow
+        GridAutoFlow::Row
     }
 
     /// How large should the gaps between items in a grid or flex container be?

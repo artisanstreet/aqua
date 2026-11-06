@@ -1,5 +1,5 @@
+use aqua_gpu_ref::conformance::{run_suite, Outcome, SuiteConfig, Tolerance};
 use aqua_gpu_ref::RefBackend;
-use aqua_gpu_ref::conformance::{Outcome, SuiteConfig, Tolerance, run_suite};
 use aqua_graph::{Extent, FramePlan};
 use aqua_protocol::{
     FrameInputs, FrameReport, GpuBackend, GpuCapabilities, GpuError, GpuReadback, PresentHint,
@@ -106,13 +106,11 @@ fn small_interior_noise_is_tolerated_and_large_noise_is_caught() {
 fn edge_pixels_get_the_wider_tolerance_but_not_an_unbounded_one() {
     let shifted = |delta: i16| run(move |pixels| nudge(pixels, 8, 30, 0, -delta));
     let within = shifted(20);
-    assert!(
-        within
-            .cases
-            .iter()
-            .filter(|c| c.name == "solid_rect")
-            .all(|c| c.passed())
-    );
+    assert!(within
+        .cases
+        .iter()
+        .filter(|c| c.name == "solid_rect")
+        .all(|c| c.passed()));
     let beyond = shifted(60);
     assert!(solid_case_is_named(&beyond, "solid_rect"));
 }
@@ -205,11 +203,9 @@ fn unsupported_operations_fail_unless_explicitly_tolerated() {
             ..config()
         },
     );
-    assert!(
-        lenient
-            .cases
-            .iter()
-            .any(|c| matches!(c.outcome, Outcome::Unsupported(_)))
-    );
+    assert!(lenient
+        .cases
+        .iter()
+        .any(|c| matches!(c.outcome, Outcome::Unsupported(_))));
     assert!(lenient.cases.iter().all(|c| c.passed()));
 }

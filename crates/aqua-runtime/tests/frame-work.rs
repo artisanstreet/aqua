@@ -2,7 +2,7 @@ use aqua_core::{DisplayItem, NodeId};
 use aqua_runtime::Runtime;
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::element::ui::{Box as UiBox, Text as UiText};
-use aqua_ui::style::{Axis, Style, px};
+use aqua_ui::style::{px, Axis, Style};
 use aqua_ui::tree::NodeKind;
 
 fn transcript() -> (Runtime, Vec<NodeId>) {

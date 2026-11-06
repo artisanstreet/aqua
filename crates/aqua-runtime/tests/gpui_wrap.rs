@@ -2,15 +2,15 @@ use aqua_core::{ColorProfile, DisplayItem};
 use aqua_runtime::Runtime;
 use aqua_text::{CaretAffinity, CaretPosition, RunId, SharedFonts, SharedRuns, TextStyle};
 use aqua_ui::element::ui::Text;
-use aqua_ui::layout::{ProfiledCosmicMeasurer, TextMeasurer};
-use aqua_ui::style::{Style, px};
+use aqua_ui::layout::{ProfiledMeasurer, TextMeasurer};
+use aqua_ui::style::{px, Style};
 
 #[test]
 fn gpui_wrap_measurement_and_retained_carets_share_visual_lines() {
     let fonts = SharedFonts::new();
     let runs = SharedRuns::new();
     let style = TextStyle::default();
-    let measurer = ProfiledCosmicMeasurer {
+    let measurer = ProfiledMeasurer {
         fonts: fonts.clone(),
         scale: 1.0,
         gpui_line_height: true,

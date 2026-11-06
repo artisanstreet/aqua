@@ -215,7 +215,7 @@ pub struct Cache {
     /// The cache entry for the node's final layout
     final_layout_entry: Option<CacheEntry<LayoutOutput>>,
     /// The cache entries for the node's preliminary size measurements
-    measure_entries: [Option<CacheEntry<Size<f32>>>; CACHE_SIZE],
+    measure_entries: crate::util::sys::Vec<CacheEntry<Size<f32>>>,
     /// Tracks which measure entries have been used since the eviction cursor last passed them
     recently_used_entries: u16,
     /// The next measure entry to consider replacing
@@ -237,11 +237,9 @@ impl Default for Cache {
 impl Cache {
     /// Create a new empty cache
     pub const fn new() -> Self {
-        /// Workaround for `Option<CacheEntry<_>>` not being `Copy` (required for array repeat expressions)
-        const NONE_MEASURE_ENTRY: Option<CacheEntry<Size<f32>>> = None;
         Self {
             final_layout_entry: None,
-            measure_entries: [NONE_MEASURE_ENTRY; CACHE_SIZE],
+            measure_entries: crate::util::sys::Vec::new(),
             recently_used_entries: 0,
             next_measure_entry: 0,
             is_empty: true,
@@ -262,7 +260,6 @@ impl Cache {
             }
             RunMode::ComputeSize => {
                 for (index, entry) in self.measure_entries.iter().enumerate() {
-                    let Some(entry) = entry else { continue };
                     if entry.key.kd_available_space == key.kd_available_space
                         && entry.key.known_dimensions_are_definite == key.known_dimensions_are_definite
                         && (entry.key.x_axis_parent_size() == key.x_axis_parent_size())
@@ -311,11 +308,19 @@ impl Cache {
                     return;
                 }
                 self.is_empty = false;
-                if let Some(index) =
-                    self.measure_entries.iter().position(|entry| entry.as_ref().is_some_and(|entry| entry.key == key))
-                {
-                    self.measure_entries[index].as_mut().unwrap().content = layout_output.size;
+                if let Some(index) = self.measure_entries.iter().position(|entry| entry.key == key) {
+                    self.measure_entries[index].content = layout_output.size;
                     self.recently_used_entries |= 1 << index;
+                    return;
+                }
+                if self.measure_entries.len() < CACHE_SIZE {
+                    let entry_index = self.measure_entries.len();
+                    if entry_index == self.measure_entries.capacity() {
+                        self.measure_entries.reserve_exact(2.min(CACHE_SIZE - entry_index));
+                    }
+                    self.measure_entries.push(CacheEntry { key, content: layout_output.size });
+                    self.recently_used_entries |= 1 << entry_index;
+                    self.next_measure_entry = ((entry_index + 1) % CACHE_SIZE) as u8;
                     return;
                 }
                 while self.recently_used_entries & (1 << self.next_measure_entry) != 0 {
@@ -326,7 +331,7 @@ impl Cache {
                     }
                 }
                 let entry_index = self.next_measure_entry as usize;
-                self.measure_entries[entry_index] = Some(CacheEntry { key, content: layout_output.size });
+                self.measure_entries[entry_index] = CacheEntry { key, content: layout_output.size };
                 self.recently_used_entries |= 1 << entry_index;
                 self.next_measure_entry += 1;
                 if self.next_measure_entry == CACHE_SIZE as u8 {
@@ -344,9 +349,7 @@ impl Cache {
         }
         self.is_empty = true;
         self.final_layout_entry = None;
-        /// Workaround for `Option<CacheEntry<_>>` not being `Copy` (required for array repeat expressions)
-        const NONE_MEASURE_ENTRY: Option<CacheEntry<Size<f32>>> = None;
-        self.measure_entries = [NONE_MEASURE_ENTRY; CACHE_SIZE];
+        self.measure_entries.clear();
         self.recently_used_entries = 0;
         self.next_measure_entry = 0;
         ClearState::Cleared
@@ -354,7 +357,7 @@ impl Cache {
 
     /// Returns true if all cache entries are None, else false
     pub fn is_empty(&self) -> bool {
-        self.final_layout_entry.is_none() && !self.measure_entries.iter().any(|entry| entry.is_some())
+        self.final_layout_entry.is_none() && self.measure_entries.is_empty()
     }
 }
 
@@ -411,7 +414,7 @@ mod tests {
         cache.store(&input(2.0), output(2.0));
         cache.store(&input(1.0), output(3.0));
 
-        assert_eq!(cache.measure_entries.iter().flatten().count(), 2);
+        assert_eq!(cache.measure_entries.len(), 2);
         assert_eq!(cache.get(&input(1.0)), Some(output(3.0)));
     }
 
@@ -504,7 +507,7 @@ mod tests {
             cache.store(&other, output(3.0));
             assert_eq!(cache.get(&other), Some(output(3.0)));
             assert!(cache.final_layout_entry.is_none());
-            assert_eq!(cache.measure_entries.iter().flatten().count(), 1);
+            assert_eq!(cache.measure_entries.len(), 1);
 
             // The old entries are gone, even for inputs that have the mode that the cache had before
             cache.store(&input(4.0), output(4.0));
@@ -521,7 +524,7 @@ mod tests {
 
             cache.store(&other, output(3.0));
             assert_eq!(cache.get(&other), Some(output(3.0)));
-            assert!(cache.measure_entries.iter().all(|entry| entry.is_none()));
+            assert!(cache.measure_entries.is_empty());
             assert_eq!(cache.get(&perform_layout_input(100.0, 50.0)), None);
         }
     }

@@ -35,7 +35,7 @@ use aqua_ui::{
     binding::{MountError, View},
     element::Element,
     events,
-    layout::ProfiledCosmicMeasurer,
+    layout::ProfiledMeasurer,
     motion::{ReducedMotion, Seconds},
     overlay_host::OverlayHost,
     tree::{ActionEvent, ActionKind, NodeKind, TextBacking, TextContent, UiTree},
@@ -948,7 +948,7 @@ impl Runtime {
             }
         }
         self.refresh_reactive_popups()?;
-        let measurer = ProfiledCosmicMeasurer {
+        let measurer = ProfiledMeasurer {
             fonts: self.fonts.clone(),
             scale: self.scale,
             gpui_line_height: self.color_profile == aqua_core::ColorProfile::GpuiWindowsEncoded,

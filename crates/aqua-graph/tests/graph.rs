@@ -1,7 +1,7 @@
-use aqua_core::{Oklch, geometry::Rect};
+use aqua_core::{geometry::Rect, Oklch};
 use aqua_graph::{
-    Extent, FilterParams, GlyphInstance, Pass, PassKind, PlanError, PlanLimits, QuadInstance,
-    RenderGraph, ShaderId, TextureFormat, TextureHandle, TextureRef, validate,
+    validate, Extent, FilterParams, GlyphInstance, Pass, PassKind, PlanError, PlanLimits,
+    QuadInstance, RenderGraph, ShaderId, TextureFormat, TextureHandle, TextureRef,
 };
 
 const EXTENT: Extent = Extent {
@@ -227,18 +227,17 @@ fn compute_and_custom_passes_plan_with_unordered_access_and_declared_inputs() {
     };
     let plan = effect_graph(compute).plan(PlanLimits::default()).unwrap();
     assert_eq!(validate(&plan), Ok(()));
-    assert!(
-        plan.passes
-            .iter()
-            .flat_map(|pass| pass.barriers.iter())
-            .any(|barrier| matches!(
-                barrier,
-                aqua_graph::Barrier::Transition {
-                    to: aqua_graph::ResourceState::UnorderedAccess,
-                    ..
-                }
-            ))
-    );
+    assert!(plan
+        .passes
+        .iter()
+        .flat_map(|pass| pass.barriers.iter())
+        .any(|barrier| matches!(
+            barrier,
+            aqua_graph::Barrier::Transition {
+                to: aqua_graph::ResourceState::UnorderedAccess,
+                ..
+            }
+        )));
     let plan = effect_graph(PassKind::Custom(custom_spec("effect", 1.0)))
         .plan(PlanLimits::default())
         .unwrap();

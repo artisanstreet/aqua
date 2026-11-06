@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::Duration;
 
-use aqua_transport::{RecvError, SendError, channel};
+use aqua_transport::{channel, RecvError, SendError};
 
 #[test]
 fn preserves_order_across_threads_under_backpressure() {

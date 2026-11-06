@@ -1,4 +1,3 @@
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RowRange {
     pub start: usize,
@@ -128,7 +127,11 @@ pub fn window_for_viewport(
     let total = sums.total() as f32;
     let max_scroll = (total - viewport_h).max(0.0);
     let y = if !scroll_y.is_finite() {
-        if scroll_y > 0.0 { max_scroll } else { 0.0 }
+        if scroll_y > 0.0 {
+            max_scroll
+        } else {
+            0.0
+        }
     } else {
         scroll_y.clamp(0.0, max_scroll)
     };

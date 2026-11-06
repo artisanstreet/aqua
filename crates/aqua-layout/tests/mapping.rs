@@ -26,7 +26,7 @@ fn grid_tracks_map() {
     };
     let mapped = to_taffy(&style);
     assert_eq!(mapped.display, Display::Grid);
-    assert_eq!(mapped.grid_template_columns.len(), 2);
+    assert_eq!(mapped.grid.as_ref().unwrap().grid_template_columns.len(), 2);
 }
 
 #[test]

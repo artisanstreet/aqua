@@ -76,7 +76,9 @@ fn maxp() -> Vec<u8> {
 }
 
 fn hmtx() -> Vec<u8> {
-    (0..3).flat_map(|_| [be16(UNITS), be16(0)].concat()).collect()
+    (0..3)
+        .flat_map(|_| [be16(UNITS), be16(0)].concat())
+        .collect()
 }
 
 fn cmap() -> Vec<u8> {
@@ -236,12 +238,23 @@ fn key(fonts: &mut FontManager, size: f32) -> RasterKey {
     let mut layout = TextLayout::new();
     layout.set_text("A", &style(size));
     let laid = layout.layout(fonts);
-    place_glyph(&laid.lines[0].glyphs[0], 0.0, laid.lines[0].baseline_y, true).key
+    place_glyph(
+        &laid.lines[0].glyphs[0],
+        0.0,
+        laid.lines[0].baseline_y,
+        true,
+    )
+    .key
 }
 
 fn texel(bitmap: &aqua_text::raster::Bitmap, x: u32, y: u32) -> [u8; 4] {
     let at = ((y * bitmap.width + x) * 4) as usize;
-    [bitmap.data[at], bitmap.data[at + 1], bitmap.data[at + 2], bitmap.data[at + 3]]
+    [
+        bitmap.data[at],
+        bitmap.data[at + 1],
+        bitmap.data[at + 2],
+        bitmap.data[at + 3],
+    ]
 }
 
 fn fonts_with_sbix() -> FontManager {
@@ -266,7 +279,10 @@ fn a_complete_sbix_font_rasterizes_through_the_whole_text_stack() {
         else {
             panic!("sbix glyph must be a color bitmap");
         };
-        assert_eq!((bitmap.width, bitmap.height), (u32::from(ppem), u32::from(ppem)));
+        assert_eq!(
+            (bitmap.width, bitmap.height),
+            (u32::from(ppem), u32::from(ppem))
+        );
         assert_eq!(bitmap.left, i32::from(origin.0));
         assert_eq!(bitmap.top, i32::from(origin.1) + i32::from(ppem));
         let quarter = u32::from(ppem) / 4;
@@ -286,7 +302,9 @@ fn intermediate_sizes_scale_from_the_nearest_strike_and_missing_glyphs_have_no_i
         subpixel: 0,
         ..key(&mut fonts, 24.0)
     };
-    let GlyphImage::Color(bitmap) = rasterizer.rasterize(&mut fonts, &key_24).expect("scaled strike")
+    let GlyphImage::Color(bitmap) = rasterizer
+        .rasterize(&mut fonts, &key_24)
+        .expect("scaled strike")
     else {
         panic!("expected a color bitmap");
     };
@@ -296,7 +314,13 @@ fn intermediate_sizes_scale_from_the_nearest_strike_and_missing_glyphs_have_no_i
     let mut layout = TextLayout::new();
     layout.set_text("B", &style(16.0));
     let laid = layout.layout(&mut fonts);
-    let blank = place_glyph(&laid.lines[0].glyphs[0], 0.0, laid.lines[0].baseline_y, true).key;
+    let blank = place_glyph(
+        &laid.lines[0].glyphs[0],
+        0.0,
+        laid.lines[0].baseline_y,
+        true,
+    )
+    .key;
     assert!(rasterizer
         .rasterize(&mut fonts, &blank)
         .is_none_or(|image| image.bitmap().is_empty() || !matches!(image, GlyphImage::Color(_))));
@@ -327,6 +351,9 @@ fn directwrite_reads_the_same_strike_with_matching_size_and_origin() {
     assert_eq!(image.size, (16, 16));
     assert_eq!(
         image.left_origin,
-        (-(SMALL_ORIGIN.0 as f32), (SMALL_ORIGIN.1 + SMALL_PPEM as i16) as f32)
+        (
+            -(SMALL_ORIGIN.0 as f32),
+            (SMALL_ORIGIN.1 + SMALL_PPEM as i16) as f32
+        )
     );
 }

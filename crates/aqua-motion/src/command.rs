@@ -1,5 +1,5 @@
-use aqua_core::NodeId;
 use aqua_core::id::RawId;
+use aqua_core::NodeId;
 
 use crate::curve::{MotionKind, MotionValue, ReducedMotion, Seconds};
 

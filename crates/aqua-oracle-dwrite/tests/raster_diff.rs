@@ -1,7 +1,7 @@
 #![cfg(windows)]
 
 use aqua_oracle_dwrite::{FontSource, GlyphRunSpec, Oracle, RenderMode};
-use aqua_text::raster::{GlyphImage, Rasterizer, place_glyph};
+use aqua_text::raster::{place_glyph, GlyphImage, Rasterizer};
 use aqua_text::{FontFamily, FontManager, TextLayout, TextStyle};
 
 const STRINGS: [&str; 4] = [

@@ -1,10 +1,10 @@
 use aqua_protocol::probe::{self, Metric, Phase};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use aqua_core::{Oklch, Size};
-use aqua_graph::{Extent, FramePlan, plan_paint_with};
+use aqua_graph::{plan_paint_with, Extent, FramePlan};
 use aqua_protocol::{
     DeviceStatus, Feedback, FrameId, FrameInputs, FrameReport, GpuBackend, GpuError, Instant,
     PresentHint, SurfaceId, SurfaceTarget,

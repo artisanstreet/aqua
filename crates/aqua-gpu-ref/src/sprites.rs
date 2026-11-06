@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use aqua_core::geometry::Rect;
 use aqua_graph::slug::{self, texel_position};
-use aqua_graph::tone::{ToneCurve, premultiplied_luminance};
+use aqua_graph::tone::{premultiplied_luminance, ToneCurve};
 use aqua_graph::{
     Extent, GlyphInstance, ImageInstance, SlugInstance, TextureFormat, TextureHandle, TextureRef,
 };
 
-use crate::raster::{Layer, Pixel, Placement, over};
+use crate::raster::{over, Layer, Pixel, Placement};
 use crate::sample::blend;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

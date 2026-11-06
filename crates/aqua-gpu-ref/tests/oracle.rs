@@ -1,6 +1,6 @@
-use aqua_core::{Oklch, geometry::Rect};
-use aqua_gpu_ref::{RefBackend, conformance};
-use aqua_graph::{Extent, PaintCommand, Quad, plan_paint};
+use aqua_core::{geometry::Rect, Oklch};
+use aqua_gpu_ref::{conformance, RefBackend};
+use aqua_graph::{plan_paint, Extent, PaintCommand, Quad};
 use aqua_protocol::{FrameInputs, GpuBackend, GpuReadback, SurfaceTarget};
 
 fn pixel(pixels: &aqua_protocol::SurfacePixels, x: usize, y: usize) -> [u8; 4] {

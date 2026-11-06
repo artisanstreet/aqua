@@ -1,10 +1,10 @@
 use aqua_core::color::linear_to_srgb;
-use aqua_core::{Oklch, geometry::Rect};
-use aqua_gpu_ref::RefBackend;
-use aqua_gpu_ref::conformance::Session;
+use aqua_core::{geometry::Rect, Oklch};
 use aqua_gpu_ref::conformance::cases::{build, hex, rect, shadow};
+use aqua_gpu_ref::conformance::Session;
 use aqua_gpu_ref::erf::normal_cdf;
 use aqua_gpu_ref::shadow::blurred_coverage;
+use aqua_gpu_ref::RefBackend;
 use aqua_graph::{
     Extent, Gradient, GradientQuad, GradientStop, PaintCommand, Quad, ShadowCast, ShadowInstance,
 };
@@ -223,12 +223,10 @@ fn shadow_alpha_never_exceeds_the_color_alpha_and_decays_monotonically_outside()
     );
     let pixels = render_pixels(&case);
     let alpha = |x: usize, y: usize| pixels.rgba8[(y * 80 + x) * 4 + 3];
-    assert!(
-        pixels
-            .rgba8
-            .chunks(4)
-            .all(|p| p[3] <= (0.6f32 * 255.0).round() as u8)
-    );
+    assert!(pixels
+        .rgba8
+        .chunks(4)
+        .all(|p| p[3] <= (0.6f32 * 255.0).round() as u8));
     let row: Vec<u8> = (50..80).map(|x| alpha(x, 20)).collect();
     assert!(row.windows(2).all(|pair| pair[0] >= pair[1]));
     assert_eq!(alpha(79, 20), 0);

@@ -1,8 +1,8 @@
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
+use aqua_core::Oklch;
 use aqua_gpu_ref::raster::Layer;
 use aqua_gpu_ref::sprites::{
-    RefTexture, TextureError, Textures, draw_glyphs, draw_images, sample_image,
+    draw_glyphs, draw_images, sample_image, RefTexture, TextureError, Textures,
 };
 use aqua_graph::{
     Extent, GlyphInstance, ImageInstance, TextureFormat, TextureHandle, TextureRef, ToneCurve,
@@ -98,12 +98,10 @@ fn glyph_sampling_clamps_inside_its_atlas_rectangle() {
         opacity: 1.0,
     };
     draw_glyphs(&mut layer, &atlas, &[glyph], ToneCurve::native());
-    assert!(
-        layer
-            .pixels
-            .iter()
-            .all(|pixel| (pixel[3] - 1.0).abs() < 1e-6)
-    );
+    assert!(layer
+        .pixels
+        .iter()
+        .all(|pixel| (pixel[3] - 1.0).abs() < 1e-6));
 }
 
 #[test]

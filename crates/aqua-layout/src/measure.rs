@@ -74,12 +74,12 @@ impl TextMeasurer for NaiveMeasurer {
 }
 
 #[derive(Clone)]
-pub struct CosmicMeasurer {
+pub struct ShapedMeasurer {
     pub fonts: SharedFonts,
     pub scale: f32,
 }
 
-impl TextMeasurer for CosmicMeasurer {
+impl TextMeasurer for ShapedMeasurer {
     fn measure_text(
         &self,
         text: &str,
@@ -169,7 +169,7 @@ mod tests {
 }
 
 #[derive(Clone)]
-pub struct ProfiledCosmicMeasurer {
+pub struct ProfiledMeasurer {
     pub fonts: SharedFonts,
     pub scale: f32,
     pub gpui_line_height: bool,
@@ -242,7 +242,7 @@ fn hash_style(hasher: &mut impl std::hash::Hasher, style: &TextStyle) {
     style.font_features.hash(hasher);
 }
 
-impl ProfiledCosmicMeasurer {
+impl ProfiledMeasurer {
     fn logical_size(&self, (width, height): (f32, f32)) -> Size {
         let scale = self.scale.max(0.01);
         let width = width / scale;
@@ -296,7 +296,7 @@ impl ProfiledCosmicMeasurer {
     }
 }
 
-impl TextMeasurer for ProfiledCosmicMeasurer {
+impl TextMeasurer for ProfiledMeasurer {
     fn memo_epoch(&self) -> Option<u64> {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();

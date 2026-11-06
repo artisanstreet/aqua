@@ -22,9 +22,7 @@ fn level_is_capped_and_survives_tiny_or_degenerate_draws() {
 
 #[test]
 fn halving_averages_premultiplied_channels() {
-    let source = [
-        100, 0, 0, 100, 200, 0, 0, 200, 0, 40, 0, 255, 0, 80, 0, 255,
-    ];
+    let source = [100, 0, 0, 100, 200, 0, 0, 200, 0, 40, 0, 255, 0, 80, 0, 255];
     let reduced = reduce(&source, 2, 2, 1);
     assert_eq!((reduced.width, reduced.height), (1, 1));
     assert_eq!(reduced.pixels, vec![75, 30, 0, 203]);

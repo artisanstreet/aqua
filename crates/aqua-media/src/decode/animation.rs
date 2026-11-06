@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use image::{AnimationDecoder, ImageDecoder};
 
-use super::{DecodedImage, MAX_IMAGE_DIM, MediaError};
+use super::{DecodedImage, MediaError, MAX_IMAGE_DIM};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnimationLoops {

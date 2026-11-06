@@ -1,9 +1,9 @@
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
-use aqua_gpu_ref::conformance::text::{SLUG_STORE, slug_assets, slug_glyph};
-use aqua_gpu_ref::raster::{Layer, draw_quad};
-use aqua_gpu_ref::sprites::{RefTexture, draw_glyphs, draw_slug};
-use aqua_graph::tone::{ToneCurve, premultiplied_luminance};
+use aqua_core::Oklch;
+use aqua_gpu_ref::conformance::text::{slug_assets, slug_glyph, SLUG_STORE};
+use aqua_gpu_ref::raster::{draw_quad, Layer};
+use aqua_gpu_ref::sprites::{draw_glyphs, draw_slug, RefTexture};
+use aqua_graph::tone::{premultiplied_luminance, ToneCurve};
 use aqua_graph::{Extent, GlyphInstance, Linear2, QuadInstance, SlugInstance, TextureFormat};
 use aqua_protocol::TextureOp as UploadOp;
 

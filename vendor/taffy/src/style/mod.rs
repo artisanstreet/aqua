@@ -689,6 +689,58 @@ crate::util::parse::impl_parse_for_keyword_enum!(Direction,
     "rtl" => Rtl,
 );
 
+/// Grid container and grid item properties of a [`Style`]
+#[cfg(feature = "grid")]
+#[derive(Clone, PartialEq, Debug)]
+pub struct GridStyle<S: CheapCloneStr = DefaultCheapStr> {
+    /// Defines the track sizing functions (heights) of the grid rows
+    pub grid_template_rows: GridTrackVec<GridTemplateComponent<S>>,
+    /// Defines the track sizing functions (widths) of the grid columns
+    pub grid_template_columns: GridTrackVec<GridTemplateComponent<S>>,
+    /// Defines the size of implicitly created rows
+    pub grid_auto_rows: GridTrackVec<TrackSizingFunction>,
+    /// Defined the size of implicitly created columns
+    pub grid_auto_columns: GridTrackVec<TrackSizingFunction>,
+    /// Controls how items get placed into the grid for auto-placed items
+    pub grid_auto_flow: GridAutoFlow,
+    /// Defines the rectangular grid areas
+    pub grid_template_areas: Option<GridTemplateAreas<S>>,
+    /// The named lines between the columns
+    pub grid_template_column_names: GridTrackVec<GridTrackVec<S>>,
+    /// The named lines between the rows
+    pub grid_template_row_names: GridTrackVec<GridTrackVec<S>>,
+    /// Defines which row in the grid the item should start and end at
+    pub grid_row: Line<GridPlacement<S>>,
+    /// Defines which column in the grid the item should start and end at
+    pub grid_column: Line<GridPlacement<S>>,
+}
+
+#[cfg(feature = "grid")]
+impl<S: CheapCloneStr> Default for GridStyle<S> {
+    fn default() -> Self {
+        Self {
+            grid_template_rows: GridTrackVec::new(),
+            grid_template_columns: GridTrackVec::new(),
+            grid_auto_rows: GridTrackVec::new(),
+            grid_auto_columns: GridTrackVec::new(),
+            grid_auto_flow: GridAutoFlow::Row,
+            grid_template_areas: None,
+            grid_template_column_names: GridTrackVec::new(),
+            grid_template_row_names: GridTrackVec::new(),
+            grid_row: Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto },
+            grid_column: Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto },
+        }
+    }
+}
+
+#[cfg(feature = "grid")]
+impl<S: CheapCloneStr> Style<S> {
+    /// The grid properties, allocated on first mutable access
+    pub fn grid_mut(&mut self) -> &mut GridStyle<S> {
+        self.grid.get_or_insert_with(Default::default)
+    }
+}
+
 /// A typed representation of the CSS style information for a single node.
 ///
 /// The most important idea in flexbox is the notion of a "main" and "cross" axis, which are always perpendicular to each other.
@@ -834,41 +886,9 @@ pub struct Style<S: CheapCloneStr = DefaultCheapStr> {
     #[cfg(feature = "flexbox")]
     pub flex_shrink: f32,
 
-    // Grid container properies
-    /// Defines the track sizing functions (heights) of the grid rows
+    /// Grid container and grid item properties, allocated only for nodes that use them
     #[cfg(feature = "grid")]
-    pub grid_template_rows: GridTrackVec<GridTemplateComponent<S>>,
-    /// Defines the track sizing functions (widths) of the grid columns
-    #[cfg(feature = "grid")]
-    pub grid_template_columns: GridTrackVec<GridTemplateComponent<S>>,
-    /// Defines the size of implicitly created rows
-    #[cfg(feature = "grid")]
-    pub grid_auto_rows: GridTrackVec<TrackSizingFunction>,
-    /// Defined the size of implicitly created columns
-    #[cfg(feature = "grid")]
-    pub grid_auto_columns: GridTrackVec<TrackSizingFunction>,
-    /// Controls how items get placed into the grid for auto-placed items
-    #[cfg(feature = "grid")]
-    pub grid_auto_flow: GridAutoFlow,
-
-    // Grid container named properties
-    /// Defines the rectangular grid areas
-    #[cfg(feature = "grid")]
-    pub grid_template_areas: Option<GridTemplateAreas<S>>,
-    /// The named lines between the columns
-    #[cfg(feature = "grid")]
-    pub grid_template_column_names: GridTrackVec<GridTrackVec<S>>,
-    /// The named lines between the rows
-    #[cfg(feature = "grid")]
-    pub grid_template_row_names: GridTrackVec<GridTrackVec<S>>,
-
-    // Grid child properties
-    /// Defines which row in the grid the item should start and end at
-    #[cfg(feature = "grid")]
-    pub grid_row: Line<GridPlacement<S>>,
-    /// Defines which column in the grid the item should start and end at
-    #[cfg(feature = "grid")]
-    pub grid_column: Line<GridPlacement<S>>,
+    pub grid: Option<crate::util::sys::Box<GridStyle<S>>>,
 }
 
 impl<S: CheapCloneStr> Style<S> {
@@ -926,27 +946,8 @@ impl<S: CheapCloneStr> Style<S> {
         flex_shrink: 1.0,
         #[cfg(feature = "flexbox")]
         flex_basis: Dimension::AUTO,
-        // Grid
         #[cfg(feature = "grid")]
-        grid_template_rows: GridTrackVec::new(),
-        #[cfg(feature = "grid")]
-        grid_template_columns: GridTrackVec::new(),
-        #[cfg(feature = "grid")]
-        grid_template_areas: None,
-        #[cfg(feature = "grid")]
-        grid_template_column_names: GridTrackVec::new(),
-        #[cfg(feature = "grid")]
-        grid_template_row_names: GridTrackVec::new(),
-        #[cfg(feature = "grid")]
-        grid_auto_rows: GridTrackVec::new(),
-        #[cfg(feature = "grid")]
-        grid_auto_columns: GridTrackVec::new(),
-        #[cfg(feature = "grid")]
-        grid_auto_flow: GridAutoFlow::Row,
-        #[cfg(feature = "grid")]
-        grid_row: Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto },
-        #[cfg(feature = "grid")]
-        grid_column: Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto },
+        grid: None,
     };
 }
 
@@ -1054,13 +1055,13 @@ impl<S: CheapCloneStr> OofItemStyle for Style<S> {
     #[inline(always)]
     fn grid_row(&self) -> Line<GridPlacement<S>> {
         // TODO: Investigate eliminating clone
-        self.grid_row.clone()
+        self.grid.as_ref().map_or(Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto }, |g| g.grid_row.clone())
     }
     #[cfg(feature = "grid")]
     #[inline(always)]
     fn grid_column(&self) -> Line<GridPlacement<S>> {
         // TODO: Investigate eliminating clone
-        self.grid_column.clone()
+        self.grid.as_ref().map_or(Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto }, |g| g.grid_column.clone())
     }
 }
 
@@ -1415,23 +1416,23 @@ impl<S: CheapCloneStr> GridContainerStyle for Style<S> {
 
     #[inline(always)]
     fn grid_template_rows(&self) -> Option<Self::TemplateTrackList<'_>> {
-        Some(self.grid_template_rows.iter().map(|c| c.as_component_ref()))
+        Some(self.grid.as_deref().map_or(&[][..], |g| &g.grid_template_rows[..]).iter().map(|c| c.as_component_ref()))
     }
     #[inline(always)]
     fn grid_template_columns(&self) -> Option<Self::TemplateTrackList<'_>> {
-        Some(self.grid_template_columns.iter().map(|c| c.as_component_ref()))
+        Some(self.grid.as_deref().map_or(&[][..], |g| &g.grid_template_columns[..]).iter().map(|c| c.as_component_ref()))
     }
     #[inline(always)]
     fn grid_auto_rows(&self) -> Self::AutoTrackList<'_> {
-        self.grid_auto_rows.iter().copied()
+        self.grid.as_deref().map_or(&[][..], |g| &g.grid_auto_rows[..]).iter().copied()
     }
     #[inline(always)]
     fn grid_auto_columns(&self) -> Self::AutoTrackList<'_> {
-        self.grid_auto_columns.iter().copied()
+        self.grid.as_deref().map_or(&[][..], |g| &g.grid_auto_columns[..]).iter().copied()
     }
     #[inline(always)]
     fn grid_auto_flow(&self) -> GridAutoFlow {
-        self.grid_auto_flow
+        self.grid.as_ref().map_or(GridAutoFlow::Row, |g| g.grid_auto_flow)
     }
     #[inline(always)]
     fn gap(&self) -> Size<LengthPercentage> {
@@ -1457,29 +1458,29 @@ impl<S: CheapCloneStr> GridContainerStyle for Style<S> {
     #[inline(always)]
     #[cfg(feature = "grid")]
     fn grid_template_areas(&self) -> Option<Self::GridTemplateAreas<'_>> {
-        self.grid_template_areas.as_ref().map(|template| template.areas.iter().cloned())
+        self.grid.as_ref().and_then(|g| g.grid_template_areas.as_ref()).map(|template| template.areas.iter().cloned())
     }
     #[inline(always)]
     #[cfg(feature = "grid")]
     fn grid_template_area_row_count(&self) -> u16 {
-        self.grid_template_areas.as_ref().map(|template| template.row_count).unwrap_or(0)
+        self.grid.as_ref().and_then(|g| g.grid_template_areas.as_ref()).map(|template| template.row_count).unwrap_or(0)
     }
     #[inline(always)]
     #[cfg(feature = "grid")]
     fn grid_template_area_column_count(&self) -> u16 {
-        self.grid_template_areas.as_ref().map(|template| template.column_count).unwrap_or(0)
+        self.grid.as_ref().and_then(|g| g.grid_template_areas.as_ref()).map(|template| template.column_count).unwrap_or(0)
     }
 
     #[inline(always)]
     #[cfg(feature = "grid")]
     fn grid_template_column_names(&self) -> Option<Self::TemplateLineNames<'_>> {
-        Some(self.grid_template_column_names.iter().map(|names| names.iter()))
+        Some(self.grid.as_deref().map_or(&[][..], |g| &g.grid_template_column_names[..]).iter().map(|names| names.iter()))
     }
 
     #[inline(always)]
     #[cfg(feature = "grid")]
     fn grid_template_row_names(&self) -> Option<Self::TemplateLineNames<'_>> {
-        Some(self.grid_template_row_names.iter().map(|names| names.iter()))
+        Some(self.grid.as_deref().map_or(&[][..], |g| &g.grid_template_row_names[..]).iter().map(|names| names.iter()))
     }
 }
 
@@ -1582,12 +1583,12 @@ impl<S: CheapCloneStr> GridItemStyle for Style<S> {
     #[inline(always)]
     fn grid_row(&self) -> Line<GridPlacement<S>> {
         // TODO: Investigate eliminating clone
-        self.grid_row.clone()
+        self.grid.as_ref().map_or(Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto }, |g| g.grid_row.clone())
     }
     #[inline(always)]
     fn grid_column(&self) -> Line<GridPlacement<S>> {
         // TODO: Investigate eliminating clone
-        self.grid_column.clone()
+        self.grid.as_ref().map_or(Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto }, |g| g.grid_column.clone())
     }
     #[inline(always)]
     fn align_self(&self) -> Option<AlignSelf> {
@@ -1682,25 +1683,7 @@ mod tests {
             max_size: Size::auto(),
             aspect_ratio: Default::default(),
             #[cfg(feature = "grid")]
-            grid_template_rows: Default::default(),
-            #[cfg(feature = "grid")]
-            grid_template_columns: Default::default(),
-            #[cfg(feature = "grid")]
-            grid_template_row_names: Default::default(),
-            #[cfg(feature = "grid")]
-            grid_template_column_names: Default::default(),
-            #[cfg(feature = "grid")]
-            grid_template_areas: Default::default(),
-            #[cfg(feature = "grid")]
-            grid_auto_rows: Default::default(),
-            #[cfg(feature = "grid")]
-            grid_auto_columns: Default::default(),
-            #[cfg(feature = "grid")]
-            grid_auto_flow: Default::default(),
-            #[cfg(feature = "grid")]
-            grid_row: Line { start: GridPlacement::Auto, end: GridPlacement::Auto },
-            #[cfg(feature = "grid")]
-            grid_column: Line { start: GridPlacement::Auto, end: GridPlacement::Auto },
+            grid: None,
         };
 
         assert_eq!(Style::DEFAULT, Style::<DefaultCheapStr>::default());

@@ -7,7 +7,7 @@ use aqua_core::{DisplayItem, NodeId, Oklch, Rect};
 use aqua_motion::{AppMotion, Binding, Easing, MotionEvent, MotionKind, MotionValue, Property};
 use aqua_protocol::{Feedback, FrameId, Instant, RenderCommand, RenderEvent, SceneDiff};
 use aqua_runtime::RenderSide;
-use aqua_transport::{RenderHost, spawn_render_thread};
+use aqua_transport::{spawn_render_thread, RenderHost};
 
 struct FakeHost {
     ticks: Arc<AtomicUsize>,

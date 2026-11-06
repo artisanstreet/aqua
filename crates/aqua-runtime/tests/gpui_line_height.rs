@@ -2,7 +2,7 @@ use aqua_core::{ColorProfile, DisplayItem};
 use aqua_runtime::Runtime;
 use aqua_text::{RunId, SharedFonts, SharedRuns, TextStyle};
 use aqua_ui::element::ui::Text;
-use aqua_ui::layout::{ProfiledCosmicMeasurer, TextMeasurer};
+use aqua_ui::layout::{ProfiledMeasurer, TextMeasurer};
 
 #[test]
 fn profile_applies_to_measurement_and_retained_shaping() {
@@ -13,7 +13,7 @@ fn profile_applies_to_measurement_and_retained_shaping() {
         let fonts = SharedFonts::new();
         let runs = SharedRuns::new();
         let style = TextStyle::default();
-        let measure = ProfiledCosmicMeasurer {
+        let measure = ProfiledMeasurer {
             fonts: fonts.clone(),
             scale: 1.25,
             gpui_line_height: profile == ColorProfile::GpuiWindowsEncoded,

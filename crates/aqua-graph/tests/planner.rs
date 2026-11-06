@@ -1,7 +1,7 @@
-use aqua_core::{Oklch, geometry::Rect};
+use aqua_core::{geometry::Rect, Oklch};
 use aqua_graph::{
-    BackdropBlur, Barrier, Blend, BlurDepth, ColorMatrix, Extent, LoadOp, PaintCommand, PassKind,
-    PlanError, Quad, ResourceState, ShaderId, TextureRef, depth_for, plan_paint, validate,
+    depth_for, plan_paint, validate, BackdropBlur, Barrier, Blend, BlurDepth, ColorMatrix, Extent,
+    LoadOp, PaintCommand, PassKind, PlanError, Quad, ResourceState, ShaderId, TextureRef,
 };
 
 const EXTENT: Extent = Extent {
@@ -457,11 +457,10 @@ fn shaders(plan: &aqua_graph::FramePlan, wanted: ShaderId) -> usize {
 fn backdrop_blur_reads_the_parent_directly_and_composites_the_half_resolution_level() {
     let plan = plan(&[quad(), backdrop(20.0), quad_at(50.0, 50.0)]);
     assert_eq!(validate(&plan), Ok(()));
-    assert!(
-        plan.passes
-            .iter()
-            .all(|pass| !matches!(pass.kind, PassKind::Copy { .. }))
-    );
+    assert!(plan
+        .passes
+        .iter()
+        .all(|pass| !matches!(pass.kind, PassKind::Copy { .. })));
     let levels = shaders(&plan, ShaderId::BlurDown);
     assert_eq!(levels, 4);
     assert_eq!(shaders(&plan, ShaderId::BlurUp), levels - 1);
@@ -626,11 +625,10 @@ fn content_blur_renders_children_to_a_layer_and_blurs_only_the_region() {
         PaintCommand::PopContentBlur,
     ]);
     assert_eq!(validate(&plan), Ok(()));
-    assert!(
-        plan.passes
-            .iter()
-            .all(|pass| !matches!(pass.kind, PassKind::Copy { .. }))
-    );
+    assert!(plan
+        .passes
+        .iter()
+        .all(|pass| !matches!(pass.kind, PassKind::Copy { .. })));
     let first_filter = plan
         .passes
         .iter()
@@ -664,11 +662,10 @@ fn large_rounded_clips_layer_only_their_corners() {
     let plan = plan_paint(extent, Oklch::TRANSPARENT, &commands).unwrap();
     assert_eq!(validate(&plan), Ok(()));
     assert_eq!(plan.textures.len(), 4);
-    assert!(
-        plan.textures
-            .iter()
-            .all(|texture| texture.extent.width <= 16 && texture.extent.height <= 16)
-    );
+    assert!(plan
+        .textures
+        .iter()
+        .all(|texture| texture.extent.width <= 16 && texture.extent.height <= 16));
     let direct: Vec<Rect> = plan
         .passes
         .iter()
@@ -681,11 +678,9 @@ fn large_rounded_clips_layer_only_their_corners() {
         .filter_map(|instance| instance.clip)
         .collect();
     assert_eq!(direct.len(), 3);
-    assert!(
-        direct
-            .iter()
-            .all(|clip| clip.x >= 10.5 && clip.right() <= 910.5)
-    );
+    assert!(direct
+        .iter()
+        .all(|clip| clip.x >= 10.5 && clip.right() <= 910.5));
 }
 
 #[test]

@@ -3,12 +3,12 @@ use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 
 use windows::core::{IUnknown, Interface};
-use windows_numerics::Vector2;
 use windows::Win32::Foundation::{COLORREF, RECT};
 use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Gdi::{
     GetCurrentObject, GetObjectW, DIBSECTION, HGDIOBJ, OBJ_BITMAP,
 };
+use windows_numerics::Vector2;
 
 #[derive(Debug)]
 pub enum OracleError {
@@ -408,7 +408,11 @@ pub struct ColorCanvas {
 }
 
 impl Oracle {
-    pub fn has_color_layers(&mut self, font: FontSource<'_>, glyph: u16) -> Result<bool, OracleError> {
+    pub fn has_color_layers(
+        &mut self,
+        font: FontSource<'_>,
+        glyph: u16,
+    ) -> Result<bool, OracleError> {
         let face = self.face(font)?;
         unsafe {
             let mut run = DWRITE_GLYPH_RUN {
@@ -548,11 +552,12 @@ impl Oracle {
         pixels_per_em: u32,
         format: u32,
     ) -> Result<Option<StrikeImage>, OracleError> {
-        let face = self.face(font)?.cast::<IDWriteFontFace4>().map_err(failure)?;
+        let face = self
+            .face(font)?
+            .cast::<IDWriteFontFace4>()
+            .map_err(failure)?;
         unsafe {
-            let formats = face
-                .GetGlyphImageFormats(glyph, 1, 2048)
-                .map_err(failure)?;
+            let formats = face.GetGlyphImageFormats(glyph, 1, 2048).map_err(failure)?;
             let wanted = DWRITE_GLYPH_IMAGE_FORMATS(format as i32);
             if formats.0 as u32 & format == 0 {
                 return Ok(Some(StrikeImage {
@@ -567,12 +572,19 @@ impl Oracle {
             let mut context = std::ptr::null_mut::<c_void>();
             face.GetGlyphImageData(glyph, pixels_per_em, wanted, &mut data, &mut context)
                 .map_err(failure)?;
-            let bytes = std::slice::from_raw_parts(data.imageData.cast::<u8>(), data.imageDataSize as usize).to_vec();
+            let bytes = std::slice::from_raw_parts(
+                data.imageData.cast::<u8>(),
+                data.imageDataSize as usize,
+            )
+            .to_vec();
             let image = StrikeImage {
                 formats: formats.0 as u32,
                 pixels_per_em: data.pixelsPerEm,
                 size: (data.pixelSize.width, data.pixelSize.height),
-                left_origin: (data.horizontalLeftOrigin.x as f32, data.horizontalLeftOrigin.y as f32),
+                left_origin: (
+                    data.horizontalLeftOrigin.x as f32,
+                    data.horizontalLeftOrigin.y as f32,
+                ),
                 data: bytes,
             };
             face.ReleaseGlyphImageData(context);

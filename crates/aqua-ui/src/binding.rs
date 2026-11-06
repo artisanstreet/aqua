@@ -593,29 +593,14 @@ impl View {
         &self.sink
     }
 
-    /// Set the whole content: first call mounts (single root required),
-    /// later calls refresh the root in place (single element) or keyed-sync
-    /// the root's children. Returns the node ids paired with the top-level
-    /// elements.
-    ///
-    /// Top-level fragments splice structurally before anything else, so
-    /// node↔element pairing is always positional. Reused node ids keep
-    /// their effects while the sources are identical; changed sources
-    /// dispose the stale child scope and re-attach without losing the node,
-    /// focus, or caret.
     pub fn set_content(
         &mut self,
         tree: &mut UiTree,
         elements: Vec<Element>,
     ) -> Result<Vec<NodeId>, MountError> {
-        // Normalize first: splice top-level fragments (keyed multi-child
-        // fragments error here, loudly, instead of vanishing a key).
         self.content = splice_top_level(elements)?;
-        let specs = lower_all(&self.content)?;
+        let mut specs = lower_all(&self.content)?;
         aqua_core::checkpoint::reach();
-        // `synced` tracks whether the tree already reflects the lowered
-        // specs, so a refreshed root spec is never synced as a child of
-        // itself.
         let mut synced = false;
         match self.root {
             None => {
@@ -629,7 +614,6 @@ impl View {
                 self.root = Some(tree.mount_spec(into_single(specs)));
             }
             Some(r) if tree.get(r).is_none() => {
-                // Root was removed out-of-band: remount from scratch.
                 self.dispose_bound();
                 if specs.len() != 1 {
                     self.root = None;
@@ -642,25 +626,25 @@ impl View {
                 self.root = Some(tree.mount_spec(into_single(specs)));
             }
             Some(r) => {
-                // A single root refreshes in place — props AND children,
-                // inside `refresh_mounted`. Anything else syncs the specs
-                // as the root's children. Never both: the refreshed root
-                // spec must not be synced as a child of itself.
                 if self.content.len() == 1 {
                     let same_key = tree.get(r).is_some_and(|record| record.key == specs[0].key);
                     let refreshed = same_key
-                        && self.content[0].refresh_mounted(tree, r, &TypoChain::default())?;
+                        && self.content[0].refresh_mounted(
+                            tree,
+                            r,
+                            &TypoChain::default(),
+                            Some(std::mem::take(&mut specs[0].children)),
+                        )?;
                     aqua_core::checkpoint::reach();
                     match refreshed {
-                        true => synced = true, // children already synced inside
+                        true => synced = true,
                         false => {
-                            // Kind changed: replace the whole root.
                             self.dispose_bound();
                             tree.remove(r);
                             let specs = lower_all(&self.content)?;
                             let fresh = tree.mount_spec(into_single(specs));
                             self.root = Some(fresh);
-                            synced = true; // mounted whole subtree; skip sync
+                            synced = true;
                         }
                     }
                 }
@@ -673,11 +657,6 @@ impl View {
         }
         aqua_core::checkpoint::reach();
         let root = self.root.unwrap();
-        // Pair nodes with elements positionally (fragments already spliced).
-        // Collection elements pair their container node with the window
-        // driver (`bind_collection` registers the mount; realization and row
-        // binding happen in `compute_layout`). Managed children are never
-        // asserted against element children here.
         let Self {
             scope,
             sink,
@@ -713,20 +692,11 @@ impl View {
                 )?;
             }
         }
-        // Prune bookkeeping AND scopes for removed subtrees (plus dead
-        // collection mounts): without this, effects outlive their rows and
-        // leak until the whole view disposes.
         aqua_core::checkpoint::reach();
         self.prune_dead(tree);
         Ok(self.paired_ids(tree, root))
     }
 
-    /// Refresh one mounted subtree in place from a freshly built element,
-    /// leaving every other node, scope, and collection mount untouched.
-    /// Returns `Ok(false)` when the subtree cannot be refreshed in place
-    /// (node gone, key or kind changed, unreachable through retained
-    /// content such as collection rows): callers fall back to
-    /// [`View::set_content`].
     pub fn refresh_subtree(
         &mut self,
         tree: &mut UiTree,
@@ -776,7 +746,7 @@ impl View {
             };
             current = next;
         }
-        if !element.refresh_mounted(tree, node, &inherited)? {
+        if !element.refresh_mounted(tree, node, &inherited, None)? {
             return Ok(false);
         }
         bind_new(

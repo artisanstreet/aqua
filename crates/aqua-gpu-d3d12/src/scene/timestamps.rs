@@ -156,7 +156,9 @@ impl Timestamps {
             self.latest = Some(duration);
             self.latest_passes.clear();
             for (index, label) in self.labels[slot].iter().enumerate() {
-                if let Some(duration) = ticks_to_duration(read(index), read(index + 1), frequency) {
+                if let Some(duration) =
+                    ticks_to_duration(read(index + 1), read(index + 2), frequency)
+                {
                     self.latest_passes.push(PassTime { label, duration });
                 }
             }

@@ -16,6 +16,8 @@ const INTERVAL: Duration = Duration::from_millis(4);
 #[derive(Default)]
 struct Probe {
     presents: AtomicU32,
+    unshown: AtomicU32,
+    frame_waits: AtomicU32,
     invalidations: AtomicU32,
     frames: Mutex<Vec<FrameId>>,
     script: Mutex<Vec<Repaint>>,
@@ -31,7 +33,9 @@ struct Fake {
 }
 
 impl FrameTarget for Fake {
-    fn wait_frame(&mut self) {}
+    fn wait_frame(&mut self) {
+        self.probe.frame_waits.fetch_add(1, Relaxed);
+    }
 
     fn present(&mut self, _side: &mut RenderSide, frame: FrameId) -> Vec<Feedback> {
         self.probe.presents.fetch_add(1, Relaxed);
@@ -45,7 +49,13 @@ impl FrameTarget for Fake {
             },
             Relaxed,
         );
-        vec![Feedback::Presented(frame)]
+        match self.probe.unshown.load(Relaxed) {
+            0 => vec![Feedback::Presented(frame)],
+            left => {
+                self.probe.unshown.store(left - 1, Relaxed);
+                Vec::new()
+            }
+        }
     }
 
     fn startup_pending(&self) -> bool {
@@ -153,6 +163,58 @@ fn presented_events(link: &mut RenderLink) -> usize {
 
 fn stats_of(link: &RenderLink) -> &Arc<RenderStats> {
     link.stats()
+}
+
+#[test]
+fn completion_and_unchanged_commands_do_not_consume_another_frame_slot() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    assert_eq!(probe.frame_waits.load(Relaxed), 1);
+    let stepped = stats_of(&link).stepped_ns.load(Relaxed);
+    link.push_commands([aqua_protocol::RenderCommand::Viewport {
+        size: Size::new(100.0, 100.0),
+        scale: 1.0,
+    }]);
+    wait_until("the unchanged viewport to be processed", || {
+        stats_of(&link).stepped_ns.load(Relaxed) > stepped
+    });
+    assert_eq!(probe.frame_waits.load(Relaxed), 1);
+    assert_eq!(probe.presents.load(Relaxed), 1);
+    assert_eq!(presented_events(&mut link), 0);
+    link.set_viewport(Size::new(101.0, 100.0), 1.0);
+    wait_until("the changed viewport completion", || {
+        presented_events(&mut link) == 1
+    });
+    assert_eq!(probe.frame_waits.load(Relaxed), 2);
+    assert_eq!(probe.presents.load(Relaxed), 2);
+}
+
+#[test]
+fn a_scene_that_never_reaches_the_screen_is_still_answered() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    probe.unshown.store(1, Relaxed);
+    link.push_scene(&mut scene_with("#ff0000"));
+    let mut events = Vec::new();
+    wait_until("the unshown scene to be answered", || {
+        events.extend(link.poll());
+        !events.is_empty()
+    });
+    assert!(events.contains(&RenderEvent::Skipped));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, RenderEvent::Presented(_))));
+    link.push_scene(&mut scene_with("#00ff00"));
+    let mut events = Vec::new();
+    wait_until("the shown scene to present", || {
+        events.extend(link.poll());
+        events
+            .iter()
+            .any(|event| matches!(event, RenderEvent::Presented(_)))
+    });
+    assert!(!events.contains(&RenderEvent::Skipped));
 }
 
 #[test]

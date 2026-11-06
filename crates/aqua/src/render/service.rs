@@ -177,7 +177,6 @@ struct Slot {
     interval: Duration,
     stats: Arc<RenderStats>,
     inbox: Vec<RenderCommand>,
-    feedback: Vec<Feedback>,
     wake: RenderWake,
     pending: Pending,
     polls: u32,
@@ -223,7 +222,6 @@ impl Slot {
             interval: new.interval,
             stats: new.stats,
             inbox: Vec::new(),
-            feedback: Vec::new(),
             wake: RenderWake::NextFrame,
             pending: Pending::Settled,
             polls: 0,
@@ -314,7 +312,6 @@ impl Slot {
         let trim = trim || idle_due;
         let due = |at: Option<WallInstant>| at.is_some_and(|at| at <= now);
         let urgent = !self.inbox.is_empty()
-            || !self.feedback.is_empty()
             || arrived
             || trim
             || visibility
@@ -337,7 +334,7 @@ impl Slot {
             repaint: due(repaint_at),
             wake_due: due(wake_at),
             inbox: !self.inbox.is_empty(),
-            feedback: !self.feedback.is_empty(),
+            feedback: false,
             visibility,
             framed: false,
             presented: false,
@@ -361,10 +358,6 @@ impl Slot {
                 }
             }
             self.hidden_seen = hidden;
-            if let Stage::Running(target) = &mut self.stage {
-                let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Wait);
-                target.wait_frame();
-            }
         }
         self.stats.waited_ns.store(epoch_ns(), Ordering::Relaxed);
         let mut commands = std::mem::take(&mut self.inbox);
@@ -384,7 +377,7 @@ impl Slot {
         self.seen_arrivals = self.stats.arrivals.load(Ordering::Acquire);
         let input = RenderInput {
             commands,
-            feedback: std::mem::take(&mut self.feedback),
+            feedback: Vec::new(),
             present_at: self.present_time(),
         };
         let step_span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Input);
@@ -408,6 +401,7 @@ impl Slot {
             (None, false) => None,
         };
         self.presented_last = false;
+        let mut announced = false;
         if let Some(frame) = frame {
             if forced {
                 self.stats.forced.fetch_add(1, Ordering::Relaxed);
@@ -419,7 +413,7 @@ impl Slot {
                 || feedback
                     .iter()
                     .any(|item| matches!(item, Feedback::Presented(_)));
-            self.feedback = match maintenance || silent {
+            let feedback = match maintenance || silent {
                 true => feedback
                     .into_iter()
                     .filter(|item| !matches!(item, Feedback::Presented(_)))
@@ -433,6 +427,16 @@ impl Slot {
                     .scenes_presented
                     .store(applied, Ordering::Release);
             }
+            for feedback in feedback {
+                let event = self.side.feedback(feedback);
+                announced |= matches!(event, RenderEvent::Presented(_));
+                if self.events.send(event).is_err() {
+                    break;
+                }
+            }
+        }
+        if scenes > 0 && !announced {
+            let _ = self.events.send(RenderEvent::Skipped);
         }
         if trim {
             self.stats.trim.store(false, Ordering::Release);
@@ -514,6 +518,11 @@ impl Slot {
         let live = self.start();
         match (&mut self.stage, live) {
             (Stage::Running(target), true) => {
+                {
+                    let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Wait);
+                    target.wait_frame();
+                }
+                self.stats.waited_ns.store(epoch_ns(), Ordering::Relaxed);
                 if invalidate {
                     target.invalidate();
                 }

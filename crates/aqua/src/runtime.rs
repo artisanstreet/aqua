@@ -331,6 +331,8 @@ pub trait Application {
 
     fn on_frame_completed(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _sequence: u64) {}
 
+    fn on_animation_frame(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _now: Instant) {}
+
     fn on_dialog(
         &mut self,
         _ctx: &mut AppCtx,
@@ -838,6 +840,13 @@ impl Aqua {
                 sink.apply(update);
             }
             if let Some(link) = record.link.as_mut() {
+                if output
+                    .render
+                    .iter()
+                    .any(|command| matches!(command, RenderCommand::Scene(_)))
+                {
+                    self.scheduler.await_present(id);
+                }
                 link.push_commands(output.render);
             }
         }
@@ -1538,6 +1547,7 @@ impl Aqua {
         for event in events {
             match event {
                 RenderEvent::Presented(frame) => {
+                    self.scheduler.present_arrived(id);
                     if let Some(record) = self.windows.get_mut(&id) {
                         record.presented += 1;
                     }
@@ -1565,10 +1575,12 @@ impl Aqua {
                     self.dispatch_frame_completed(app, id, frame);
                 }
                 RenderEvent::DeviceLost => {
+                    self.scheduler.present_arrived(id);
                     self.render_errors += 1;
                     app.step_input(id, RuntimeInput::Gpu(GpuEvent::DeviceLost));
                     self.with_ctx(|ctx| app.on_render_error(ctx, id, "device lost"));
                 }
+                RenderEvent::Skipped => self.scheduler.present_arrived(id),
                 RenderEvent::DeviceRecovered => {
                     app.step_input(id, RuntimeInput::Gpu(GpuEvent::DeviceRecovered));
                     self.scheduler.request_frame(id, FrameReason::EXPLICIT);
@@ -1619,6 +1631,9 @@ impl Aqua {
             }
             crate::profile::begin_frame();
             crate::profile::note(|| format!("rebuild_reason={reasons:?}"));
+            if reasons.intersects(FrameReason::ANIMATION | FrameReason::GPUI_PULSE) {
+                self.with_ctx(|ctx| app.on_animation_frame(ctx, id, now));
+            }
             let started = WallInstant::now();
             self.produce_frame(app, id, now);
             let cost = started.elapsed();
@@ -1703,6 +1718,7 @@ impl Aqua {
         aqua_core::checkpoint::reach();
         if let Some(scene) = app.scene_mut(id) {
             link.push_scene(scene);
+            self.scheduler.await_present(id);
         }
         aqua_core::checkpoint::reach();
         if let Some(probe) = self.input_latency.as_mut() {

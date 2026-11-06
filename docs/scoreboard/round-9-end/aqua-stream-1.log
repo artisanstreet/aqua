@@ -1,0 +1,14 @@
+probe-launch unix_ms=1793891531368 pid=5372
+probe-startup window_ms=82 first_content_ms=175 nondominant=0.087
+probe-open thread=bench-stream unix_ms=1793891531755 since_launch_ms=387 since_click_ms=-1
+probe-cpu name=stream0 unix_ms=1793891543409 cpu_ms=312 user_ms=188 private_mb=115.7 working_set_mb=3.1 threads=33 handles=1345
+probe-trigger unix_ms=1793891543415
+probe-latency name=stream_latency kind=idle samples=300 timeouts=0 p50_ms=0.07 p90_ms=0.175 p99_ms=0.37 max_ms=5.75 mean_ms=0.11 over4_ms=1 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/6,0.1/0,0.1/0
+probe-cpu name=stream1 unix_ms=1793891552930 cpu_ms=1016 user_ms=688 private_mb=128.3 working_set_mb=47.1 threads=35 handles=1349
+probe-wakes name=stream seconds=10 context_switches_per_sec_avg=364.5 max=405 top_threads=18152=145.8(aqua-render),22504=113(main),21088=67.4(),10740=24.2(forge-net) attempt=1
+probe-ctxseries name=stream start_unix_ms=1793891553009 per_second=379,376,405,334,384,344,343,371,394,315 hard_faults=0,0,0,0,0,0,0,10,0,0 page_faults=10,205,198,30,105,149,9,197,54,2
+probe-cpu name=stream2 unix_ms=1793891563208 cpu_ms=1859 user_ms=1438 private_mb=131.2 working_set_mb=50.8 threads=33 handles=1348
+probe-gpumem name=stream dedicated_mb=51.9
+pid=5372 dpi=120 working_set_mb=1 private_mb=129
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---

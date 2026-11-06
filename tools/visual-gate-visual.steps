@@ -1,0 +1,35 @@
+waitopen bench-visual 20
+sleep 3
+move 760 300
+shot v-tail
+move 700 150
+sleep 0.5
+click 700 150
+sleep 1.5
+shot v-lightbox
+key esc
+sleep 1
+wheel 760 300 120
+sleep 1.5
+wheel 760 300 120
+sleep 1.5
+wheel 760 300 120
+sleep 2
+shot v-scroll
+move 1218 382
+sleep 1.5
+shot v-menu
+click 1000 366
+move 760 300
+sleep 2
+shot v-top
+click 24 876
+sleep 2
+shot v-account
+key esc
+sleep 1
+click 760 800
+sleep 1
+typehex 68 65 6C 6C 6F 20 1F642 20 2728 20 1F44D 20 1F600 20 6F 6B
+sleep 1.5
+shot v-emoji

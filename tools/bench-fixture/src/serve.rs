@@ -49,6 +49,9 @@ async fn seed(store: &Store, spec: &Spec) -> Result<BTreeMap<String, String>> {
     for id in &spec.unread {
         store.mark_unread(id).await?;
     }
+    for id in &spec.settled {
+        store.settle_thread(id, u64::MAX).await?;
+    }
     Ok(hashes)
 }
 

@@ -266,26 +266,59 @@ class Gen:
         return steps
 
 
+VISUAL_PARAGRAPH = (
+    "Text sits behind every glass surface in this thread so that blur, tint, shadow and clipping are visible: "
+    "the quick brown fox jumps over the lazy dog, then 0123456789 and {{}} [] () <> == != -> => :: ... "
+    "with mixed scripts 日本語のテキスト, Ελληνικά, עברית and emoji 🙂 ✨ 👍 😀 🚀 🎉 in the same run."
+)
+
+
+def visual_thread(gen, thread):
+    gen.add(thread, {"type": "user_message", "text": "Show emoji 🙂 ✨ 👍 😀 🚀, mixed scripts 日本語 and an image, then a long reply with code and a table.", "images": [], "steer": False})
+    gen.add(thread, {"type": "assistant_message", "text": VISUAL_PARAGRAPH, "phase": "commentary"})
+    for section in range(3):
+        body = [f"## Section {section + 1} 🚀 rendering checks", VISUAL_PARAGRAPH, VISUAL_PARAGRAPH]
+        body.append("- bullet one with emoji 👍 and `inline code`\n- bullet two with a [link](https://example.com/visual) and **bold text**\n- bullet three: " + VISUAL_PARAGRAPH[:90])
+        body.append("```rust\n" + RUST + "```")
+        body.append("| phase | p50 (ms) | p99 (ms) | note |\n| --- | ---: | ---: | --- |\n| build | 0.31 | 1.20 | ✨ warm |\n| layout | 0.12 | 0.50 | 🙂 cached |\n| record | 0.09 | 0.40 | 👍 ok |")
+        body.append("> " + VISUAL_PARAGRAPH)
+        gen.add(thread, {"type": "assistant_message", "text": "\n\n".join(body), "phase": "final"})
+    gen.add(thread, {"type": "image", "blob": gen.image(1280, 720), "caption": "A generated test image with a caption 🙂"})
+    gen.add(thread, {"type": "user_message", "text": "Here is the screenshot 🙂", "images": [gen.image(960, 540)], "steer": False})
+    gen.add(thread, {"type": "assistant_message", "text": "\n\n".join([VISUAL_PARAGRAPH] * 2), "phase": "final"})
+
+
+def history_thread(gen, thread):
+    gen.add(thread, {"type": "user_message", "text": "An older, finished thread that lives under History.", "images": [], "steer": False})
+    gen.add(thread, {"type": "assistant_message", "text": "Settled and filed away.", "phase": "final"})
+
+
 def main():
     out = sys.argv[1]
     gen = Gen()
-    large, stream, project = "bench-large", "bench-stream", "bench-project"
+    large, stream, project, visual, history = "bench-large", "bench-stream", "bench-project", "bench-visual", "bench-history"
     for index in range(TURNS):
         gen.turn(large, index)
     for index in range(4):
         gen.turn(stream, index)
     gen.add(stream, {"type": "user_message", "text": "Walk me through the frame pipeline and show the hot loop.", "images": [], "steer": False})
+    stream_steps = gen.stream_steps(stream, "bench-run")
+    visual_thread(gen, visual)
+    history_thread(gen, history)
     config = {"engine": "claude", "model": "claude-opus-5-5", "effort": "medium", "permissions": "auto", "options": {}}
     spec = {
         "projects": [{"id": project, "path": "C:\\bench\\project", "name": "Bench"}],
         "threads": [
             {"id": large, "project_id": project, "config": config, "title": "Large benchmark thread", "parent_thread_id": None, "spawned_by": None},
             {"id": stream, "project_id": project, "config": config, "title": "Streaming benchmark thread", "parent_thread_id": None, "spawned_by": None},
+            {"id": history, "project_id": project, "config": config, "title": "Finished history thread", "parent_thread_id": None, "spawned_by": None},
+            {"id": visual, "project_id": project, "config": config, "title": "Visual parity thread", "parent_thread_id": None, "spawned_by": None},
         ],
         "images": gen.images,
         "items": gen.items,
-        "unread": [large, stream],
-        "stream": {"thread_id": stream, "run_id": "bench-run", "model": "claude-opus-5-5", "steps": gen.stream_steps(stream, "bench-run")},
+        "unread": [large, stream, visual],
+        "settled": [history],
+        "stream": {"thread_id": stream, "run_id": "bench-run", "model": "claude-opus-5-5", "steps": stream_steps},
     }
     with open(out, "w") as file:
         json.dump(spec, file, separators=(",", ":"))

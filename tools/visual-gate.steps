@@ -2,6 +2,24 @@ waitopen bench-large 20
 sleep 3
 move 760 450
 shot bottom
+move 1216 400
+sleep 1.5
+shot menu
+click 1000 297
+move 760 450
+sleep 2
+shot jump-a
+move 1216 400
+sleep 1.5
+click 1000 513
+move 760 450
+sleep 2
+shot jump-b
+move 1216 400
+sleep 1.5
+click 1000 693
+move 760 450
+sleep 2
 wheel 760 450 120
 sleep 1.5
 shot notch1

@@ -8,6 +8,7 @@ W=/home/sander/projects/artisanstreet
 OUT=${AQUA_COMPARE_OUT:-$T/shots/compare}
 FIXTURE_ROOT=${AQUA_FIXTURE_ROOT:-/mnt/c/Users/sander/AppData/Local/aqua-bench}
 FIXTURE_PORT=${AQUA_FIXTURE_PORT:-47950}
+PRIVATE=${AQUA_COMPARE_PRIVATE:-0}
 FIXTURE_TURNS=${AQUA_FIXTURE_TURNS:-150}
 USER_EDITOR_DATA="/mnt/c/Users/sander/AppData/Local/Artisan Street/Editor/data"
 HOST_ID=
@@ -31,7 +32,7 @@ RESIZE_COUNT=${AQUA_COMPARE_RESIZE_COUNT:-120}
 RUNS=${AQUA_COMPARE_RUNS:-3}
 TARGETS=${AQUA_COMPARE_TARGETS:-"aqua gpui"}
 PHASES=${AQUA_COMPARE_PHASES:-"main open stream keys wakesrc spikes"}
-DIAG_PHASES="wakesrc spikes memdiag streamprof coldprof"
+DIAG_PHASES="wakesrc idleprobe spikes memdiag streamprof coldprof"
 SNAPSHOT_DIR=${AQUA_COMPARE_SNAPSHOT_DIR:-}
 MAX_SYSTEM_LOAD=${AQUA_COMPARE_MAX_SYSTEM_LOAD:-25}
 export AQUA_STATS_OVERRIDE=off
@@ -124,7 +125,7 @@ trap stop_forge EXIT
 
 start_forge() {
   local rundir=$1
-  powershell.exe -NoProfile -Command "Get-Process bench-fixture -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1 || true
+  [ "$PRIVATE" = 1 ] || powershell.exe -NoProfile -Command "Get-Process bench-fixture -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1 || true
   sleep 1
   rm -rf "$rundir" || die "cannot clear $rundir: a stale fixture Forge still holds it"
   mkdir -p "$rundir"
@@ -144,7 +145,7 @@ phase_args() {
     main) echo "artisan://thread/$HOST_ID/$LARGE" ;;
     open) echo "artisan://new/$HOST_ID" ;;
     stream|streamprof) echo "artisan://thread/$HOST_ID/$STREAM" ;;
-    wakesrc|spikes|memdiag|idlegate|resize|resizeprof|cold|coldprof) echo "artisan://thread/$HOST_ID/$LARGE" ;;
+    wakesrc|spikes|memdiag|idlegate|idleprobe|resize|resizeprof|cold|coldprof) echo "artisan://thread/$HOST_ID/$LARGE" ;;
   esac
 }
 
@@ -152,7 +153,7 @@ phase_steps() {
   local phase=$1 rundir=$2
   case $phase in
     main)
-      echo "waitopen $LARGE 12 $SIDEBAR_THREAD 30; sleep 3; display state; load boot_load 3; cpu boot; gpumem boot; sleep 2; cpu idle0; wakes idle $IDLE_SECONDS; threads idle_threads $IDLE_THREAD_SECONDS; cpu idle1; lat idle_latency 300 10; snapshot pre; shot thread; scrolllat scroll $SCROLL_X $SCROLL_Y $SCROLL_FRAMES $SCROLL_GAP_MS 120; changed pre 0 0 1518 900; cpu scroll1; sleep 4; cpu settle; gpumem settle; click $COMPOSER_CLICK; sleep 1; typelat type $COMPOSER_RECT $TYPE_COUNT 60; resizelat resize $RESIZE_COUNT 16; sleep 3; cpu rs0; wakes after_resize $IDLE_SECONDS; cpu rs1; threads after_resize_threads $IDLE_THREAD_SECONDS; load end_load 3; shot final"
+      echo "waitopen $LARGE 12 $SIDEBAR_THREAD 30; sleep 3; display state; load boot_load 3; cpu boot; gpumem boot; sleep 2; cpu idle0; wakes idle $IDLE_SECONDS; threads idle_threads $IDLE_THREAD_SECONDS; cpu idle1; lat idle_latency 300 10; snapshot pre; shot thread; cpu scroll0; scrolllat scroll $SCROLL_X $SCROLL_Y $SCROLL_FRAMES $SCROLL_GAP_MS 120; cpu scroll1; changed pre 0 0 1518 900; sleep 4; cpu settle; gpumem settle; click $COMPOSER_CLICK; sleep 1; typelat type $COMPOSER_RECT $TYPE_COUNT 60; resizelat resize $RESIZE_COUNT 16; sleep 3; cpu rs0; wakes after_resize $IDLE_SECONDS; cpu rs1; threads after_resize_threads $IDLE_THREAD_SECONDS; load end_load 3; shot final"
       ;;
     cold|coldprof)
       echo "waitopen $LARGE 45 $SIDEBAR_THREAD 30; sleep 2"
@@ -162,6 +163,9 @@ phase_steps() {
       ;;
     wakesrc)
       echo "waitopen $LARGE 45 $SIDEBAR_THREAD 30; sleep 8; cpu wake0; sleep $DIAG_IDLE_SECONDS; cpu wake1; setsize 1100 760; sleep 4; sleep $DIAG_IDLE_SECONDS; cpu wake2"
+      ;;
+    idleprobe)
+      echo "waitopen $LARGE 45 $SIDEBAR_THREAD 30; sleep 8; ${AQUA_COMPARE_IDLE_STEPS:-threads idle_a 15; threads idle_b 15}"
       ;;
     idlegate)
       local poke=""
@@ -222,7 +226,7 @@ verify_phase() {
       local matched posts; matched=$(sed -n 's/.* matched=\([0-9]*\).*/\1/p' <<<"$line"); posts=$(sed -n 's/.* posts=\([0-9]*\).*/\1/p' <<<"$line")
       [ "${matched:-0}" -ge $(( ${posts:-1} * 8 / 10 )) ] || die "$which keys run matched only ${matched:-0} of ${posts:-0} keystrokes to presents (see $log)"
       ;;
-    wakesrc|spikes|memdiag|resize|resizeprof|streamprof) ;;
+    wakesrc|spikes|memdiag|idleprobe|resize|resizeprof|streamprof) ;;
     idlegate)
       local lines; lines=$(sed -n 's/.*probe-wakelines name=idle_gate .* lines=\([0-9]*\).*/\1/p' "$log" | tail -1)
       [ -n "$lines" ] || die "$which idle gate produced no probe-wakelines result (see $log)"
@@ -256,13 +260,19 @@ for which in $TARGETS; do
   [ -f "$exe" ] || die "missing $PROFILE executable $exe; run: $hint"
 done
 
+if [ "$PRIVATE" = 1 ]; then
+  [ "$FIXTURE_PORT" != 47950 ] || die "AQUA_COMPARE_PRIVATE=1 needs its own AQUA_FIXTURE_PORT (not 47950)"
+  [ "$FIXTURE_ROOT" != /mnt/c/Users/sander/AppData/Local/aqua-bench ] || die "AQUA_COMPARE_PRIVATE=1 needs its own AQUA_FIXTURE_ROOT"
+  echo "private run: no global scoreboard lock; results are for A/B only, not the official scoreboard" >&2
+else
 exec 9>/tmp/aqua-scoreboard.lock
 echo "waiting for /tmp/aqua-scoreboard.lock (one scoreboard at a time)" >&2
 flock -w 7200 9 || die "another scoreboard run held /tmp/aqua-scoreboard.lock for two hours"
+fi
 
 exec 8>"/tmp/aqua-forge-port-$FIXTURE_PORT.lock"
 flock -w 120 8 || die "fixture Forge port $FIXTURE_PORT is locked by another run (/tmp/aqua-forge-port-$FIXTURE_PORT.lock)"
-PIDFILE=/tmp/aqua-scoreboard.pid
+PIDFILE=/tmp/aqua-scoreboard${PRIVATE:+-$FIXTURE_PORT}.pid
 proc_start() { awk '{print $22}' "/proc/$1/stat" 2>/dev/null || true; }
 if [ -r "$PIDFILE" ]; then
   read -r held_pid held_start <"$PIDFILE" || true
@@ -275,7 +285,11 @@ trap 'rm -f "$PIDFILE"' EXIT
 
 fixture_prepare
 mkdir -p "$OUT"
-rm -f "$OUT"/verdict.txt "$OUT"/scoreboard.txt "$OUT"/manifest.txt
+if [ "${AQUA_COMPARE_KEEP:-0}" != 1 ]; then
+  find "$OUT" -maxdepth 1 -type f \( -name 'aqua-*' -o -name 'gpui-*' -o -name 'verdict.txt' -o -name 'scoreboard.txt' -o -name 'manifest.txt' -o -name 'visual-gate-status.txt' \) -delete
+  rm -rf "$OUT/visual-gate"
+fi
+[ "$PRIVATE" = 1 ] || powershell.exe -NoProfile -Command "Get-Process bench-fixture,bench-fixture-visual -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1 || true
 
 SNAP=${SNAPSHOT_DIR:-$FIXTURE_ROOT/exe-snapshot}
 mkdir -p "$SNAP"
@@ -392,6 +406,22 @@ for phase in $PHASES; do
 done
 
 [ "$PHASES" = idlegate ] && exit 0
+
+VISUAL=${AQUA_COMPARE_VISUAL:-auto}
+case $VISUAL in
+  auto) case " $PHASES " in *" main "*) [ "$RUNS" -ge 3 ] && VISUAL=1 || VISUAL=0 ;; *) VISUAL=0 ;; esac ;;
+esac
+if [ "$VISUAL" = 1 ]; then
+  echo "=== visual gate ==="
+  if VISUAL_GATE_LOCKED=1 VISUAL_GATE_OUT=$OUT/visual-gate VISUAL_GATE_PORT=$((FIXTURE_PORT + 1)) VISUAL_GATE_PROFILE=$PROFILE \
+      VISUAL_GATE_AQUA_EXE=$AQUA_EXE_RUN VISUAL_GATE_GPUI_EXE=$GPUI_EXE_RUN "$HERE/visual-gate.sh" 2>&1 | tee "$OUT/visual-gate.log"; then
+    grep -q "^VISUAL GATE FAILED" "$OUT/visual-gate.log" && echo "FAIL $(grep -m1 '^VISUAL GATE FAILED' "$OUT/visual-gate.log")" > "$OUT/visual-gate-status.txt" || echo "PASS shots in $OUT/visual-gate" > "$OUT/visual-gate-status.txt"
+  else
+    echo "FAIL $(grep -m1 '^VISUAL GATE FAILED' "$OUT/visual-gate.log" || echo "visual gate exited non-zero")" > "$OUT/visual-gate-status.txt"
+  fi
+else
+  echo "SKIPPED" > "$OUT/visual-gate-status.txt"
+fi
 
 status=0
 AQUA_COMPARE_MAX_SYSTEM_LOAD=$MAX_SYSTEM_LOAD AQUA_COMPARE_PROFILE=$PROFILE python3 "$HERE/compare-editors-report.py" "$OUT" "$RUNS" "$SCROLL_FRAMES" || status=$?

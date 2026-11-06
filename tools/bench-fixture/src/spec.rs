@@ -12,6 +12,8 @@ pub struct Spec {
     pub images: BTreeMap<String, ImageSpec>,
     pub items: Vec<Value>,
     pub unread: Vec<ThreadId>,
+    #[serde(default)]
+    pub settled: Vec<ThreadId>,
     pub stream: StreamSpec,
 }
 

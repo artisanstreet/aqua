@@ -28,7 +28,7 @@ public static class W {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll", EntryPoint="PostMessageW")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
@@ -177,14 +177,16 @@ try {
   $style = [W]::GetWindowLong($h, -16); $ex = [W]::GetWindowLong($h, -20)
   [void][W]::AdjustWindowRectExForDpi([ref]$r, [uint32]$style, $false, [uint32]$ex, $dpi)
   if ($env:AQUA_NO_RESIZE -ne "1") { [void][W]::SetWindowPos($h, $(if ($env:AQUA_PLACE -eq "top") { [IntPtr](-1) } else { [IntPtr]1 }), 40, 40, ($r.R - $r.L), ($r.B - $r.T), 0x0010) }
-  $firstMs = -1; $firstFrac = 0
+  $firstMs = -1; $firstFrac = 0; $richMs = -1
   while ($launchClock.Elapsed.TotalSeconds -lt 30) {
     $f = [W]::Grab($h)
     $frac = [W]::NonDominant($f)
-    if ($frac -gt 0.06) { $firstMs = $launchClock.Elapsed.TotalMilliseconds; $firstFrac = $frac; break }
+    if ($firstMs -lt 0 -and $frac -gt 0.06) { $firstMs = $launchClock.Elapsed.TotalMilliseconds; $firstFrac = $frac }
+    if ($frac -ge 0.15) { $richMs = $launchClock.Elapsed.TotalMilliseconds; break }
+    if ($firstMs -ge 0 -and ($launchClock.Elapsed.TotalMilliseconds - $firstMs) -gt 3000) { break }
     Start-Sleep -Milliseconds 10
   }
-  "probe-startup window_ms=$([math]::Round($windowMs,0)) first_content_ms=$([math]::Round($firstMs,0)) nondominant=$([math]::Round($firstFrac,3))"
+  "probe-startup window_ms=$([math]::Round($windowMs,0)) first_content_ms=$([math]::Round($firstMs,0)) nondominant=$([math]::Round($firstFrac,3)) rich_content_ms=$([math]::Round($richMs,0))"
   for ($i = 0; $i -lt $(if ($env:AQUA_NO_RESIZE -eq "1") { 0 } else { 4 }); $i++) {
     Start-Sleep -Milliseconds 400
     $cr = New-Object W+RECT; [void][W]::GetClientRect($h, [ref]$cr)
@@ -261,6 +263,8 @@ function Probe-Latency($name, $kind, $count, $gap, $scroll, $x, $y, $delta) {
   $timeouts = 0
   $pt = New-Object W+POINT; $pt.X = [int]($x * $scale); $pt.Y = [int]($y * $scale)
   [void][W]::ClientToScreen($h, [ref]$pt)
+  $warm = [IntPtr]::Zero
+  for ($i = 0; $i -lt 8; $i++) { [void][W]::SendMessageTimeout($h, 0, [IntPtr]::Zero, [IntPtr]::Zero, 3, 2000, [ref]$warm) }
   for ($i = 0; $i -lt $count; $i++) {
     $tick = $total.Elapsed.TotalMilliseconds
     if ($scroll) {
@@ -357,7 +361,7 @@ function Probe-Latency($name, $kind, $count, $gap, $scroll, $x, $y, $delta) {
         $proc.Refresh()
         if ($proc.HasExited) { "probe-exited name=$($a[0]) exit_code=$($proc.ExitCode)"; continue }
         $ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        "probe-cpu name=$($a[0]) unix_ms=$ms cpu_ms=$([int]$proc.TotalProcessorTime.TotalMilliseconds) user_ms=$([int]$proc.UserProcessorTime.TotalMilliseconds) private_mb=$([math]::Round($proc.PrivateMemorySize64/1MB,1)) working_set_mb=$([math]::Round($proc.WorkingSet64/1MB,1)) threads=$($proc.Threads.Count) handles=$($proc.HandleCount)"
+        "probe-cpu name=$($a[0]) unix_ms=$ms cpu_ms=$([int]$proc.TotalProcessorTime.TotalMilliseconds) user_ms=$([int]$proc.UserProcessorTime.TotalMilliseconds) private_mb=$([math]::Round($proc.PrivateMemorySize64/1MB,1)) working_set_mb=$([math]::Round($proc.WorkingSet64/1MB,1)) peak_working_set_mb=$([math]::Round($proc.PeakWorkingSet64/1MB,1)) threads=$($proc.Threads.Count) handles=$($proc.HandleCount)"
       }
       "lat" { Probe-Latency $a[0] "idle" ([int]$a[1]) ([double]$a[2]) $false 0 0 0 }
       "scrolllat" { Probe-Latency $a[0] "scroll" ([int]$a[3]) ([double]$a[4]) $true ([double]$a[1]) ([double]$a[2]) ([int]$a[5]) }
@@ -369,12 +373,22 @@ function Probe-Latency($name, $kind, $count, $gap, $scroll, $x, $y, $delta) {
         $wr0 = New-Object W+RECT; [void][W]::GetWindowRect($h, [ref]$wr0)
         [void][W]::SetWindowPos($h, $(if ($env:AQUA_PLACE -eq "top") { [IntPtr](-1) } else { [IntPtr]1 }), 40, 40, $nw, $nh, 0x0010)
       }
+      "tstart" {
+        Ensure-TD
+        $script:tstart_counters = Get-ThreadCounters $procId
+        $script:tstart_time = [DateTime]::UtcNow
+      }
       "threads" {
         $secs = [int]$a[1]
         try {
           Ensure-TD
-          $s0 = Get-ThreadCounters $procId
-          Start-Sleep -Seconds $secs
+          if ($secs -le 0 -and $script:tstart_counters) {
+            $s0 = $script:tstart_counters
+            $secs = [math]::Max(1, [int][math]::Round(([DateTime]::UtcNow - $script:tstart_time).TotalSeconds))
+          } else {
+            $s0 = Get-ThreadCounters $procId
+            Start-Sleep -Seconds $secs
+          }
           $s1 = Get-ThreadCounters $procId
           $proc.Refresh()
           $mods = @($proc.Modules)

@@ -103,6 +103,7 @@ def collect(which):
             marks, lats, wakes, gpu, other, threads, loads = main
             st = other.get("startup", {})
             put("startup_first_content_ms", num(st, "first_content_ms"))
+            put("startup_rich_content_ms", num(st, "rich_content_ms"))
             put("startup_window_ms", num(st, "window_ms"))
             put("cold_thread_ms", num(other.get("open", {}), "since_launch_ms"))
             put("fallback_clicks", num(other.get("open", {}), "fallback_click"))
@@ -123,9 +124,9 @@ def collect(which):
                                ("scroll_max", "max_ms"), ("scroll_over4", "over4_ms"), ("scroll_over8", "over8_ms"),
                                ("scroll_over16", "over16_ms"), ("scroll_timeouts", "timeouts")):
                 put(key, num(sl, field))
-            s1, i1 = marks.get("scroll1"), marks.get("idle1")
-            if s1 and i1:
-                put("scroll_cpu_ms_per_input", (num(s1, "cpu_ms") - num(i1, "cpu_ms")) / scroll_frames)
+            s0, s1 = marks.get("scroll0"), marks.get("scroll1")
+            if s0 and s1:
+                put("scroll_cpu_ms_per_input", (num(s1, "cpu_ms") - num(s0, "cpu_ms")) / scroll_frames)
             ty = lats.get("type", {})
             put("pixel_type_p50", num(ty, "p50_ms"))
             put("pixel_type_p99", num(ty, "p99_ms"))
@@ -138,6 +139,8 @@ def collect(which):
             put("private_settle", num(marks.get("settle", {}), "private_mb"))
             put("working_set_boot", num(marks.get("boot", {}), "working_set_mb"))
             put("working_set_settle", num(marks.get("settle", {}), "working_set_mb"))
+            put("peak_working_set_boot", num(marks.get("boot", {}), "peak_working_set_mb"))
+            put("peak_working_set_settle", num(marks.get("settle", {}), "peak_working_set_mb"))
             put("gpu_boot", num(gpu.get("boot", {}), "dedicated_mb"))
             put("gpu_settle", num(gpu.get("settle", {}), "dedicated_mb"))
             put("exited", 1.0 if "exited" in other else 0.0)
@@ -207,11 +210,14 @@ TABLE = [
     ("idle threads waking after resize", "idle_resized_waking_threads", True),
     ("private MiB after startup", "private_boot", True),
     ("private MiB after 600 scrolls", "private_settle", True),
-    ("working set MiB after startup", "working_set_boot", True),
-    ("working set MiB after 600 scrolls", "working_set_settle", True),
+    ("peak working set MiB after startup (untrimmed)", "peak_working_set_boot", True),
+    ("peak working set MiB after 600 scrolls (untrimmed)", "peak_working_set_settle", True),
+    ("working set MiB after startup (current, trim-sensitive)", "working_set_boot", False),
+    ("working set MiB after 600 scrolls (current, trim-sensitive)", "working_set_settle", False),
     ("GPU dedicated MiB after startup", "gpu_boot", True),
     ("GPU dedicated MiB after 600 scrolls", "gpu_settle", True),
     ("cold start to first content (ms)", "startup_first_content_ms", True),
+    ("cold start to a frame with 15% non-dominant pixels (ms)", "startup_rich_content_ms", True),
     ("cold start to thread painted (ms)", "cold_thread_ms", True),
     ("open large thread, click to painted (ms)", "open_thread_ms", True),
     ("resize p50 (ms)", "resize_p50", True),
@@ -269,6 +275,17 @@ for label, key, limit in (("section 11 windowed private memory", "private_settle
     passed = value is not None and value <= limit
     verdict.append(f"{label} ({limit:.0f} MiB, {profile}): {'PASS' if passed else 'FAIL'} ({fmt(value)})")
     failed = failed or not passed
+
+visual_status = out / "visual-gate-status.txt"
+visual_text = visual_status.read_text().strip() if visual_status.exists() else "MISSING"
+if visual_text.startswith("PASS"):
+    verdict.append(f"visual gate (shots captured and distinct for both editors, side port; read the PNG pairs): PASS ({visual_text})")
+elif visual_text == "SKIPPED":
+    verdict.append("visual gate: FAIL (skipped; a scoreboard without the visual gate does not count)")
+    failed = True
+else:
+    verdict.append(f"visual gate: FAIL ({visual_text})")
+    failed = True
 
 for which in TARGETS:
     load = rows[which].get("system_load")

@@ -1,0 +1,35 @@
+probe-launch unix_ms=1793891145861 pid=17020
+probe-startup window_ms=93 first_content_ms=187 nondominant=0.087
+probe-open thread=bench-large unix_ms=1793891146247 since_launch_ms=386 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:2560x1440@165Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=7.3
+probe-cpu name=boot unix_ms=1793891161206 cpu_ms=375 user_ms=188 private_mb=122.5 working_set_mb=3.2 threads=34 handles=1346
+probe-gpumem name=boot dedicated_mb=49.9
+probe-cpu name=idle0 unix_ms=1793891164221 cpu_ms=375 user_ms=188 private_mb=122.5 working_set_mb=3.9 threads=34 handles=1346
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=0.13 max=2 top_threads=22068=0.1(forge-net),10880=0(),21356=0(),4736=0() attempt=1
+probe-ctxseries name=idle start_unix_ms=1793891164289 per_second=0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,14,0,0,0,0,0,0,0,0,0,83,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,54
+probe-thread name=idle_threads tid=22068 thread='forge-net' started_ms=26 module=aquarun686ddada.exe start_rva=0x1747500 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=3160 thread='' started_ms=31 module=combase.dll start_rva=0x4732621e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=21356 thread='' started_ms=31 module=ntdll.dll start_rva=0x474a64990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=3 total=29
+probe-cpu name=idle1 unix_ms=1793891209765 cpu_ms=375 user_ms=188 private_mb=122.4 working_set_mb=5.1 threads=29 handles=1340
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.06 p90_ms=0.13 p99_ms=0.243 max_ms=6.148 mean_ms=0.095 over4_ms=1 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/6,0.1/0,0.1/0
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.09 p90_ms=0.306 p99_ms=0.46 max_ms=0.754 mean_ms=0.131 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/0,0.1/1,0.1/1,0.1/0,0.1/0,0.1/0
+probe-changed name=pre pixels=351065 total=2135250 nondominant=0.228
+probe-cpu name=scroll1 unix_ms=1793891232532 cpu_ms=5953 user_ms=4984 private_mb=133.3 working_set_mb=45.5 threads=28 handles=1338
+probe-cpu name=settle unix_ms=1793891236536 cpu_ms=6109 user_ms=5125 private_mb=127.3 working_set_mb=2.1 threads=28 handles=1337
+probe-gpumem name=settle dedicated_mb=51.9
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=30.591 p90_ms=34.093 p99_ms=41.646 max_ms=41.646 mean_ms=28.644 over4_ms=40 over8_ms=40 over16_ms=37 over50_ms=0 grab_p50_ms=12.7
+probe-latency name=resize_setpos kind=resize samples=120 timeouts=0 p50_ms=1.477 p90_ms=1.973 p99_ms=2.779 max_ms=2.914 mean_ms=1.522 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=1.802 p90_ms=2.229 p99_ms=3.113 max_ms=3.211 mean_ms=1.797 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 
+probe-cpu name=rs0 unix_ms=1793891250502 cpu_ms=7219 user_ms=5969 private_mb=129.2 working_set_mb=0.4 threads=30 handles=1342
+probe-wakes name=after_resize seconds=30 context_switches_per_sec_avg=0.13 max=2 top_threads=22068=0.1(forge-net),3160=0.1(),11764=0(artisan-markdown-stored),5004=0() attempt=1
+probe-ctxseries name=after_resize start_unix_ms=1793891250502 per_second=1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,2,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=196,0,0,0,0,463,52,0,0,0,0,0,0,0,0,0,0,0,0,0,0,209,0,0,0,0,0,0,0,129
+probe-cpu name=rs1 unix_ms=1793891280867 cpu_ms=7219 user_ms=5969 private_mb=129.1 working_set_mb=4.4 threads=26 handles=1336
+probe-thread name=after_resize_threads tid=22068 thread='forge-net' started_ms=26 module=aquarun686ddada.exe start_rva=0x1747500 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=after_resize_threads tid=16716 thread='' started_ms=138044 module=ntdll.dll start_rva=0x474a64990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=after_resize_threads seconds=15 active=2 total=27
+probe-load name=end_load seconds=3 system_cpu_pct=6.8
+pid=17020 dpi=120 working_set_mb=6 private_mb=129
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---

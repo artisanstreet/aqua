@@ -41,5 +41,16 @@ while read -r name f; do
   else fail=$((fail+1)); failed+=("$name:$code"); fi
   skipped=$(grep -c SKIP "$log"); echo "$name exit=$code skips=$skipped $(( $(date +%s) - start ))s"
 done < "$list"
+visual=skipped
+if [ "${AQUA_SWEEP_VISUAL:-1}" = 1 ]; then
+  visual_out=$out/visual-gate
+  if VISUAL_GATE_OUT=$visual_out VISUAL_GATE_PORT=${AQUA_SWEEP_VISUAL_PORT:-47951} "$root/tools/visual-gate.sh" > "$out/visual-gate.log" 2>&1; then
+    visual="pass shots=$visual_out pixel_diff=$visual_out/diff/pixel-diff.txt"
+  else
+    visual="FAIL $(grep -m1 '^VISUAL GATE FAILED' "$out/visual-gate.log" || echo 'see visual-gate.log')"
+    fail=$((fail+1)); failed+=("visual-gate:1")
+  fi
+fi
+echo "VISUAL GATE $visual"
 echo "SWEEP exes=$((pass+fail+advisory_fail)) pass=$pass fail=$fail advisory_fail=$advisory_fail ${failed[*]:-} advisory: ${advised[*]:-} retried: ${retried[*]:-}"
 [ $fail -eq 0 ]

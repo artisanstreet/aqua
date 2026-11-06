@@ -81,13 +81,18 @@ fn resize_edge(input: &HitInput<'_>, lx: i32, ly: i32, width: i32, height: i32) 
     let right = lx >= width - border;
     let top = ly < border;
     let bottom = ly >= height - border;
+    let corner = border.saturating_mul(2);
+    let near_left = lx < corner;
+    let near_right = lx >= width - corner;
+    let near_top = ly < corner;
+    let near_bottom = ly >= height - corner;
     let top_owned_by_frame = input.drag_band == 0 || !input.drag.caption_controls.is_empty();
     active
         .then_some(match (top, bottom, left, right) {
-            (true, _, true, _) => Some(ht::TOPLEFT),
-            (true, _, _, true) => Some(ht::TOPRIGHT),
-            (_, true, true, _) => Some(ht::BOTTOMLEFT),
-            (_, true, _, true) => Some(ht::BOTTOMRIGHT),
+            _ if (top && near_left) || (left && near_top) => Some(ht::TOPLEFT),
+            _ if (top && near_right) || (right && near_top) => Some(ht::TOPRIGHT),
+            _ if (bottom && near_left) || (left && near_bottom) => Some(ht::BOTTOMLEFT),
+            _ if (bottom && near_right) || (right && near_bottom) => Some(ht::BOTTOMRIGHT),
             (_, _, true, _) => Some(ht::LEFT),
             (_, _, _, true) => Some(ht::RIGHT),
             (_, true, _, _) => Some(ht::BOTTOM),

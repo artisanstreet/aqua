@@ -102,10 +102,10 @@ pub fn spawn_prewarm(fonts: SharedFonts, styles: Vec<TextStyle>) -> Option<JoinH
                 .count();
             save_fallback_index(&fonts);
             if crate::profile::enabled() {
-                eprintln!(
-                    "aqua-startup prewarm queued={queued} installed={installed} ms={:.1}",
+                crate::native::startup_mark(&format!(
+                    "prewarm_done queued={queued} installed={installed} ms={:.1}",
                     started.elapsed().as_secs_f64() * 1000.0
-                );
+                ));
             }
             installed
         })

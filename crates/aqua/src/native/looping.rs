@@ -29,6 +29,7 @@ use crate::inbox::AquaUserEvent;
 use crate::runtime::{Application, Aqua, ExternalFileDrag};
 
 const FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
+const FILE_DROP_IDLE: Duration = Duration::from_millis(30);
 
 struct Host<A: Application> {
     aqua: Aqua,
@@ -40,6 +41,7 @@ struct Host<A: Application> {
     resizes: HashMap<AquaWindowId, (u32, u32)>,
     occlusion: HashMap<AquaWindowId, Occlusion>,
     wakes: Option<WakeLedger>,
+    file_drop_pending: Vec<AquaWindowId>,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -138,8 +140,10 @@ impl<A: Application + 'static> Host<A> {
 
     fn create_window(&mut self, options: WindowOptions) -> Result<AquaWindowId, String> {
         options.validated().map_err(|e| format!("{e:?}"))?;
+        super::startup_mark("window_create_begin");
         let window = Window::create(&shell_options(&options, &self.aqua))
             .map_err(|error: ShellError| error.to_string())?;
+        super::startup_mark("window_created");
         let id = window.id();
         let (inner, scale) = logical(window);
         let observed = ObservedWindowState {
@@ -155,12 +159,16 @@ impl<A: Application + 'static> Host<A> {
         let native: Rc<dyn crate::native_window::NativeWindow> = Rc::new(Win32Window { window });
         self.aqua.add_native_window(observed.clone(), native);
         self.shell.insert(id, window);
+        self.file_drop_pending.push(id);
         self.rebind_waker();
         let inbox = self.aqua.inbox();
         let wake: aqua_a11y_uia::WakeFn = Arc::new(move || {
             inbox.post(AquaUserEvent::A11yActions(id));
         });
-        match UiaAdapter::attach(id.raw() as isize, wake) {
+        super::startup_mark("uia_begin");
+        let attached = UiaAdapter::attach(id.raw() as isize, wake);
+        super::startup_mark("uia_done");
+        match attached {
             Ok(adapter) => {
                 let now = self.aqua.clock();
                 if let Some(deadline) = self.app.prepare_accessibility(&observed, now) {
@@ -176,10 +184,12 @@ impl<A: Application + 'static> Host<A> {
             }
             Err(error) => eprintln!("aqua: uia attach failed: {error:?}"),
         }
+        super::startup_mark("ime_begin");
         self.aqua
             .attach_ime(id, Box::new(TsfIme::from_hwnd(id.raw() as isize)));
         super::startup_mark("window_shown");
         window.show();
+        super::startup_mark("window_visible");
         let clear = match options.transparent {
             true => Oklch::TRANSPARENT,
             false => Oklch::BLACK,
@@ -192,11 +202,25 @@ impl<A: Application + 'static> Host<A> {
             self.aqua.runs().clone(),
             clear,
         );
+        super::startup_mark("factory_built");
         self.aqua.attach_render(id, factory, FRAME_INTERVAL);
+        super::startup_mark("render_attached");
         self.aqua.dispatch_start(&mut self.app, id);
         super::startup_mark("app_started");
         self.aqua.scheduler.request_frame(id, FrameReason::EXPOSE);
         Ok(id)
+    }
+
+    fn enable_file_drop_when_idle(&mut self, now: Instant, next: Option<Instant>) {
+        let idle = next.is_none_or(|at| at.saturating_duration_since(now) > FILE_DROP_IDLE);
+        if self.aqua.frames_presented == 0 || !idle {
+            return;
+        }
+        let pending = std::mem::take(&mut self.file_drop_pending);
+        pending
+            .into_iter()
+            .filter_map(|id| self.shell.get(&id))
+            .for_each(|window| window.enable_file_drop());
     }
 
     fn publish_inspector(&self) {
@@ -527,6 +551,7 @@ impl<A: Application + 'static> Handler for Host<A> {
             .into_iter()
             .flatten()
             .min();
+        self.enable_file_drop_when_idle(now, next);
         let presented = self.aqua.frames_presented != presented_before;
         if let Some(ledger) = &mut self.wakes {
             ledger.tick(now, presented, next);
@@ -557,8 +582,11 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
         resizes: HashMap::new(),
         occlusion: HashMap::new(),
         wakes: wakes::enabled().then(|| WakeLedger::new(inbox)),
+        file_drop_pending: Vec::new(),
     };
+    super::startup_mark("host_ready");
     aqua_shell_win32::set_message_hook(TsfHook::new());
+    super::startup_mark("hook_set");
     if let Err(message) = host.create_window(options.clone()) {
         let error = aqua_protocol::window::WindowError::Native(message.clone());
         host.app

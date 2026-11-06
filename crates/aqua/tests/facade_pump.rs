@@ -1,7 +1,7 @@
 //! Verification: facade orchestration over real peer contracts.
 //!
 //! Headless tests against the public low-level `aqua` facade API (`Aqua`,
-//! `AquaConfig`, `Application`, `AppCtx`): window registration without winit/GPU,
+//! `AquaConfig`, `Application`, `AppCtx`): window registration without a windowing library or GPU,
 //! event/input dispatch driving the platform scheduler, close removing the
 //! window, scene commits into the render-owned `Scene`, and config-to-
 //! scheduler wiring. No duplicate scheduler/reactive/text/overlay systems

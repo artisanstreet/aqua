@@ -9,7 +9,7 @@ use aqua_runtime::Runtime;
 use aqua_scene::Scene;
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::element::ui::{Box as UiBox, Text as UiText};
-use aqua_ui::style::{Axis, Style, px};
+use aqua_ui::style::{px, Axis, Style};
 
 const VIEWPORT: Size = Size { w: 640.0, h: 480.0 };
 
@@ -18,7 +18,7 @@ fn transcript(runtime: &mut Runtime) {
         .mount(|_| {
             UiBox::new()
                 .style(Style::new().axis(Axis::Column).width(px(600.0)))
-                .children((0..6).map(|index| {
+                .children((0..30).map(|index| {
                     UiText::builder()
                         .arg(format!(
                             "Row {index}. Retained text lowers once and is re-placed when the content moves under a scroll glide."
@@ -94,4 +94,5 @@ fn replaced_runs_equal_fresh_lowering_at_every_offset() {
         );
         warm.retain_frame(cached);
     }
+    assert!(warm.span_replays() >= 5);
 }

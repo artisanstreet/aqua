@@ -112,7 +112,7 @@ fn repeated_builder_styles_calls_mix_direct_setters() {
     assert_eq!(specs[0].style.gap, 4.0);
     // Last radius entry wins over BASE's 6.0.
     let paint = match &specs[0].kind {
-        aqua_ui::tree::NodeKind::Box(b) => b.paint.clone(),
+        aqua_ui::tree::NodeKind::Box(b) => b.paint().clone(),
         other => panic!("expected Box, got {other:?}"),
     };
     assert_eq!(paint.radius, 2.0);
@@ -183,8 +183,8 @@ fn button_paint_needs_no_wrapper_box() {
     assert_eq!(specs[0].children.len(), 1);
     match &specs[0].children[0].kind {
         aqua_ui::tree::NodeKind::Box(b) => {
-            assert_eq!(b.paint.fill, Some(PAPER));
-            assert_eq!(b.paint.radius, 6.0);
+            assert_eq!(b.paint().fill, Some(PAPER));
+            assert_eq!(b.paint().radius, 6.0);
         }
         other => panic!("expected Box, got {other:?}"),
     }

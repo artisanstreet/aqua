@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{SyncSender, sync_channel};
+use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant as WallInstant};
@@ -11,7 +11,7 @@ use aqua_protocol::{
 use aqua_runtime::RenderSide;
 use aqua_transport::{Notify, Receiver, RecvError, Sender};
 
-use super::host::{Clock, FrameTarget, RenderStats, Repaint, TargetInit, epoch_ns};
+use super::host::{epoch_ns, Clock, FrameTarget, RenderStats, Repaint, TargetInit};
 
 const DRAIN_LIMIT: usize = 4096;
 const MAX_PENDING_POLLS: u32 = 60;

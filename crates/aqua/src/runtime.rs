@@ -601,7 +601,9 @@ pub struct Aqua {
 
 impl Aqua {
     pub fn new(config: AquaConfig) -> Result<Self, String> {
-        Self::new_with_preferences(config, query_preferences())
+        let prefs = query_preferences();
+        crate::native::startup_mark("preferences_queried");
+        Self::new_with_preferences(config, prefs)
     }
 
     pub(crate) fn new_with_preferences(
@@ -628,6 +630,7 @@ impl Aqua {
             eprintln!("aqua: reduced-motion motion policy requested");
         }
         let (clipboard, clipboard_backend) = app_clipboard();
+        crate::native::startup_mark("clipboard_ready");
         eprintln!("aqua: clipboard backend: {clipboard_backend:?}");
         let smoke_frames = std::env::var("AQUA_SMOKE_FRAMES")
             .ok()

@@ -1,5 +1,5 @@
-use aqua_core::Transform2D;
 use aqua_core::geometry::Rect;
+use aqua_core::Transform2D;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Affine(pub Transform2D);

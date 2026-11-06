@@ -35,6 +35,7 @@ use super::host::RenderStats;
 use super::link::ExternalUpdate;
 use super::mesh;
 use super::shape::{self, Border, Fidelity, Paint, Radii, ShadowSpec, Sides};
+use super::span::{self, SpanCache};
 use super::text::{ShimmerClocks, TextScope, TextStack};
 use super::transition::{Phase, Settings, Transition};
 use super::vector::{gradient_axis, rotation_steps, VectorCache};
@@ -168,6 +169,10 @@ impl RunCache {
     }
 }
 
+const VOLATILE_FRAMES: u64 = 30;
+
+const SEGMENT_ITEMS: usize = 24;
+
 fn kind_name(item: &DisplayItem) -> &'static str {
     match item {
         DisplayItem::Rect { .. } => "Rect",
@@ -240,7 +245,40 @@ enum Scope {
     Blur,
 }
 
+struct Marks {
+    pending: u32,
+    approximated: u32,
+    unsupported: u32,
+    glyphs: u32,
+    curves: u32,
+    pulsing: bool,
+}
+
+struct Recording {
+    id: aqua_core::NodeId,
+    segment: bool,
+    open: usize,
+    depth: usize,
+    starts: Vec<u32>,
+    contexts: Vec<Option<span::Context>>,
+    matching: Vec<u32>,
+    pending_scopes: Vec<(u32, Nesting)>,
+    broken: bool,
+    tainted: bool,
+    laid_start: usize,
+    out_start: usize,
+    paths_start: usize,
+    marks: Marks,
+    environment: span::Environment,
+    origin: (f32, f32),
+    clip: Option<Rect>,
+    stamp: span::Stamp,
+}
+
 struct Walk {
+    recordings: Vec<Recording>,
+    closed: bool,
+    laid: Vec<(u64, Arc<LaidOut>)>,
     base: Affine,
     transforms: Vec<Affine>,
     open: Vec<Scope>,
@@ -263,6 +301,29 @@ fn outside_region(rect: Rect, region: Rect, pad: f32) -> bool {
 }
 
 impl Walk {
+    fn seeded(parent: &Walk, context: &span::Context) -> Self {
+        Self {
+            recordings: Vec::new(),
+            closed: false,
+            laid: Vec::new(),
+            base: parent.base,
+            transforms: vec![Affine(context.affine)],
+            open: match context.blurred {
+                true => vec![Scope::Blur],
+                false => Vec::new(),
+            },
+            out: Vec::new(),
+            report: LowerReport::default(),
+            surface: parent.surface,
+            now_secs: parent.now_secs,
+            pulses: Vec::new(),
+            item: (0, 0),
+            lifted: false,
+            cull: None,
+            clips: context.clip.into_iter().collect(),
+        }
+    }
+
     fn hidden(&mut self, rect: Rect, reach: f32) -> bool {
         if self.lifted || self.open.contains(&Scope::Blur) {
             return false;
@@ -401,6 +462,15 @@ pub struct Lowering {
     begun: Option<Settings>,
     transition: Option<Transition>,
     outline_text: bool,
+    spans: SpanCache,
+    span_replays: u64,
+    span_rejects: [u32; 8],
+    span_misses: [u32; 10],
+    span_trace: Vec<String>,
+    volatile_spans: HashMap<aqua_core::NodeId, (u64, usize)>,
+    span_frame: u64,
+    slug_generation: u64,
+    diag_seen: FastMap<aqua_core::NodeId, u64>,
 }
 
 fn residency_config() -> ResidencyConfig {
@@ -521,6 +591,16 @@ fn shadow_spec(layer: &ShadowLayer, color: Oklch, scale: f32) -> ShadowSpec {
     }
 }
 
+fn path_style_label(path: &aqua_core::vector::GpuiPath) -> &'static str {
+    use aqua_core::vector::GpuiPathStyle;
+    match (&path.style, &path.background) {
+        (GpuiPathStyle::Fill { .. }, aqua_core::GpuiBackground::Solid(_)) => "fill_solid",
+        (GpuiPathStyle::Fill { .. }, _) => "fill_gradient",
+        (_, aqua_core::GpuiBackground::Solid(_)) => "stroke_solid",
+        _ => "stroke_gradient",
+    }
+}
+
 fn full_source() -> Rect {
     Rect {
         x: 0.0,
@@ -595,6 +675,15 @@ impl Lowering {
             begun: None,
             transition: None,
             outline_text: false,
+            spans: SpanCache::default(),
+            span_replays: 0,
+            span_rejects: [0; 8],
+            span_misses: [0; 10],
+            span_trace: Vec::new(),
+            volatile_spans: HashMap::new(),
+            span_frame: 0,
+            slug_generation: 0,
+            diag_seen: FastMap::default(),
         }
     }
 
@@ -648,6 +737,7 @@ impl Lowering {
     }
 
     pub fn release_image(&mut self, layer: u64) {
+        self.spans.clear();
         if let Some(image) = self.retained.remove(&layer) {
             self.residency.remove_image(&image_key(layer, &image));
         }
@@ -669,10 +759,19 @@ impl Lowering {
         self.reduced.clear();
         self.vectors.clear();
         self.run_cache.clear();
+        self.spans.clear();
+        self.volatile_spans.clear();
+        self.slug_generation += 1;
     }
 
     pub fn trim(&mut self, idle_frames: u64) -> usize {
+        self.spans.clear();
         self.residency.trim_idle(idle_frames)
+    }
+
+    #[must_use]
+    pub fn span_replays(&self) -> u64 {
+        self.span_replays
     }
 
     pub fn residency(&self) -> &Residency {
@@ -697,6 +796,8 @@ impl Lowering {
     ) -> (Vec<PaintCommand>, UploadBatch, LowerReport) {
         let started = WallInstant::now();
         self.last_now = now;
+        self.span_trace.clear();
+        self.span_frame += 1;
         let mut previous = std::mem::take(&mut self.last_commands);
         let mut buffer = std::mem::take(&mut self.spare_commands);
         buffer.clear();
@@ -707,6 +808,9 @@ impl Lowering {
         self.text.clear();
         let extent = physical_extent(size, scale);
         let mut walk = Walk {
+            recordings: Vec::new(),
+            closed: false,
+            laid: Vec::new(),
             base: Affine::device(scale),
             transforms: Vec::new(),
             open: Vec::new(),
@@ -730,10 +834,88 @@ impl Lowering {
         };
         let profiled = crate::profile::enabled();
         let mut kinds: std::collections::BTreeMap<&'static str, (u32, u64)> = Default::default();
+        if profiled {
+            let mut changed: BTreeMap<&'static str, u32> = Default::default();
+            let mut samples: Vec<String> = Vec::new();
+            let mut now_seen: FastMap<aqua_core::NodeId, u64> = FastMap::default();
+            for (index, (id, item)) in scene.ordered().enumerate() {
+                let revision = scene.item_revision(id).unwrap_or(0);
+                now_seen.insert(id, revision);
+                if self.diag_seen.get(&id) != Some(&revision) {
+                    *changed.entry(kind_name(item)).or_insert(0) += 1;
+                    if samples.len() < 8 && kind_name(item) != "scope" {
+                        let text = format!("{item:?}");
+                        samples.push(format!(
+                            "{index}:{}",
+                            text.chars().take(110).collect::<String>()
+                        ));
+                    }
+                }
+            }
+            self.diag_seen = now_seen;
+            crate::profile::note(|| format!("diag_changed={changed:?} diag_samples={samples:?}"));
+        }
         let loop_started = WallInstant::now();
-        for (id, item) in scene.ordered() {
+        let total = scene.len();
+        let mut position = 0;
+        let mut replayed = 0u32;
+        let mut hold_until = 0usize;
+        let mut emitted_ranges: Vec<(usize, usize)> = Vec::new();
+        let mut recorded = 0u32;
+        while position < total {
+            let Some((id, item)) = scene.item_at(position) else {
+                break;
+            };
+            let transform = match item {
+                DisplayItem::PushTransform(local) => Some(local),
+                _ => None,
+            };
+            let mut segment_start =
+                transform.is_none() && position >= hold_until && self.at_baseline(&walk);
+            if segment_start {
+                if let Some((seen, len)) = self.volatile_spans.get(&id).copied() {
+                    if self.span_frame - seen < VOLATILE_FRAMES {
+                        hold_until = position + len + 1;
+                        segment_start = false;
+                    }
+                }
+            }
+            if transform.is_some() || segment_start {
+                let before = walk.out.len() as u32;
+                if let Some(close) = self.replay_span(scene, position, id, transform, &mut walk) {
+                    replayed += 1;
+                    let after = walk.out.len() as u32;
+                    for recording in walk.recordings.iter_mut() {
+                        recording.starts.push(before);
+                        recording.contexts.push(None);
+                        recording.matching.push(span::NONE);
+                        for _ in position + 1..=close {
+                            recording.starts.push(after);
+                            recording.contexts.push(None);
+                            recording.matching.push(span::NONE);
+                        }
+                    }
+                    position = close + 1;
+                    continue;
+                }
+                if self.begin_span(position, id, transform, &mut walk) {
+                    recorded += 1;
+                }
+            }
+            if profiled {
+                match emitted_ranges.last_mut() {
+                    Some((_, end)) if *end + 1 == position => *end = position,
+                    _ => emitted_ranges.push((position, position)),
+                }
+            }
+            self.note_item(item, &mut walk);
             walk.report.items += 1;
             walk.item = (id.raw().index, id.raw().generation);
+            if taints_span(item) {
+                walk.recordings
+                    .iter_mut()
+                    .for_each(|recording| recording.tainted = true);
+            }
             match profiled {
                 true => {
                     let item_started = WallInstant::now();
@@ -745,7 +927,18 @@ impl Lowering {
                 }
                 false => self.emit(item, &mut walk),
             }
+            if walk.closed {
+                walk.closed = false;
+                self.finish_span(scene, position, &mut walk);
+            } else if walk.recordings.last().is_some_and(|recording| {
+                recording.segment && position + 1 - recording.open >= SEGMENT_ITEMS
+            }) && self.at_baseline_inside(&walk)
+            {
+                self.finish_span(scene, position, &mut walk);
+            }
+            position += 1;
         }
+        walk.recordings.clear();
         let loop_us = loop_started.elapsed().as_micros();
         while let Some(kind) = walk.open.pop() {
             walk.out.push(match kind {
@@ -784,12 +977,21 @@ impl Lowering {
                 .map(|(name, (count, spent))| format!("{name}:{count}:{}us", spent / 1000))
                 .collect();
             format!(
-                "walk_kinds=[{}] walk_items={} walk_culled={} walk_us={} loop_us={loop_us} pre_us={}",
+                "walk_kinds=[{}] walk_items={} walk_culled={} walk_us={} loop_us={loop_us} pre_us={} spans=replayed:{replayed},recorded:{recorded},cached:{},rejects:{:?},misses:{:?}",
                 top.join(","),
                 walk.report.items,
                 walk.report.culled,
                 started.elapsed().as_micros(),
-                loop_started.duration_since(started).as_micros()
+                loop_started.duration_since(started).as_micros(),
+                self.spans.len(),
+                self.span_rejects,
+                self.span_misses
+            )
+        });
+        crate::profile::note(|| {
+            format!(
+                "span_trace={:?} emitted_ranges={emitted_ranges:?}",
+                self.span_trace
             )
         });
         walk.report.shimmering |= self.overlay_transition(&mut walk.out, walk.surface, now);
@@ -853,6 +1055,497 @@ impl Lowering {
         }
         self.last_report = walk.report.clone();
         (walk.out, uploads, walk.report)
+    }
+
+    fn span_stamp(&self) -> span::Stamp {
+        span::Stamp {
+            epoch: self.residency.eviction_epoch(),
+            fonts: self.fonts.revision(),
+            slug: self
+                .slug_store
+                .evictions()
+                .wrapping_add(self.slug_generation << 32),
+        }
+    }
+
+    fn span_environment(walk: &Walk) -> span::Environment {
+        let parent = walk.at().0;
+        span::Environment {
+            scale: walk.base.scale().to_bits(),
+            surface: (walk.surface.w.to_bits(), walk.surface.h.to_bits()),
+            clip: walk.clips.last().copied().map(span::clip_bits),
+            open: walk.open.len(),
+            blurred: walk.open.contains(&Scope::Blur),
+            parent: [
+                parent.a.to_bits(),
+                parent.b.to_bits(),
+                parent.c.to_bits(),
+                parent.d.to_bits(),
+            ],
+        }
+    }
+
+    fn span_origin(&mut self, walk: &Walk, local: &Transform2D) -> Option<(f32, f32)> {
+        let at = walk.at();
+        let reasons = [
+            walk.lifted,
+            walk.cull.is_some(),
+            !walk.pulses.is_empty(),
+            !self.text.is_balanced(),
+            self.transition.is_some() || self.begun.is_some(),
+            !is_translation(local),
+            at.0.b != 0.0 || at.0.c != 0.0,
+        ];
+        if let Some(index) = reasons.iter().position(|rejected| *rejected) {
+            self.span_rejects[index] += 1;
+            return None;
+        }
+        let next = snapped_nest(walk, at, local);
+        next.finite().then_some((next.0.tx, next.0.ty))
+    }
+
+    fn at_baseline(&self, walk: &Walk) -> bool {
+        walk.recordings.is_empty() && self.at_baseline_inside(walk)
+    }
+
+    fn at_baseline_inside(&self, walk: &Walk) -> bool {
+        walk.transforms.is_empty()
+            && walk.open.is_empty()
+            && walk.clips.is_empty()
+            && walk.pulses.is_empty()
+            && !walk.lifted
+            && walk.cull.is_none()
+            && self.text.is_balanced()
+            && self.transition.is_none()
+            && self.begun.is_none()
+    }
+
+    fn segment_origin(&self, walk: &Walk) -> Option<(f32, f32)> {
+        self.at_baseline_inside(walk).then_some((0.0, 0.0))
+    }
+
+    fn item_context(&self, item: &DisplayItem, walk: &Walk) -> Option<span::Context> {
+        (patch_start(item) && self.text.is_balanced() && walk.pulses.is_empty()).then(|| {
+            span::Context {
+                affine: walk.at().0,
+                clip: walk.clips.last().copied(),
+                blurred: walk.open.contains(&Scope::Blur),
+            }
+        })
+    }
+
+    fn note_item(&self, item: &DisplayItem, walk: &mut Walk) {
+        if walk.recordings.is_empty() {
+            return;
+        }
+        let start = walk.out.len() as u32;
+        let context = self.item_context(item, walk);
+        let kind = scope_kind(item);
+        let inflated = walk.recordings.iter().any(|recording| !recording.segment);
+        for recording in walk.recordings.iter_mut() {
+            let index = recording.starts.len() as u32;
+            recording.starts.push(start);
+            recording
+                .contexts
+                .push(match recording.segment && inflated {
+                    true => None,
+                    false => context,
+                });
+            recording.matching.push(span::NONE);
+            match kind {
+                ScopeKind::Leaf => {}
+                ScopeKind::Open(kind) => recording.pending_scopes.push((index, kind)),
+                ScopeKind::Close(kind) => match recording.pending_scopes.pop() {
+                    Some((open, opened)) if opened == kind => {
+                        recording.matching[open as usize] = index;
+                        recording.matching[index as usize] = open;
+                    }
+                    _ => recording.broken = true,
+                },
+            }
+        }
+    }
+
+    fn patch_units(
+        &self,
+        scene: &Scene,
+        id: aqua_core::NodeId,
+        position: usize,
+        dirty: &[usize],
+    ) -> Option<Vec<(usize, usize)>> {
+        let entry = self.spans.get(id)?;
+        let mut units: Vec<(usize, usize)> = Vec::new();
+        for at in dirty {
+            let relative = at - position;
+            let (_, item) = scene.item_at(*at)?;
+            let partner = *entry.matching.get(relative)?;
+            let unit = match (scope_kind(item), partner) {
+                (ScopeKind::Leaf, _) => (relative, relative),
+                (ScopeKind::Open(_), partner) if partner != span::NONE => {
+                    (relative, partner as usize)
+                }
+                (ScopeKind::Close(_), partner) if partner != span::NONE => {
+                    (partner as usize, relative)
+                }
+                _ => return None,
+            };
+            units.push(unit);
+        }
+        units.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for unit in units {
+            match merged.last() {
+                Some(last) if unit.1 <= last.1 => {}
+                Some(last) if unit.0 <= last.1 => return None,
+                _ => merged.push(unit),
+            }
+        }
+        for (first, last) in &merged {
+            entry.contexts.get(*first).copied().flatten()?;
+            for relative in *first..=*last {
+                let (_, item) = scene.item_at(position + relative)?;
+                patchable(item).then_some(())?;
+            }
+        }
+        Some(merged)
+    }
+
+    fn fresh_units(
+        &mut self,
+        scene: &Scene,
+        id: aqua_core::NodeId,
+        position: usize,
+        dirty: &[usize],
+        shift: (f32, f32),
+        walk: &Walk,
+    ) -> Option<Vec<span::Unit>> {
+        let units = self.patch_units(scene, id, position, dirty)?;
+        let contexts: Vec<span::Context> = {
+            let entry = self.spans.get(id)?;
+            units
+                .iter()
+                .map(|(first, _)| entry.contexts[*first])
+                .collect::<Option<Vec<_>>>()?
+        };
+        let mut fresh = Vec::with_capacity(units.len());
+        for ((first, last), context) in units.into_iter().zip(contexts) {
+            let moved = span::Context {
+                affine: Transform2D {
+                    tx: context.affine.tx + shift.0,
+                    ty: context.affine.ty + shift.1,
+                    ..context.affine
+                },
+                clip: context.clip.map(|clip| clip.translate(shift.0, shift.1)),
+                blurred: context.blurred,
+            };
+            let mut temporary = Walk::seeded(walk, &moved);
+            let (depth, clips, open) = (
+                temporary.transforms.len(),
+                temporary.clips.len(),
+                temporary.open.len(),
+            );
+            for relative in first..=last {
+                let (_, item) = scene.item_at(position + relative)?;
+                self.emit(item, &mut temporary);
+            }
+            let clean = temporary.report.pending == 0
+                && temporary.report.approximated == 0
+                && temporary.report.unsupported() == 0
+                && !temporary.report.pulsing
+                && temporary.transforms.len() == depth
+                && temporary.clips.len() == clips
+                && temporary.open.len() == open;
+            if !clean {
+                return None;
+            }
+            fresh.push(span::Unit {
+                first,
+                last,
+                commands: temporary.out,
+            });
+        }
+        (self.span_stamp() == self.spans.get(id)?.stamp).then_some(fresh)
+    }
+
+    fn replay_span(
+        &mut self,
+        scene: &Scene,
+        position: usize,
+        id: aqua_core::NodeId,
+        local: Option<&Transform2D>,
+        walk: &mut Walk,
+    ) -> Option<usize> {
+        if self.spans.is_empty() {
+            return None;
+        }
+        let origin = match local {
+            Some(local) => self.span_origin(walk, local)?,
+            None => self.segment_origin(walk)?,
+        };
+        let Some(entry) = self.spans.get(id) else {
+            self.span_misses[0] += 1;
+            return None;
+        };
+        let (dx, dy) = (origin.0 - entry.origin.0, origin.1 - entry.origin.1);
+        let whole = (dx - dx.round()).abs() < 1.0e-2 && (dy - dy.round()).abs() < 1.0e-2;
+        let (dx, dy) = (dx.round(), dy.round());
+        let close = position + entry.len;
+        let intact = scene
+            .indices(position, close + 1)
+            .is_some_and(|ids| ids == entry.ids.as_slice());
+        let valid = whole
+            && intact
+            && close < scene.len()
+            && entry.environment == Self::span_environment(walk)
+            && entry.stamp == self.span_stamp()
+            && dx.abs() <= span::SLACK
+            && dy.abs() <= span::SLACK;
+        if !valid {
+            let env = entry.environment == Self::span_environment(walk);
+            let flags = [
+                !whole,
+                !intact,
+                !env,
+                entry.stamp != self.span_stamp(),
+                dx.abs() > span::SLACK || dy.abs() > span::SLACK,
+            ];
+            for (i, f) in flags.iter().enumerate() {
+                if *f {
+                    self.span_misses[1 + i] += 1;
+                }
+            }
+            if crate::profile::enabled() {
+                self.span_trace.push(format!("invalid@{position}+{} segment={} flags={flags:?} d=({dx},{dy}) raw=({},{}) org=({},{}) local={:?} at=({},{})", entry.len, local.is_none(), origin.0 - entry.origin.0, origin.1 - entry.origin.1, origin.0, origin.1, local.map(|l| (l.tx, l.ty)), walk.at().0.tx, walk.at().0.ty));
+            }
+            self.spans.remove(id);
+            return None;
+        }
+        let mut dirty: Vec<usize> = Vec::new();
+        let revision = entry.revision;
+        let first = position + usize::from(local.is_some());
+        let reaches = scene.changed_since(revision, |at| {
+            if at >= first && at <= close {
+                dirty.push(at);
+            }
+        });
+        if !reaches {
+            self.span_misses[6] += 1;
+            return None;
+        }
+        dirty.sort_unstable();
+        dirty.dedup();
+        let units = match dirty.is_empty() {
+            true => Vec::new(),
+            false => match self.fresh_units(scene, id, position, &dirty, (dx, dy), walk) {
+                Some(units) => units,
+                None => {
+                    self.span_misses[7] += 1;
+                    self.volatile_spans
+                        .insert(id, (self.span_frame, close - position));
+                    if crate::profile::enabled() {
+                        let kinds: Vec<&'static str> = dirty
+                            .iter()
+                            .take(4)
+                            .filter_map(|at| scene.item_at(*at).map(|(_, item)| kind_name(item)))
+                            .collect();
+                        self.span_trace.push(format!(
+                            "patchfail@{position}+{} dirty={} kinds={kinds:?}",
+                            close - position,
+                            dirty.len()
+                        ));
+                    }
+                    return None;
+                }
+            },
+        };
+        let entry = self.spans.get(id)?;
+        let current = {
+            let guard = self.runs.lock();
+            entry.laid.iter().all(|(run, laid)| {
+                guard
+                    .resolve(RunId(*run))
+                    .and_then(|handle| handle.layout.laid_out_shared())
+                    .is_some_and(|now| Arc::ptr_eq(&now, laid))
+            })
+        };
+        if !current {
+            self.span_misses[8] += 1;
+            return None;
+        }
+        let region = walk.clips.last().copied();
+        let dropped = span::replay_around(&mut walk.out, entry, &units, dx, dy, region);
+        walk.report.items += (entry.len + 1) as u32;
+        walk.report.glyphs += entry.tally.glyphs;
+        walk.report.curves += entry.tally.curves;
+        walk.report.culled += entry.tally.culled + dropped;
+        for page in &entry.pages {
+            self.residency.touch_page(*page);
+        }
+        self.path_keys_now.extend(entry.paths.iter().copied());
+        if !walk.recordings.is_empty() {
+            walk.laid.extend(entry.laid.iter().cloned());
+        }
+        self.span_replays += 1;
+        Some(close)
+    }
+
+    fn begin_span(
+        &mut self,
+        position: usize,
+        id: aqua_core::NodeId,
+        local: Option<&Transform2D>,
+        walk: &mut Walk,
+    ) -> bool {
+        if self
+            .volatile_spans
+            .get(&id)
+            .is_some_and(|(seen, _)| self.span_frame - seen < VOLATILE_FRAMES)
+        {
+            return false;
+        }
+        let origin = match local {
+            Some(local) => self.span_origin(walk, local),
+            None => self.segment_origin(walk),
+        };
+        let Some(origin) = origin else {
+            return false;
+        };
+        let unsupported = walk.report.unsupported();
+        walk.recordings.push(Recording {
+            id,
+            segment: local.is_none(),
+            open: position,
+            depth: walk.transforms.len(),
+            starts: Vec::new(),
+            contexts: Vec::new(),
+            matching: Vec::new(),
+            pending_scopes: Vec::new(),
+            broken: false,
+            tainted: false,
+            laid_start: walk.laid.len(),
+            out_start: walk.out.len(),
+            paths_start: self.path_keys_now.len(),
+            marks: Marks {
+                pending: walk.report.pending,
+                approximated: walk.report.approximated,
+                unsupported,
+                glyphs: walk.report.glyphs,
+                curves: walk.report.curves,
+                pulsing: walk.report.pulsing,
+            },
+            environment: Self::span_environment(walk),
+            origin,
+            clip: walk.clips.last().copied(),
+            stamp: self.span_stamp(),
+        });
+        if local.is_some() {
+            if let Some(top) = walk.clips.last_mut() {
+                *top = top.inflate(span::SLACK);
+            }
+        }
+        true
+    }
+
+    fn finish_span(&mut self, scene: &Scene, close: usize, walk: &mut Walk) {
+        let Some(recording) = walk.recordings.pop() else {
+            return;
+        };
+        if let (false, Some(top), Some(original)) =
+            (recording.segment, walk.clips.last_mut(), recording.clip)
+        {
+            *top = original;
+        }
+        let laid = walk
+            .laid
+            .split_off(recording.laid_start.min(walk.laid.len()));
+        let clean = !recording.tainted
+            && walk.open.len() == recording.environment.open
+            && self.text.is_balanced()
+            && walk.report.pending == recording.marks.pending
+            && walk.report.approximated == recording.marks.approximated
+            && walk.report.unsupported() == recording.marks.unsupported
+            && walk.report.pulsing == recording.marks.pulsing
+            && self.span_stamp() == recording.stamp
+            && span::cacheable(&walk.out[recording.out_start..]) == span::Taint::Clean
+            && walk.out.len() - recording.out_start >= span::MIN_COMMANDS;
+        if !clean && crate::profile::enabled() {
+            let taint = span::cacheable(&walk.out[recording.out_start..]);
+            self.span_trace.push(format!(
+                "unclean@{}+{} cmds={} tainted={} open={}/{} balanced={} pend={} approx={} unsup={} pulse={} stamp={} cache={taint:?}",
+                recording.open,
+                close - recording.open,
+                walk.out.len() - recording.out_start,
+                recording.tainted,
+                walk.open.len(),
+                recording.environment.open,
+                self.text.is_balanced(),
+                walk.report.pending != recording.marks.pending,
+                walk.report.approximated != recording.marks.approximated,
+                walk.report.unsupported() != recording.marks.unsupported,
+                walk.report.pulsing != recording.marks.pulsing,
+                self.span_stamp() != recording.stamp,
+            ));
+        }
+        if !walk.recordings.is_empty() {
+            walk.laid.extend(laid.iter().cloned());
+        }
+        let full = walk.out.split_off(recording.out_start);
+        let mut starts: Vec<u32> = recording
+            .starts
+            .iter()
+            .map(|start| start - recording.out_start as u32)
+            .collect();
+        starts.push(full.len() as u32);
+        let aligned = starts.len() == close - recording.open + 2
+            && recording.contexts.len() == close - recording.open + 1;
+        let aligned = aligned && !recording.broken && recording.pending_scopes.is_empty();
+        let contexts = match aligned {
+            true => recording.contexts,
+            false => vec![None; close - recording.open + 1],
+        };
+        let matching = match aligned {
+            true => recording.matching,
+            false => vec![span::NONE; close - recording.open + 1],
+        };
+        if !aligned {
+            starts = (0..close - recording.open + 2)
+                .map(|_| full.len() as u32)
+                .collect();
+        }
+        let region = walk.clips.last().copied();
+        span::replay(&mut walk.out, &full, 0.0, 0.0, region);
+        if !clean {
+            self.spans.remove(recording.id);
+            return;
+        }
+        let pages = span::pages_of(&full);
+        let bytes = span::bytes_of(&full);
+        let entry = span::Entry {
+            starts,
+            contexts,
+            matching,
+            commands: full,
+            segment: recording.segment,
+            len: close - recording.open,
+            ids: scene
+                .indices(recording.open, close + 1)
+                .map(<[u32]>::to_vec)
+                .unwrap_or_default(),
+            revision: scene.revision(),
+            origin: recording.origin,
+            environment: recording.environment,
+            stamp: recording.stamp,
+            tally: span::Tally {
+                glyphs: walk.report.glyphs - recording.marks.glyphs,
+                curves: walk.report.curves - recording.marks.curves,
+                culled: 0,
+            },
+            pages,
+            laid,
+            paths: self.path_keys_now[recording.paths_start..].to_vec(),
+            bytes,
+        };
+        self.spans.insert(recording.id, entry);
     }
 
     pub fn lower(
@@ -1073,7 +1766,7 @@ impl Lowering {
                 }));
             }
             DisplayItem::PushTransform(local) => {
-                let next = at.nested(*local);
+                let next = snapped_nest(walk, at, local);
                 let usable = next.finite() && next.scale() > 0.0;
                 walk.note(match usable {
                     true => Fidelity::Exact,
@@ -1084,11 +1777,14 @@ impl Lowering {
                     false => at,
                 });
             }
-            DisplayItem::PopTransform => {
-                if walk.transforms.pop().is_none() {
-                    walk.skip(Unsupported::UnbalancedScope);
+            DisplayItem::PopTransform => match walk.transforms.pop() {
+                None => walk.skip(Unsupported::UnbalancedScope),
+                Some(_) => {
+                    walk.closed = walk.recordings.last().is_some_and(|recording| {
+                        !recording.segment && recording.depth == walk.transforms.len()
+                    });
                 }
-            }
+            },
             DisplayItem::Text {
                 at: origin,
                 run,
@@ -1253,6 +1949,9 @@ impl Lowering {
             walk.report.pending += 1;
             return;
         };
+        if !walk.recordings.is_empty() {
+            walk.laid.push((run_id, laid.clone()));
+        }
         let at = walk.at();
         let s = at.scale();
         let (base_x, base_y) = at.point(origin[0], origin[1]);
@@ -1479,7 +2178,7 @@ impl Lowering {
         if !curves.is_empty() {
             walk.out.push(PaintCommand::Slug(SlugRun {
                 store: STORE_HANDLE,
-                glyphs: curves,
+                glyphs: curves.into(),
             }));
         }
         walk.out.extend(color_images);
@@ -1652,17 +2351,30 @@ impl Lowering {
     }
 
     fn emit_path(&mut self, path: &aqua_core::vector::GpuiPath, at: Affine, walk: &mut Walk) {
+        let described = std::time::Instant::now();
         let Some(raster) = self.vectors.path(path, at.0) else {
             walk.skip(Unsupported::PathFailed);
             return;
         };
-        crate::profile::note(|| format!("path_raster={}x{}", raster.width, raster.height));
-        match self.residency.vector(
+        let described = described.elapsed();
+        let resident = std::time::Instant::now();
+        let slot = self.residency.vector(
             &raster.source,
             raster.width,
             raster.height,
             VectorMode::Color,
-        ) {
+        );
+        crate::profile::note(|| {
+            format!(
+                "path_raster={}x{} describe_us={} resident_us={} style={}",
+                raster.width,
+                raster.height,
+                described.as_micros(),
+                resident.elapsed().as_micros(),
+                path_style_label(path)
+            )
+        });
+        match slot {
             Ok(Slot::Resident(placement)) => {
                 self.path_keys_now.push(Residency::vector_key(
                     &raster.source,
@@ -1712,6 +2424,7 @@ impl Lowering {
             .copied()
             .filter(|old| *old != key)
         {
+            self.spans.clear();
             self.residency.remove_image(&previous);
         }
         let slot = match self.residency.image_resident(&key) {
@@ -1768,6 +2481,7 @@ impl Lowering {
             .zip(self.path_keys.iter())
             .filter(|(old, new)| old != new && !self.path_keys.contains(old))
             .for_each(|(old, _)| {
+                self.spans.clear();
                 self.residency.remove_vector(*old, VectorMode::Color);
             });
     }
@@ -1777,6 +2491,7 @@ impl Lowering {
     }
 
     pub fn set_text_raster(&mut self, mode: TextRasterMode) {
+        self.spans.clear();
         self.outline_text = mode == TextRasterMode::Outline;
     }
 
@@ -1825,6 +2540,98 @@ impl Lowering {
             _ => false,
         }
     }
+}
+
+fn is_translation(local: &Transform2D) -> bool {
+    local.a == 1.0 && local.d == 1.0 && local.b == 0.0 && local.c == 0.0
+}
+
+fn snapped_nest(walk: &Walk, at: Affine, local: &Transform2D) -> Affine {
+    let next = at.nested(*local);
+    let translated =
+        at.0.b == 0.0 && at.0.c == 0.0 && at.0.a == walk.base.0.a && at.0.d == walk.base.0.d;
+    match translated && !walk.lifted && is_translation(local) && next.finite() {
+        true => Affine(Transform2D {
+            tx: (next.0.tx + 0.5).floor(),
+            ty: (next.0.ty + 0.5).floor(),
+            ..next.0
+        }),
+        false => next,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Nesting {
+    Transform,
+    Clip,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScopeKind {
+    Leaf,
+    Open(Nesting),
+    Close(Nesting),
+}
+
+fn scope_kind(item: &DisplayItem) -> ScopeKind {
+    match item {
+        DisplayItem::PushTransform(_) => ScopeKind::Open(Nesting::Transform),
+        DisplayItem::PopTransform => ScopeKind::Close(Nesting::Transform),
+        DisplayItem::PushClip { .. }
+        | DisplayItem::PushRoundedClip { .. }
+        | DisplayItem::PushGpuiContentMask { .. } => ScopeKind::Open(Nesting::Clip),
+        DisplayItem::PopClip => ScopeKind::Close(Nesting::Clip),
+        DisplayItem::PushOpacity(_)
+        | DisplayItem::PushContentBlur { .. }
+        | DisplayItem::PushTextColorMap(_)
+        | DisplayItem::PushGpuiTextColorMap(_)
+        | DisplayItem::PushGpuiTextShimmer(_)
+        | DisplayItem::PushGpuiTextColor(_)
+        | DisplayItem::PushGpuiTextOpacity(_)
+        | DisplayItem::PushGpuiSourceTextColor(_)
+        | DisplayItem::PushGpuiQuadPulse(_) => ScopeKind::Open(Nesting::Other),
+        DisplayItem::PopOpacity
+        | DisplayItem::PopContentBlur
+        | DisplayItem::PopTextColorMap
+        | DisplayItem::PopGpuiTextColorMap
+        | DisplayItem::PopGpuiTextColor
+        | DisplayItem::PopGpuiTextOpacity
+        | DisplayItem::PopGpuiSourceTextColor
+        | DisplayItem::PopGpuiQuadPulse => ScopeKind::Close(Nesting::Other),
+        _ => ScopeKind::Leaf,
+    }
+}
+
+fn patchable(item: &DisplayItem) -> bool {
+    match scope_kind(item) {
+        ScopeKind::Open(Nesting::Other) | ScopeKind::Close(Nesting::Other) => false,
+        ScopeKind::Open(_) | ScopeKind::Close(_) => true,
+        ScopeKind::Leaf => matches!(
+            item,
+            DisplayItem::Rect { .. }
+                | DisplayItem::Quad { .. }
+                | DisplayItem::GpuiBackground { .. }
+                | DisplayItem::GpuiBorder { .. }
+                | DisplayItem::Shadow { .. }
+                | DisplayItem::GpuiShadow { .. }
+                | DisplayItem::GpuiSvg { .. }
+                | DisplayItem::GpuiTransformedSvg { .. }
+        ),
+    }
+}
+
+fn patch_start(item: &DisplayItem) -> bool {
+    patchable(item) && !matches!(scope_kind(item), ScopeKind::Close(_))
+}
+
+fn taints_span(item: &DisplayItem) -> bool {
+    matches!(
+        item,
+        DisplayItem::PushGpuiTextShimmer(_)
+            | DisplayItem::PushGpuiQuadPulse(_)
+            | DisplayItem::External { .. }
+    )
 }
 
 fn lift_commands(commands: &mut [PaintCommand], lift: Transform2D) -> u32 {
@@ -1984,8 +2791,13 @@ impl aqua_transport::Lowering for Lowering {
 
     fn trim(&mut self, request: TrimRequest) -> usize {
         match request {
-            TrimRequest::IdleFrames(frames) => self.residency.trim_idle(frames),
+            TrimRequest::IdleFrames(frames) => {
+                self.spans.clear();
+                self.residency.trim_idle(frames)
+            }
             TrimRequest::Everything => {
+                self.spans.clear();
+                self.slug_generation += 1;
                 self.slug_store.reset();
                 self.slug_cache.clear();
                 self.residency.trim_idle(0)

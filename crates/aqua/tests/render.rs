@@ -12,6 +12,8 @@ mod lowering;
 mod mesh;
 #[path = "render/shape.rs"]
 mod shape;
+#[path = "render/span.rs"]
+mod span;
 mod support;
 #[path = "render/text.rs"]
 mod text;

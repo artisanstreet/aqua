@@ -4,13 +4,13 @@ use aqua::render::lower::Lowering;
 use aqua_core::geometry::{CornerRadii, Insets, Rect};
 use aqua_core::scene::{DisplayItem, ShadowLayer};
 use aqua_core::{Oklch, Size, Transform2D};
-use aqua_graph::{Extent, PlanLimits, plan_paint_with};
+use aqua_graph::{plan_paint_with, Extent, PlanLimits};
 use aqua_protocol::Instant as ProtoInstant;
 use aqua_runtime::Runtime;
 use aqua_scene::Scene;
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::element::ui::{Box as UiBox, Text as UiText};
-use aqua_ui::style::{Axis, Style, px};
+use aqua_ui::style::{px, Axis, Style};
 
 const PARAGRAPH: &str = "Aqua keeps retained text, layout and scene state between frames so that an unchanged transcript costs nothing, while a streaming message only reshapes the run that changed.";
 const VIEWPORT: Size = Size {
@@ -212,6 +212,7 @@ fn glide(glass: bool, group: bool, with_chips: bool) {
     let mut lower_us = Vec::new();
     let mut plan_us = Vec::new();
     let mut total_us = Vec::new();
+    let mut validate_us = Vec::new();
     let mut shape = (0, 0, 0);
     for step in 0..400 {
         let shift = (step as f32) * 3.7;
@@ -225,12 +226,16 @@ fn glide(glass: bool, group: bool, with_chips: bool) {
         let lowered_at = started.elapsed();
         let plan = plan_paint_with(extent, clear, &commands, limits).unwrap();
         let finished = started.elapsed();
+        let validated = Instant::now();
+        aqua_graph::validate(&plan).unwrap();
+        let validate_cost = validated.elapsed();
         lowering.retain_frame(commands);
         drop(uploads);
         if step >= 40 {
             lower_us.push(lowered_at.as_secs_f64() * 1e6);
             plan_us.push((finished - lowered_at).as_secs_f64() * 1e6);
             total_us.push(finished.as_secs_f64() * 1e6);
+            validate_us.push(validate_cost.as_secs_f64() * 1e6);
             shape = (lowered.commands, plan.passes.len(), lowered.glyphs);
         }
     }
@@ -244,4 +249,5 @@ fn glide(glass: bool, group: bool, with_chips: bool) {
     report("lower", lower_us);
     report("plan", plan_us);
     report("total", total_us);
+    report("validate", validate_us);
 }

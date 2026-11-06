@@ -12,6 +12,7 @@ pub mod pressure;
 pub mod runs;
 pub mod service;
 pub mod shape;
+pub mod span;
 pub mod text;
 pub mod transition;
 pub mod vector;

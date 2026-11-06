@@ -24,7 +24,7 @@ use aqua_ui::{NaiveMeasurer, UiTree};
 
 fn text_row(key: &str, text: &str) -> NodeSpec {
     NodeSpec::new(
-        NodeKind::Text(TextContent::editable(text, false)),
+        NodeKind::text(TextContent::editable(text, false)),
         LayoutStyle::default(),
     )
     .keyed(key)
@@ -159,7 +159,7 @@ fn button_fixture() -> (
             root,
             vec![
                 NodeSpec::new(NodeKind::Box(BoxContent::default()), bstyle).child(NodeSpec::new(
-                    NodeKind::Text(TextContent::label("Add")),
+                    NodeKind::text(TextContent::label("Add")),
                     LayoutStyle::default(),
                 )),
             ],

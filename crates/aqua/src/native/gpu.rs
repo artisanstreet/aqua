@@ -71,15 +71,43 @@ fn since_process_start() -> Option<Duration> {
         .checked_sub(since_epoch)
 }
 
+static STARTUP_LINES: std::sync::Mutex<Vec<(f64, String)>> = std::sync::Mutex::new(Vec::new());
+
+fn process_ms() -> f64 {
+    since_process_start().map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
+}
+
+fn record_startup(line: impl FnOnce(f64) -> String) {
+    let at = process_ms();
+    STARTUP_LINES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push((at, line(at)));
+}
+
+fn flush_startup_lines() {
+    let mut lines = std::mem::take(
+        &mut *STARTUP_LINES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    );
+    #[cfg(not(feature = "d3d12"))]
+    lines.extend(gpu::stages::drain());
+    lines.sort_by(|a, b| a.0.total_cmp(&b.0));
+    lines.iter().for_each(|(_, line)| eprintln!("{line}"));
+}
+
+fn startup_marks_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("AQUA_PROFILE").is_some_and(|value| value == "1"))
+}
+
 pub fn startup_mark(label: &str) {
     if crate::mem_probe::memory_report_enabled() {
         eprintln!("aqua-stage {label} {}", crate::mem_probe::stage_summary());
     }
-    if crate::profile::enabled() {
-        eprintln!(
-            "aqua-startup {label} process_ms={:.1}",
-            since_process_start().map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
-        );
+    if startup_marks_enabled() {
+        record_startup(|at| format!("aqua-startup {label} process_ms={at:.1}"));
     }
 }
 
@@ -94,12 +122,6 @@ fn stage_nth(label: &str, counter: &std::sync::atomic::AtomicU32, limit: u32) {
 
 pub fn prewarm() {
     startup_mark("prewarm_start");
-    if crate::profile::enabled() {
-        eprintln!(
-            "aqua-startup prewarm_called process_ms={:.1}",
-            since_process_start().map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
-        );
-    }
     WindowBackend::begin_early(WindowOptions::from_env(), persist::load_pipeline_cache);
 }
 
@@ -110,6 +132,7 @@ fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
     TEXT_SERVICES.call_once(|| {
         persist::start_text_services(fonts);
     });
+    startup_mark("hub_begin");
     let device_started = std::time::Instant::now();
     let early = WindowBackend::take_early().and_then(Result::ok);
     let mut backend = match early {
@@ -121,11 +144,12 @@ fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
         }
     };
     if crate::profile::enabled() {
-        eprintln!(
-            "aqua-startup device_ready device_ms={:.1} process_ms={:.1}",
-            device_started.elapsed().as_secs_f64() * 1000.0,
-            since_process_start().map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
-        );
+        record_startup(|at| {
+            format!(
+                "aqua-startup device_wait device_ms={:.1} process_ms={at:.1}",
+                device_started.elapsed().as_secs_f64() * 1000.0
+            )
+        });
     }
     startup_mark("device_ready");
     let signals: Signals = Rc::default();
@@ -262,13 +286,14 @@ impl WindowHandle {
                 .collect();
             let phases = backend.phases();
             format!(
-                "d3d12 gpu_ms={:.3} passes_ms=[{}] slot_wait_us={} reserve_us={} transients_recreated={} late_pso={:?} window={:?}",
+                "d3d12 gpu_ms={:.3} passes_ms=[{}] slot_wait_us={} reserve_us={} resize_us={} transients_recreated={} late_pso={:?} window={:?}",
                 backend
                     .gpu_frame_time()
                     .map_or(0.0, |time| time.as_secs_f64() * 1000.0),
                 passes.join(","),
                 phases.slot_wait.as_micros(),
                 phases.reserve.as_micros(),
+                phases.resize.as_micros(),
                 phases.reserve_created,
                 backend.late_pipelines(),
                 backend.stats()
@@ -327,6 +352,12 @@ impl WindowHandle {
 
     fn pipeline_cache(&self) -> Option<Vec<u8>> {
         self.hub.backend.borrow().pipeline_cache()
+    }
+
+    fn settle_surfaces(&mut self) {
+        if let Err(error) = self.hub.backend.borrow_mut().settle_surfaces() {
+            eprintln!("aqua: swapchain settle failed: {error}");
+        }
     }
 
     fn report_memory(&self) {
@@ -526,6 +557,9 @@ impl FrameTarget for WindowTarget {
         if self.stats.inject_loss.swap(false, Ordering::AcqRel) {
             self.frames.backend().inject_removal();
         }
+        if !self.announced {
+            startup_mark("frame_present_begin");
+        }
         let feedback = self.frames.present(side, frame);
         if crate::mem_probe::memory_report_enabled() {
             static PRESENTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -536,10 +570,8 @@ impl FrameTarget for WindowTarget {
         }
         if !self.announced && crate::profile::enabled() {
             self.announced = true;
-            eprintln!(
-                "aqua-startup first_present process_ms={:.1}",
-                since_process_start().map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
-            );
+            startup_mark("first_present");
+            flush_startup_lines();
         }
         self.frames.backend().finish_startup();
         self.frames.backend().profile_backend();
@@ -629,6 +661,7 @@ pub fn factory(
                 .with_pressure(|backend: &mut WindowHandle| backend.service_budget())
                 .with_visibility(|backend: &mut WindowHandle, hidden| backend.set_hidden(hidden))
                 .with_maintenance(move |backend: &mut WindowHandle| {
+                    backend.settle_surfaces();
                     saver.save(backend.pipeline_cache());
                     backend.report_memory();
                     persist::save_fallback_index(&fonts);

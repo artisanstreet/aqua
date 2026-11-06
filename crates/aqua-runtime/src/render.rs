@@ -135,7 +135,7 @@ impl RenderSide {
         }
     }
 
-    fn feedback(&mut self, feedback: Feedback) -> RenderEvent {
+    pub fn feedback(&mut self, feedback: Feedback) -> RenderEvent {
         match feedback {
             Feedback::Presented(frame) => RenderEvent::Presented(frame),
             Feedback::DeviceLost => RenderEvent::DeviceLost,

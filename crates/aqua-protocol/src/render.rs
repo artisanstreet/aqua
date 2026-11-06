@@ -30,6 +30,7 @@ pub enum RenderEvent {
     Presented(FrameId),
     DeviceLost,
     DeviceRecovered,
+    Skipped,
     Motion(MotionEvent),
 }
 

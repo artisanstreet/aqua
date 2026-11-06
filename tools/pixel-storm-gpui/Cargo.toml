@@ -1,0 +1,11 @@
+[package]
+name = "pixel-storm-gpui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gpui = { package = "gpui-ce", git = "https://github.com/artisanstreet/gpui-ce", rev = "6cd20f9c5deab2b160b68ac66f453ec70820e8a2" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/artisanstreet/gpui-ce", rev = "6cd20f9c5deab2b160b68ac66f453ec70820e8a2", features = ["cosmic-text"] }
+
+[workspace]

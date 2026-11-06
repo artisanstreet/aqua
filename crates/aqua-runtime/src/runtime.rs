@@ -2609,6 +2609,25 @@ impl Runtime {
         Some((root, focused, items))
     }
 
+    fn press(&mut self, node: NodeId) {
+        let _ = self.tree.set_focused(Some(node));
+        let kind = if self
+            .tree
+            .has_action(node, ActionKind::AccessibilityActivate)
+        {
+            ActionKind::AccessibilityActivate
+        } else {
+            ActionKind::Activate
+        };
+        self.tree.fire_action(ActionEvent {
+            source: None,
+            node,
+            kind,
+            text: None,
+            focused: None,
+        });
+    }
+
     fn apply_access(&mut self, request: &A11yActionRequest) {
         if self.tree.get(request.node).is_none()
             || self.tree.is_disabled(request.node)
@@ -2638,31 +2657,20 @@ impl Runtime {
         }
         match request.action {
             A11yAction::Expand | A11yAction::Collapse => {
-                self.tree
-                    .set_control_expanded(request.node, request.action == A11yAction::Expand);
-                self.process_control_requests();
+                let expand = request.action == A11yAction::Expand;
+                if self.tree.control(request.node).is_some() {
+                    self.tree.set_control_expanded(request.node, expand);
+                    self.process_control_requests();
+                } else if self.tree.interaction_semantics(request.node).expanded == Some(!expand)
+                    && !self.tree.is_disabled(request.node)
+                {
+                    self.press(request.node);
+                }
             }
             A11yAction::Focus => {
                 let _ = self.tree.set_focused(Some(request.node));
             }
-            A11yAction::Press if !self.tree.is_disabled(request.node) => {
-                let _ = self.tree.set_focused(Some(request.node));
-                let kind = if self
-                    .tree
-                    .has_action(request.node, ActionKind::AccessibilityActivate)
-                {
-                    ActionKind::AccessibilityActivate
-                } else {
-                    ActionKind::Activate
-                };
-                self.tree.fire_action(ActionEvent {
-                    source: None,
-                    node: request.node,
-                    kind,
-                    text: None,
-                    focused: None,
-                });
-            }
+            A11yAction::Press if !self.tree.is_disabled(request.node) => self.press(request.node),
             A11yAction::SetValue | A11yAction::ReplaceSelectedText => {
                 if let A11yActionData::Value(value) = &request.data {
                     if request.action == A11yAction::SetValue

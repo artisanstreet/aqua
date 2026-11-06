@@ -123,3 +123,33 @@ fn accessibility_press_falls_back_to_existing_activation() {
     press(&mut runtime, node);
     assert_eq!(calls.get(), 11);
 }
+
+#[test]
+fn expanding_a_disclosure_button_presses_it_only_when_the_state_changes() {
+    let calls = Rc::new(Cell::new(0));
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    let disclosure = |expanded: bool| {
+        let output = calls.clone();
+        Button::new()
+            .on_activate(move || output.set(output.get() + 1))
+            .build()
+            .with_key("menu")
+            .aria_expanded(expanded)
+    };
+    runtime.mount(|_| disclosure(false)).unwrap();
+    let node = runtime.tree().root().unwrap();
+    let request = |action| A11yActionRequest {
+        node,
+        action,
+        data: A11yActionData::None,
+    };
+    support::access(&mut runtime, request(A11yAction::Collapse));
+    assert_eq!(calls.get(), 0);
+    support::access(&mut runtime, request(A11yAction::Expand));
+    assert_eq!(calls.get(), 1);
+    runtime.refresh(vec![disclosure(true)]).unwrap();
+    support::access(&mut runtime, request(A11yAction::Expand));
+    assert_eq!(calls.get(), 1);
+    support::access(&mut runtime, request(A11yAction::Collapse));
+    assert_eq!(calls.get(), 2);
+}

@@ -52,3 +52,15 @@ pid=25120 dpi=120 working_set_mb=125 private_mb=115
 foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
 --- frame stats (last 5) ---
 key-latency target=gpui pid=25120 posts=145 matched=145 unmatched=0 p50_ms=17.86 p90_ms=19.48 p99_ms=19.89 max_ms=20.18 mean_ms=18.16 over8_3=145 over16_7=145
+
+
+diagnostic-present-modes
+probe-launch unix_ms=1794004318659 pid=25040
+probe-startup window_ms=61 first_content_ms=535 nondominant=0.165 rich_content_ms=535
+probe-open thread=bench-large unix_ms=1794004318811 since_launch_ms=152 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=25040
+probe-latency name=type kind=type samples=1 timeouts=0 p50_ms=264.66 p90_ms=264.66 p99_ms=264.66 max_ms=264.66 mean_ms=264.66 over4_ms=1 over8_ms=1 over16_ms=1 over50_ms=1 grab_p50_ms=262.3
+pid=25040 dpi=120 working_set_mb=127 private_mb=119
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+key-latency target=aqua pid=25040 posts=145 matched=145 unmatched=0 p50_ms=1.46 p90_ms=1.88 p99_ms=2.22 max_ms=2.31 mean_ms=1.55 over8_3=0 over16_7=0

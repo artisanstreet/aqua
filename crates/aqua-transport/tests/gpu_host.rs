@@ -114,6 +114,20 @@ impl GpuBackend for Probe {
         self.log.push("wait");
         Ok(())
     }
+
+    fn wait_for_present_slot(
+        &mut self,
+        surface: SurfaceId,
+        hint: PresentHint,
+    ) -> Result<(), GpuError> {
+        match hint {
+            PresentHint::Immediate => {
+                self.log.push("wait-immediate");
+                Ok(())
+            }
+            PresentHint::Vsync => self.wait_for_frame_slot(surface),
+        }
+    }
 }
 
 impl GpuReadback for Probe {
@@ -183,6 +197,28 @@ fn a_frame_waits_for_the_slot_once_then_executes_and_presents() {
     assert_eq!(log.take(), vec!["wait"]);
     host.execute(&mut side, 2);
     assert_eq!(log.take(), vec!["execute", "present"]);
+}
+
+#[test]
+fn slot_waits_follow_the_current_presentation_hint() {
+    let log = Log::default();
+    let mut host = host(&log, SharedClock::default());
+    let mut side = RenderSide::new();
+    setup(&mut side, vec![(node(0), rect_item(0.0, color("#ff0000")))]);
+    host.set_present(PresentHint::Immediate);
+    host.execute(&mut side, 1);
+    assert_eq!(
+        log.take(),
+        vec!["create", "wait-immediate", "execute", "present"]
+    );
+    host.set_present(PresentHint::Vsync);
+    host.wait_frame();
+    assert_eq!(log.take(), vec!["wait"]);
+    host.execute(&mut side, 2);
+    assert_eq!(log.take(), vec!["execute", "present"]);
+    host.set_present(PresentHint::Immediate);
+    host.wait_frame();
+    assert_eq!(log.take(), vec!["wait-immediate"]);
 }
 
 #[test]

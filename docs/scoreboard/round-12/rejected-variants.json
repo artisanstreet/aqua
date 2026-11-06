@@ -1,0 +1,42 @@
+[
+  {
+    "variant": "no-redirection",
+    "binary": "editor-no-redirection.exe",
+    "binary_sha256": "38f70a6bbe51d37fb735b64388baf789829d5162237914e5ff33cfe974aee284",
+    "result": "key-latency target=aqua pid=13716 posts=145 matched=128 unmatched=17 p50_ms=16.19 p90_ms=140.51 p99_ms=185.93 max_ms=188.35 mean_ms=47.15 over8_3=66 over16_7=58",
+    "foreground_unchanged": true,
+    "accepted": false
+  },
+  {
+    "variant": "composition",
+    "binary": "editor-composition.exe",
+    "binary_sha256": "bcc26e6bf1cbd4e0ae41b1f96da342f40d19ad0531cb932663571f90d1543e04",
+    "result": "key-latency target=aqua pid=9156 posts=145 matched=126 unmatched=19 p50_ms=46.47 p90_ms=156.87 p99_ms=187.41 max_ms=187.64 mean_ms=62.34 over8_3=79 over16_7=73",
+    "foreground_unchanged": true,
+    "accepted": false
+  },
+  {
+    "variant": "surface-mirror",
+    "binary": "editor-current-optimized.exe",
+    "binary_sha256": "0c91e7ded8a99d4b6af423da91b90d52e08c890fdfebd2a70a60d493864842b9",
+    "result": "key-latency target=aqua pid=18900 posts=145 matched=133 unmatched=12 p50_ms=15.80 p90_ms=141.30 p99_ms=186.84 max_ms=187.57 mean_ms=46.69 over8_3=69 over16_7=60",
+    "foreground_unchanged": true,
+    "accepted": false
+  },
+  {
+    "variant": "composition-clock",
+    "binary": "editor-composition-clock.exe",
+    "binary_sha256": "217fcff3b71fa2d5adfef27ee4f6568edcd8b8269c713d16a8c3419d180e8308",
+    "result": "key-latency target=aqua pid=7484 posts=145 matched=121 unmatched=24 p50_ms=77.77 p90_ms=171.04 p99_ms=190.26 max_ms=190.29 mean_ms=81.89 over8_3=103 over16_7=88",
+    "foreground_unchanged": true,
+    "accepted": false
+  },
+  {
+    "variant": "no-timestamps",
+    "binary": "editor-no-timestamps.exe",
+    "binary_sha256": "f914510ec97b7dda8bd20ee9ebb1df0b24e10602c480ecfe80766850cdf7a2ff",
+    "result": "key-latency target=aqua pid=16680 posts=145 matched=125 unmatched=20 p50_ms=31.67 p90_ms=156.26 p99_ms=188.36 max_ms=190.14 mean_ms=59.91 over8_3=77 over16_7=71",
+    "foreground_unchanged": true,
+    "accepted": false
+  }
+]

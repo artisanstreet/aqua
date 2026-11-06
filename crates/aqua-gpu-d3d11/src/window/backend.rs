@@ -803,10 +803,11 @@ impl WindowBackend {
                 ));
             }
         };
+        let clocked = std::mem::take(&mut entry.clocked);
         let mode = match hint {
             PresentHint::Immediate => PresentMode::Immediate,
             PresentHint::Vsync if entry.half_rate => PresentMode::HalfVsync,
-            PresentHint::Vsync if entry.clocked => PresentMode::Latest,
+            PresentHint::Vsync if clocked => PresentMode::Latest,
             PresentHint::Vsync => PresentMode::Vsync,
         };
         let damage = match entry.damage.has_presented() {
@@ -1079,12 +1080,22 @@ impl GpuBackend for WindowBackend {
     }
 
     fn wait_for_frame_slot(&mut self, surface: SurfaceId) -> Result<(), GpuError> {
+        self.wait_for_present_slot(surface, PresentHint::Vsync)
+    }
+
+    fn wait_for_present_slot(
+        &mut self,
+        surface: SurfaceId,
+        hint: PresentHint,
+    ) -> Result<(), GpuError> {
         let entry = self
             .surfaces
             .get_mut(&surface)
             .ok_or(GpuError::UnknownSurface(surface))?;
         let monitor = timing::monitor_of(owner(entry.window, entry.kind));
-        entry.clocked = entry.clock.wait(monitor, entry.pacer.interval());
+        entry.clocked = hint == PresentHint::Vsync
+            && !entry.half_rate
+            && entry.clock.wait(monitor, entry.pacer.interval());
         entry.swapchain.wait_for_frame(match entry.clocked {
             true => 0,
             false => FRAME_WAIT_MS,

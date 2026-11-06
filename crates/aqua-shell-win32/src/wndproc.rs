@@ -330,21 +330,30 @@ fn apply_cursor(icon: CursorIcon) {
 
 pub(crate) fn refresh_cursor(hwnd: HWND) {
     let raw = hwnd.0 as isize;
-    let mut point = POINT::default();
+    let mut screen = POINT::default();
     let mut client = RECT::default();
     let inside = unsafe {
-        GetCursorPos(&mut point).is_ok()
-            && ScreenToClient(hwnd, &mut point).as_bool()
-            && GetClientRect(hwnd, &mut client).is_ok()
-            && PtInRect(&client, point).as_bool()
-            && WindowFromPoint(POINT {
-                x: point.x,
-                y: point.y,
-            }) != HWND::default()
+        GetCursorPos(&mut screen).is_ok() && WindowFromPoint(screen) == hwnd && {
+            let mut point = screen;
+            ScreenToClient(hwnd, &mut point).as_bool()
+                && GetClientRect(hwnd, &mut client).is_ok()
+                && PtInRect(&client, point).as_bool()
+        }
     };
     if inside {
-        if let Some(icon) = state::window(raw, |w| w.cursor) {
-            apply_cursor(icon);
+        let coordinates = ((screen.y as u16 as u32) << 16) | screen.x as u16 as u32;
+        let hit = unsafe {
+            SendMessageW(
+                hwnd,
+                WM_NCHITTEST,
+                Some(WPARAM(0)),
+                Some(LPARAM(coordinates as isize)),
+            )
+        };
+        if hit.0 == ht::CLIENT as isize {
+            if let Some(icon) = state::window(raw, |w| w.cursor) {
+                apply_cursor(icon);
+            }
         }
     }
 }

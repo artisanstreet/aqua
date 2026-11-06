@@ -1,10 +1,34 @@
 use std::collections::VecDeque;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const FALLBACK_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 const MIN_INTERVAL: Duration = Duration::from_micros(2_000);
 const MAX_INTERVAL: Duration = Duration::from_millis(200);
 const WINDOW: usize = 240;
+
+#[derive(Default)]
+pub struct VblankGuard {
+    finished: Option<Instant>,
+    early_waits: u8,
+}
+
+impl VblankGuard {
+    pub fn observe(&mut self, started: Instant, finished: Instant, interval: Duration) -> bool {
+        let idle = self
+            .finished
+            .is_none_or(|last| started.duration_since(last) >= interval);
+        let blocked = finished.duration_since(started) >= Duration::from_millis(1);
+        if idle || blocked {
+            self.early_waits = 0;
+        }
+        self.finished = Some(finished);
+        if blocked {
+            return true;
+        }
+        self.early_waits = self.early_waits.saturating_add(1);
+        self.early_waits < 3
+    }
+}
 
 pub fn interval_from_ticks(period: u64, frequency: u64) -> Duration {
     match (period, frequency) {

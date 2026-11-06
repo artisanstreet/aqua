@@ -163,9 +163,9 @@ impl InputLatency {
                 queue: ms(flight.stamp.input_done, flight.frame_start),
                 build: ms(flight.frame_start, flight.build_done),
                 handoff: ms(flight.pushed, picked),
-                gpu_wait: ms(picked, waited),
-                step: ms(waited, stepped),
-                execute: ms(stepped, done),
+                gpu_wait: ms(stepped, waited),
+                step: ms(picked, stepped),
+                execute: ms(waited, done),
             };
             if self.mode == Mode::Detail {
                 eprintln!(

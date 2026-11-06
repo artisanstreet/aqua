@@ -1943,9 +1943,14 @@ impl Lowering {
             let guard = self.runs.lock();
             guard
                 .resolve(RunId(run_id))
-                .and_then(|handle| handle.layout.laid_out_shared())
+                .and_then(|handle| {
+                    handle
+                        .layout
+                        .laid_out_shared()
+                        .map(|laid| (laid, handle.layout.scale()))
+                })
         };
-        let Some(laid) = shared else {
+        let Some((laid, run_scale)) = shared else {
             walk.report.pending += 1;
             return;
         };
@@ -1953,10 +1958,11 @@ impl Lowering {
             walk.laid.push((run_id, laid.clone()));
         }
         let at = walk.at();
-        let s = at.scale();
+        let scene_scale = at.scale();
+        let s = scene_scale / run_scale;
         let (base_x, base_y) = at.point(origin[0], origin[1]);
         if walk.cull.is_some() && at.is_exact() {
-            let pad = (TEXT_OVERHANG_PAD + TEXT_OVERHANG_RATIO * laid.size.1) * s;
+            let pad = TEXT_OVERHANG_PAD * scene_scale + TEXT_OVERHANG_RATIO * laid.size.1 * s;
             let ink = Rect {
                 x: base_x,
                 y: base_y,
@@ -1987,7 +1993,7 @@ impl Lowering {
         let mut color_pens: Vec<PenY> = Vec::new();
         let mut last_color: Option<([f32; 4], Oklch)> = None;
         let moving = !walk.transforms.is_empty()
-            && (!at.is_exact() || (s / walk.base.scale() - 1.0).abs() > 1.0e-3);
+            && (!at.is_exact() || (scene_scale / walk.base.scale() - 1.0).abs() > 1.0e-3);
         let mut curves: Vec<SlugInstance> = Vec::new();
         let signature = self
             .text
@@ -2062,14 +2068,14 @@ impl Lowering {
                                 glyph,
                                 scene_color,
                                 factor,
-                                (plain, phase, map_bounds, s, center),
+                                (plain, phase, map_bounds, scene_scale, center),
                                 &mut last_color,
                             );
                             let pen = at.point(
-                                origin[0] + glyph.x + glyph.x_offset,
-                                origin[1] + line.baseline_y + glyph.y - glyph.y_offset,
+                                origin[0] + (glyph.x + glyph.x_offset) / run_scale,
+                                origin[1] + (line.baseline_y + glyph.y - glyph.y_offset) / run_scale,
                             );
-                            let size = glyph.font_size_px;
+                            let size = glyph.font_size_px / run_scale;
                             curves.push(SlugInstance {
                                 origin: [pen.0, pen.1],
                                 linear: Linear2::scale(size, -size).then(Linear2::of(at.0)),
@@ -2130,7 +2136,7 @@ impl Lowering {
                             glyph,
                             scene_color,
                             factor,
-                            (plain, phase, map_bounds, s, center),
+                            (plain, phase, map_bounds, scene_scale, center),
                             &mut last_color,
                         );
                         let entry = Glyph {

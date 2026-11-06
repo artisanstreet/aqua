@@ -26,7 +26,7 @@ SCROLL_X=${AQUA_COMPARE_SCROLL_X:-760}
 SCROLL_Y=${AQUA_COMPARE_SCROLL_Y:-450}
 COMPOSER_CLICK=${AQUA_COMPARE_COMPOSER_CLICK:-"760 800"}
 COMPOSER_RECT=${AQUA_COMPARE_COMPOSER_RECT:-"445 772 500 40"}
-SIDEBAR_THREAD=${AQUA_COMPARE_SIDEBAR_THREAD:-"136 118"}
+SIDEBAR_THREAD=${AQUA_COMPARE_SIDEBAR_THREAD:-"136 168"}
 TYPE_COUNT=${AQUA_COMPARE_TYPE_COUNT:-40}
 RESIZE_COUNT=${AQUA_COMPARE_RESIZE_COUNT:-120}
 RUNS=${AQUA_COMPARE_RUNS:-3}
@@ -305,6 +305,8 @@ AQUA_EXE_RUN=$SNAP/aqua.exe
   echo "date $(date -Is)"
   echo "profile $PROFILE runs $RUNS idle_seconds $IDLE_SECONDS scroll_frames $SCROLL_FRAMES"
   echo "aqua_git $(git -C "$W/aqua" rev-parse --short HEAD) port_git $(git -C "$W/editor-aqua-port" rev-parse --short HEAD 2>/dev/null || echo none) dirty_aqua=$(git -C "$W/aqua" status --porcelain | wc -l)"
+  echo "fixture_server bench-fixture links the port forge-http (SSE keep-alive $(grep -o 'from_secs([0-9]*)' "$W/editor-aqua-port/crates/forge-http/src/events.rs" | head -1)) while the GPUI repo forge-http keeps $(grep -o 'from_secs(15)' "$W/editor/crates/forge-http/src/events.rs" | head -1); both editors talk to the same fixture server in every run, so neither sees a different heartbeat, but absolute idle wakes differ from a real 15 s Forge"
+  echo "gpui_baseline release build of the gpui-ce fork at $(grep -o 'rev = "[0-9a-f]*"' "$W/editor/Cargo.toml" | head -1), built by tools/compare-editors.sh build with the same cargo-windows toolchain as the port"
   for f in "$AQUA_EXE:aqua" "$GPUI_EXE:gpui"; do
     src=${f%%:*}; name=${f##*:}
     [ -f "$src" ] && echo "$name exe $src built $(date -r "$src" -Is) sha256 $(sha256sum "$src" | cut -c1-16) size $(stat -c %s "$src")"

@@ -5,8 +5,10 @@ T=/home/sander/.local/share/aqua-port-tools
 W=/home/sander/projects/artisanstreet
 OUT=${VISUAL_GATE_OUT:-$T/shots/visual-gate}
 FIXTURE_ROOT=${AQUA_FIXTURE_ROOT:-/mnt/c/Users/sander/AppData/Local/aqua-bench}
-FIXTURE_PORT=${AQUA_FIXTURE_PORT:-47950}
+FIXTURE_PORT=${AQUA_FIXTURE_PORT:-}
 SIDE_PORT=${VISUAL_GATE_PORT:-}
+PORT_LOW=${VISUAL_GATE_PORT_LOW:-48716}
+PORT_HIGH=${VISUAL_GATE_PORT_HIGH:-49100}
 PROFILE=${VISUAL_GATE_PROFILE:-release}
 AQUA_EXE=${VISUAL_GATE_AQUA_EXE:-$W/editor-aqua-port/target/editor-aqua-windows/x86_64-pc-windows-gnu/$PROFILE/editor-aqua.exe}
 GPUI_EXE=${VISUAL_GATE_GPUI_EXE:-$W/editor/target/x86_64-pc-windows-gnu/$PROFILE/artisan-editor.exe}
@@ -17,36 +19,54 @@ STREAM=bench-stream
 VISUAL=bench-visual
 STEPS_FILE=${VISUAL_GATE_STEPS:-$HERE/visual-gate.steps}
 VISUAL_STEPS_FILE=${VISUAL_GATE_VISUAL_STEPS:-$HERE/visual-gate-visual.steps}
-ALIGNED_SHOTS=${VISUAL_GATE_ALIGNED:-"v-tail v-scroll v-lightbox v-menu v-top v-account v-emoji menu jump-a jump-b bottom notch1"}
+ALIGNED_SHOTS=${VISUAL_GATE_ALIGNED:-"bottom menu notch1 depth1 depth2 depth3 depth4 depth5 depth6 depth7 depth8 edge edge2 far1 far2 far3 far4 far5 far6 far7 far8 far9 far10 far11 far12 emoji jump-a jump-b dialog v-tail v-scroll v-lightbox v-menu v-top v-account v-emoji"}
+MAX_DIFF_PCT=${VISUAL_GATE_MAX_DIFF_PCT:-18}
+JUMP_BUTTON_LIMIT=${VISUAL_GATE_JUMP_BUTTON_LIMIT:-30}
+REGIONS=${VISUAL_GATE_REGIONS:-"notch1:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest depth1:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest depth2:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest depth3:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest depth4:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest"}
 die() { echo "VISUAL GATE FAILED: $*" >&2; exit 1; }
 win() { wslpath -w "$1"; }
 
+bindable_ports() {
+  powershell.exe -NoProfile -Command "\$o=@();foreach(\$p in $1..$2){ if(\$o.Count -ge $3){break}; try{\$l=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,\$p);\$l.Start();\$l.Stop();\$o+=\$p}catch{} }; \$o -join ' '" | tr -d '\r'
+}
+claim_port() {
+  local fd
+  exec {fd}>"/tmp/aqua-forge-port-$1.lock"
+  flock -n "$fd" || { exec {fd}>&-; return 1; }
+}
+claim_ports() {
+  local candidates port claimed=()
+  candidates=$(bindable_ports "$((PORT_LOW + (RANDOM % 40) * 2))" "$PORT_HIGH" 30)
+  [ -n "$candidates" ] || candidates=$(bindable_ports "$PORT_LOW" "$PORT_HIGH" 30)
+  for port in $candidates; do
+    claim_port "$port" && claimed+=("$port")
+    [ ${#claimed[@]} -lt 2 ] || break
+  done
+  [ ${#claimed[@]} -ge 2 ] || die "no two free loopback ports in $PORT_LOW-$PORT_HIGH (46000-48715 are reserved by Windows on this machine)"
+  FIXTURE_PORT=${claimed[0]}
+  SIDE_PORT=${claimed[1]}
+}
+if [ -n "$FIXTURE_PORT" ] && [ -n "$SIDE_PORT" ] && [ "$(bindable_ports "$FIXTURE_PORT" "$FIXTURE_PORT" 1)" = "$FIXTURE_PORT" ] && [ "$(bindable_ports "$SIDE_PORT" "$SIDE_PORT" 1)" = "$SIDE_PORT" ] && claim_port "$FIXTURE_PORT" && claim_port "$SIDE_PORT"; then :; else claim_ports; fi
+
+mkdir -p "$OUT"
 [ -f "$AQUA_EXE" ] || die "missing $AQUA_EXE"
 [ -f "$GPUI_EXE" ] || die "missing $GPUI_EXE"
 [ -f "$STEPS_FILE" ] || die "missing $STEPS_FILE"
 [ -f "$VISUAL_STEPS_FILE" ] || die "missing $VISUAL_STEPS_FILE"
-cp "$HERE/win-drive.ps1" "$T/win-drive.ps1"
+[ "$HERE/win-drive.ps1" -ef "$T/win-drive.ps1" ] || cp "$HERE/win-drive.ps1" "$T/win-drive.ps1"
 
-if [ -z "$SIDE_PORT" ]; then
-  exec 9>/tmp/aqua-scoreboard.lock
-  flock -w 7200 9 || die "scoreboard lock busy"
-  exec 8>"/tmp/aqua-forge-port-$FIXTURE_PORT.lock"
-  flock -w 120 8 || die "fixture port locked"
-fi
-
-if [ -n "$SIDE_PORT" ] && [ -z "${VISUAL_GATE_LOCKED:-}" ]; then
+if [ -z "${VISUAL_GATE_LOCKED:-}" ]; then
   exec 9>/tmp/aqua-scoreboard.lock
   flock -w 7200 9 || die "scoreboard lock busy"
 fi
-"$HERE/compare-editors.sh" fixture >/dev/null 2>&1 || die "fixture preparation failed"
+AQUA_FIXTURE_PORT=$FIXTURE_PORT "$HERE/compare-editors.sh" fixture >"$OUT/fixture.log" 2>&1 || die "fixture preparation failed, see $OUT/fixture.log"
 HOST_ID=$(python3 -c "import json;print(json.load(open('$FIXTURE_ROOT/editor-config/hosts.json'))['last'])")
-BASE_PORT=$FIXTURE_PORT
-CONFIG=$FIXTURE_ROOT/editor-config-visual${SIDE_PORT:+-side}
+CONFIG=$FIXTURE_ROOT/editor-config-visual-side
 fresh_config() {
   rm -rf "$CONFIG"; cp -r "$FIXTURE_ROOT/editor-config" "$CONFIG"
-  [ -z "$SIDE_PORT" ] || sed -i "s/127.0.0.1:$BASE_PORT/127.0.0.1:$SIDE_PORT/" "$CONFIG/hosts.json"
+  sed -i -E "s/127\.0\.0\.1:[0-9]+/127.0.0.1:$SIDE_PORT/g" "$CONFIG/hosts.json"
 }
-[ -z "$SIDE_PORT" ] || FIXTURE_PORT=$SIDE_PORT
+FIXTURE_PORT=$SIDE_PORT
 
 FORGE_PID=""
 stop_forge() {
@@ -56,13 +76,13 @@ stop_forge() {
 trap stop_forge EXIT
 
 start_forge() {
-  local rundir=$FIXTURE_ROOT/run-visual${SIDE_PORT:+-side}
-  if [ -n "$SIDE_PORT" ]; then powershell.exe -NoProfile -Command "Get-Process bench-fixture-visual -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1 || true; else powershell.exe -NoProfile -Command "Get-Process bench-fixture -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1 || true; fi
+  local rundir=$FIXTURE_ROOT/run-visual-side
+  powershell.exe -NoProfile -Command "Get-Process bench-fixture-visual -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1 || true
   sleep 1
   rm -rf "$rundir"; mkdir -p "$rundir"
   cp -r "$FIXTURE_ROOT/template/forge" "$rundir/forge"
   local r; r=$(win "$rundir")
-  FORGE_EXE=$FIXTURE_ROOT/bench-fixture${SIDE_PORT:+-visual}.exe
+  FORGE_EXE=$FIXTURE_ROOT/bench-fixture-visual.exe
   cp "$BF_EXE" "$FORGE_EXE"
   FORGE_PID=$(powershell.exe -NoProfile -Command "\$p = Start-Process -FilePath '$(win "$FORGE_EXE")' -WindowStyle Hidden -PassThru -ArgumentList 'serve','--data','$r\\forge','--listen','127.0.0.1:$FIXTURE_PORT','--spec','$(win "$FIXTURE_ROOT/spec.json")','--device','$(win "$FIXTURE_ROOT/identity.json")','--ready','$r\\ready.json','--events','$r\\events.jsonl','--trigger','$r\\trigger'; \$p.Id" | tr -d '\r')
   local waited=0
@@ -72,7 +92,6 @@ start_forge() {
   RUNDIR=$rundir
 }
 
-mkdir -p "$OUT"
 
 defects=()
 defect() { echo "DEFECT: $*" >&2; defects+=("$*"); }
@@ -87,12 +106,17 @@ run_scene() {
       AQUA_EDITOR_DIR=$CONFIG AQUA_APP_ARGS="artisan://thread/$HOST_ID/$thread" AQUA_EVENTS=$RUNDIR/events.jsonl \
       "$T/bin/win-app" "$exe" "$(steps_of "$steps_file")" 8 "$OUT" "$which" >"$OUT/$which-$thread.log" 2>&1 || die "$which run failed on $thread, see $OUT/$which-$thread.log"
     stop_forge
-    grep -q "probe-open thread=$thread " "$OUT/$which-$thread.log" && return 0
-    echo "$which did not show fixture thread $thread on attempt $attempt" >&2
+    if grep -q "probe-open thread=$thread " "$OUT/$which-$thread.log"; then
+      echo "$which $thread opened on attempt $attempt" >>"$OUT/open-attempts.txt"
+      [ "$attempt" = 1 ] || [ -z "${VISUAL_GATE_STRICT_OPEN:-}" ] || die "$which needed $attempt launches to show $thread (VISUAL_GATE_STRICT_OPEN)"
+      return 0
+    fi
+    echo "$which did not show fixture thread $thread on attempt $attempt" | tee -a "$OUT/open-attempts.txt" >&2
   done
   die "$which did not show fixture thread $thread"
 }
 
+[ -n "${VISUAL_GATE_TARGETS:-}" ] || : >"$OUT/open-attempts.txt"
 for which in ${VISUAL_GATE_TARGETS:-aqua gpui}; do
   case $which in aqua) exe=$AQUA_EXE;; gpui) exe=$GPUI_EXE;; esac
   rm -f "$OUT/$which"-*.png "$OUT/$which"*.log
@@ -123,7 +147,7 @@ done
 
 echo "visual gate shots in $OUT: read the *-NAME.png pairs and compare gpui against aqua"
 if [ -z "${VISUAL_GATE_TARGETS:-}" ] || [[ " $VISUAL_GATE_TARGETS " == *" aqua "* && " $VISUAL_GATE_TARGETS " == *" gpui "* ]]; then
-  PIXEL_DIFF_MAX_PCT=${VISUAL_GATE_MAX_DIFF_PCT:-} "$HERE/pixel-diff.sh" "$OUT" gpui aqua $ALIGNED_SHOTS || die "aligned shots differ more than ${VISUAL_GATE_MAX_DIFF_PCT}% (see $OUT/diff/pixel-diff.txt)"
+  PIXEL_DIFF_MAX_PCT=$MAX_DIFF_PCT PIXEL_DIFF_REGIONS=$REGIONS "$HERE/pixel-diff.sh" "$OUT" gpui aqua $ALIGNED_SHOTS || die "aligned shots differ more than ${MAX_DIFF_PCT}% or a checked region differs (see $OUT/diff/pixel-diff.txt)"
 fi
 
 if [ ${#defects[@]} -gt 0 ]; then

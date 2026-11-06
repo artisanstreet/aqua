@@ -134,7 +134,7 @@ builders, reactive bindings, overlay host, and facade host:
   only for empty editable nodes, model stays empty, `is_placeholder()` flags
   muted rendering, IME preedit takes precedence; static labels ignore it.
 - Text measure: `TextMeasurer` trait; `NaiveMeasurer` (tests/bootstrap only);
-  `CosmicMeasurer { fonts: SharedFonts, scale }` over the shared font manager
+  `ShapedMeasurer { fonts: SharedFonts, scale }` over the shared font manager
   (same instance the renderer uses — measurement/pixels cannot disagree).
 - Canvas: `CanvasContent { painter }` + registry; painter `Fn(Rect) ->
   Vec<DisplayItem>`, no tree access. No painter → space reserved, nothing

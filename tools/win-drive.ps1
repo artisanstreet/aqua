@@ -261,6 +261,7 @@ function Probe-Latency($name, $kind, $count, $gap, $scroll, $x, $y, $delta) {
   $total = [System.Diagnostics.Stopwatch]::StartNew()
   $lat = New-Object System.Collections.Generic.List[double]
   $timeouts = 0
+  $stamps = New-Object System.Collections.Generic.List[string]
   $pt = New-Object W+POINT; $pt.X = [int]($x * $scale); $pt.Y = [int]($y * $scale)
   [void][W]::ClientToScreen($h, [ref]$pt)
   $warm = [IntPtr]::Zero
@@ -275,12 +276,16 @@ function Probe-Latency($name, $kind, $count, $gap, $scroll, $x, $y, $delta) {
     }
     $r = [IntPtr]::Zero
     $sw.Restart()
+    $ts0 = [System.Diagnostics.Stopwatch]::GetTimestamp()
     $ok = [W]::SendMessageTimeout($h, 0, [IntPtr]::Zero, [IntPtr]::Zero, 3, 2000, [ref]$r)
+    $ts1 = [System.Diagnostics.Stopwatch]::GetTimestamp()
     $sw.Stop()
+    if ($env:AQUA_WM_NULL_TRACE) { $stamps.Add("$ts0,$ts1") }
     if ($ok -eq [IntPtr]::Zero) { $timeouts++ } else { $lat.Add($sw.Elapsed.TotalMilliseconds) }
     $rest = $gap - ($total.Elapsed.TotalMilliseconds - $tick)
     if ($rest -gt 1) { Start-Sleep -Milliseconds ([int]$rest) }
   }
+  if ($env:AQUA_WM_NULL_TRACE) { Set-Content -Path ($env:AQUA_WM_NULL_TRACE + ".probe") -Value $stamps }
   $series = @(); for ($b = 0; $b -lt $lat.Count; $b += 100) { $chunk = @($lat[$b..([math]::Min($b + 99, $lat.Count - 1))] | Sort-Object); $series += "$([math]::Round($chunk[[int](($chunk.Count - 1) / 2)],1))/$([math]::Round($chunk[-1],0))" }
   $v = @($lat | Sort-Object)
   if ($v.Count -eq 0) { "probe-latency name=$name kind=$kind samples=0 timeouts=$timeouts"; return }

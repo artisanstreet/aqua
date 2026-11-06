@@ -5,21 +5,8 @@ shot bottom
 move 1216 400
 sleep 1.5
 shot menu
-click 1000 297
 move 760 450
-sleep 2
-shot jump-a
-move 1216 400
-sleep 1.5
-click 1000 513
-move 760 450
-sleep 2
-shot jump-b
-move 1216 400
-sleep 1.5
-click 1000 693
-move 760 450
-sleep 2
+sleep 1
 wheel 760 450 120
 sleep 1.5
 shot notch1
@@ -167,24 +154,12 @@ wheel 760 450 120
 sleep 0.06
 sleep 1
 shot depth8
-move 760 450
 wheel 760 450 120
 sleep 1
 shot edge
 wheel 760 450 40
 sleep 1
 shot edge2
-click 24 876
-sleep 2
-shot dialog
-key esc
-sleep 1
-click 760 800
-sleep 1
-typehex 68 65 6C 6C 6F 20 1F642 20 2728 20 1F44D 20 1F600 20 6F 6B
-sleep 1.5
-shot emoji
-move 760 450
 wheel 760 450 120
 sleep 0.05
 wheel 760 450 120
@@ -689,3 +664,25 @@ wheel 760 450 120
 sleep 0.05
 sleep 1.2
 shot far12
+click 760 800
+sleep 1
+typehex 68 65 6C 6C 6F 20 1F642 20 2728 20 1F44D 20 1F600 20 6F 6B
+sleep 1.5
+shot emoji
+move 1216 400
+sleep 1.5
+click 1000 297
+move 760 450
+sleep 2
+shot jump-a
+move 1216 400
+sleep 1.5
+click 1000 513
+move 760 450
+sleep 2
+shot jump-b
+move 760 450
+sleep 1
+click 24 876
+sleep 2
+shot dialog

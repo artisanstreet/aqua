@@ -1941,14 +1941,12 @@ impl Lowering {
     ) {
         let shared = {
             let guard = self.runs.lock();
-            guard
-                .resolve(RunId(run_id))
-                .and_then(|handle| {
-                    handle
-                        .layout
-                        .laid_out_shared()
-                        .map(|laid| (laid, handle.layout.scale()))
-                })
+            guard.resolve(RunId(run_id)).and_then(|handle| {
+                handle
+                    .layout
+                    .laid_out_shared()
+                    .map(|laid| (laid, handle.layout.scale()))
+            })
         };
         let Some((laid, run_scale)) = shared else {
             walk.report.pending += 1;
@@ -2073,7 +2071,8 @@ impl Lowering {
                             );
                             let pen = at.point(
                                 origin[0] + (glyph.x + glyph.x_offset) / run_scale,
-                                origin[1] + (line.baseline_y + glyph.y - glyph.y_offset) / run_scale,
+                                origin[1]
+                                    + (line.baseline_y + glyph.y - glyph.y_offset) / run_scale,
                             );
                             let size = glyph.font_size_px / run_scale;
                             curves.push(SlugInstance {

@@ -1,5 +1,5 @@
 use aqua::render::lower::Lowering;
-use aqua::{UiApp, ui::Text};
+use aqua::{ui::Text, UiApp};
 use aqua_core::scene::{DisplayItem, TextRasterMode, TextRun};
 use aqua_core::{ColorProfile, Oklch, Point, Rect, Size, Transform2D};
 use aqua_graph::{PaintCommand, SlugInstance};

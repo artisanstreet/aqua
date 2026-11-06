@@ -288,7 +288,8 @@ where
         if self.slot_acquired {
             return Ok(());
         }
-        self.backend.wait_for_frame_slot(surface)?;
+        self.backend
+            .wait_for_present_slot(surface, self.config.present)?;
         self.slot_acquired = true;
         Ok(())
     }

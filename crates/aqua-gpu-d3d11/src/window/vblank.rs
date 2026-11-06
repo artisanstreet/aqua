@@ -25,6 +25,7 @@ impl VblankClock {
             .is_some_and(|factory| !unsafe { factory.IsCurrent() }.as_bool());
         let retry = self.output.is_none() && self.retry_after.is_none_or(|at| now >= at);
         if monitor != self.monitor || stale || retry {
+            self.guard = VblankGuard::default();
             self.monitor = monitor;
             self.factory = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }.ok();
             self.output = self

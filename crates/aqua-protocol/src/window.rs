@@ -134,6 +134,7 @@ pub enum WindowRequest {
     SetBadge(AquaWindowId, Option<TaskbarBadge>),
     SetMaxFrameRate(AquaWindowId, Option<std::num::NonZeroU32>),
     SetVsync(AquaWindowId, bool),
+    SetGlideCadence(AquaWindowId, bool),
     SetOuterPosition(AquaWindowId, PhysicalPosition),
     Center(AquaWindowId),
     BeginSnapshotTransition(AquaWindowId, aqua_core::scene::SnapshotTransition),

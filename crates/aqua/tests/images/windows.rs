@@ -18,7 +18,9 @@ fn observed(id: u64) -> ObservedWindowState {
     }
 }
 
-fn media(handle: aqua::ImageHandle) -> impl FnOnce(&aqua_reactive::Scope) -> aqua_ui::element::Element {
+fn media(
+    handle: aqua::ImageHandle,
+) -> impl FnOnce(&aqua_reactive::Scope) -> aqua_ui::element::Element {
     move |_| {
         ui::Media::new(handle)
             .style(Style::new().width(px(32.0)).height(px(32.0)))
@@ -65,8 +67,14 @@ fn every_window_uploads_and_releases_only_its_own_visible_images() {
     app.build_scene(&two, Instant::ZERO);
     let first = app.synchronize_images_for(one.id, Instant::ZERO).unwrap();
     let second = app.synchronize_images_for(two.id, Instant::ZERO).unwrap();
-    assert_eq!(first.iter().map(|frame| frame.layer).collect::<Vec<_>>(), vec![first_layer]);
-    assert_eq!(second.iter().map(|frame| frame.layer).collect::<Vec<_>>(), vec![second_layer]);
+    assert_eq!(
+        first.iter().map(|frame| frame.layer).collect::<Vec<_>>(),
+        vec![first_layer]
+    );
+    assert_eq!(
+        second.iter().map(|frame| frame.layer).collect::<Vec<_>>(),
+        vec![second_layer]
+    );
     assert_eq!(app.gpu_image_bytes(), 8);
 
     aqua.dispatch_window_event(

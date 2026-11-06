@@ -21,6 +21,7 @@ pub struct DeviceOptions {
     pub preference: AdapterPreference,
     pub debug_layer: bool,
     pub single_threaded: bool,
+    pub prevent_internal_threading: bool,
 }
 
 impl Default for DeviceOptions {
@@ -29,6 +30,7 @@ impl Default for DeviceOptions {
             preference: AdapterPreference::HighPerformance,
             debug_layer: false,
             single_threaded: false,
+            prevent_internal_threading: false,
         }
     }
 }
@@ -43,6 +45,8 @@ impl DeviceOptions {
                 .unwrap_or(defaults.preference),
             debug_layer: std::env::var("AQUA_D3D11_DEBUG").as_deref() == Ok("1"),
             single_threaded: std::env::var("AQUA_D3D11_SINGLETHREADED").as_deref() == Ok("1"),
+            prevent_internal_threading: std::env::var("AQUA_D3D11_PREVENT_THREADING").as_deref()
+                == Ok("1"),
         }
     }
 
@@ -53,6 +57,11 @@ impl DeviceOptions {
 
     pub fn with_debug_layer(mut self, debug_layer: bool) -> Self {
         self.debug_layer = debug_layer;
+        self
+    }
+
+    pub fn with_prevent_internal_threading(mut self, prevent: bool) -> Self {
+        self.prevent_internal_threading = prevent;
         self
     }
 
@@ -108,6 +117,7 @@ fn build(options: &DeviceOptions) -> Result<Built, Error> {
         Creation {
             debug: options.debug_layer,
             single_threaded: options.single_threaded,
+            prevent_internal_threading: options.prevent_internal_threading,
         },
     )?;
     stages.mark("    select_device");

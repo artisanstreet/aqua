@@ -54,6 +54,29 @@ fn empty_store_uploads_nothing() {
     assert!(store.uploads().textures.is_empty());
 }
 
+#[test]
+fn clearing_keeps_the_gpu_texture_and_rewrites_it_in_place() {
+    use aqua_protocol::TextureOp;
+    let glyph = SlugGlyph::from_path(&rounded_blob()).expect("outline");
+    let mut store: SlugStore<u32> = SlugStore::with_budget(1 << 20);
+    store.insert(1, &glyph);
+    let first = store.uploads();
+    assert!(first
+        .textures
+        .iter()
+        .any(|upload| matches!(upload.op, TextureOp::Create { .. })));
+    store.clear();
+    assert!(store.is_empty());
+    assert!(store.uploads().textures.is_empty());
+    store.insert(2, &glyph);
+    let second = store.uploads();
+    assert!(second
+        .textures
+        .iter()
+        .all(|upload| matches!(upload.op, TextureOp::Write { .. })));
+    assert!(!second.textures.is_empty());
+}
+
 #[cfg(windows)]
 mod fonts {
     use super::*;

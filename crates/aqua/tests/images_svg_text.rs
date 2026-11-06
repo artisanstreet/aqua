@@ -50,7 +50,13 @@ fn show(assets: ImageAssets, fonts: &SharedFonts, runs: &SharedRuns) -> Vec<Show
             assert_eq!(uploaded.len(), 1);
             let mut uploaded_ink = 0;
             for image in uploaded {
-                uploaded_ink = image.rgba.as_chunks::<4>().0.iter().filter(|p| p[3] > 32).count();
+                uploaded_ink = image
+                    .rgba
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|p| p[3] > 32)
+                    .count();
                 renderer.register_image(image.layer, image.width, image.height, &image.rgba);
             }
             let frame = renderer.paint(app.ui_mut().scene_mut(), Size::new(96.0, 32.0), 1.0);
@@ -74,8 +80,16 @@ fn svg_text_is_outlined_on_the_decode_worker_and_reaches_every_renderer() {
     let shown = show(assets, &fonts, &runs);
     assert!(shown.len() > 1, "no D3D12 adapter available");
     for each in &shown {
-        assert!(each.uploaded_ink > 120, "uploaded ink {}", each.uploaded_ink);
-        assert!(each.painted_ink > 80, "painted red ink {}", each.painted_ink);
+        assert!(
+            each.uploaded_ink > 120,
+            "uploaded ink {}",
+            each.uploaded_ink
+        );
+        assert!(
+            each.painted_ink > 80,
+            "painted red ink {}",
+            each.painted_ink
+        );
     }
 }
 

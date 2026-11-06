@@ -304,6 +304,15 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
         self.overruns
     }
 
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.warmed.clear();
+        self.texels = Vec::new();
+        self.free = Vec::new();
+        self.dirty = None;
+        self.revision = 0;
+    }
+
     pub fn reset(&mut self) {
         self.entries.clear();
         self.warmed.clear();
@@ -444,7 +453,7 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
         }
         let needed_rows = self.texels.len().div_ceil(ROW_TEXELS) as u32;
         let wanted_rows = needed_rows.max(MIN_STORE_ROWS).next_power_of_two();
-        let shrink = self.created && wanted_rows * 4 <= self.rows;
+        let shrink = self.created && !self.texels.is_empty() && wanted_rows * 4 <= self.rows;
         let recreate = !self.created || needed_rows > self.rows || shrink;
         let mut textures = Vec::new();
         let rows_range = match recreate {
@@ -520,7 +529,7 @@ impl SlugStore<SlugKey> {
         key: &RasterKey,
     ) -> StoreLookup {
         if self.revision != fonts.font_revision() {
-            self.reset();
+            self.clear();
             self.revision = fonts.font_revision();
         }
         let slug_key = SlugKey::of(key);

@@ -195,7 +195,10 @@ impl Probe {
                         }
                         false => self.finish(
                             ctx,
-                            Err(format!("sustained pressure trimmed {} times", trims - before)),
+                            Err(format!(
+                                "sustained pressure trimmed {} times",
+                                trims - before
+                            )),
                         ),
                     }
                 } else if waited(since) > Duration::from_secs(12) {

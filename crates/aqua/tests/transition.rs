@@ -69,14 +69,29 @@ fn a_snapshot_transition_starts_on_the_old_frame_sweeps_diagonally_and_ends_on_t
 
         let first = painter.paint_at(&blue, SIZE, 1.0, at(10.0));
         assert!(painter.report.shimmering, "{label}");
-        assert!(is(first.pixel(4, 4), [255, 0, 0]), "{label}: {:?}", first.pixel(4, 4));
+        assert!(
+            is(first.pixel(4, 4), [255, 0, 0]),
+            "{label}: {:?}",
+            first.pixel(4, 4)
+        );
         assert!(is(first.pixel(120, 120), [255, 0, 0]), "{label}");
 
         let mid = painter.paint_at(&blue, SIZE, 1.0, at(10.5));
-        assert!(is(mid.pixel(4, 4), [0, 0, 255]), "{label}: {:?}", mid.pixel(4, 4));
-        assert!(is(mid.pixel(124, 124), [255, 0, 0]), "{label}: {:?}", mid.pixel(124, 124));
+        assert!(
+            is(mid.pixel(4, 4), [0, 0, 255]),
+            "{label}: {:?}",
+            mid.pixel(4, 4)
+        );
+        assert!(
+            is(mid.pixel(124, 124), [255, 0, 0]),
+            "{label}: {:?}",
+            mid.pixel(124, 124)
+        );
         let seam = mid.pixel(64, 64);
-        assert!(seam[0] > 20 && seam[2] > 20, "{label}: blended seam {seam:?}");
+        assert!(
+            seam[0] > 20 && seam[2] > 20,
+            "{label}: blended seam {seam:?}"
+        );
         mid_frames.push((label.clone(), mid));
 
         let done = painter.paint_at(&blue, SIZE, 1.0, at(11.0));
@@ -108,7 +123,10 @@ fn the_shimmer_tint_peaks_at_the_sweep_edge() {
         painter.paint_at(&blue, SIZE, 1.0, at(1.0));
         let mid = painter.paint_at(&blue, SIZE, 1.0, at(1.5));
         let seam = mid.pixel(64, 64);
-        assert!(seam[0] > 235 && seam[1] > 235 && seam[2] > 235, "{label}: {seam:?}");
+        assert!(
+            seam[0] > 235 && seam[1] > 235 && seam[2] > 235,
+            "{label}: {seam:?}"
+        );
         assert!(is(mid.pixel(4, 4), [0, 0, 255]), "{label}");
     }
 }
@@ -119,10 +137,11 @@ fn the_eased_sweep_is_slower_than_linear_at_the_start_and_lands_exactly() {
     let soft = settings(Sweep::Soft, 0.0);
     let early = Duration::from_millis(200);
     assert!(aqua::render::transition::progress(&eased, early) < 0.2);
-    assert!(
-        (aqua::render::transition::progress(&soft, early) - 0.2).abs() < 1.0e-6
+    assert!((aqua::render::transition::progress(&soft, early) - 0.2).abs() < 1.0e-6);
+    assert_eq!(
+        aqua::render::transition::progress(&eased, Duration::from_secs(2)),
+        1.0
     );
-    assert_eq!(aqua::render::transition::progress(&eased, Duration::from_secs(2)), 1.0);
     let steps: Vec<f32> = (0..=20)
         .map(|i| aqua::render::transition::progress(&eased, Duration::from_millis(i * 50)))
         .collect();

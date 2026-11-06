@@ -64,7 +64,11 @@ fn consecutive_moves_keep_only_the_latest_position() {
 #[test]
 fn moves_are_not_merged_across_button_changes_contacts_or_windows() {
     let held = motion(1, 0, 0, 3.0);
-    for next in [motion(1, 0, 1, 4.0), motion(1, 7, 0, 4.0), motion(2, 0, 0, 4.0)] {
+    for next in [
+        motion(1, 0, 1, 4.0),
+        motion(1, 7, 0, 4.0),
+        motion(2, 0, 0, 4.0),
+    ] {
         assert_eq!(merge(held, next), Merge::Split(held, next));
     }
 }

@@ -203,11 +203,9 @@ fn pending_content_is_repainted_until_it_settles() {
         "items that were pending need a full repaint"
     );
     let frames = probe.frames.lock().unwrap().clone();
-    assert!(
-        frames[base as usize..]
-            .windows(2)
-            .all(|pair| pair[0] == pair[1])
-    );
+    assert!(frames[base as usize..]
+        .windows(2)
+        .all(|pair| pair[0] == pair[1]));
 }
 
 #[test]

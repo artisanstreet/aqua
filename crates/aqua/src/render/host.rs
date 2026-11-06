@@ -14,6 +14,7 @@ use aqua_transport::{
     GpuRenderHost, HostConfig, HostCounters, Inspector, MonotonicClock, RenderHost,
 };
 
+use super::cadence::Cadence;
 use super::damage::{DamagePlanner, Plan};
 use super::link::ExternalUpdate;
 use super::lower::Lowering;
@@ -71,6 +72,7 @@ pub struct RenderStats {
     pub commands: AtomicU64,
     pub glyphs: AtomicU64,
     pub immediate: std::sync::atomic::AtomicBool,
+    pub glide: std::sync::atomic::AtomicBool,
     pub trim: std::sync::atomic::AtomicBool,
     pub gpu_ns: AtomicU64,
     pub waits: AtomicU64,
@@ -124,6 +126,7 @@ type Maintenance<B> = Box<dyn FnMut(&mut B)>;
 type Release<B> = Box<dyn FnMut(&mut B)>;
 type Pressure<B> = Box<dyn FnMut(&mut B) -> bool>;
 type Visibility<B> = Box<dyn FnMut(&mut B, bool) -> bool>;
+type HalfRate<B> = Box<dyn FnMut(&mut B, SurfaceId, bool)>;
 
 struct DamageStage {
     planner: DamagePlanner,
@@ -141,6 +144,9 @@ pub struct GpuFrames<B: GpuBackend<Error = GpuError> + 'static> {
     pressure: Option<Pressure<B>>,
     probe: Option<RepaintProbe<B>>,
     visibility: Option<Visibility<B>>,
+    half_rate: Option<HalfRate<B>>,
+    cadence: Cadence,
+    halved: bool,
     since_maintenance: u64,
     counted: HostCounters,
     damage: Option<DamageStage>,
@@ -175,6 +181,9 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
             pressure: None,
             probe: None,
             visibility: None,
+            half_rate: None,
+            cadence: Cadence::new(),
+            halved: false,
             since_maintenance: 0,
             counted: HostCounters::default(),
             damage: None,
@@ -229,6 +238,14 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
         visibility: impl FnMut(&mut B, bool) -> bool + 'static,
     ) -> Self {
         self.visibility = Some(Box::new(visibility));
+        self
+    }
+
+    pub fn with_half_rate(
+        mut self,
+        half_rate: impl FnMut(&mut B, SurfaceId, bool) + 'static,
+    ) -> Self {
+        self.half_rate = Some(Box::new(half_rate));
         self
     }
 
@@ -399,6 +416,16 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
             false => self.hint,
         };
         self.host.set_present(hint);
+        let half = hint == PresentHint::Vsync
+            && self
+                .cadence
+                .half_rate(self.stats.glide.load(Ordering::Relaxed));
+        if half != self.halved {
+            if let Some(set) = self.half_rate.as_mut() {
+                set(self.host.backend_mut(), self.surface, half);
+            }
+            self.halved = half;
+        }
         let idle = self.stats.trim.swap(false, Ordering::AcqRel);
         if idle {
             self.host.trim_handle().request();
@@ -411,6 +438,12 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
         self.stage_damage(side);
         crate::profile::note(|| format!("damage_us={}", staging.elapsed().as_micros()));
         let feedback = self.host.execute(side, frame);
+        if feedback
+            .iter()
+            .any(|item| matches!(item, Feedback::Presented(_)))
+        {
+            self.cadence.observe(WallInstant::now(), half);
+        }
         if idle {
             if let Some(release) = self.idle_release.as_mut() {
                 release(self.host.backend_mut());

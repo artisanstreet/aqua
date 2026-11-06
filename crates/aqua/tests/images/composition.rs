@@ -1,5 +1,5 @@
 use aqua::images::DecodedImage;
-use aqua::{ImageAssets, Instant, ManagedUiApp, Style, UiApp, px, ui};
+use aqua::{px, ui, ImageAssets, Instant, ManagedUiApp, Style, UiApp};
 use aqua_core::{Rect, Size};
 use aqua_text::{SharedFonts, SharedRuns};
 

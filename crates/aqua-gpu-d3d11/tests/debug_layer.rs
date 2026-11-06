@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 
 use aqua_gpu_d3d11::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
-use aqua_gpu_ref::conformance::{Session, cases};
+use aqua_gpu_ref::conformance::{cases, Session};
 
 static SERIAL: Mutex<()> = Mutex::new(());
 

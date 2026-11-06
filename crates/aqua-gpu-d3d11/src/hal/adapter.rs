@@ -103,6 +103,7 @@ fn create(adapter: &IDXGIAdapter1, flags: D3D11_CREATE_DEVICE_FLAG) -> Result<Op
 pub struct Creation {
     pub debug: bool,
     pub single_threaded: bool,
+    pub prevent_internal_threading: bool,
 }
 
 fn open_device(adapter: &IDXGIAdapter1, creation: Creation) -> Result<Opened, Error> {
@@ -111,9 +112,9 @@ fn open_device(adapter: &IDXGIAdapter1, creation: Creation) -> Result<Opened, Er
         true => D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_SINGLETHREADED,
         false => D3D11_CREATE_DEVICE_BGRA_SUPPORT,
     };
-    let base = match std::env::var("AQUA_D3D11_PREVENT_THREADING").as_deref() {
-        Ok("1") => base | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
-        _ => base,
+    let base = match creation.prevent_internal_threading {
+        true => base | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
+        false => base,
     };
     match debug {
         false => create(adapter, base),

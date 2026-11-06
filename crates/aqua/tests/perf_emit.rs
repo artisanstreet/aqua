@@ -3,12 +3,12 @@ use std::time::Instant as WallInstant;
 use aqua::render::damage::DamagePlanner;
 use aqua::render::lower::Lowering;
 use aqua_core::{Oklch, Point, Size};
-use aqua_graph::{Extent, PaintCommand, PlanLimits, plan_paint_with};
+use aqua_graph::{plan_paint_with, Extent, PaintCommand, PlanLimits};
 use aqua_protocol::Instant;
 use aqua_runtime::Runtime;
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::element::ui::{Box as UiBox, Scroll as UiScroll, Text as UiText};
-use aqua_ui::style::{Axis, Style, px};
+use aqua_ui::style::{px, Axis, Style};
 use aqua_ui::tree::NodeKind;
 
 const PARAGRAPH: &str = "Aqua keeps retained text, layout and scene state between frames so that an unchanged transcript costs nothing, while a streaming message only reshapes the run that changed.";

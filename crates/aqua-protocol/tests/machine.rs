@@ -1,5 +1,5 @@
 use aqua_protocol::{
-    Feedback, GpuEvent, Instant, Machine, Recorder, RuntimeOutput, first_divergence, replay,
+    first_divergence, replay, Feedback, GpuEvent, Instant, Machine, Recorder, RuntimeOutput,
 };
 
 struct Accumulator {

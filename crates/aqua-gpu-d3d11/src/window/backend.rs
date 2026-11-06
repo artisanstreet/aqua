@@ -132,6 +132,7 @@ struct WindowSurface {
     pacer: Pacer,
     last_present: Option<Instant>,
     monitor: isize,
+    half_rate: bool,
 }
 
 struct Handoff<T>(T);
@@ -250,6 +251,7 @@ fn new_surface(
         pacer: Pacer::new(timing::monitor_interval(monitor)),
         last_present: None,
         monitor,
+        half_rate: false,
     })
 }
 
@@ -443,6 +445,12 @@ impl WindowBackend {
         let core = self.core.as_mut().ok_or_else(no_device)?;
         let trim = core.trim(trim)?;
         self.release(&trim)
+    }
+
+    pub fn set_half_rate(&mut self, surface: SurfaceId, half_rate: bool) {
+        if let Some(entry) = self.surfaces.get_mut(&surface) {
+            entry.half_rate = half_rate;
+        }
     }
 
     pub fn set_visibility(&mut self, visibility: Visibility) -> Result<Trim, GpuError> {
@@ -792,6 +800,7 @@ impl WindowBackend {
         };
         let mode = match hint {
             PresentHint::Immediate => PresentMode::Immediate,
+            PresentHint::Vsync if entry.half_rate => PresentMode::HalfVsync,
             PresentHint::Vsync => PresentMode::Vsync,
         };
         let damage = match entry.damage.has_presented() {

@@ -251,7 +251,8 @@ impl AppCtx<'_> {
 
     #[track_caller]
     pub fn request_frame(&mut self, id: AquaWindowId, reason: FrameReason) {
-        if std::env::var_os("AQUA_TRACE_REQ").is_some() {
+        static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *TRACE.get_or_init(|| std::env::var_os("AQUA_TRACE_REQ").is_some()) {
             eprintln!("req-frame {} {:?}", std::panic::Location::caller(), reason);
         }
         self.requested_frames.insert(id);
@@ -935,6 +936,7 @@ impl Aqua {
             | WindowRequest::SetBadge(id, _)
             | WindowRequest::SetMaxFrameRate(id, _)
             | WindowRequest::SetVsync(id, _)
+            | WindowRequest::SetGlideCadence(id, _)
             | WindowRequest::SetOuterPosition(id, _)
             | WindowRequest::Center(id)
             | WindowRequest::BeginSnapshotTransition(id, _)
@@ -989,6 +991,15 @@ impl Aqua {
             WindowRequest::SetMaxFrameRate(_, target) => {
                 self.scheduler.set_window_fps_target(id, *target);
                 self.scheduler.request_frame(id, FrameReason::EXPLICIT);
+            }
+            WindowRequest::SetGlideCadence(_, gliding) => {
+                if let Some(link) = self
+                    .windows
+                    .get(&id)
+                    .and_then(|record| record.link.as_ref())
+                {
+                    link.set_glide(*gliding);
+                }
             }
             WindowRequest::SetVsync(_, enabled) => {
                 if let Some(record) = self.windows.get_mut(&id) {

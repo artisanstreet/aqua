@@ -1,4 +1,5 @@
 pub mod affine;
+pub mod cadence;
 pub mod color;
 pub mod cull;
 pub mod damage;

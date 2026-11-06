@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use aqua_core::{ImageId, ImageRef, RawId};
-use aqua_media::decode::animation::{AnimationBudget, DecodedAnimation, decode_animation};
+use aqua_media::decode::animation::{decode_animation, AnimationBudget, DecodedAnimation};
 
 static NEXT_IMAGE_INDEX: AtomicU32 = AtomicU32::new(0x8000_0000);
 
@@ -569,71 +569,67 @@ fn spawn_worker(shared: &Arc<Mutex<State>>) {
     let weak = Arc::downgrade(shared);
     let worker = std::thread::Builder::new()
         .name("aqua-image-decode".into())
-        .spawn(move || {
-            loop {
-                let (job, budget, fonts) = {
-                    let Some(shared) = weak.upgrade() else {
-                        return;
-                    };
-                    let mut state = lock(&shared);
-                    let Some(job) = state.queue.pop_front() else {
-                        state.stats.workers -= 1;
-                        return;
-                    };
-                    (job, state.budget.decoded_bytes, state.fonts.clone())
+        .spawn(move || loop {
+            let (job, budget, fonts) = {
+                let Some(shared) = weak.upgrade() else {
+                    return;
                 };
-                #[cfg(test)]
-                let callback = DECODE_STARTED
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .clone();
-                #[cfg(test)]
-                if let Some(callback) = callback {
-                    callback(job.id);
-                }
-                let result = if job.preview && job.encoded.len() > 32 * 1024 * 1024 {
-                    Err(ImageAssetError::Decode(
-                        "image source exceeds 32 MiB".into(),
-                    ))
-                } else if aqua_media::decode::is_svg(&job.encoded) {
-                    let source = match &fonts {
-                        Some(fonts) => {
-                            aqua_text::svg::outline_text(&job.encoded, &mut fonts.lock())
-                        }
-                        None => std::borrow::Cow::Borrowed(&job.encoded[..]),
-                    };
-                    aqua_media::decode::decode_svg(&source, budget)
-                        .map(|image| Data::Still(Arc::new(image)))
-                        .map_err(|error| ImageAssetError::Decode(error.to_string()))
-                } else if job.preview && !aqua_media::decode::is_gif(&job.encoded) {
-                    aqua_media::decode::decode_preview_still(&job.encoded, budget)
-                        .map(|image| Data::Still(Arc::new(image)))
-                        .map_err(|error| ImageAssetError::Decode(error.to_string()))
+                let mut state = lock(&shared);
+                let Some(job) = state.queue.pop_front() else {
+                    state.stats.workers -= 1;
+                    return;
+                };
+                (job, state.budget.decoded_bytes, state.fonts.clone())
+            };
+            #[cfg(test)]
+            let callback = DECODE_STARTED
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+            #[cfg(test)]
+            if let Some(callback) = callback {
+                callback(job.id);
+            }
+            let result = if job.preview && job.encoded.len() > 32 * 1024 * 1024 {
+                Err(ImageAssetError::Decode(
+                    "image source exceeds 32 MiB".into(),
+                ))
+            } else if aqua_media::decode::is_svg(&job.encoded) {
+                let source = match &fonts {
+                    Some(fonts) => aqua_text::svg::outline_text(&job.encoded, &mut fonts.lock()),
+                    None => std::borrow::Cow::Borrowed(&job.encoded[..]),
+                };
+                aqua_media::decode::decode_svg(&source, budget)
+                    .map(|image| Data::Still(Arc::new(image)))
+                    .map_err(|error| ImageAssetError::Decode(error.to_string()))
+            } else if job.preview && !aqua_media::decode::is_gif(&job.encoded) {
+                aqua_media::decode::decode_preview_still(&job.encoded, budget)
+                    .map(|image| Data::Still(Arc::new(image)))
+                    .map_err(|error| ImageAssetError::Decode(error.to_string()))
+            } else {
+                let result = if job.preview {
+                    aqua_media::decode::animation::decode_preview_gif(&job.encoded, budget)
                 } else {
-                    let result = if job.preview {
-                        aqua_media::decode::animation::decode_preview_gif(&job.encoded, budget)
-                    } else {
-                        decode_animation(
-                            &job.encoded,
-                            AnimationBudget {
-                                max_bytes: budget.min(64 * 1024 * 1024),
-                                ..Default::default()
-                            },
-                        )
-                    };
-                    result
-                        .map(|animation| {
-                            if animation.frames().len() == 1 {
-                                Data::Still(Arc::new(animation.frames()[0].image.clone()))
-                            } else {
-                                Data::Animation(Arc::new(animation))
-                            }
-                        })
-                        .map_err(|error| ImageAssetError::Decode(error.to_string()))
+                    decode_animation(
+                        &job.encoded,
+                        AnimationBudget {
+                            max_bytes: budget.min(64 * 1024 * 1024),
+                            ..Default::default()
+                        },
+                    )
                 };
-                if let Some(shared) = weak.upgrade() {
-                    complete(&shared, job.id, job.encoded, result);
-                }
+                result
+                    .map(|animation| {
+                        if animation.frames().len() == 1 {
+                            Data::Still(Arc::new(animation.frames()[0].image.clone()))
+                        } else {
+                            Data::Animation(Arc::new(animation))
+                        }
+                    })
+                    .map_err(|error| ImageAssetError::Decode(error.to_string()))
+            };
+            if let Some(shared) = weak.upgrade() {
+                complete(&shared, job.id, job.encoded, result);
             }
         });
     if let Err(error) = worker {

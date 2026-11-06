@@ -2,16 +2,16 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
+use aqua_core::Oklch;
 use aqua_gpu_d3d11::hal::DeviceOptions;
 use aqua_gpu_d3d11::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
 use aqua_gpu_d3d11::window::{WindowBackend, WindowOptions};
-use aqua_gpu_ref::conformance::{Case, Session, cases};
-use aqua_graph::{Extent, PaintCommand, Quad, plan_paint};
+use aqua_gpu_ref::conformance::{cases, Case, Session};
+use aqua_graph::{plan_paint, Extent, PaintCommand, Quad};
 use aqua_protocol::{FrameInputs, GpuBackend, NativeSurface, PresentHint, SurfaceTarget, WindowId};
 
 #[allow(dead_code)]

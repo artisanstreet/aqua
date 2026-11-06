@@ -2798,7 +2798,7 @@ impl aqua_transport::Lowering for Lowering {
             TrimRequest::Everything => {
                 self.spans.clear();
                 self.slug_generation += 1;
-                self.slug_store.reset();
+                self.slug_store.clear();
                 self.slug_cache.clear();
                 self.residency.trim_idle(0)
             }

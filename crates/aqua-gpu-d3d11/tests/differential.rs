@@ -3,9 +3,9 @@
 mod support;
 
 use aqua_gpu_d3d11::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
+use aqua_gpu_ref::conformance::{compare, Comparison, Session, Tolerance};
 use aqua_gpu_ref::RefBackend;
-use aqua_gpu_ref::conformance::{Comparison, Session, Tolerance, compare};
-use aqua_verify::differential::{VARIANTS, scenes, variant_case};
+use aqua_verify::differential::{scenes, variant_case, VARIANTS};
 
 const SEED: u64 = 0xD3D1_2D1F;
 

@@ -20,7 +20,7 @@ use aqua_shell_win32::{
 };
 
 use super::gpu;
-use super::hook::TsfHook;
+use super::hook::{TsfHook, UiaHook};
 use super::inspector::HostInspector;
 use super::wakes::{self, WakeLedger};
 use super::window::{UiaSink, Win32Window};
@@ -166,10 +166,11 @@ impl<A: Application + 'static> Host<A> {
             inbox.post(AquaUserEvent::A11yActions(id));
         });
         super::startup_mark("uia_begin");
-        let attached = UiaAdapter::attach(id.raw() as isize, wake);
+        let attached = UiaAdapter::attach_routed(id.raw() as isize, wake);
         super::startup_mark("uia_done");
         match attached {
-            Ok(adapter) => {
+            Ok((adapter, router)) => {
+                aqua_shell_win32::add_message_hook(UiaHook::new(id.raw() as isize, router));
                 let now = self.aqua.clock();
                 if let Some(deadline) = self.app.prepare_accessibility(&observed, now) {
                     self.aqua.scheduler.request_animation_deadline(id, deadline);

@@ -2,10 +2,10 @@ use std::ffi::c_void;
 use std::mem::size_of;
 
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentThread, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+    GetCurrentProcess, GetCurrentThread, ProcessPowerThrottling, SetProcessInformation,
+    SetThreadPriority, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
     PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,
-    PROCESS_POWER_THROTTLING_STATE, ProcessPowerThrottling, SetProcessInformation,
-    SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+    PROCESS_POWER_THROTTLING_STATE, THREAD_PRIORITY_ABOVE_NORMAL,
 };
 
 pub fn opt_out_of_throttling() {

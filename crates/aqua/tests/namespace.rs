@@ -1,9 +1,9 @@
 use aqua::render::namespace::{
-    NAMESPACE_LIMIT, NAMESPACE_SHIFT, Namespaces, namespace_plan, namespace_uploads,
+    namespace_plan, namespace_uploads, Namespaces, NAMESPACE_LIMIT, NAMESPACE_SHIFT,
 };
 use aqua_core::{Oklch, Rect};
 use aqua_graph::{
-    Extent, Glyph, GlyphRun, Image, PaintCommand, PassKind, TextureHandle, TextureRef, plan_paint,
+    plan_paint, Extent, Glyph, GlyphRun, Image, PaintCommand, PassKind, TextureHandle, TextureRef,
 };
 use aqua_protocol::{TextureOp, TextureUpload, UploadBatch};
 

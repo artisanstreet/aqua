@@ -102,6 +102,12 @@ impl RenderLink {
             .store(immediate, std::sync::atomic::Ordering::Relaxed);
     }
 
+    pub fn set_glide(&self, gliding: bool) {
+        self.stats
+            .glide
+            .store(gliding, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn request_trim(&self) {
         self.stats
             .trim

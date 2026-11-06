@@ -19,3 +19,29 @@ impl MessageHook for TsfHook {
             .pre_translate(message.message, message.wparam, message.lparam)
     }
 }
+
+pub struct UiaHook {
+    hwnd: isize,
+    router: aqua_a11y_uia::UiaRouter,
+}
+
+impl UiaHook {
+    pub fn new(hwnd: isize, router: aqua_a11y_uia::UiaRouter) -> Self {
+        Self { hwnd, router }
+    }
+}
+
+impl MessageHook for UiaHook {
+    fn window_message(&mut self, message: &RawMessage) -> Option<isize> {
+        match message.hwnd == self.hwnd {
+            true => self
+                .router
+                .handle(message.message, message.wparam, message.lparam),
+            false => None,
+        }
+    }
+
+    fn retired(&self) -> bool {
+        self.router.retired()
+    }
+}

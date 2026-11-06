@@ -38,11 +38,17 @@ pub struct PersistentTextures {
     reused: u64,
 }
 
-fn texture_label(format: TextureFormat) -> &'static str {
-    match format {
-        TextureFormat::R8Unorm => "persistent_r8",
-        TextureFormat::Rgba8Unorm => "persistent_rgba8",
-        _ => "persistent_other",
+const SMALL_PAGE_BYTES: u64 = 512 * 1024;
+
+fn texture_label(extent: Extent, format: TextureFormat) -> &'static str {
+    let large = texture_bytes(extent, format) > SMALL_PAGE_BYTES;
+    match (format, large) {
+        (TextureFormat::R8Unorm, false) => "persistent_r8_small",
+        (TextureFormat::R8Unorm, true) => "persistent_r8_page",
+        (TextureFormat::Rgba8Unorm, false) => "persistent_rgba8_small",
+        (TextureFormat::Rgba8Unorm, true) => "persistent_rgba8_page",
+        (_, false) => "persistent_other_small",
+        (_, true) => "persistent_other_page",
     }
 }
 
@@ -114,10 +120,18 @@ impl PersistentTextures {
     fn reuse(
         &mut self,
         context: &ID3D11DeviceContext1,
+        handle: TextureHandle,
         extent: Extent,
         format: TextureFormat,
     ) -> Option<Entry> {
-        let entry = self.pool.take(&(extent, format))?;
+        let in_place = self
+            .entries
+            .get(&handle)
+            .is_some_and(|entry| entry.extent == extent && entry.format == format);
+        let entry = match in_place {
+            true => self.entries.remove(&handle)?,
+            false => self.pool.take(&(extent, format))?,
+        };
         let pitch = extent.width as u64 * format.bytes_per_texel();
         let zeros = vec![0u8; (pitch * extent.height as u64) as usize];
         unsafe {
@@ -146,7 +160,7 @@ impl PersistentTextures {
         if extent.width == 0 || extent.height == 0 {
             return Err(Error::Texture("persistent texture has an empty extent"));
         }
-        if let Some(entry) = self.reuse(context, extent, format) {
+        if let Some(entry) = self.reuse(context, handle, extent, format) {
             if let Some(replaced) = self.entries.insert(handle, entry) {
                 self.retire(replaced);
             }
@@ -186,7 +200,7 @@ impl PersistentTextures {
                 format,
                 extent,
                 _token: record(
-                    texture_label(format),
+                    texture_label(extent, format),
                     LedgerKind::Texture,
                     texture_bytes(extent, format),
                 ),

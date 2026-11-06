@@ -185,6 +185,7 @@ impl Gpu {
         let creation = crate::hal::Creation {
             debug,
             single_threaded: false,
+            prevent_internal_threading: false,
         };
         let selected = crate::hal::select_adapter(&factory, preference, creation)?;
         let mut renderer = SceneRenderer::new(&selected.device, cache, options)?;

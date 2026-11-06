@@ -301,6 +301,16 @@ impl WindowHandle {
         });
     }
 
+    fn set_half_rate(&self, surface: SurfaceId, half_rate: bool) {
+        #[cfg(not(feature = "d3d12"))]
+        self.hub
+            .backend
+            .borrow_mut()
+            .set_half_rate(surface, half_rate);
+        #[cfg(feature = "d3d12")]
+        let _ = (surface, half_rate);
+    }
+
     fn set_hidden(&self, hidden: bool) -> bool {
         let all_hidden = {
             let mut set = self.hub.hidden.borrow_mut();
@@ -660,6 +670,9 @@ pub fn factory(
                 .with_idle_release(|backend: &mut WindowHandle| backend.release_idle())
                 .with_pressure(|backend: &mut WindowHandle| backend.service_budget())
                 .with_visibility(|backend: &mut WindowHandle, hidden| backend.set_hidden(hidden))
+                .with_half_rate(|backend: &mut WindowHandle, surface, half| {
+                    backend.set_half_rate(surface, half)
+                })
                 .with_maintenance(move |backend: &mut WindowHandle| {
                     backend.settle_surfaces();
                     saver.save(backend.pipeline_cache());

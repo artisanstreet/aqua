@@ -1,5 +1,7 @@
 #[path = "render/animation.rs"]
 mod animation;
+#[path = "render/cadence.rs"]
+mod cadence;
 #[path = "render/color.rs"]
 mod color;
 #[path = "render/cull.rs"]

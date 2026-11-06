@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use aqua_protocol::{
-    ImeEvent, Instant, Machine, Pace, RuntimeInput, RuntimeOutput, ShellEvent, Timeline, Utf16Range,
-    WindowId,
+    ImeEvent, Instant, Machine, Pace, RuntimeInput, RuntimeOutput, ShellEvent, Timeline,
+    Utf16Range, WindowId,
 };
 
 #[derive(Default)]
@@ -110,7 +110,10 @@ fn seeking_back_rebuilds_the_machine_and_seeking_forward_replays_the_recording()
     }
     assert_eq!(line.machine().ticks.len(), 10);
     line.seek(ms(40));
-    assert_eq!(line.machine().ticks, vec![0, 10_000_000, 20_000_000, 30_000_000, 40_000_000]);
+    assert_eq!(
+        line.machine().ticks,
+        vec![0, 10_000_000, 20_000_000, 30_000_000, 40_000_000]
+    );
     assert_eq!(line.machine().ime, 5);
     assert_eq!(line.now(), ms(40));
     line.seek(ms(90));

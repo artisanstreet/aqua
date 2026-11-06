@@ -190,11 +190,9 @@ fn moving_a_group_damages_both_extents() {
     let Plan::Regions(regions) = plan else {
         panic!("group move should stay partial");
     };
-    assert!(
-        regions
-            .iter()
-            .all(|r| !(r.x < 300.0 && r.right() > 300.0 && r.y < 200.0 && r.bottom() > 200.0))
-    );
+    assert!(regions
+        .iter()
+        .all(|r| !(r.x < 300.0 && r.right() > 300.0 && r.y < 200.0 && r.bottom() > 200.0)));
 }
 
 fn blur_at(x: f32, y: f32) -> DisplayItem {
@@ -283,11 +281,9 @@ fn a_pulsing_quad_damages_only_its_own_footprint_every_frame() {
     ));
     let area: f32 = regions.iter().map(|r| r.w * r.h).sum();
     assert!(area < 40.0 * 40.0, "{area}");
-    assert!(
-        regions
-            .iter()
-            .all(|r| !(r.x < 100.0 && r.right() > 100.0 && r.y < 50.0 && r.bottom() > 50.0))
-    );
+    assert!(regions
+        .iter()
+        .all(|r| !(r.x < 100.0 && r.right() > 100.0 && r.y < 50.0 && r.bottom() > 50.0)));
 }
 
 #[test]
@@ -332,11 +328,9 @@ fn a_pulse_behind_a_blur_repaints_the_whole_blur_zone_and_nothing_far_from_it() 
     let Plan::Regions(regions) = &plan else {
         panic!("expected regions, got {plan:?}")
     };
-    assert!(
-        regions
-            .iter()
-            .all(|r| !(r.x < 100.0 && r.right() > 100.0 && r.y < 50.0 && r.bottom() > 50.0))
-    );
+    assert!(regions
+        .iter()
+        .all(|r| !(r.x < 100.0 && r.right() > 100.0 && r.y < 50.0 && r.bottom() > 50.0)));
 }
 
 #[test]
@@ -363,7 +357,7 @@ mod differential {
     use aqua_core::geometry::Transform2D;
     use aqua_core::{DisplayItem, NodeId, Oklch, Rect, Size};
     use aqua_gpu_ref::RefBackend;
-    use aqua_graph::{Extent, plan_paint};
+    use aqua_graph::{plan_paint, Extent};
     use aqua_protocol::{FrameInputs, GpuBackend, GpuReadback, PresentHint, SurfaceTarget};
     use aqua_scene::Scene;
     use aqua_text::SharedRuns;

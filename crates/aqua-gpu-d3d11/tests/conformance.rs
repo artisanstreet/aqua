@@ -3,8 +3,8 @@
 mod support;
 
 use aqua_gpu_d3d11::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat};
+use aqua_gpu_ref::conformance::{run_suite, SuiteConfig, Tolerance};
 use aqua_gpu_ref::RefBackend;
-use aqua_gpu_ref::conformance::{SuiteConfig, Tolerance, run_suite};
 
 fn fuzz_count() -> usize {
     std::env::var("AQUA_CONFORMANCE_FUZZ")

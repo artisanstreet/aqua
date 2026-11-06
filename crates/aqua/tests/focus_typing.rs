@@ -35,7 +35,9 @@ fn characters_typed_one_by_one_into_a_field_whose_focus_rebuilds_the_view_arrive
                 Aqua::Text("")
                     .bind((draft_r.clone(), draft_w.clone()))
                     .placeholder("New task")
-                    .on_focus(move |value| { focus_write.set_if_changed(value); })
+                    .on_focus(move |value| {
+                        focus_write.set_if_changed(value);
+                    })
                     .build(),
             )
             .build()

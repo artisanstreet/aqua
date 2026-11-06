@@ -80,15 +80,6 @@ impl From<LowerError> for MountError {
     }
 }
 
-/// Scope-owned view over one [`UiTree`]. One view per tree root: `traverse`
-/// (used for binding bookkeeping) covers the whole tree.
-///
-/// Every bound node gets a **child scope** owning exactly that node's
-/// effects. Removing a subtree disposes its scopes (no leaked
-/// subscriptions); reusing a node id with different sources disposes the
-/// stale scope and re-attaches (no duplicates, no clobbering). Always finish
-/// with [`View::dispose`]: dropping the view does not dispose scopes
-/// (reactive ownership is explicit).
 pub struct View {
     scope: Scope,
     sink: CommandSink,
@@ -1944,17 +1935,6 @@ fn into_single(mut specs: Vec<NodeSpec>) -> NodeSpec {
     specs.pop().unwrap()
 }
 
-/// Bind `el` (and its subtree) to `id`, applying each binding once per
-/// source identity. Fresh ids bind under a new child scope; reused ids keep
-/// their effects while the sources are identical, otherwise the stale child
-/// scope is disposed (old sources stop) and bindings re-attach — the node
-/// id, focus, and caret survive. Non-effect bindings (actions, focus,
-/// painters) re-apply idempotently every pass.
-///
-/// Collection elements route to the window driver instead: their children
-/// are realized (not lowered from stored parts), so the normal child-count
-/// assert is skipped for them and no bindings are taken here. Row/header
-/// descriptors are bound by the driver from retained fresh builds.
 #[allow(clippy::too_many_arguments)]
 fn bind_new(
     scope: &Scope,
@@ -1966,8 +1946,6 @@ fn bind_new(
     el: &mut Element,
     inherited: &TypoChain,
 ) -> Result<(), MountError> {
-    // Effective chain at this position, exactly as normative lowering
-    // composes it (parent chain plus this element's explicit overrides).
     let local_typography = el.typo_chain();
     let own = inherited.child(&local_typography);
     if el.is_collection() {
@@ -2005,27 +1983,32 @@ fn bind_new(
             .get(&id.raw())
             .map(|s| s.effects == keys)
             .unwrap_or(false);
-    if same {
-        // Sources unchanged: effects already live; re-apply only the
-        // idempotent non-effect bindings (fresh callbacks from the new
-        // element tree). Effect handles are dropped, not re-subscribed.
-        let plain: Vec<ElementBinding> = bindings.into_iter().filter(|b| !is_effect(b)).collect();
-        apply_bindings(tree, scope, sink, id, plain);
-    } else {
-        // Fresh id, or sources changed: dispose any stale child scope (old
-        // sources stop), then (re)bind everything under a fresh scope.
-        if let Some(state) = bound.remove(&id.raw()) {
-            state.scope.dispose();
+    match (keys.is_empty(), same) {
+        (true, _) => {
+            if let Some(state) = bound.remove(&id.raw()) {
+                state.scope.dispose();
+            }
+            apply_bindings(tree, scope, sink, id, bindings);
         }
-        let child = scope.child();
-        apply_bindings(tree, &child, sink, id, bindings);
-        bound.insert(
-            id.raw(),
-            BoundState {
-                scope: child,
-                effects: keys,
-            },
-        );
+        (false, true) => {
+            let plain: Vec<ElementBinding> =
+                bindings.into_iter().filter(|b| !is_effect(b)).collect();
+            apply_bindings(tree, scope, sink, id, plain);
+        }
+        (false, false) => {
+            if let Some(state) = bound.remove(&id.raw()) {
+                state.scope.dispose();
+            }
+            let child = scope.child();
+            apply_bindings(tree, &child, sink, id, bindings);
+            bound.insert(
+                id.raw(),
+                BoundState {
+                    scope: child,
+                    effects: keys,
+                },
+            );
+        }
     }
     sink.interaction(
         crate::tree::interaction::InteractionCommand::TypographyColor {
@@ -2035,11 +2018,6 @@ fn bind_new(
             own_source: local_typography.explicit_gpui_source_color(),
         },
     );
-    // Explicit author semantics (`Element::role` /
-    // `Element::collection_semantics`): overlay the provided fields onto
-    // the mounted node, preserving everything else. Nodes without explicit
-    // overrides keep whatever they have — including inferred control roles
-    // (a missing override never resets to `Group`).
     if el.role_opt().is_some() || el.collection_semantics_opt().is_some() {
         if let Some(rec) = tree.get(id) {
             let mut sem = rec.semantics.clone();
@@ -3105,11 +3083,7 @@ mod tests {
         rt2.flush();
         let after = rt2.stats();
         assert_eq!(after.effects, baseline.effects + 1, "{after:?}");
-        assert_eq!(
-            after.live_scopes,
-            baseline.live_scopes + 2, // view scope + surviving row scope
-            "{after:?}"
-        );
+        assert_eq!(after.live_scopes, baseline.live_scopes + 1, "{after:?}");
     }
 
     #[test]

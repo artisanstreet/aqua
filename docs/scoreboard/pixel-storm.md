@@ -70,7 +70,7 @@ About 85% of the frame is the app thread's `build` phase, which diffs the new el
 
 ## Sprint continuation: scopes only for reactive bindings (2026-11-06)
 
-Based on `5f4ec00`, measured from the isolated `perf/reconcile` worktree. Nodes with only imperative bindings or no bindings now skip child reactive scope creation and the per-node binding-state entry. Switching from a reactive binding to a plain binding still disposes the previous subscription; adding a binding creates a fresh owned scope.
+Based on `5f4ec00`, measured from the isolated `perf/reconcile` worktree. Nodes with only imperative bindings or no bindings now skip child reactive scope creation and the per-node binding-state entry. Switching from a reactive binding to a plain binding still disposes the previous subscription; adding a reactive binding creates a fresh owned scope.
 
 Release Windows `pixel_storm --size 320x200 --static`, same driver as above, stats disabled, 5 s boot and 5 s observation: private memory was 535.8 MiB before and 512.7 MiB after; peak working set was 490.3 and 467.2 MiB. Dedicated GPU memory stayed 48.7 MiB, settled process CPU did not advance, and neither run took foreground. Animated runs (8 s boot, 21 s observation) had comparable second-window frame medians, 266.68 and 264.78 ms; this change establishes a memory improvement, not a frame-time improvement. These are individual A/B runs on a shared machine, not a new official Editor scoreboard.
 

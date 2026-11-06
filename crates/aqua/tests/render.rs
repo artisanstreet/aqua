@@ -19,5 +19,8 @@ mod span;
 mod support;
 #[path = "render/text.rs"]
 mod text;
+#[cfg(windows)]
+#[path = "render/lower/dpi.rs"]
+mod text_dpi;
 #[path = "render/vector.rs"]
 mod vector;

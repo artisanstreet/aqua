@@ -411,3 +411,75 @@ fn startup_steps_run_one_per_idle_turn_without_presenting() {
     assert_eq!(probe.startup_done.load(Relaxed), 6);
     assert_eq!(probe.presents.load(Relaxed), presents);
 }
+
+#[test]
+fn a_scene_arriving_during_the_frame_slot_wait_is_presented_immediately() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc::{channel, Receiver, Sender};
+
+    struct ControlledTarget {
+        pause: Arc<AtomicBool>,
+        waiting: Sender<()>,
+        resume: Receiver<()>,
+        shown: Sender<Option<Oklch>>,
+    }
+
+    impl FrameTarget for ControlledTarget {
+        fn wait_frame(&mut self) {
+            if self.pause.swap(false, Relaxed) {
+                self.waiting.send(()).unwrap();
+                self.resume.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+        }
+
+        fn present(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback> {
+            let fill = side.scene().ordered().find_map(|(_, item)| match item {
+                DisplayItem::Rect { fill, .. } => Some(*fill),
+                _ => None,
+            });
+            self.shown.send(fill).unwrap();
+            vec![Feedback::Presented(frame)]
+        }
+    }
+
+    let service = RenderService::new().unwrap();
+    let pause = Arc::new(AtomicBool::new(false));
+    let target_pause = pause.clone();
+    let (waiting, waited) = channel();
+    let (resume, resumed) = channel();
+    let (shown, displayed) = channel();
+    let factory: InitFactory = Box::new(move |_| {
+        Box::new(move || {
+            Ok(Box::new(ControlledTarget {
+                pause: target_pause,
+                waiting,
+                resume: resumed,
+                shown,
+            }) as Box<dyn FrameTarget>)
+        })
+    });
+    let mut link = RenderLink::spawn(
+        &service,
+        factory,
+        Arc::new(|_| {}),
+        clock(),
+        INTERVAL,
+        Arc::new(|| {}),
+    );
+    link.set_viewport(Size::new(100.0, 100.0), 1.0);
+    displayed.recv_timeout(Duration::from_secs(5)).unwrap();
+    pause.store(true, Relaxed);
+    link.push_scene(&mut scene_with("#ff0000"));
+    waited.recv_timeout(Duration::from_secs(5)).unwrap();
+    link.push_scene(&mut scene_with("#00ff00"));
+    resume.send(()).unwrap();
+    assert_eq!(
+        displayed.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Some(Oklch::from_hex("#00ff00").unwrap())
+    );
+    wait_until("both scenes to be acknowledged", || {
+        link.stats().scenes_presented.load(Relaxed) == 2
+    });
+    assert_eq!(link.stats().scenes_applied.load(Relaxed), 2);
+    link.shutdown();
+}

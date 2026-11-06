@@ -17,6 +17,8 @@ mod recovery_textures;
 #[cfg(windows)]
 mod refresh;
 #[cfg(windows)]
+mod resize;
+#[cfg(windows)]
 mod scissor;
 #[cfg(windows)]
 mod shared_device;

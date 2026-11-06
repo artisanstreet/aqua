@@ -3,11 +3,11 @@ use aqua_protocol::{
     Features, FrameInputs, GpuBackend, GpuReadback, SurfaceId, SurfaceTarget, UploadBatch,
 };
 
-use super::cases::{Case, STANDARD, cases};
+use super::cases::{cases, Case, STANDARD};
 use super::effects::requirements;
 use super::glass::{
-    MAX_STEP, MIN_SPREAD, blurred, column_steepest, glass_cases, interior_difference, profile,
-    rim_pair, rows,
+    blurred, column_steepest, glass_cases, interior_difference, profile, rim_pair, rows, MAX_STEP,
+    MIN_SPREAD,
 };
 use super::gpui;
 

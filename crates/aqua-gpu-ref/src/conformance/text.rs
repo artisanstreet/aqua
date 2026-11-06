@@ -1,16 +1,16 @@
 use std::sync::OnceLock;
 
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
-use aqua_graph::slug::{PathCommand, STORE_WIDTH, SlugGlyph, pack_glyph};
+use aqua_core::Oklch;
+use aqua_graph::slug::{pack_glyph, PathCommand, SlugGlyph, STORE_WIDTH};
 use aqua_graph::{
     Extent, FramePlan, Glyph, GlyphRun, Linear2, PaintCommand, SlugInstance, SlugRun,
     TextureFormat, TextureHandle, ToneCurve,
 };
 use aqua_protocol::{TextureOp, TextureRegion, TextureUpload, UploadBatch};
 
-use super::assets::{ATLAS, standard_uploads};
-use super::cases::{Case, STANDARD, build, hex, quad, rect};
+use super::assets::{standard_uploads, ATLAS};
+use super::cases::{build, hex, quad, rect, Case, STANDARD};
 
 pub const SLUG_STORE: TextureHandle = TextureHandle(3);
 
@@ -169,7 +169,7 @@ pub fn slug_glyph(
 fn slug_run(glyphs: Vec<SlugInstance>) -> PaintCommand {
     PaintCommand::Slug(SlugRun {
         store: SLUG_STORE,
-        glyphs,
+        glyphs: glyphs.into(),
     })
 }
 

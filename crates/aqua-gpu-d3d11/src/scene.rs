@@ -11,7 +11,7 @@ mod timestamps;
 mod transients;
 
 pub use crate::hal::selection::AdapterPreference;
-pub use offscreen::{HEAP_ALIGNMENT, OffscreenBackend, SurfaceFormat, read_texture};
+pub use offscreen::{read_texture, OffscreenBackend, SurfaceFormat, HEAP_ALIGNMENT};
 pub use persistent::{PersistentStats, PersistentTextures};
 pub use pipeline::{Kind as PipelineKind, PipelineStats};
 pub use renderer::{SceneOptions, SceneRenderer, SceneStats, SceneTarget};

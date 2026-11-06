@@ -32,8 +32,8 @@ pub struct Prioritized {
 #[allow(dead_code)]
 pub fn prioritized() -> Prioritized {
     use windows::Win32::System::Threading::{
-        GetCurrentProcess, GetCurrentThread, GetPriorityClass, GetThreadPriority,
-        HIGH_PRIORITY_CLASS, PROCESS_CREATION_FLAGS, SetPriorityClass, SetThreadPriority,
+        GetCurrentProcess, GetCurrentThread, GetPriorityClass, GetThreadPriority, SetPriorityClass,
+        SetThreadPriority, HIGH_PRIORITY_CLASS, PROCESS_CREATION_FLAGS,
         THREAD_PRIORITY_TIME_CRITICAL,
     };
     let thread = unsafe { GetCurrentThread() };
@@ -50,8 +50,8 @@ pub fn prioritized() -> Prioritized {
 impl Drop for Prioritized {
     fn drop(&mut self) {
         use windows::Win32::System::Threading::{
-            GetCurrentProcess, GetCurrentThread, PROCESS_CREATION_FLAGS, SetPriorityClass,
-            SetThreadPriority, THREAD_PRIORITY,
+            GetCurrentProcess, GetCurrentThread, SetPriorityClass, SetThreadPriority,
+            PROCESS_CREATION_FLAGS, THREAD_PRIORITY,
         };
         let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY(self.thread)) };
         let _ =

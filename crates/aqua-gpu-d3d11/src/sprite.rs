@@ -1,6 +1,8 @@
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
+use aqua_core::Oklch;
 use aqua_graph::{GlyphInstance, ImageInstance, SlugInstance};
+
+use crate::memo::ColorMemo;
 
 pub const SPRITE_STRIDE: usize = std::mem::size_of::<SpriteGpu>();
 
@@ -34,6 +36,18 @@ fn rect(rect: Rect) -> [f32; 4] {
 
 fn clip(clip: Option<Rect>) -> [f32; 4] {
     clip.map(rect).unwrap_or(NO_CLIP)
+}
+
+pub fn pack_glyph_with(glyph: &GlyphInstance, memo: &mut ColorMemo) -> SpriteGpu {
+    SpriteGpu {
+        bounds: rect(glyph.bounds),
+        texels: rect(glyph.texels),
+        clip: clip(glyph.clip),
+        tail: memo
+            .premultiplied(glyph.color)
+            .map(|channel| channel * glyph.opacity),
+        extra: [0.0; 4],
+    }
 }
 
 pub fn pack_glyph(glyph: &GlyphInstance) -> SpriteGpu {
@@ -87,12 +101,18 @@ pub fn pack_image(image: &ImageInstance) -> SpriteGpu {
 }
 
 pub fn pack_slug(glyph: &SlugInstance) -> SlugGpu {
+    pack_slug_with(glyph, &mut ColorMemo::default())
+}
+
+pub fn pack_slug_with(glyph: &SlugInstance, memo: &mut ColorMemo) -> SlugGpu {
     let linear = glyph.linear.pack();
     SlugGpu {
         placement: [glyph.origin[0], glyph.origin[1], linear[0], linear[1]],
         glyph: [linear[2], linear[3], glyph.glyph as f32, 0.0],
         bounds: glyph.em_bounds,
         clip: clip(glyph.clip),
-        color: glyph.color.to_gpu().map(|channel| channel * glyph.opacity),
+        color: memo
+            .premultiplied(glyph.color)
+            .map(|channel| channel * glyph.opacity),
     }
 }

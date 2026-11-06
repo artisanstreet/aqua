@@ -1,5 +1,5 @@
-use windows::Win32::Graphics::Direct3D11::*;
 use windows::core::Interface;
+use windows::Win32::Graphics::Direct3D11::*;
 
 pub fn requested() -> bool {
     std::env::var("AQUA_D3D11_DEBUG").as_deref() == Ok("1")

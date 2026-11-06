@@ -1,5 +1,7 @@
 use aqua_graph::{QuadInstance, ShadowCast, ShadowInstance};
 
+use crate::memo::ColorMemo;
+
 pub const QUAD_STRIDE: usize = std::mem::size_of::<QuadGpu>();
 pub const SHADOW_STRIDE: usize = std::mem::size_of::<ShadowGpu>();
 
@@ -46,6 +48,10 @@ fn oklab(color: aqua_core::Oklch) -> [f32; 4] {
 }
 
 pub fn pack_quad(instance: &QuadInstance) -> QuadGpu {
+    pack_quad_with(instance, &mut ColorMemo::default())
+}
+
+pub fn pack_quad_with(instance: &QuadInstance, memo: &mut ColorMemo) -> QuadGpu {
     let bounds = instance.bounds;
     let (flag, gradient, stop_a, stop_b, offsets) = match &instance.gradient {
         Some(gradient) => (
@@ -71,8 +77,8 @@ pub fn pack_quad(instance: &QuadInstance) -> QuadGpu {
             instance.opacity,
             flag,
         ],
-        fill: instance.fill.to_gpu(),
-        border: instance.border_color.to_srgba(),
+        fill: memo.premultiplied(instance.fill),
+        border: memo.straight(instance.border_color),
         gradient,
         stop_a,
         stop_b,
@@ -82,6 +88,10 @@ pub fn pack_quad(instance: &QuadInstance) -> QuadGpu {
 }
 
 pub fn pack_shadow(instance: &ShadowInstance) -> ShadowGpu {
+    pack_shadow_with(instance, &mut ColorMemo::default())
+}
+
+pub fn pack_shadow_with(instance: &ShadowInstance, memo: &mut ColorMemo) -> ShadowGpu {
     let bounds = instance.bounds;
     ShadowGpu {
         bounds: [bounds.x, bounds.y, bounds.w, bounds.h],
@@ -101,6 +111,6 @@ pub fn pack_shadow(instance: &ShadowInstance) -> ShadowGpu {
             },
             0.0,
         ],
-        color: instance.color.to_gpu(),
+        color: memo.premultiplied(instance.color),
     }
 }

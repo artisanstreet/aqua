@@ -13,8 +13,9 @@ use super::Error;
 use crate::hal::budget::Trim;
 use crate::ledger::{record, Kind as LedgerKind, Token};
 use crate::lifetimes::Precision;
-use crate::pack::{pack_quad, pack_shadow, QUAD_STRIDE, SHADOW_STRIDE};
-use crate::sprite::{glyph_packer, pack_image, pack_slug, SPRITE_STRIDE};
+use crate::memo::ColorMemo;
+use crate::pack::{pack_quad_with, pack_shadow_with, QUAD_STRIDE, SHADOW_STRIDE};
+use crate::sprite::{pack_glyph_with, pack_image, pack_slug_with, SPRITE_STRIDE};
 
 const INITIAL_INSTANCE_BYTES: u64 = 1 << 16;
 const PARAMETER_BYTES: u64 = 256;
@@ -40,6 +41,7 @@ pub struct SceneTarget<'a> {
     pub rtv: &'a ID3D11RenderTargetView,
     pub srv: Option<&'a ID3D11ShaderResourceView>,
     pub format: DXGI_FORMAT,
+    pub extent: Extent,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -122,6 +124,7 @@ fn align16(value: usize) -> usize {
 fn append_all<T: bytemuck::Pod>(bytes: &mut Vec<u8>, items: impl Iterator<Item = T>) -> (u64, u32) {
     bytes.resize(align16(bytes.len()), 0);
     let offset = bytes.len() as u64;
+    bytes.reserve(items.size_hint().0 * std::mem::size_of::<T>());
     let mut count = 0;
     for item in items {
         bytes.extend_from_slice(bytemuck::bytes_of(&item));
@@ -134,6 +137,7 @@ fn append_all<T: bytemuck::Pod>(bytes: &mut Vec<u8>, items: impl Iterator<Item =
 struct Scratch {
     bytes: Vec<u8>,
     uploads: Vec<Upload>,
+    colors: ColorMemo,
 }
 
 impl Scratch {
@@ -141,22 +145,37 @@ impl Scratch {
         self.bytes.clear();
         self.uploads.clear();
         let bytes = &mut self.bytes;
+        let colors = &mut self.colors;
         for pass in &plan.passes {
             let upload = match &pass.kind {
                 PassKind::Instanced { instances, .. } if !instances.is_empty() => {
-                    let (offset, count) = append_all(bytes, instances.iter().map(pack_quad));
+                    let (offset, count) = append_all(
+                        bytes,
+                        instances.iter().map(|quad| pack_quad_with(quad, colors)),
+                    );
                     Upload::Quads { offset, count }
                 }
                 PassKind::Shadows { instances } if !instances.is_empty() => {
-                    let (offset, count) = append_all(bytes, instances.iter().map(pack_shadow));
+                    let (offset, count) = append_all(
+                        bytes,
+                        instances
+                            .iter()
+                            .map(|shadow| pack_shadow_with(shadow, colors)),
+                    );
                     Upload::Shadows { offset, count }
                 }
                 PassKind::Glyphs { instances, .. } if !instances.is_empty() => {
-                    let (offset, count) = append_all(bytes, instances.iter().map(glyph_packer()));
+                    let (offset, count) = append_all(
+                        bytes,
+                        instances.iter().map(|glyph| pack_glyph_with(glyph, colors)),
+                    );
                     Upload::Sprites { offset, count }
                 }
                 PassKind::Slug { instances, .. } if !instances.is_empty() => {
-                    let (offset, count) = append_all(bytes, instances.iter().map(pack_slug));
+                    let (offset, count) = append_all(
+                        bytes,
+                        instances.iter().map(|slug| pack_slug_with(slug, colors)),
+                    );
                     Upload::Sprites { offset, count }
                 }
                 PassKind::Images { instances } if !instances.is_empty() => {
@@ -692,7 +711,7 @@ impl SceneRenderer {
             let Some(&write) = pass.writes.first() else {
                 continue;
             };
-            let out = self.bind(write, target, plan.extent, textures)?;
+            let out = self.bind(write, target, target.extent, textures)?;
             let extent = out.extent;
             let scissor_bound = repaint.filter(|_| write == TextureRef::Surface);
             let mut views: [Option<ID3D11ShaderResourceView>; MAX_INPUTS] = Default::default();
@@ -700,7 +719,7 @@ impl SceneRenderer {
             let mut source_format = None;
             let mut source_texture = None;
             for (slot, reference) in pass.reads.iter().take(MAX_INPUTS).enumerate() {
-                let bound = self.bind(*reference, target, plan.extent, textures)?;
+                let bound = self.bind(*reference, target, target.extent, textures)?;
                 source_extent.get_or_insert(bound.extent);
                 source_format.get_or_insert(bound.format);
                 if slot == 0 {
@@ -719,7 +738,7 @@ impl SceneRenderer {
                 context.OMSetRenderTargets(None, None::<&ID3D11DepthStencilView>);
             }
             if needs_surface_view {
-                let view = self.surface_view(context, target, plan.extent)?;
+                let view = self.surface_view(context, target, target.extent)?;
                 for (slot, reference) in pass.reads.iter().take(MAX_INPUTS).enumerate() {
                     if *reference == TextureRef::Surface {
                         views[slot] = Some(view.clone());

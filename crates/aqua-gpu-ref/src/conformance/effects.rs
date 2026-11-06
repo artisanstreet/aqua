@@ -1,4 +1,4 @@
-use aqua_core::{Oklch, geometry::Rect};
+use aqua_core::{geometry::Rect, Oklch};
 use aqua_graph::{
     Blend, ColorMatrix, CustomPassSpec, CustomShaderId, FramePlan, ImageInstance, PaintCommand,
     Pass, PassKind, PlanLimits, QuadInstance, RenderGraph, ShaderId, TextureFormat, TextureRef,
@@ -7,8 +7,8 @@ use aqua_protocol::Features;
 
 use super::assets::standard_uploads;
 use super::cases::{
-    Case, STANDARD, backdrop_blur, build, clip, glyph_run, gradient, hex, photo, quad, rect,
-    shadow, stripes,
+    backdrop_blur, build, clip, glyph_run, gradient, hex, photo, quad, rect, shadow, stripes, Case,
+    STANDARD,
 };
 use crate::kernels::{INVERT, ROW_BOX_BLUR, ROW_BOX_BLUR_TILE};
 

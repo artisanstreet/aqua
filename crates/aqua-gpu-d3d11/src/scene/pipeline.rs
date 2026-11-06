@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use windows::core::{s, PCSTR};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::core::{PCSTR, s};
 
 use super::Error;
-use crate::ledger::{Kind as LedgerKind, Token, record};
+use crate::ledger::{record, Kind as LedgerKind, Token};
 
 pub const CONSTANT_FLOATS: usize = 36;
 

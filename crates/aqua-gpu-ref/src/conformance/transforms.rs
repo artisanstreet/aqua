@@ -2,7 +2,7 @@ use aqua_core::Oklch;
 use aqua_graph::{Gradient, GradientQuad, GradientStop, Image, Linear2, PaintCommand, Quad};
 
 use super::assets::PHOTO;
-use super::cases::{Case, backdrop, hex, quad, rect, standard};
+use super::cases::{backdrop, hex, quad, rect, standard, Case};
 
 fn linear(matrix: Linear2, leaf: PaintCommand) -> PaintCommand {
     PaintCommand::Linear {

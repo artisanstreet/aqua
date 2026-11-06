@@ -111,6 +111,10 @@ fn open_device(adapter: &IDXGIAdapter1, creation: Creation) -> Result<Opened, Er
         true => D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_SINGLETHREADED,
         false => D3D11_CREATE_DEVICE_BGRA_SUPPORT,
     };
+    let base = match std::env::var("AQUA_D3D11_PREVENT_THREADING").as_deref() {
+        Ok("1") => base | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
+        _ => base,
+    };
     match debug {
         false => create(adapter, base),
         true => {

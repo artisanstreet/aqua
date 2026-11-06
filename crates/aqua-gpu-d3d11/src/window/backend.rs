@@ -417,7 +417,7 @@ impl WindowBackend {
             .surfaces
             .values()
             .map(|entry| {
-                let (width, height) = entry.swapchain.extent();
+                let (width, height) = entry.swapchain.texture_extent();
                 width as u64 * height as u64 * 4 * entry.swapchain.buffer_count() as u64
             })
             .sum();
@@ -428,7 +428,10 @@ impl WindowBackend {
             retired_transient_bytes: 0,
             frame_upload_bytes: gpu.map_or(0, |gpu| gpu.renderer.constant_bytes()),
             scene_upload_bytes: gpu.map_or(0, |gpu| gpu.renderer.instance_bytes()),
-            atlas_resident_bytes: gpu.map_or(0, |gpu| gpu.textures.stats().resident_bytes),
+            atlas_resident_bytes: gpu.map_or(0, |gpu| {
+                let stats = gpu.textures.stats();
+                stats.resident_bytes + stats.pooled_bytes
+            }),
             atlas_staging_bytes: 0,
             surface_mirror_bytes: gpu.map_or(0, |gpu| gpu.renderer.mirror_bytes()),
             local_usage: memory.local.usage,
@@ -449,6 +452,32 @@ impl WindowBackend {
         Ok(trim)
     }
 
+    pub fn settle_surfaces(&mut self) -> Result<(), GpuError> {
+        let core = self.core.as_ref().ok_or_else(no_device)?;
+        let mut failure = None;
+        for entry in self.surfaces.values_mut() {
+            match core.settle_swapchain(&mut entry.swapchain) {
+                Ok(true) => {
+                    entry.damage.reset();
+                    entry.rendered = None;
+                    entry.pending = false;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+        }
+        match failure {
+            Some(error) => {
+                self.note_failure();
+                Err(error.into())
+            }
+            None => Ok(()),
+        }
+    }
+
     pub fn service_budget(&mut self) -> Result<Option<BudgetStatus>, GpuError> {
         let core = self.core.as_mut().ok_or_else(no_device)?;
         let status = core.service_budget()?;
@@ -463,6 +492,9 @@ impl WindowBackend {
             return Err(no_device());
         };
         let freed = gpu.renderer.trim(trim);
+        if trim.free_transients {
+            gpu.textures.drain_pool();
+        }
         if trim.evict_idle_resources {
             core.trim_device();
         }
@@ -631,6 +663,9 @@ impl WindowBackend {
         damage: Option<&[Rect]>,
     ) -> Result<FrameReport, GpuError> {
         let started = Instant::now();
+        if self.stats.frames < 2 {
+            crate::stages::StageClock::from_env().mark("execute_begin");
+        }
         match self.gpu.as_ref() {
             Some(gpu) => gpu.renderer.validate(plan)?,
             None => validate(plan)?,
@@ -685,12 +720,19 @@ impl WindowBackend {
             rtv,
             srv: entry.swapchain.srv(),
             format: RENDER_FORMAT,
+            extent: {
+                let (width, height) = entry.swapchain.texture_extent();
+                Extent { width, height }
+            },
         };
         let stats = gpu
             .renderer
             .record(context, plan, &target, &gpu.textures, repaint)
             .map_err(GpuError::from)?;
         let recorded_in = record_started.elapsed();
+        if self.stats.frames < 2 {
+            crate::stages::StageClock::from_env().mark("execute_end");
+        }
         self.phases = PhaseTimes {
             validate: validated,
             slot_wait: Duration::ZERO,
@@ -768,7 +810,14 @@ impl WindowBackend {
             .zip(dirty.iter_mut())
             .for_each(|(rect, slot)| *slot = to_rect(*rect));
         let present_started = Instant::now();
+        let stages = crate::stages::StageClock::from_env();
+        if self.stats.presents < 3 {
+            stages.mark("present_enter");
+        }
         let status = entry.swapchain.present(mode, &dirty[..count])?;
+        if self.stats.presents < 3 {
+            stages.mark("present_returned");
+        }
         self.phases.present = present_started.elapsed();
         entry.pending = false;
         let now = Instant::now();

@@ -6,7 +6,7 @@ use aqua_gpu_d3d11::window::{WindowBackend, WindowOptions};
 use aqua_protocol::{FrameInputs, GpuBackend, PresentHint};
 use windows::Win32::Foundation::{HWND, LUID};
 use windows::Win32::Graphics::Dxgi::{IDXGIAdapter1, IDXGIOutput};
-use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTOPRIMARY, MonitorFromWindow};
+use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTOPRIMARY};
 
 use crate::backend::{frame, matches_reference, open, options, scene};
 use crate::test_window::TestWindow;

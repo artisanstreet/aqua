@@ -240,6 +240,11 @@ impl Core {
         swapchain.resize(&self.device, &self.context, width, height)
     }
 
+    pub fn settle_swapchain(&self, swapchain: &mut Swapchain) -> Result<bool, Error> {
+        self.check_removed()?;
+        swapchain.settle(&self.device, &self.context)
+    }
+
     pub fn inject_device_removal(&self) {
         self.injected.set(true);
     }

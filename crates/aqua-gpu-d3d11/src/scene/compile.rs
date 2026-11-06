@@ -1,8 +1,8 @@
 use std::ffi::CString;
 
-use windows::Win32::Graphics::Direct3D::Fxc::{D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCompile};
+use windows::core::{s, PCSTR};
+use windows::Win32::Graphics::Direct3D::Fxc::{D3DCompile, D3DCOMPILE_OPTIMIZATION_LEVEL3};
 use windows::Win32::Graphics::Direct3D::{ID3DBlob, ID3DInclude};
-use windows::core::{PCSTR, s};
 
 use super::Error;
 

@@ -2,7 +2,7 @@ use aqua_core::geometry::Rect;
 use aqua_graph::{Extent, PaintCommand, Shadow, ShadowCast};
 use aqua_protocol::SurfacePixels;
 
-use super::cases::{Case, backdrop_blur, build, hex, quad, stripes};
+use super::cases::{backdrop_blur, build, hex, quad, stripes, Case};
 
 pub const GLASS_EXTENT: Extent = Extent {
     width: 320,

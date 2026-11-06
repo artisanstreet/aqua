@@ -1,13 +1,15 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use aqua_graph::{Extent, TextureFormat, TextureHandle};
 use aqua_protocol::{TextureOp, UploadBatch};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use super::Error;
 use super::formats::persistent;
-use crate::ledger::{Kind as LedgerKind, Token, record};
+use super::Error;
+use crate::ledger::{record, Kind as LedgerKind, Token};
+use crate::pool::{Pool, POOL_TTL};
 
 pub struct Entry {
     pub texture: ID3D11Texture2D,
@@ -23,12 +25,17 @@ pub struct PersistentStats {
     pub resident_bytes: u64,
     pub staging_bytes: u64,
     pub uploaded_bytes: u64,
+    pub pooled_textures: u32,
+    pub pooled_bytes: u64,
+    pub reused: u64,
 }
 
 pub struct PersistentTextures {
     device: ID3D11Device,
     entries: HashMap<TextureHandle, Entry>,
+    pool: Pool<(Extent, TextureFormat), Entry>,
     uploaded_bytes: u64,
+    reused: u64,
 }
 
 fn texture_label(format: TextureFormat) -> &'static str {
@@ -48,7 +55,9 @@ impl PersistentTextures {
         Self {
             device: device.clone(),
             entries: HashMap::new(),
+            pool: Pool::default(),
             uploaded_bytes: 0,
+            reused: 0,
         }
     }
 
@@ -74,15 +83,60 @@ impl PersistentTextures {
                 .sum(),
             staging_bytes: 0,
             uploaded_bytes: self.uploaded_bytes,
+            pooled_textures: self.pool.len() as u32,
+            pooled_bytes: self
+                .pool
+                .iter()
+                .map(|(_, entry)| texture_bytes(entry.extent, entry.format))
+                .sum(),
+            reused: self.reused,
         }
     }
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.pool.clear();
+    }
+
+    pub fn drain_pool(&mut self) -> usize {
+        self.pool.clear()
+    }
+
+    pub fn expire_pool(&mut self, now: Instant) -> usize {
+        self.pool.expire(now, POOL_TTL)
+    }
+
+    fn retire(&mut self, entry: Entry) {
+        self.pool
+            .put((entry.extent, entry.format), entry, Instant::now());
+    }
+
+    fn reuse(
+        &mut self,
+        context: &ID3D11DeviceContext1,
+        extent: Extent,
+        format: TextureFormat,
+    ) -> Option<Entry> {
+        let entry = self.pool.take(&(extent, format))?;
+        let pitch = extent.width as u64 * format.bytes_per_texel();
+        let zeros = vec![0u8; (pitch * extent.height as u64) as usize];
+        unsafe {
+            context.UpdateSubresource(
+                &entry.texture,
+                0,
+                None,
+                zeros.as_ptr() as *const _,
+                pitch as u32,
+                0,
+            )
+        };
+        self.reused += 1;
+        Some(entry)
     }
 
     fn create(
         &mut self,
+        context: &ID3D11DeviceContext1,
         handle: TextureHandle,
         extent: Extent,
         format: TextureFormat,
@@ -91,6 +145,12 @@ impl PersistentTextures {
             persistent(format).ok_or(Error::Texture("unsupported persistent texture format"))?;
         if extent.width == 0 || extent.height == 0 {
             return Err(Error::Texture("persistent texture has an empty extent"));
+        }
+        if let Some(entry) = self.reuse(context, extent, format) {
+            if let Some(replaced) = self.entries.insert(handle, entry) {
+                self.retire(replaced);
+            }
+            return Ok(());
         }
         let desc = D3D11_TEXTURE2D_DESC {
             Width: extent.width,
@@ -118,7 +178,7 @@ impl PersistentTextures {
             self.device
                 .CreateShaderResourceView(&texture, None, Some(&mut srv))?
         };
-        self.entries.insert(
+        let created = self.entries.insert(
             handle,
             Entry {
                 texture,
@@ -132,6 +192,9 @@ impl PersistentTextures {
                 ),
             },
         );
+        if let Some(replaced) = created {
+            self.retire(replaced);
+        }
         Ok(())
     }
 
@@ -141,13 +204,16 @@ impl PersistentTextures {
         batches: &[UploadBatch],
     ) -> Result<u64, Error> {
         let mut written = 0u64;
+        self.expire_pool(Instant::now());
         for upload in batches.iter().flat_map(|batch| &batch.textures) {
             match &upload.op {
                 TextureOp::Create { extent, format } => {
-                    self.create(upload.handle, *extent, *format)?
+                    self.create(context, upload.handle, *extent, *format)?
                 }
                 TextureOp::Release => {
-                    self.entries.remove(&upload.handle);
+                    if let Some(entry) = self.entries.remove(&upload.handle) {
+                        self.retire(entry);
+                    }
                 }
                 TextureOp::Write { region, data } => {
                     let entry = self

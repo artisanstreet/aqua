@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
-use aqua_graph::{Extent, FramePlan, PaintCommand, Quad, plan_paint, validate};
+use aqua_core::Oklch;
+use aqua_graph::{plan_paint, validate, Extent, FramePlan, PaintCommand, Quad};
 use aqua_protocol::{
     DeviceStatus, FeatureTier, Features, FrameInputs, FrameReport, GpuBackend, GpuCapabilities,
     GpuError, GpuReadback, PresentHint, PresentTimes, RecoveryReport, SurfaceId, SurfacePixels,
@@ -19,7 +19,7 @@ use super::pacing::{PaceReport, Pacer};
 use super::timing;
 use crate::hal::budget::{Trim, Visibility};
 use crate::hal::{
-    self, BudgetStatus, Core, DeviceOptions, PresentMode, PresentStatus, RENDER_FORMAT, Swapchain,
+    self, BudgetStatus, Core, DeviceOptions, PresentMode, PresentStatus, Swapchain, RENDER_FORMAT,
 };
 use crate::half::bgra8_rows_to_rgba8;
 use crate::scene::util::{footprint_location, texture_location};
@@ -588,6 +588,10 @@ impl WindowBackend {
         let trim = core.set_visibility(visibility)?;
         self.release(&trim)?;
         Ok(trim)
+    }
+
+    pub fn settle_surfaces(&mut self) -> Result<(), GpuError> {
+        Ok(())
     }
 
     pub fn service_budget(&mut self) -> Result<Option<BudgetStatus>, GpuError> {

@@ -334,6 +334,7 @@ impl OffscreenBackend {
             rtv: &entry.rtv,
             srv: Some(&entry.srv),
             format: self.format.dxgi(),
+            extent: plan.extent,
         };
         let stats = gpu
             .renderer

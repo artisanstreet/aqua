@@ -1,11 +1,11 @@
 use std::time::Duration;
 
+use windows::core::Interface;
 use windows::Win32::Foundation::S_OK;
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::core::Interface;
 
 use super::Error;
-use crate::ledger::{Kind, Token, record};
+use crate::ledger::{record, Kind, Token};
 
 const STAMPS_PER_SLOT: usize = 64;
 const SLOTS: usize = 4;

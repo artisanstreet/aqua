@@ -1,12 +1,12 @@
 use std::thread::sleep;
 use std::time::Duration;
 
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
+use aqua_core::Oklch;
 use aqua_gpu_d3d11::hal::selection::AdapterPreference;
 use aqua_gpu_d3d11::window::{SurfaceKind, WindowBackend};
 use aqua_gpu_ref::RefBackend;
-use aqua_graph::{Extent, FramePlan, PaintCommand, Quad, plan_paint};
+use aqua_graph::{plan_paint, Extent, FramePlan, PaintCommand, Quad};
 use aqua_protocol::{
     FrameInputs, GpuBackend, GpuReadback, PresentHint, SurfaceId, SurfaceTarget, WindowMaterial,
 };
@@ -14,12 +14,12 @@ use aqua_shell_win32::{Window, WindowOptions};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
-    DeleteDC, DeleteObject, GetDIBits, HGDIOBJ, SelectObject,
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDIBits, SelectObject,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
 };
-use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
+use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetWindowRect, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
+    DispatchMessageW, GetWindowRect, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
 };
 
 use crate::backend::options;

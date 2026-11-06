@@ -5,13 +5,14 @@ use aqua_graph::{CustomPassSpec, CustomShaderId, Extent};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D11::*;
 
-use super::Error;
 use super::compile::compile;
+use super::Error;
 
 pub const MAX_INPUTS: usize = 8;
 pub const ROW_BOX_BLUR: CustomShaderId = CustomShaderId(1);
 
-const VERTEX_SOURCE: &str = "struct Output { float4 position : SV_Position; float2 uv : TEXCOORD0; };\n\
+const VERTEX_SOURCE: &str =
+    "struct Output { float4 position : SV_Position; float2 uv : TEXCOORD0; };\n\
 Output vs_custom(uint vertex : SV_VertexID)\n\
 {\n\
     float2 corner = float2(vertex & 1, vertex >> 1);\n\

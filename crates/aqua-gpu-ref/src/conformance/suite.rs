@@ -1,8 +1,8 @@
 use aqua_protocol::{FeatureTier, GpuBackend, GpuReadback};
 
-use super::cases::{Case, cases};
-use super::compare::{Comparison, Tolerance, compare};
-use super::contract::{ContractReport, run_contract};
+use super::cases::{cases, Case};
+use super::compare::{compare, Comparison, Tolerance};
+use super::contract::{run_contract, ContractReport};
 use super::effects::requirements;
 use super::fuzz::fuzz_cases;
 use super::session::Session;

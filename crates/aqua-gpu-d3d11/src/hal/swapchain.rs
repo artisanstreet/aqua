@@ -1,17 +1,19 @@
+use windows::core::Interface;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, RECT, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D::D3D11_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Threading::WaitForSingleObjectEx;
-use windows::core::Interface;
 
 use super::error::Error;
-use crate::ledger::{Kind, Token, record};
+use crate::ledger::{record, Kind, Token};
 
 pub const RENDER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 const BUFFER_COUNT: u32 = 2;
 const OCCLUDED: i32 = 0x087A0001;
+const CAPACITY_STEP: u32 = 128;
+const MAX_SLACK: u32 = 384;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresentMode {
@@ -46,8 +48,13 @@ pub struct Swapchain {
     tearing: bool,
     width: u32,
     height: u32,
+    capacity: (u32, u32),
     flips: u64,
     shader_views: bool,
+}
+
+fn stepped(extent: u32) -> u32 {
+    extent.div_ceil(CAPACITY_STEP) * CAPACITY_STEP
 }
 
 fn flags(tearing: bool) -> u32 {
@@ -118,6 +125,7 @@ impl Swapchain {
             tearing,
             width,
             height,
+            capacity: (width, height),
             flips: 0,
             shader_views: std::env::var("AQUA_D3D11_SURFACE_MIRROR").as_deref() != Ok("1"),
         };
@@ -130,7 +138,7 @@ impl Swapchain {
             SwapchainTarget::Hwnd(_) => "swapchain_buffer",
             SwapchainTarget::Composition => "composition_swapchain_buffer",
         };
-        let bytes = self.width as u64 * self.height as u64 * 4;
+        let bytes = self.capacity.0 as u64 * self.capacity.1 as u64 * 4;
         let texture: ID3D11Texture2D = unsafe { self.swapchain.GetBuffer(0)? };
         let view = D3D11_RENDER_TARGET_VIEW_DESC {
             Format: RENDER_FORMAT,
@@ -187,6 +195,10 @@ impl Swapchain {
         (self.width, self.height)
     }
 
+    pub fn texture_extent(&self) -> (u32, u32) {
+        self.capacity
+    }
+
     pub fn tearing(&self) -> bool {
         self.tearing
     }
@@ -222,23 +234,60 @@ impl Swapchain {
         if width == self.width && height == self.height {
             return Ok(false);
         }
+        let windowed = matches!(self.target, SwapchainTarget::Hwnd(_));
+        let fits = windowed
+            && width <= self.capacity.0
+            && height <= self.capacity.1
+            && self.capacity.0 - width <= MAX_SLACK
+            && self.capacity.1 - height <= MAX_SLACK;
+        match (fits, windowed) {
+            (true, _) => {}
+            (false, true) => self.reallocate(device, context, (stepped(width), stepped(height)))?,
+            (false, false) => self.reallocate(device, context, (width, height))?,
+        }
+        self.width = width;
+        self.height = height;
+        if windowed {
+            unsafe { self.swapchain.SetSourceSize(width, height)? };
+        }
+        Ok(true)
+    }
+
+    pub fn settle(
+        &mut self,
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext1,
+    ) -> Result<bool, Error> {
+        let exact = (self.width, self.height);
+        if self.capacity == exact {
+            return Ok(false);
+        }
+        self.reallocate(device, context, exact)?;
+        unsafe { self.swapchain.SetSourceSize(self.width, self.height)? };
+        Ok(true)
+    }
+
+    fn reallocate(
+        &mut self,
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext1,
+        capacity: (u32, u32),
+    ) -> Result<(), Error> {
         self.buffer = None;
         unsafe {
             context.ClearState();
             context.Flush();
             self.swapchain.ResizeBuffers(
                 BUFFER_COUNT,
-                width,
-                height,
+                capacity.0,
+                capacity.1,
                 DXGI_FORMAT_UNKNOWN,
                 DXGI_SWAP_CHAIN_FLAG(flags(self.tearing) as i32),
             )?;
         }
-        self.width = width;
-        self.height = height;
+        self.capacity = capacity;
         self.flips = 0;
-        self.acquire(device)?;
-        Ok(true)
+        self.acquire(device)
     }
 
     pub fn wait_for_frame(&self, timeout_ms: u32) -> bool {

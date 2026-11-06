@@ -1,10 +1,10 @@
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
+use aqua_core::Oklch;
 use aqua_gpu_d3d11::hal::selection::AdapterPreference;
-use aqua_gpu_d3d11::window::WindowBackend;
 use aqua_gpu_d3d11::window::damage::{Damage, PixelRect};
+use aqua_gpu_d3d11::window::WindowBackend;
 use aqua_gpu_ref::RefBackend;
-use aqua_graph::{Extent, FramePlan, PaintCommand, Quad, Shadow, ShadowCast, plan_paint};
+use aqua_graph::{plan_paint, Extent, FramePlan, PaintCommand, Quad, Shadow, ShadowCast};
 use aqua_protocol::{FrameInputs, GpuBackend, GpuReadback, PresentHint, SurfaceId, SurfaceTarget};
 
 use crate::backend::{backend, open};

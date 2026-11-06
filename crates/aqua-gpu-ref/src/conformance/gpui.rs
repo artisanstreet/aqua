@@ -1,6 +1,6 @@
 use aqua_protocol::SurfacePixels;
 
-use super::cases::{Case, hex, quad, standard};
+use super::cases::{hex, quad, standard, Case};
 
 pub const NEAR_BLACK: u8 = 0x11;
 pub const COMPOSER_GLASS_ALPHA: f32 = 0.05;

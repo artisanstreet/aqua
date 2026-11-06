@@ -1,0 +1,47 @@
+[package]
+edition = "2021"
+rust-version = "1.71"
+name = "taffy"
+version = "0.15.1"
+authors = [
+    "Alice Cecile <alice.i.cecile@gmail.com>",
+    "Johnathan Kelley <jkelleyrtp@gmail.com>",
+    "Nico Burns <nico@nicoburns.com>",
+]
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "taffy 0.15.1 with chunked node storage (Aqua vendored copy)"
+license = "MIT"
+repository = "https://github.com/DioxusLabs/taffy"
+
+[lib]
+name = "taffy"
+path = "src/lib.rs"
+
+[features]
+default = ["std", "taffy_tree", "flexbox", "grid", "content_size"]
+alloc = []
+block_layout = []
+calc = []
+content_size = []
+debug = ["std"]
+detailed_layout_info = []
+flexbox = []
+flexbox_balance = ["flexbox"]
+float_layout = []
+grid = ["dep:smallvec"]
+std = []
+strict_provenance = []
+taffy_tree = []
+
+[dependencies.smallvec]
+version = "1.13"
+optional = true
+default-features = false
+
+[lints.rust]
+unexpected_cfgs = "allow"

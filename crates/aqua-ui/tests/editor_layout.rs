@@ -87,7 +87,7 @@ fn tree_opt_in_ceil_snaps_measured_text_in_device_pixels() {
     }
     let mut tree = UiTree::new();
     let node = tree.mount_spec(NodeSpec::new(
-        NodeKind::Text(TextContent::label("x")),
+        NodeKind::text(TextContent::label("x")),
         LayoutStyle::default(),
     ));
     tree.set_gpui_layout_scale(Some(2.0));
@@ -150,7 +150,7 @@ fn source_border_widths_place_children_and_width_changes_relayout() {
         )
         .resolve_paint();
     let root = NodeSpec::new(
-        NodeKind::Box(BoxContent { paint }),
+        NodeKind::Box(BoxContent::new(paint)),
         LayoutStyle {
             width: Length::Px(30.0),
             height: Length::Px(20.0),

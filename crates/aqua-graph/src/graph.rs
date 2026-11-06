@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use aqua_core::{Oklch, geometry::Rect};
+use aqua_core::{geometry::Rect, Oklch};
 
 use crate::analysis::{
-    Lifetime, align_up, first_writers, independent, intersect, lifetimes, union,
+    align_up, first_writers, independent, intersect, lifetimes, union, Lifetime,
 };
 use crate::plan::{
     Barrier, Extent, FramePlan, GlyphInstance, LoadOp, Pass, PassKind, QuadInstance, ResourceState,
@@ -12,7 +12,7 @@ use crate::plan::{
 };
 use crate::slug::SlugInstance;
 use crate::tone::ToneCurve;
-use crate::validate::{PlanError, validate};
+use crate::validate::{validate, PlanError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlanLimits {

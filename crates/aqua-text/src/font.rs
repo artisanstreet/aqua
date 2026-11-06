@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use aqua_fonts_system::{FaceBytes, FontDatabase, ID, Query, Stretch, Style, Weight};
-use skrifa::MetadataProvider;
+use aqua_fonts_system::{FaceBytes, FontDatabase, Query, Stretch, Style, Weight, ID};
 use skrifa::raw::TableProvider;
+use skrifa::MetadataProvider;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::fallback::{Coverage, FallbackIndex};

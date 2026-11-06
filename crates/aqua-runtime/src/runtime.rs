@@ -330,6 +330,7 @@ pub struct Runtime {
     scene: Scene,
     chrome_regions: Option<DragRegions>,
     last_build_error: Option<String>,
+    footprint_report: Option<Seconds>,
     structural: Rc<RefCell<Option<Element>>>,
     disposed: bool,
     clock: Seconds,
@@ -470,6 +471,9 @@ impl Runtime {
             chrome_regions: None,
             structural: Rc::new(RefCell::new(None)),
             last_build_error: None,
+            footprint_report: std::env::var_os("AQUA_MEMORY_REPORT")
+                .is_some_and(|value| value == "1")
+                .then_some(0.0),
             disposed: false,
             clock: 0.0,
             cached_scene: Vec::new(),
@@ -1246,6 +1250,11 @@ impl Runtime {
         self.frame_work.layout_nodes_visited = self.tree.take_layout_visited();
         self.report_work();
         let now = self.clock;
+        if self.footprint_report.is_some_and(|next| now >= next) {
+            self.footprint_report = Some(now + 1.0);
+            self.diagnostics
+                .push(format!("aqua-tree-footprint: {:?}", self.tree.footprint()));
+        }
         let work = self.frame_work;
         if let Some(line) = self
             .frame_work_window
@@ -1304,6 +1313,7 @@ impl Runtime {
             fonts_revision,
         );
         self.sync_selection_bindings();
+        self.tree.run_observers();
         let content_changed = self.cached_version != Some(version);
         if content_changed {
             let _span = probe::span(Phase::Text);

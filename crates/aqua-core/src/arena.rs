@@ -346,11 +346,10 @@ mod tests {
         let mut arena = Arena::new();
         let ids: Vec<_> = (0..CHUNK * 3 + 5).map(|n| arena.insert(n)).collect();
         assert_eq!(arena.capacity_slots(), ids.len());
-        assert!(
-            ids.iter()
-                .enumerate()
-                .all(|(n, id)| arena.get(*id) == Some(&n))
-        );
+        assert!(ids
+            .iter()
+            .enumerate()
+            .all(|(n, id)| arena.get(*id) == Some(&n)));
         let victim = ids[CHUNK + 1];
         assert_eq!(arena.remove(victim), Ok(CHUNK + 1));
         let reused = arena.insert(1000);

@@ -229,6 +229,12 @@ pub struct InteractionStore {
     emitted_tap: Option<(u64, usize)>,
 }
 
+impl InteractionStore {
+    pub(crate) fn entry_capacity(&self) -> usize {
+        self.nodes.capacity()
+    }
+}
+
 #[derive(Debug)]
 struct PointerClick {
     at: aqua_core::Point,

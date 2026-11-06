@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+exclude = ["vendor/taffy"]
 
 [workspace.package]
 version = "0.1.0"
@@ -18,4 +19,4 @@ aqua-text = { path = "crates/aqua-text" }
 aqua-scene = { path = "crates/aqua-scene" }
 aqua-protocol = { path = "crates/aqua-protocol" }
 aqua-runtime = { path = "crates/aqua-runtime" }
-taffy = { version = "0.15", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "content_size"] }
+taffy = { path = "vendor/taffy", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "content_size"] }

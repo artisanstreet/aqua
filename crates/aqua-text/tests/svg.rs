@@ -118,8 +118,12 @@ mod with_fonts {
 
     #[test]
     fn em_and_percent_font_sizes_resolve_through_ancestors() {
-        let em = doc(r#"<g font-size="20"><text x="10" y="60" font-family="Arial" font-size="2em">Hi</text></g>"#);
-        let percent = doc(r#"<g font-size="20"><text x="10" y="60" font-family="Arial" font-size="200%">Hi</text></g>"#);
+        let em = doc(
+            r#"<g font-size="20"><text x="10" y="60" font-family="Arial" font-size="2em">Hi</text></g>"#,
+        );
+        let percent = doc(
+            r#"<g font-size="20"><text x="10" y="60" font-family="Arial" font-size="200%">Hi</text></g>"#,
+        );
         let pixels = doc(r#"<text x="10" y="60" font-family="Arial" font-size="40">Hi</text>"#);
         let mut fonts = FontManager::new();
         let expected = ink_columns(&render(&pixels, &mut fonts));
@@ -144,7 +148,8 @@ mod with_fonts {
 
     #[test]
     fn text_on_a_curve_rotates_and_start_offset_with_anchor_shift_it() {
-        let flat = doc(r#"<text x="10" y="100" font-family="Arial" font-size="24">Hello World</text>"#);
+        let flat =
+            doc(r#"<text x="10" y="100" font-family="Arial" font-size="24">Hello World</text>"#);
         let arc = doc(
             r##"<path id="p" d="M10 100 A 90 90 0 0 1 190 100" fill="none"/><text font-family="Arial" font-size="24"><textPath href="#p">Hello World</textPath></text>"##,
         );

@@ -19,17 +19,17 @@ fn pulse_scope_surrounds_descendant_quad_paint() {
         ..Default::default()
     };
     let mut parent = NodeSpec::new(
-        NodeKind::Box(BoxContent {
-            paint: Style::new().gpui_quad_pulse(pulse).resolve_paint(),
-        }),
+        NodeKind::Box(BoxContent::new(
+            Style::new().gpui_quad_pulse(pulse).resolve_paint(),
+        )),
         layout.clone(),
     );
     parent.children.push(NodeSpec::new(
-        NodeKind::Box(BoxContent {
-            paint: Style::new()
+        NodeKind::Box(BoxContent::new(
+            Style::new()
                 .background(aqua_core::Oklch::WHITE)
                 .resolve_paint(),
-        }),
+        )),
         layout,
     ));
     tree.mount_spec(parent);

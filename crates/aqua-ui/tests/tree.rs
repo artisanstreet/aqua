@@ -8,7 +8,7 @@ use aqua_ui::tree::{NodeKind, NodeSpec, TextBacking, TextContent, UiTree};
 fn selecting_static_text_clamps_to_graphemes_without_invalidating_content() {
     let mut tree = UiTree::new();
     let node = tree.mount_spec(NodeSpec::new(
-        NodeKind::Text(TextContent::label("a👩‍💻b")),
+        NodeKind::text(TextContent::label("a👩‍💻b")),
         LayoutStyle::default(),
     ));
     tree.compute_layout(Size::new(300.0, 100.0), &NaiveMeasurer)
@@ -29,7 +29,7 @@ fn selecting_static_text_clamps_to_graphemes_without_invalidating_content() {
 fn selecting_during_composition_restores_displaced_text_and_invalidates_layout() {
     let mut tree = UiTree::new();
     let node = tree.mount_spec(NodeSpec::new(
-        NodeKind::Text(TextContent::editable("draft", false)),
+        NodeKind::text(TextContent::editable("draft", false)),
         LayoutStyle::default(),
     ));
     tree.edit_text(node, |text| {
@@ -89,7 +89,7 @@ fn empty_leaf_layout_applies_explicit_dimensions_constraints_and_padding() {
 fn transformed_subtree_culling_uses_visual_geometry_and_portals_paint_above_later_siblings() {
     use aqua_core::{DisplayItem, Oklch, Transform2D};
     use aqua_ui::element::{lower_specs, ui};
-    use aqua_ui::style::{Axis, Style, px};
+    use aqua_ui::style::{px, Axis, Style};
     let element = ui::Box::new()
         .style(
             Style::new()
@@ -127,11 +127,10 @@ fn transformed_subtree_culling_uses_visual_geometry_and_portals_paint_above_late
     tree.compute_layout(Size::new(400.0, 300.0), &NaiveMeasurer)
         .unwrap();
     assert_eq!(tree.visual_rect(target).unwrap().x, 30.0);
-    assert!(
-        tree.emit_scene()
-            .iter()
-            .any(|(node, item)| *node == target && matches!(item, DisplayItem::Rect { .. }))
-    );
+    assert!(tree
+        .emit_scene()
+        .iter()
+        .any(|(node, item)| *node == target && matches!(item, DisplayItem::Rect { .. })));
     let mut paint = tree.get(target).unwrap().paint().clone();
     paint.transform = Some(Transform2D::translate(150.0, 0.0));
     tree.set_paint(target, paint);
@@ -174,7 +173,7 @@ fn media_preserves_asset_lease_and_fit_source_then_releases_on_unmount() {
     use aqua_core::image::ImageFit;
     use aqua_core::{DisplayItem, ImageId, ImageRef, Point, RawId, Rect};
     use aqua_ui::element::{lower_specs, ui};
-    use aqua_ui::style::{Style, px};
+    use aqua_ui::style::{px, Style};
     use std::sync::Arc;
     let lease = Arc::new(());
     let id = ImageId::from_raw(RawId {
@@ -203,7 +202,7 @@ fn media_preserves_asset_lease_and_fit_source_then_releases_on_unmount() {
 fn shadow_stack_emits_outer_then_background_then_inset_and_retains_visible_transformed_shadow() {
     use aqua_core::{DisplayItem, Oklch, Transform2D};
     use aqua_ui::element::{lower_specs, ui};
-    use aqua_ui::style::{Axis, ShadowLayer, Style, px};
+    use aqua_ui::style::{px, Axis, ShadowLayer, Style};
     let outer = ShadowLayer {
         dx: -30.0,
         dy: 0.0,
@@ -282,7 +281,7 @@ fn shadow_stack_emits_outer_then_background_then_inset_and_retains_visible_trans
 fn mixed_corners_and_edge_border_reach_scene_and_clip() {
     use aqua_core::{CornerRadii, DisplayItem, Insets, Oklch};
     use aqua_ui::element::{lower_specs, ui};
-    use aqua_ui::style::{Style, px};
+    use aqua_ui::style::{px, Style};
     let corners = CornerRadii {
         top_left: 0.0,
         top_right: 8.0,
@@ -320,7 +319,7 @@ fn mixed_corners_and_edge_border_reach_scene_and_clip() {
 fn gpui_paint_profile_emits_uniform_quads_and_invalidates_cached_content() {
     use aqua_core::{DisplayItem, Oklch};
     use aqua_ui::element::{lower_specs, ui};
-    use aqua_ui::style::{Style, px};
+    use aqua_ui::style::{px, Style};
     let element = ui::Box::new()
         .style(
             Style::new()
@@ -336,39 +335,33 @@ fn gpui_paint_profile_emits_uniform_quads_and_invalidates_cached_content() {
     tree.mount_spec(lower_specs(&element).unwrap().remove(0));
     tree.compute_layout(Size::new(100.0, 100.0), &NaiveMeasurer)
         .unwrap();
-    assert!(
-        tree.emit_scene()
-            .iter()
-            .any(|(_, item)| matches!(item, DisplayItem::Rect { .. }))
-    );
+    assert!(tree
+        .emit_scene()
+        .iter()
+        .any(|(_, item)| matches!(item, DisplayItem::Rect { .. })));
     let version = tree.content_version();
     tree.set_gpui_paint(true);
     assert!(tree.content_version() > version);
     let items = tree.emit_scene();
-    assert!(
-        items.iter().any(
-            |(_, item)| matches!(item, DisplayItem::Quad { fill, .. } if *fill == Oklch::WHITE)
-        )
-    );
+    assert!(items
+        .iter()
+        .any(|(_, item)| matches!(item, DisplayItem::Quad { fill, .. } if *fill == Oklch::WHITE)));
     assert!(items.iter().any(|(_, item)| matches!(item, DisplayItem::Quad { border_widths, .. } if border_widths.top == 0.4)));
-    assert!(
-        items
-            .iter()
-            .any(|(_, item)| matches!(item, DisplayItem::PushGpuiContentMask { .. }))
-    );
+    assert!(items
+        .iter()
+        .any(|(_, item)| matches!(item, DisplayItem::PushGpuiContentMask { .. })));
     tree.set_gpui_paint(false);
-    assert!(
-        tree.emit_scene()
-            .iter()
-            .any(|(_, item)| matches!(item, DisplayItem::Rect { .. }))
-    );
+    assert!(tree
+        .emit_scene()
+        .iter()
+        .any(|(_, item)| matches!(item, DisplayItem::Rect { .. })));
 }
 
 #[test]
 fn source_shadow_and_border_colors_preserve_layer_order_in_scene() {
     use aqua_core::{DisplayItem, GpuiBackground, GpuiHsla, Insets};
     use aqua_ui::element::{lower_specs, ui};
-    use aqua_ui::style::{GpuiShadowLayer, Style, px};
+    use aqua_ui::style::{px, GpuiShadowLayer, Style};
     let color = GpuiHsla {
         h: 0.19,
         s: 0.43,
@@ -423,7 +416,7 @@ fn source_shadow_and_border_colors_preserve_layer_order_in_scene() {
 fn gpui_overflow_mask_insets_only_visible_source_borders() {
     use aqua_core::{DisplayItem, GpuiHsla, Insets, Rect};
     use aqua_ui::element::{lower_specs, ui};
-    use aqua_ui::style::{Style, px};
+    use aqua_ui::style::{px, Style};
     let widths = Insets {
         top: 1.0,
         right: 2.0,
@@ -466,7 +459,7 @@ fn non_box_paint_round_trips_and_returns_to_default() {
     use aqua_ui::style::Paint;
     let mut tree = UiTree::new();
     let node = tree.mount_spec(NodeSpec::new(
-        NodeKind::Text(TextContent::label("hello")),
+        NodeKind::text(TextContent::label("hello")),
         LayoutStyle::default(),
     ));
     assert_eq!(tree.paint(node), Some(Paint::default()));

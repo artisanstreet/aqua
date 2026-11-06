@@ -160,10 +160,10 @@ impl MotionRuntime {
                     .any(|(property, _)| *property == AnimatedProperty::Opacity);
             let translate = spec.presence.slide_offset().is_some()
                 || spec
-                .animate
-                .properties()
-                .iter()
-                .any(|(property, _)| *property == AnimatedProperty::Translate);
+                    .animate
+                    .properties()
+                    .iter()
+                    .any(|(property, _)| *property == AnimatedProperty::Translate);
             if opacity || translate {
                 out.insert(node, MotionGroups { opacity, translate });
             }
@@ -271,7 +271,11 @@ impl MotionRuntime {
     }
 
     fn rest_translate(state: &NodeState, tree: &UiTree, node: NodeId) -> (f32, f32) {
-        match state.props.get(&AnimatedProperty::Translate).map(|prop| prop.target) {
+        match state
+            .props
+            .get(&AnimatedProperty::Translate)
+            .map(|prop| prop.target)
+        {
             Some(MotionValue::Pair(x, y)) => (x, y),
             _ => Self::resting_translate(tree, node),
         }

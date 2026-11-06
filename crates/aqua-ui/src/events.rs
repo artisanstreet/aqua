@@ -34,19 +34,23 @@ fn hit_test_excluded(tree: &UiTree, mut node: NodeId) -> bool {
 }
 
 fn hit_node(tree: &UiTree, id: NodeId, at: Point, clip: Option<Rect>) -> Option<NodeId> {
-    let rect = tree.visual_rect(id)?;
+    tree.rect(id)?;
     let rec = tree.get(id)?;
     if rec.hit_test_excluded {
         return None;
     }
     let clip = if tree.is_portal(id) { None } else { clip };
-    let clips = matches!(&rec.kind, NodeKind::Box(b) if b.paint.clip)
+    let clips = matches!(&rec.kind, NodeKind::Box(b) if b.paint().clip)
         || matches!(rec.kind, NodeKind::Scroll(_));
     let child_clip = if clips {
+        let rect = tree.visual_rect(id)?;
         Some(clip.map_or(rect, |parent| parent.intersect(rect)))
     } else {
         clip
     };
+    if child_clip.is_some_and(|clip| !clip.contains(at)) {
+        return None;
+    }
     for &child in rec.children.iter().rev() {
         if tree.is_portal(child) {
             continue;
@@ -849,7 +853,7 @@ mod tests {
             bstyle,
         )
         .child(NodeSpec::new(
-            NodeKind::Text(TextContent::label("Add")),
+            NodeKind::text(TextContent::label("Add")),
             LayoutStyle::default(),
         ))]));
         tree.compute_layout(Size::new(300.0, 300.0), &NaiveMeasurer)
@@ -980,7 +984,7 @@ mod tests {
     #[test]
     fn keydown_char_never_inserts_text_input_does_once() {
         let (mut tree, _root) = laid_out(vec![NodeSpec::new(
-            NodeKind::Text(TextContent::editable("", false)),
+            NodeKind::text(TextContent::editable("", false)),
             LayoutStyle::default(),
         )]);
         let field = tree.get(tree.root().unwrap()).unwrap().children[0];
@@ -1003,7 +1007,7 @@ mod tests {
     #[test]
     fn ime_commit_inserts_once_without_text_input() {
         let (mut tree, _root) = laid_out(vec![NodeSpec::new(
-            NodeKind::Text(TextContent::editable("", false)),
+            NodeKind::text(TextContent::editable("", false)),
             LayoutStyle::default(),
         )]);
         let field = tree.get(tree.root().unwrap()).unwrap().children[0];
@@ -1024,7 +1028,7 @@ mod tests {
 
     fn focused_field(initial: &str) -> (UiTree, NodeId) {
         let (mut tree, _root) = laid_out(vec![NodeSpec::new(
-            NodeKind::Text(TextContent::editable(initial, false)),
+            NodeKind::text(TextContent::editable(initial, false)),
             LayoutStyle::default(),
         )]);
         let field = tree.get(tree.root().unwrap()).unwrap().children[0];
@@ -1168,7 +1172,7 @@ mod tests {
     fn typing_routes_to_focused_editable_and_fires_action() {
         use std::sync::{Arc, Mutex};
         let (mut tree, root) = laid_out(vec![NodeSpec::new(
-            NodeKind::Text(TextContent::editable("", false)),
+            NodeKind::text(TextContent::editable("", false)),
             LayoutStyle::default(),
         )]);
         let field = tree.get(root).unwrap().children[0];
@@ -1197,11 +1201,11 @@ mod tests {
     fn tab_cycles_focus() {
         let (mut tree, _root) = laid_out(vec![
             NodeSpec::new(
-                NodeKind::Text(TextContent::editable("a", false)),
+                NodeKind::text(TextContent::editable("a", false)),
                 LayoutStyle::default(),
             ),
             NodeSpec::new(
-                NodeKind::Text(TextContent::editable("b", false)),
+                NodeKind::text(TextContent::editable("b", false)),
                 LayoutStyle::default(),
             ),
         ]);

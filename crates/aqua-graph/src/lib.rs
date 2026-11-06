@@ -10,12 +10,12 @@ pub mod slug;
 pub mod tone;
 pub mod validate;
 
-pub use blur::{BlurDepth, BlurOutput, BlurRequest, blur_chain, depth_for};
+pub use blur::{blur_chain, depth_for, BlurDepth, BlurOutput, BlurRequest};
 pub use graph::{PlanLimits, PlanStats, RenderGraph, ResourceDesc};
 pub use linear::Linear2;
 pub use paint::{
-    BackdropBlur, Glyph, GlyphList, GlyphRun, GradientQuad, Image, PaintCommand, Quad, Shadow,
-    SlugRun, plan_paint, plan_paint_with,
+    plan_paint, plan_paint_with, BackdropBlur, Glyph, GlyphList, GlyphRun, GradientQuad, Image,
+    PaintCommand, Quad, Shadow, SlugList, SlugRun,
 };
 pub use plan::{
     Barrier, Blend, ColorMatrix, CustomPassSpec, CustomShaderId, Extent, FilterParams, FramePlan,
@@ -25,4 +25,4 @@ pub use plan::{
 };
 pub use slug::SlugInstance;
 pub use tone::ToneCurve;
-pub use validate::{PlanError, validate};
+pub use validate::{validate, PlanError};

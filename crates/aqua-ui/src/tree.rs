@@ -56,6 +56,8 @@ use crate::style::{LayoutStyle, Paint};
 
 pub type PrepaintCallback = Box<dyn Fn(&UiTree, NodeId)>;
 
+pub type ObserveCallback = Box<dyn Fn(&UiTree, NodeId)>;
+
 /// Keyed-identity marker for reconciliation. Keys hash to `u64` with a fixed
 /// seed so equal keys match within and across runs.
 pub type KeyHash = u64;
@@ -501,11 +503,30 @@ impl fmt::Debug for TextContent {
     }
 }
 
-/// Box (container) paint.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BoxContent {
-    /// Paint properties.
-    pub paint: Paint,
+    paint: Option<Box<Paint>>,
+}
+
+impl BoxContent {
+    #[must_use]
+    pub fn new(paint: Paint) -> Self {
+        let mut content = Self::default();
+        content.set_paint(paint);
+        content
+    }
+
+    #[must_use]
+    pub fn paint(&self) -> &Paint {
+        match &self.paint {
+            Some(paint) => paint,
+            None => default_paint(),
+        }
+    }
+
+    pub fn set_paint(&mut self, paint: Paint) {
+        self.paint = (paint != Paint::default()).then(|| Box::new(paint));
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -554,6 +575,7 @@ pub type ContextCanvasPaintCallback = Box<dyn Fn(CanvasPaintContext<'_>) -> Vec<
 enum CanvasPainter {
     Legacy(CanvasPaintCallback),
     Context(ContextCanvasPaintCallback),
+    ScrollStable(CanvasPaintCallback),
 }
 
 struct RegisteredCanvasPainter {
@@ -605,7 +627,7 @@ pub enum NodeKind {
     /// Child composition, background, border, clipping.
     Box(BoxContent),
     /// Displayed text with optional selection/editing.
-    Text(TextContent),
+    Text(Box<TextContent>),
     /// Visual media presentation.
     Media(MediaContent),
     /// Scrollable viewport.
@@ -614,6 +636,13 @@ pub enum NodeKind {
     Canvas(CanvasContent),
     /// Programmable GPU content under ordinary UI layout/clipping.
     Viewport3D(ViewportContent),
+}
+
+impl NodeKind {
+    #[must_use]
+    pub fn text(content: TextContent) -> Self {
+        Self::Text(Box::new(content))
+    }
 }
 
 impl fmt::Debug for NodeKind {
@@ -907,7 +936,7 @@ pub struct NodeSemantics {
     /// Total collection size and logical positions for virtualized content
     /// (lists report `set_size`/`position_in_set`; tables report row/column
     /// counts and indices). `None` for non-collection nodes.
-    pub collection: Option<CollectionSemantics>,
+    pub collection: Option<Box<CollectionSemantics>>,
 }
 
 impl Default for NodeSemantics {
@@ -987,6 +1016,16 @@ impl fmt::Debug for NodeRecord {
             .field("semantics", &self.semantics)
             .finish()
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TreeFootprint {
+    pub nodes: usize,
+    pub arena_slots: usize,
+    pub arena_slot_bytes: usize,
+    pub taffy_nodes: usize,
+    pub layout_slots: usize,
+    pub interaction_entries: usize,
 }
 
 /// Per-leaf Taffy context. Text leaves carry measurable content; every other
@@ -1106,6 +1145,9 @@ pub struct UiTree {
     painters: HashMap<u64, RegisteredCanvasPainter>,
     deferred_canvas_actions: RefCell<Vec<DeferredCanvasAction>>,
     prepaints: HashMap<RawId, PrepaintCallback>,
+    observers: HashMap<RawId, ObserveCallback>,
+    observer_order: RefCell<Option<(u64, Vec<NodeId>)>>,
+    observed_version: std::cell::Cell<Option<u64>>,
     /// Next canvas painter id.
     next_painter: u64,
     /// Action callbacks by (node, action kind).
@@ -1225,6 +1267,9 @@ impl UiTree {
             painters: HashMap::new(),
             deferred_canvas_actions: RefCell::new(Vec::new()),
             prepaints: HashMap::new(),
+            observers: HashMap::new(),
+            observer_order: RefCell::new(None),
+            observed_version: std::cell::Cell::new(None),
             next_painter: 1,
             actions: HashMap::new(),
             bound_actions: HashSet::new(),
@@ -1572,7 +1617,7 @@ impl UiTree {
                     .filter(|child| !self.is_access_hidden(*child))
                     .collect(),
                 bounds,
-                collection: rec.semantics.collection,
+                collection: rec.semantics.collection.as_deref().copied(),
             });
         }
         out
@@ -1716,6 +1761,18 @@ impl UiTree {
     #[must_use]
     pub fn len(&self) -> usize {
         self.nodes.len()
+    }
+
+    #[must_use]
+    pub fn footprint(&self) -> TreeFootprint {
+        TreeFootprint {
+            nodes: self.nodes.len(),
+            arena_slots: self.nodes.capacity_slots(),
+            arena_slot_bytes: std::mem::size_of::<NodeRecord>(),
+            taffy_nodes: self.taffy.total_node_count(),
+            layout_slots: self.tmap.capacity() + self.rects.capacity() + self.content.capacity(),
+            interaction_entries: self.interaction.entry_capacity(),
+        }
     }
 
     /// Whether the tree is empty.
@@ -1880,7 +1937,7 @@ impl UiTree {
     #[must_use]
     pub fn motion_spec(&self, id: NodeId) -> Option<Rc<aqua_style::motion::MotionSpec>> {
         self.get(id).and_then(|rec| match &rec.kind {
-            NodeKind::Box(content) => content.paint.motion.clone(),
+            NodeKind::Box(content) => content.paint().motion.clone(),
             _ => rec.paint().motion.clone(),
         })
     }
@@ -1980,7 +2037,7 @@ impl UiTree {
 
     fn paint_transform(&self, id: NodeId) -> Option<Option<Transform2D>> {
         self.get(id).map(|rec| match &rec.kind {
-            NodeKind::Box(b) => b.paint.transform,
+            NodeKind::Box(b) => b.paint().transform,
             _ => rec.paint().transform,
         })
     }
@@ -2432,7 +2489,7 @@ impl UiTree {
         let kind = spec.kind;
         let children = spec.children;
         self.motion_declared |= paint.motion.is_some()
-            || matches!(&kind, NodeKind::Box(content) if content.paint.motion.is_some());
+            || matches!(&kind, NodeKind::Box(content) if content.paint().motion.is_some());
         let focusable = matches!(kind, NodeKind::Text(ref t) if t.is_editable())
             || control.as_deref().is_some_and(|control| {
                 matches!(
@@ -2702,6 +2759,7 @@ impl UiTree {
             self.content.remove(&n.raw());
             self.actions.retain(|(raw, _), _| *raw != n.raw());
             self.prepaints.remove(&n.raw());
+            self.observers.remove(&n.raw());
             self.bound_actions.retain(|(raw, _)| *raw != n.raw());
             let _ = self.nodes.remove(n.raw());
         }
@@ -2737,7 +2795,7 @@ impl UiTree {
     #[must_use]
     pub fn paint(&self, id: NodeId) -> Option<Paint> {
         self.get(id).map(|rec| match &rec.kind {
-            NodeKind::Box(b) => b.paint.clone(),
+            NodeKind::Box(b) => b.paint().clone(),
             _ => rec.paint().clone(),
         })
     }
@@ -2750,7 +2808,7 @@ impl UiTree {
             return false;
         };
         let current = match &rec.kind {
-            NodeKind::Box(b) => &b.paint,
+            NodeKind::Box(b) => b.paint(),
             _ => rec.paint(),
         };
         if *current == paint {
@@ -2767,7 +2825,7 @@ impl UiTree {
         };
         let layout_changed = self.gpui_layout_scale.is_some() && border(current) != border(&paint);
         match &mut rec.kind {
-            NodeKind::Box(b) => b.paint = paint,
+            NodeKind::Box(b) => b.set_paint(paint),
             _ => {
                 rec.paint_slot = (paint != Paint::default()).then(|| Box::new(paint));
             }
@@ -2783,6 +2841,14 @@ impl UiTree {
     /// painter id. The callback runs at emission with the committed bounds.
     pub fn set_canvas_painter(&mut self, id: NodeId, paint: CanvasPaintCallback) -> Option<u64> {
         self.set_registered_canvas_painter(id, CanvasPainter::Legacy(paint))
+    }
+
+    pub fn set_scroll_stable_canvas_painter(
+        &mut self,
+        id: NodeId,
+        paint: CanvasPaintCallback,
+    ) -> Option<u64> {
+        self.set_registered_canvas_painter(id, CanvasPainter::ScrollStable(paint))
     }
 
     pub fn set_context_canvas_painter(
@@ -2848,6 +2914,81 @@ impl UiTree {
 
     pub fn clear_canvas_prepaint(&mut self, id: NodeId) {
         self.prepaints.remove(&id.raw());
+    }
+
+    pub fn set_canvas_observer(&mut self, id: NodeId, callback: ObserveCallback) -> bool {
+        if !self
+            .get(id)
+            .is_some_and(|node| matches!(node.kind, NodeKind::Canvas(_)))
+        {
+            return false;
+        }
+        self.observers.insert(id.raw(), callback);
+        self.observer_order.get_mut().take();
+        self.observed_version.set(None);
+        true
+    }
+
+    pub fn clear_canvas_observer(&mut self, id: NodeId) {
+        if self.observers.remove(&id.raw()).is_some() {
+            self.observer_order.get_mut().take();
+        }
+    }
+
+    pub fn run_observers(&self) {
+        if self.observers.is_empty() || self.observed_version.get() == Some(self.content_version) {
+            return;
+        }
+        self.observed_version.set(Some(self.content_version));
+        let stale = self
+            .observer_order
+            .borrow()
+            .as_ref()
+            .is_none_or(|(epoch, _)| *epoch != self.structure_epoch);
+        if stale {
+            let ordered: Vec<NodeId> = self
+                .traverse()
+                .into_iter()
+                .filter(|node| self.observers.contains_key(&node.raw()))
+                .collect();
+            *self.observer_order.borrow_mut() = Some((self.structure_epoch, ordered));
+        }
+        let ordered = self
+            .observer_order
+            .borrow()
+            .as_ref()
+            .map(|(_, nodes)| nodes.clone())
+            .unwrap_or_default();
+        for node in ordered {
+            if let Some(callback) = self.observers.get(&node.raw()) {
+                callback(self, node);
+            }
+        }
+    }
+
+    pub fn observe_clip(&self, node: NodeId) -> Rect {
+        let viewport =
+            Rect::from_origin_size(Point::ZERO, self.last_viewport.unwrap_or(Size::ZERO));
+        let mut clip = viewport;
+        let mut cursor = Some(node);
+        while let Some(id) = cursor {
+            let Some(record) = self.get(id) else {
+                break;
+            };
+            let clips = matches!(&record.kind, NodeKind::Box(b) if b.paint().clip)
+                || matches!(record.kind, NodeKind::Scroll(_))
+                || record.paint().clip;
+            if clips {
+                if let Some(rect) = self.visual_rect(id) {
+                    clip = clip.intersect(rect);
+                }
+            }
+            if self.is_portal(id) {
+                break;
+            }
+            cursor = record.parent;
+        }
+        clip
     }
 
     /// Mark a node (and its ancestors) layout-dirty. Bumps the layout and
@@ -2966,7 +3107,7 @@ impl UiTree {
 
     pub fn set_text_selection(&mut self, id: NodeId, selection: Option<Selection>) -> bool {
         let composing = self.get(id).is_some_and(|record| {
-            matches!(&record.kind, NodeKind::Text(TextContent { backing: TextBacking::Editable(editor), .. }) if editor.is_composing())
+            matches!(&record.kind, NodeKind::Text(text) if matches!(&text.backing, TextBacking::Editable(editor) if editor.is_composing()))
         });
         if composing {
             return self
@@ -3260,7 +3401,7 @@ impl UiTree {
                 Some(scale) => {
                     let mut style = crate::layout::editor::to_taffy(&record.style, scale);
                     let paint = match &record.kind {
-                        NodeKind::Box(content) => &content.paint,
+                        NodeKind::Box(content) => content.paint(),
                         _ => record.paint(),
                     };
                     let widths = paint.gpui_border.map(|border| border.widths).or_else(|| {
@@ -3530,7 +3671,7 @@ impl UiTree {
             return;
         };
         let paint = match &rec.kind {
-            NodeKind::Box(content) => content.paint.clone(),
+            NodeKind::Box(content) => content.paint().clone(),
             _ => rec.paint().clone(),
         };
         let forced = self.motion_groups.get(&id).copied().unwrap_or_default();
@@ -3931,24 +4072,11 @@ impl UiTree {
                     .painter
                     .and_then(|pid| self.painters.get(&pid).map(|painter| (pid, painter)))
                 {
-                    let scroll_canceled = scrolled != Point::ZERO;
-                    if scroll_canceled {
-                        for active in self.scroll_active.borrow().iter() {
-                            if let Some(slot) = self.scroll_state.borrow_mut().get_mut(active) {
-                                slot.volatile = true;
-                            }
-                        }
-                        out.push((
-                            id,
-                            DisplayItem::PushTransform(Transform2D::translate(
-                                scrolled.x, scrolled.y,
-                            )),
-                        ));
-                    }
                     let ops = match &painter.callback {
                         CanvasPainter::Legacy(paint) => {
                             paint(rect.translate(-scrolled.x, -scrolled.y))
                         }
+                        CanvasPainter::ScrollStable(paint) => paint(rect),
                         CanvasPainter::Context(paint) => {
                             let corners = [
                                 rect.origin(),
@@ -3990,8 +4118,26 @@ impl UiTree {
                             })
                         }
                     };
-                    out.extend(ops.into_iter().map(|op| (id, op)));
+                    let scroll_canceled = scrolled != Point::ZERO
+                        && !matches!(painter.callback, CanvasPainter::ScrollStable(_));
                     if scroll_canceled {
+                        for active in self.scroll_active.borrow().iter() {
+                            if let Some(slot) = self.scroll_state.borrow_mut().get_mut(active) {
+                                slot.volatile = true;
+                            }
+                        }
+                    }
+                    let cancel = scroll_canceled && !ops.is_empty();
+                    if cancel {
+                        out.push((
+                            id,
+                            DisplayItem::PushTransform(Transform2D::translate(
+                                scrolled.x, scrolled.y,
+                            )),
+                        ));
+                    }
+                    out.extend(ops.into_iter().map(|op| (id, op)));
+                    if cancel {
                         out.push((id, DisplayItem::PopTransform));
                     }
                 }
@@ -4302,7 +4448,7 @@ mod tests {
     #[test]
     fn every_primitive_paints_without_wrapper_nodes() {
         let kinds = [
-            NodeKind::Text(TextContent::label("painted")),
+            NodeKind::text(TextContent::label("painted")),
             NodeKind::Media(MediaContent::default()),
             NodeKind::Scroll(ScrollContent::default()),
             NodeKind::Canvas(CanvasContent::default()),
@@ -4350,7 +4496,7 @@ mod tests {
         let mut tree = UiTree::new();
         let field = || {
             NodeSpec::new(
-                NodeKind::Text(TextContent::editable("draft", false)),
+                NodeKind::text(TextContent::editable("draft", false)),
                 LayoutStyle {
                     width: Length::Px(100.0),
                     height: Length::Px(40.0),
@@ -4390,7 +4536,7 @@ mod tests {
         let mut tree = UiTree::new();
         let spec = || {
             NodeSpec::new(
-                NodeKind::Text(TextContent::label("same")),
+                NodeKind::text(TextContent::label("same")),
                 LayoutStyle::default(),
             )
             .keyed(1u64)
@@ -4418,7 +4564,7 @@ mod tests {
         NodeSpec::new(NodeKind::Box(BoxContent::default()), LayoutStyle::default())
             .keyed(key)
             .child(NodeSpec::new(
-                NodeKind::Text(TextContent::label(label)),
+                NodeKind::text(TextContent::label(label)),
                 LayoutStyle::default(),
             ))
     }
@@ -4476,7 +4622,7 @@ mod tests {
         );
         let text = tree.insert(
             Some(root),
-            NodeKind::Text(TextContent::label("hi")),
+            NodeKind::text(TextContent::label("hi")),
             LayoutStyle::default(),
         );
         tree.compute_layout(Size::new(400.0, 400.0), &NaiveMeasurer)
@@ -4662,12 +4808,12 @@ mod tests {
         let mut tree = UiTree::new();
         let root = tree.mount_spec(column(vec![
             NodeSpec::new(
-                NodeKind::Text(TextContent::editable("first", false)),
+                NodeKind::text(TextContent::editable("first", false)),
                 LayoutStyle::default(),
             )
             .keyed("a"),
             NodeSpec::new(
-                NodeKind::Text(TextContent::editable("second", false)),
+                NodeKind::text(TextContent::editable("second", false)),
                 LayoutStyle::default(),
             )
             .keyed("b"),
@@ -4683,12 +4829,12 @@ mod tests {
             root,
             vec![
                 NodeSpec::new(
-                    NodeKind::Text(TextContent::editable("", false)),
+                    NodeKind::text(TextContent::editable("", false)),
                     LayoutStyle::default(),
                 )
                 .keyed("b"),
                 NodeSpec::new(
-                    NodeKind::Text(TextContent::editable("", false)),
+                    NodeKind::text(TextContent::editable("", false)),
                     LayoutStyle::default(),
                 )
                 .keyed("a"),
@@ -4705,7 +4851,7 @@ mod tests {
     fn kind_change_replaces_node() {
         let mut tree = UiTree::new();
         let root = tree.mount_spec(column(vec![NodeSpec::new(
-            NodeKind::Text(TextContent::label("x")),
+            NodeKind::text(TextContent::label("x")),
             LayoutStyle::default(),
         )
         .keyed("k")]));
@@ -4731,7 +4877,7 @@ mod tests {
         );
         let text = tree.insert(
             Some(root),
-            NodeKind::Text(TextContent::label("a")),
+            NodeKind::text(TextContent::label("a")),
             LayoutStyle::default(),
         );
         tree.push_command(UiCommand::SetText {
@@ -4849,7 +4995,7 @@ mod tests {
                 root,
                 99,
                 NodeSpec::new(
-                    NodeKind::Text(TextContent::label("hi")),
+                    NodeKind::text(TextContent::label("hi")),
                     LayoutStyle::default(),
                 )
                 .keyed("t"),
@@ -4886,9 +5032,9 @@ mod tests {
             {
                 let rec = tree.get_mut(kids[0]).unwrap();
                 if let NodeKind::Box(ref mut b) = rec.kind {
-                    let mut paint = b.paint.clone();
+                    let mut paint = b.paint().clone();
                     paint.fill = Some(Oklch::from_hex("#123456").unwrap());
-                    b.paint = paint;
+                    b.set_paint(paint);
                 }
             }
             assert!(tree.content_version() > v0);
@@ -4923,7 +5069,7 @@ mod tests {
         let mut tree = UiTree::new();
         let root = tree.mount_spec(column(vec![
             NodeSpec::new(
-                NodeKind::Text(TextContent::label("hello")),
+                NodeKind::text(TextContent::label("hello")),
                 LayoutStyle::default(),
             )
             .keyed("t"),
@@ -4974,11 +5120,11 @@ mod tests {
                 disabled: false,
                 selected: false,
                 value_text: None,
-                collection: Some(CollectionSemantics {
+                collection: Some(Box::new(CollectionSemantics {
                     set_size: Some(100),
                     position_in_set: Some(1),
                     ..Default::default()
-                }),
+                })),
             }
         ));
     }
@@ -4997,11 +5143,11 @@ mod tests {
                 disabled: false,
                 selected: false,
                 value_text: None,
-                collection: Some(CollectionSemantics {
+                collection: Some(Box::new(CollectionSemantics {
                     set_size: Some(100),
                     position_in_set: Some(42),
                     ..Default::default()
-                }),
+                })),
             }
         ));
         // Default is None (non-collection nodes report no coordinates).
@@ -5050,7 +5196,7 @@ mod tests {
                 body,
                 0,
                 NodeSpec::new(
-                    NodeKind::Text(TextContent::label("row")),
+                    NodeKind::text(TextContent::label("row")),
                     LayoutStyle::default(),
                 )
                 .keyed("row-7"),
@@ -5124,7 +5270,7 @@ mod tests {
         );
         let field = tree.insert(
             Some(row),
-            NodeKind::Text(TextContent::editable("draft", false)),
+            NodeKind::text(TextContent::editable("draft", false)),
             LayoutStyle::default(),
         );
         tree.set_focusable(field, true);
@@ -5143,7 +5289,7 @@ mod tests {
         );
         let child = NodeSpec::new(NodeKind::Box(BoxContent::default()), LayoutStyle::default())
             .child(NodeSpec::new(
-                NodeKind::Text(TextContent::label("nested")),
+                NodeKind::text(TextContent::label("nested")),
                 LayoutStyle::default(),
             ));
         let ids = tree.sync_children(root, vec![child]);

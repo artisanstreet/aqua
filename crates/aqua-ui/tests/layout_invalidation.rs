@@ -59,7 +59,7 @@ fn text_tree() -> (UiTree, NodeId) {
             ..LayoutStyle::default()
         })
         .child(NodeSpec::new(
-            NodeKind::Text(TextContent::label("measured once")),
+            NodeKind::text(TextContent::label("measured once")),
             LayoutStyle::default(),
         )),
     );

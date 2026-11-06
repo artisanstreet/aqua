@@ -1,7 +1,7 @@
 use aqua_core::Size;
-use aqua_ui::NaiveMeasurer;
 use aqua_ui::style::{LayoutStyle, Length};
 use aqua_ui::tree::{BoxContent, NodeKind, NodeSpec, TextContent, UiTree};
+use aqua_ui::NaiveMeasurer;
 
 #[test]
 fn wrapping_text_in_a_row_shrinks_to_the_container_instead_of_overflowing() {
@@ -15,7 +15,7 @@ fn wrapping_text_in_a_row_shrinks_to_the_container_instead_of_overflowing() {
             ..Default::default()
         },
     )
-    .child(NodeSpec::new(NodeKind::Text(text), LayoutStyle::default()));
+    .child(NodeSpec::new(NodeKind::text(text), LayoutStyle::default()));
     let root = tree.mount_spec(container);
     tree.compute_layout(Size::new(400.0, 400.0), &NaiveMeasurer)
         .unwrap();

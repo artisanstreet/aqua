@@ -523,13 +523,11 @@ mod tests {
         assert_eq!(decode_layer(0xC000_0000_0000_0001), None);
         // INVALID handles never form a live key (reserved index decodes only
         // as coordinates; stores still reject it via liveness checks).
-        assert!(
-            decode_layer(media_layer(ImageId::from_raw(RawId {
-                index: 0,
-                generation: 0
-            })))
-            .is_some()
-        );
+        assert!(decode_layer(media_layer(ImageId::from_raw(RawId {
+            index: 0,
+            generation: 0
+        })))
+        .is_some());
     }
 
     #[test]

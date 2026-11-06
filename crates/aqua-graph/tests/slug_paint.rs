@@ -1,8 +1,8 @@
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
+use aqua_core::Oklch;
 use aqua_graph::{
-    Extent, Linear2, PaintCommand, PassKind, PlanError, Quad, Shadow, ShadowCast, SlugInstance,
-    SlugRun, TextureHandle, TextureRef, plan_paint, validate,
+    plan_paint, validate, Extent, Linear2, PaintCommand, PassKind, PlanError, Quad, Shadow,
+    ShadowCast, SlugInstance, SlugRun, TextureHandle, TextureRef,
 };
 
 const STORE: TextureHandle = TextureHandle(9);
@@ -84,11 +84,11 @@ fn consecutive_slug_runs_merge_into_one_pass_reading_the_store() {
     let commands = [
         PaintCommand::Slug(SlugRun {
             store: STORE,
-            glyphs: vec![glyph([10.0, 40.0]), glyph([40.0, 40.0])],
+            glyphs: vec![glyph([10.0, 40.0]), glyph([40.0, 40.0])].into(),
         }),
         PaintCommand::Slug(SlugRun {
             store: STORE,
-            glyphs: vec![glyph([70.0, 40.0])],
+            glyphs: vec![glyph([70.0, 40.0])].into(),
         }),
     ];
     let plan = plan_paint(EXTENT, Oklch::TRANSPARENT, &commands).unwrap();
@@ -120,7 +120,7 @@ fn disjoint_children_fold_the_group_opacity_into_the_glyphs() {
         PaintCommand::Quad(quad(rect(2.0, 2.0, 10.0, 10.0))),
         PaintCommand::Slug(SlugRun {
             store: STORE,
-            glyphs: vec![glyph([60.0, 60.0])],
+            glyphs: vec![glyph([60.0, 60.0])].into(),
         }),
         PaintCommand::PopOpacity,
     ];
@@ -139,7 +139,7 @@ fn overlapping_children_draw_into_a_layer_with_local_origins() {
         PaintCommand::Quad(quad(rect(30.0, 20.0, 20.0, 20.0))),
         PaintCommand::Slug(SlugRun {
             store: STORE,
-            glyphs: vec![glyph([36.0, 36.0])],
+            glyphs: vec![glyph([36.0, 36.0])].into(),
         }),
         PaintCommand::PopOpacity,
     ];

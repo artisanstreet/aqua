@@ -1,3 +1,5 @@
+use std::cell::{Cell, RefCell};
+
 pub use aqua_core::geometry::Rect;
 pub use aqua_core::id::{NodeId, RawId};
 pub use aqua_core::scene::{DisplayItem, TextRun};
@@ -15,6 +17,8 @@ pub fn inflate(r: Rect, px: f32) -> Rect {
 fn wrap(index: u32, generation: u32) -> NodeId {
     NodeId::from_raw(RawId { index, generation })
 }
+
+const CHANGE_LOG_LIMIT: usize = 2048;
 
 struct Node {
     generation: u32,
@@ -47,8 +51,10 @@ pub struct Scene {
     /// Painter order: node indices back-to-front.
     order: Vec<u32>,
     /// Position of each node index in `order`. Rebuilt when `order` changes.
-    positions: Vec<u32>,
-    order_dirty: bool,
+    positions: RefCell<Vec<u32>>,
+    order_dirty: Cell<bool>,
+    log: Vec<(u64, u32)>,
+    log_floor: u64,
     /// Pending node indices changed since last drain (may contain stale or
     /// duplicate entries; both are filtered at drain time).
     dirty: Vec<u32>,
@@ -96,7 +102,7 @@ impl Scene {
             self.order.push(index);
             (index, 0)
         };
-        self.order_dirty = true;
+        self.order_dirty.set(true);
         self.struct_version += 1;
         self.mark_dirty(index);
         wrap(index, generation)
@@ -120,6 +126,7 @@ impl Scene {
         self.revision += 1;
         node.item = item;
         node.changed_at = self.revision;
+        self.record_change(raw.index);
         if !already_pending {
             self.mark_dirty(raw.index);
         }
@@ -145,7 +152,7 @@ impl Scene {
         node.generation = next_gen;
         self.free.push((raw.index, next_gen));
         self.order.retain(|&i| i != raw.index);
-        self.order_dirty = true;
+        self.order_dirty.set(true);
         self.struct_version += 1;
         true
     }
@@ -163,7 +170,7 @@ impl Scene {
         let order: Vec<u32> = ids.iter().map(|id| id.raw().index).collect();
         if order != self.order {
             self.order = order;
-            self.order_dirty = true;
+            self.order_dirty.set(true);
             self.struct_version += 1;
             self.revision += 1;
         }
@@ -205,19 +212,79 @@ impl Scene {
 
     fn mark_dirty(&mut self, index: u32) {
         self.dirty.push(index);
+        self.record_change(index);
     }
 
-    fn refresh_positions(&mut self) {
-        if !self.order_dirty {
+    fn record_change(&mut self, index: u32) {
+        if self.log.last() == Some(&(self.revision, index)) {
             return;
         }
-        if self.positions.len() < self.nodes.len() {
-            self.positions.resize(self.nodes.len(), u32::MAX);
+        if self.log.capacity() == 0 {
+            self.log.reserve_exact(CHANGE_LOG_LIMIT * 2 + 1);
+        }
+        self.log.push((self.revision, index));
+        if self.log.len() > CHANGE_LOG_LIMIT * 2 {
+            let dropped = self.log.drain(..CHANGE_LOG_LIMIT).next_back();
+            self.log_floor = dropped.map_or(self.log_floor, |(revision, _)| revision);
+        }
+    }
+
+    fn refresh_positions(&self) {
+        if !self.order_dirty.get() {
+            return;
+        }
+        let mut positions = self.positions.borrow_mut();
+        if positions.len() < self.nodes.len() {
+            positions.resize(self.nodes.len(), u32::MAX);
         }
         for (pos, &idx) in self.order.iter().enumerate() {
-            self.positions[idx as usize] = pos as u32;
+            positions[idx as usize] = pos as u32;
         }
-        self.order_dirty = false;
+        self.order_dirty.set(false);
+    }
+
+    pub fn struct_version(&self) -> u64 {
+        self.struct_version
+    }
+
+    pub fn item_at(&self, position: usize) -> Option<(NodeId, &DisplayItem)> {
+        let index = *self.order.get(position)?;
+        let node = &self.nodes[index as usize];
+        Some((wrap(index, node.generation), &node.item))
+    }
+
+    pub fn indices(&self, from: usize, to: usize) -> Option<&[u32]> {
+        self.order.get(from..to)
+    }
+
+    pub fn position(&self, id: NodeId) -> Option<usize> {
+        let raw = id.raw();
+        self.nodes
+            .get(raw.index as usize)
+            .filter(|n| n.alive && n.generation == raw.generation)?;
+        self.refresh_positions();
+        self.positions
+            .borrow()
+            .get(raw.index as usize)
+            .map(|&position| position as usize)
+            .filter(|&position| self.order.get(position) == Some(&raw.index))
+    }
+
+    pub fn changed_since(&self, revision: u64, mut visit: impl FnMut(usize)) -> bool {
+        if revision < self.log_floor {
+            return false;
+        }
+        self.refresh_positions();
+        let positions = self.positions.borrow();
+        let start = self.log.partition_point(|&(at, _)| at <= revision);
+        for &(_, index) in &self.log[start..] {
+            if let Some(&position) = positions.get(index as usize) {
+                if self.order.get(position as usize) == Some(&index) {
+                    visit(position as usize);
+                }
+            }
+        }
+        true
     }
 
     /// Drain nodes changed since the last drain, in painter order.
@@ -227,7 +294,9 @@ impl Scene {
     pub fn drain_changes(&mut self) -> Vec<(NodeId, DisplayItem)> {
         self.refresh_positions();
         let mut pending: Vec<u32> = std::mem::take(&mut self.dirty);
-        pending.sort_by_key(|&i| self.positions.get(i as usize).copied().unwrap_or(u32::MAX));
+        let positions = self.positions.borrow();
+        pending.sort_by_key(|&i| positions.get(i as usize).copied().unwrap_or(u32::MAX));
+        drop(positions);
         pending.dedup();
         let mut out = Vec::with_capacity(pending.len());
         for i in pending {

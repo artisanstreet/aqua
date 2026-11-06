@@ -29,7 +29,7 @@ fn editor(tree: &UiTree, id: aqua_core::NodeId) -> &aqua_text::TextEditor {
 fn ctrl_paragraph_keys_preserve_column_and_shift_anchor() {
     let mut tree = UiTree::new();
     let id = tree.mount_spec(NodeSpec::new(
-        NodeKind::Text(TextContent::editable("abcd\nx\nwxyz", true)),
+        NodeKind::text(TextContent::editable("abcd\nx\nwxyz", true)),
         LayoutStyle::default(),
     ));
     assert!(tree.set_focused(Some(id)));
@@ -56,7 +56,7 @@ fn ctrl_paragraph_keys_preserve_column_and_shift_anchor() {
 fn ctrl_word_deletion_and_undo_redo_route_to_editor() {
     let mut tree = UiTree::new();
     let id = tree.mount_spec(NodeSpec::new(
-        NodeKind::Text(TextContent::editable("hello world", true)),
+        NodeKind::text(TextContent::editable("hello world", true)),
         LayoutStyle::default(),
     ));
     assert!(tree.set_focused(Some(id)));

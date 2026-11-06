@@ -1,6 +1,6 @@
 //! Platform-neutral input events. The platform adapter translates native
-//! events (winit key codes, IME, pointer) into these; UI and apps only ever
-//! see this vocabulary. No winit/wgpu types here.
+//! events (key codes, IME, pointer) into these; UI and apps only ever
+//! see this vocabulary. No windowing or GPU types here.
 
 use crate::geometry::Point;
 
@@ -205,7 +205,7 @@ pub enum InputEvent {
     /// Key released.
     KeyUp(KeyEvent),
     ModifiersChanged(Modifiers),
-    /// Committed text from the platform (winit `KeyEvent.text`), routed
+    /// Committed text from the platform, routed
     /// exactly once per platform key event and SUPPRESSED while IME is
     /// active (IME text travels via `ImeEvent::Commit` instead). Carries the
     /// full multi-scalar string — `Key::Char` is identity only and cannot

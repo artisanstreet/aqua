@@ -1676,9 +1676,7 @@ fn table_host_specs() -> Vec<NodeSpec> {
         ..Default::default()
     };
     let mut clip = NodeSpec::new(
-        NodeKind::Box(BoxContent {
-            paint: clip_paint.clone(),
-        }),
+        NodeKind::Box(BoxContent::new(clip_paint.clone())),
         clip_style,
     );
     clip.paint = clip_paint;
@@ -1781,7 +1779,7 @@ fn apply_collection_semantics(
         if let Some(rec) = tree.get(id) {
             let mut sem = rec.semantics.clone();
             sem.role = role;
-            sem.collection = Some(cs);
+            sem.collection = Some(Box::new(cs));
             tree.set_semantics(id, sem);
         }
     }
@@ -2049,7 +2047,7 @@ fn bind_new(
                 sem.role = role;
             }
             if let Some(cs) = el.collection_semantics_opt() {
-                sem.collection = Some(cs);
+                sem.collection = Some(Box::new(cs));
             }
             tree.set_semantics(id, sem);
         }
@@ -2227,6 +2225,8 @@ fn effect_keys(bindings: &[ElementBinding]) -> Vec<aqua_reactive::NodeId> {
             | ElementBinding::Focusable
             | ElementBinding::Painter(_)
             | ElementBinding::ContextPainter(_)
+            | ElementBinding::ScrollStablePainter(_)
+            | ElementBinding::Observe(_)
             | ElementBinding::Prepaint(_) => {}
         }
     }
@@ -2243,6 +2243,7 @@ fn apply_bindings(
 ) {
     tree.clear_input_bindings(id);
     tree.clear_canvas_prepaint(id);
+    tree.clear_canvas_observer(id);
     tree.clear_canvas_painter(id);
     if let Some(record) = tree.get_mut(id) {
         record.description = None;
@@ -2458,8 +2459,14 @@ fn apply_bindings(
             ElementBinding::ContextPainter(painter) => {
                 tree.set_context_canvas_painter(id, painter);
             }
+            ElementBinding::ScrollStablePainter(painter) => {
+                tree.set_scroll_stable_canvas_painter(id, painter);
+            }
             ElementBinding::Prepaint(callback) => {
                 tree.set_canvas_prepaint(id, callback);
+            }
+            ElementBinding::Observe(callback) => {
+                tree.set_canvas_observer(id, callback);
             }
         }
     }

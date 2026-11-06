@@ -212,6 +212,7 @@ pub const STORE_HANDLE: TextureHandle = TextureHandle(u32::MAX - 1);
 
 const MIN_STORE_ROWS: u32 = 8;
 const ROW_TEXELS: usize = STORE_WIDTH as usize;
+const GROWTH_STEP_TEXELS: usize = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StoredGlyph {
@@ -396,6 +397,10 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
         let packed = pack_glyph(glyph, base);
         let end = base as usize + packed.len();
         if self.texels.len() < end {
+            if self.texels.capacity() < end {
+                let step = end.next_multiple_of(GROWTH_STEP_TEXELS) - self.texels.len();
+                self.texels.reserve_exact(step);
+            }
             self.texels.resize(end, [0.0; 4]);
         }
         self.texels[base as usize..end].copy_from_slice(&packed);

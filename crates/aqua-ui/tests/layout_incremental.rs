@@ -40,7 +40,7 @@ fn row_spec(rng: &mut Lcg, depth: u32) -> NodeSpec {
     let mut node = NodeSpec::new(NodeKind::Box(BoxContent::default()), style);
     node.children = match depth {
         0 => vec![NodeSpec::new(
-            NodeKind::Text(TextContent::label(
+            NodeKind::text(TextContent::label(
                 "word ".repeat(rng.next(12) as usize + 1),
             )),
             LayoutStyle::default(),

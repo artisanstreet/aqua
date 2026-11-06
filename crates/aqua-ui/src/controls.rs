@@ -478,12 +478,12 @@ fn seek(tree: &mut UiTree, node: NodeId, pointer: Point, capture: Capture) {
                 + match resize.axis {
                     Axis::Row => (pointer.x - capture.origin.x) as f64,
                     Axis::Column => (pointer.y - capture.origin.y) as f64,
-                } / tree
-                    .visual_transform(node)
-                    .map_or(1.0, |transform| match transform.a.abs() > f32::EPSILON {
+                } / tree.visual_transform(node).map_or(1.0, |transform| {
+                    match transform.a.abs() > f32::EPSILON {
                         true => transform.a as f64,
                         false => 1.0,
-                    }),
+                    }
+                }),
         ),
         _ => None,
     };

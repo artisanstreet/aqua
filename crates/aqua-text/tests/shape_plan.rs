@@ -1,8 +1,8 @@
 #![cfg(windows)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use aqua_text::{FontManager, LineMode, TextLayout, TextStyle, WrapMode};
 

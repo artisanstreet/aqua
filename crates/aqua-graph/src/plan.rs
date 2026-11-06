@@ -1,4 +1,4 @@
-use aqua_core::{Oklch, geometry::Rect};
+use aqua_core::{geometry::Rect, Oklch};
 
 use crate::linear::Linear2;
 use crate::slug::SlugInstance;

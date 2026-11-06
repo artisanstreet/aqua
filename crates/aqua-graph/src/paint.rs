@@ -1,10 +1,10 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use aqua_core::{Oklch, geometry::Rect};
+use aqua_core::{geometry::Rect, Oklch};
 
 use crate::analysis::{intersect, union};
-use crate::blur::{BlurRequest, blur_chain};
+use crate::blur::{blur_chain, BlurRequest};
 use crate::graph::{PlanLimits, RenderGraph};
 use crate::linear::Linear2;
 use crate::plan::{
@@ -94,10 +94,33 @@ pub struct GlyphRun {
     pub glyphs: GlyphList,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SlugList(Arc<Vec<SlugInstance>>);
+
+impl Deref for SlugList {
+    type Target = [SlugInstance];
+
+    fn deref(&self) -> &[SlugInstance] {
+        &self.0
+    }
+}
+
+impl From<Vec<SlugInstance>> for SlugList {
+    fn from(glyphs: Vec<SlugInstance>) -> Self {
+        Self(Arc::new(glyphs))
+    }
+}
+
+impl FromIterator<SlugInstance> for SlugList {
+    fn from_iter<I: IntoIterator<Item = SlugInstance>>(glyphs: I) -> Self {
+        Self(Arc::new(glyphs.into_iter().collect()))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SlugRun {
     pub store: TextureHandle,
-    pub glyphs: Vec<SlugInstance>,
+    pub glyphs: SlugList,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

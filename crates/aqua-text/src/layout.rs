@@ -7,7 +7,7 @@ use crate::font::FontManager;
 use crate::lines;
 use aqua_media::hash::FastHasher;
 
-use crate::shape::{ShapeContext, ShapedParagraph, SpanText, scaled_line_height, shape_paragraph};
+use crate::shape::{scaled_line_height, shape_paragraph, ShapeContext, ShapedParagraph, SpanText};
 use crate::shape_cache::paragraph_key;
 use crate::style::{LineMode, StyledSpan, TextAlign, TextStyle, WrapMode};
 
@@ -606,7 +606,7 @@ impl TextLayout {
         mode: crate::overflow::OverflowMode,
     ) -> Arc<LaidOut> {
         use crate::overflow::{
-            EllipsisPosition, OverflowCluster, single_line_overflow_with_spacing,
+            single_line_overflow_with_spacing, EllipsisPosition, OverflowCluster,
         };
         let natural = self.layout(fonts);
         if self.line_mode != LineMode::Single

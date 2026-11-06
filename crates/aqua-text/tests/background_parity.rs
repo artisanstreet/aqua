@@ -81,7 +81,7 @@ fn source_backgrounds(shaped: &LaidOut, spans: &[StyledSpan]) -> Vec<TextBackgro
 }
 
 #[test]
-fn backgrounds_follow_pinned_cosmic_painter_for_clusters_bidi_and_wraps() {
+fn backgrounds_follow_pinned_reference_painter_for_clusters_bidi_and_wraps() {
     let red = [0.2, 0.3, 0.4, 0.5];
     let blue = [0.6, 0.7, 0.8, 0.9];
     let fixtures = [

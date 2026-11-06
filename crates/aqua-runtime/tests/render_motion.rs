@@ -160,6 +160,13 @@ fn a_second_notch_mid_glide_continues_from_the_presented_position() {
     let mut rig = Rig::new(scroller());
     rig.app_frame(0.0);
     rig.wheel(1.0, 1.0);
+    rig.deliver(
+        vec![RenderCommand::Viewport {
+            size: aqua_core::Size::new(300.0, 200.0),
+            scale: 1.25,
+        }],
+        1.0,
+    );
     for step in 1..=12 {
         rig.render_only(1.0 + f64::from(step) / 120.0);
     }

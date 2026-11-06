@@ -1123,7 +1123,7 @@ mod tests {
 
     fn editable_field() -> NodeSpec {
         NodeSpec::new(
-            NodeKind::Text(TextContent::editable("", false)),
+            NodeKind::text(TextContent::editable("", false)),
             LayoutStyle::default(),
         )
     }

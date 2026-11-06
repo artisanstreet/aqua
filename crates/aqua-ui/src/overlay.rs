@@ -301,7 +301,11 @@ pub fn place_overlay_uncontained(anchor: Rect, size: Size, placement: &Placement
 fn clamp_cross(pos: f32, len: f32, lo: f32, hi: f32, margin: f32) -> f32 {
     let min = lo + margin;
     let max = hi - margin - len;
-    if max <= min { min } else { pos.clamp(min, max) }
+    if max <= min {
+        min
+    } else {
+        pos.clamp(min, max)
+    }
 }
 
 /// Clamp an overlay origin into the viewport margin box. Oversized overlays
@@ -1245,11 +1249,9 @@ mod tests {
             index: 99,
             generation: 0,
         });
-        assert!(
-            service
-                .close(&mut focus, ghost, CloseReason::Requested)
-                .is_empty()
-        );
+        assert!(service
+            .close(&mut focus, ghost, CloseReason::Requested)
+            .is_empty());
     }
 
     #[test]
@@ -1539,11 +1541,9 @@ mod tests {
 
         let closed = service.dispose_owner(&mut focus, node(1));
         assert_eq!(closed.len(), 2);
-        assert!(
-            closed
-                .iter()
-                .any(|c| c.id == parent && c.reason == CloseReason::OwnerRemoved)
-        );
+        assert!(closed
+            .iter()
+            .any(|c| c.id == parent && c.reason == CloseReason::OwnerRemoved));
         // Focus was on the disposed overlay's node: falls back to saved.
         assert_eq!(focus.focused(), Some(node(5)));
         // The other owner's menu survives.

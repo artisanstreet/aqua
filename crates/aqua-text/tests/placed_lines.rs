@@ -91,25 +91,21 @@ fn recoloring_an_earlier_span_changes_only_that_paragraph() {
     let mut fonts = FontManager::new();
     let mut layout = configured(TextAlign::Start, Some(220.0));
     layout.set_spans(vec![
-        StyledSpan::new(STREAM, style.clone()).color([1, 2, 3, 255]),
+        StyledSpan::new(STREAM, style.clone()).color([1, 2, 3, 255])
     ]);
     let before = layout.layout(&mut fonts);
     layout.set_spans(vec![
-        StyledSpan::new(STREAM, style.clone()).color([9, 9, 9, 255]),
+        StyledSpan::new(STREAM, style.clone()).color([9, 9, 9, 255])
     ]);
     let after = layout.layout(&mut fonts);
-    assert!(
-        before
-            .lines
-            .iter()
-            .flat_map(|line| &line.glyphs)
-            .all(|glyph| glyph.color_srgb == Some([1, 2, 3, 255]))
-    );
-    assert!(
-        after
-            .lines
-            .iter()
-            .flat_map(|line| &line.glyphs)
-            .all(|glyph| glyph.color_srgb == Some([9, 9, 9, 255]))
-    );
+    assert!(before
+        .lines
+        .iter()
+        .flat_map(|line| &line.glyphs)
+        .all(|glyph| glyph.color_srgb == Some([1, 2, 3, 255])));
+    assert!(after
+        .lines
+        .iter()
+        .flat_map(|line| &line.glyphs)
+        .all(|glyph| glyph.color_srgb == Some([9, 9, 9, 255])));
 }

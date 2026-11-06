@@ -1,7 +1,7 @@
 use std::ops::Range;
 
-use icu_segmenter::LineSegmenter;
 use icu_segmenter::options::LineBreakOptions;
+use icu_segmenter::LineSegmenter;
 use unicode_bidi::{Level, ParagraphBidiInfo};
 
 use crate::shape::{Cluster, ShapedParagraph};

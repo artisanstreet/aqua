@@ -10,7 +10,7 @@ use aqua_protocol::{
 use aqua_ui::input::{ClipboardPaste, ExternalFileDragEvent};
 use aqua_ui::tree::{NodeKind, TextBacking};
 
-use super::{Runtime, emit_scene_diff};
+use super::{emit_scene_diff, Runtime};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ImeProbe {

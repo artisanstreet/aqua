@@ -37,10 +37,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::rc::Rc;
 
-use crate::element::{Element, Key, LowerError, TypoChain, lower_specs_in};
+use crate::element::{lower_specs_in, Element, Key, LowerError, TypoChain};
 use crate::style::{Axis, LayoutStyle, Length, Paint, Style};
 use crate::tree::{BoxContent, NodeKind, NodeSpec};
-use crate::virtualization::{PrefixSums, ReadingAnchor, RowRange, window_for_viewport};
+use crate::virtualization::{window_for_viewport, PrefixSums, ReadingAnchor, RowRange};
 
 /// Width plan for one layout pass. The source computes this from
 /// `available_width` only (fit-to-content is explicit, never an implicit scan
@@ -486,7 +486,11 @@ pub fn container_style(desc: &CollectionDescriptor) -> (LayoutStyle, Paint) {
 pub fn body_gap(desc: &CollectionDescriptor) -> f32 {
     let (layout, _) = container_style(desc);
     let g = layout.row_gap.unwrap_or(layout.gap);
-    if g.is_finite() && g >= 0.0 { g } else { 0.0 }
+    if g.is_finite() && g >= 0.0 {
+        g
+    } else {
+        0.0
+    }
 }
 /// Shell shape for a descriptor (agreed contract with the View driver owner,
 /// via parent): tells the driver what to BUILD into the empty lowered shell.
@@ -525,6 +529,7 @@ pub fn shell_shape(desc: &CollectionDescriptor) -> ShellShape {
 /// the real viewport width on every `compute_layout` and rebuilds rows when
 /// it changes — this constant never governs steady state.
 pub const INITIAL_AVAILABLE_WIDTH: f32 = 800.0;
+const REALIZED_WINDOW_HYSTERESIS: f32 = 0.25;
 
 /// Lower one source row to specs with the runtime-owned identity key forced
 /// on top (sources must not set keys; reuse keys and anchor keys must
@@ -1244,17 +1249,23 @@ impl CollectionState {
         }
         if let Some(pixels) = self.desc.overscan_pixels {
             if self.viewport_h.is_finite() && self.viewport_h > 0.0 {
-                let maximum = (self.total_height() - self.viewport_h).max(0.0);
-                let y = self.scroll_y.clamp(0.0, maximum);
-                let first = self.index_at(f64::from((y - pixels).max(0.0))).min(len - 1);
-                let end = self
-                    .index_at(f64::from(y) + f64::from(self.viewport_h) + f64::from(pixels))
-                    .saturating_add(1)
-                    .min(len);
-                return RowRange {
-                    start: first,
-                    end: end.max(first + 1),
+                let needed = self.pixel_window(pixels, len);
+                let held = self.mounted;
+                if held.start == held.end || held.end > len {
+                    return needed;
+                }
+                let hysteresis = pixels * REALIZED_WINDOW_HYSTERESIS;
+                let ceiling = self.pixel_window(pixels + 2.0 * hysteresis, len);
+                let expanded = self.pixel_window(pixels + hysteresis, len);
+                let start = match held.start >= ceiling.start && held.start <= needed.start {
+                    true => held.start,
+                    false => expanded.start,
                 };
+                let end = match held.end <= ceiling.end && held.end >= needed.end {
+                    true => held.end,
+                    false => expanded.end,
+                };
+                return RowRange { start, end };
             }
         }
         if self.sparse.is_some() {
@@ -1286,6 +1297,20 @@ impl CollectionState {
             self.viewport_h,
             self.desc.overscan,
         )
+    }
+
+    fn pixel_window(&self, pixels: f32, len: usize) -> RowRange {
+        let maximum = (self.total_height() - self.viewport_h).max(0.0);
+        let y = self.scroll_y.clamp(0.0, maximum);
+        let first = self.index_at(f64::from((y - pixels).max(0.0))).min(len - 1);
+        let end = self
+            .index_at(f64::from(y) + f64::from(self.viewport_h) + f64::from(pixels))
+            .saturating_add(1)
+            .min(len);
+        RowRange {
+            start: first,
+            end: end.max(first + 1),
+        }
     }
 
     /// Sorted mounted index runs: the desired window plus the pinned row as

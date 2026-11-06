@@ -17,7 +17,7 @@ use aqua_ui::binding::View;
 use aqua_ui::collection_runtime::{
     CollectionDescriptor, CollectionError, CollectionLayout, CollectionRole, CollectionSource,
 };
-use aqua_ui::element::{Element, Key, ui};
+use aqua_ui::element::{ui, Element, Key};
 use aqua_ui::layout::NaiveMeasurer;
 use aqua_ui::tree::{ActionEvent, ActionKind, NodeKind, UiTree};
 
@@ -264,15 +264,14 @@ fn prepared_rows_fail_before_registration_and_remain_bounded_on_retry() {
         registered.set(registered.get() + sources.len());
         Ok(())
     };
-    assert!(
-        view.compute_layout_with_row_sources(
+    assert!(view
+        .compute_layout_with_row_sources(
             &mut tree,
             Size::new(200.0, 160.0),
             &NaiveMeasurer,
             &mut register
         )
-        .is_err()
-    );
+        .is_err());
     assert_eq!(registrations.get(), 0);
     assert!(row_texts(&tree).is_empty());
     failing.set(false);
@@ -1429,29 +1428,25 @@ fn table_horizontal_scroll_moves_header_and_body_together() {
         use aqua_ui::style::{Length, Style};
         view.set_content(
             &mut tree,
-            vec![
-                Table::new()
-                    .items(items)
-                    .key(|it: &TCell| it.key)
-                    .columns([
-                        ColumnBuilder::new("name")
-                            .header(|| ui::Text::builder().arg("Name").build())
-                            .cell(|it: &TCell| ui::Text::builder().arg(it.name.clone()).build())
-                            .width(Length::Px(400.0))
-                            .build(),
-                        ColumnBuilder::new("value")
-                            .header(|| ui::Text::builder().arg("Value").build())
-                            .cell(|it: &TCell| {
-                                ui::Text::builder().arg(format!("{}", it.value)).build()
-                            })
-                            .width(Length::Px(400.0))
-                            .build(),
-                    ])
-                    .header_styles([Style::new().gap(6.0)])
-                    .row_styles([Style::new().gap(6.0)])
-                    .virtualize()
-                    .build(),
-            ],
+            vec![Table::new()
+                .items(items)
+                .key(|it: &TCell| it.key)
+                .columns([
+                    ColumnBuilder::new("name")
+                        .header(|| ui::Text::builder().arg("Name").build())
+                        .cell(|it: &TCell| ui::Text::builder().arg(it.name.clone()).build())
+                        .width(Length::Px(400.0))
+                        .build(),
+                    ColumnBuilder::new("value")
+                        .header(|| ui::Text::builder().arg("Value").build())
+                        .cell(|it: &TCell| ui::Text::builder().arg(format!("{}", it.value)).build())
+                        .width(Length::Px(400.0))
+                        .build(),
+                ])
+                .header_styles([Style::new().gap(6.0)])
+                .row_styles([Style::new().gap(6.0)])
+                .virtualize()
+                .build()],
         )
         .unwrap();
     }
@@ -1601,10 +1596,9 @@ fn aligned_view_reveal_waits_for_a_committed_viewport() {
         10,
         CollectionRevealAlignment::Start
     ));
-    assert!(
-        view.collection_index_target_aligned(&tree, root, 10, CollectionRevealAlignment::Start)
-            .is_none()
-    );
+    assert!(view
+        .collection_index_target_aligned(&tree, root, 10, CollectionRevealAlignment::Start)
+        .is_none());
     drive(&mut view, &mut tree, 200.0, 160.0);
     let original = tree.scroll_offset(root).unwrap();
     assert_eq!(tree.content_size(root).unwrap().h, 3200.0);
@@ -1953,4 +1947,37 @@ fn matching_shape_epoch_skips_the_snapshot_refresh_and_still_checks_revisions() 
         .unwrap();
     harness.settle();
     assert!(calls.get() >= 500);
+}
+
+#[test]
+fn realized_window_holds_until_the_needed_window_escapes_then_expands_ahead() {
+    use aqua_ui::collection_runtime::CollectionState;
+    let source = Rc::new(TSource::plain(1000));
+    let mut descriptor = desc_of(&source, true);
+    descriptor.overscan_pixels = Some(400.0);
+    let mut state = CollectionState::new(descriptor).unwrap();
+    state.set_viewport(400.0, 64.0);
+    state.set_scroll(0.0, 3200.0);
+    let first = state.desired_window();
+    state.set_mounted(first);
+    let mut remounts = 0;
+    for step in 1..=200 {
+        state.set_scroll(0.0, 3200.0 + step as f32 * 8.0);
+        let window = state.desired_window();
+        if window != state.mounted() {
+            remounts += 1;
+            assert!(window.start >= state.mounted().start);
+            assert!(window.end >= state.mounted().end);
+            state.set_mounted(window);
+        }
+        let needed_first = ((3200.0 + step as f32 * 8.0 - 400.0) / 32.0) as usize;
+        let needed_end = ((3200.0 + step as f32 * 8.0 + 64.0 + 400.0) / 32.0) as usize + 1;
+        assert!(state.mounted().start <= needed_first);
+        assert!(state.mounted().end >= needed_end);
+    }
+    assert!(remounts > 0 && remounts < 25, "{remounts}");
+    state.set_scroll(0.0, 300.0);
+    let jumped = state.desired_window();
+    assert!(jumped.start == 0 && jumped.end >= 22);
+    assert!(jumped.end < 40);
 }

@@ -594,11 +594,11 @@ fn transactional_text_commands_respect_disabled_composing_and_routed_domains() {
     let root = tree.mount_spec(
         NodeSpec::new(NodeKind::Box(BoxContent::default()), LayoutStyle::default())
             .child(NodeSpec::new(
-                NodeKind::Text(TextContent::editable("background", false)),
+                NodeKind::text(TextContent::editable("background", false)),
                 LayoutStyle::default(),
             ))
             .child(NodeSpec::new(
-                NodeKind::Text(TextContent::editable("modal", false)),
+                NodeKind::text(TextContent::editable("modal", false)),
                 LayoutStyle::default(),
             )),
     );

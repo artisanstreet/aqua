@@ -1,4 +1,4 @@
-use crate::analysis::{Lifetime, align_up, lifetime_of, transient_of};
+use crate::analysis::{align_up, lifetime_of, transient_of, Lifetime};
 use crate::plan::{
     Barrier, FramePlan, LoadOp, PassKind, QuadInstance, ResourceState, ShaderId, ShadowInstance,
     TextureRef, TransientId,

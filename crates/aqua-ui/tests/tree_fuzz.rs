@@ -37,9 +37,7 @@ fn spec(key: u32, exit: bool, depth: u32, rng: &mut Lcg) -> NodeSpec {
             .collect(),
     };
     let mut node = NodeSpec::new(
-        NodeKind::Box(BoxContent {
-            paint: paint.clone(),
-        }),
+        NodeKind::Box(BoxContent::new(paint.clone())),
         LayoutStyle {
             axis: Axis::Column,
             width: Length::Px(60.0),

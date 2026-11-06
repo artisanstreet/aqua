@@ -9,7 +9,7 @@ fn placeholder_names_the_field_without_entering_its_editable_value() {
     let mut tree = UiTree::new();
     let mut text = TextContent::editable("", false);
     text.placeholder = "Search".to_owned();
-    let node = tree.mount_spec(NodeSpec::new(NodeKind::Text(text), LayoutStyle::default()));
+    let node = tree.mount_spec(NodeSpec::new(NodeKind::text(text), LayoutStyle::default()));
     tree.set_semantics(
         node,
         NodeSemantics {

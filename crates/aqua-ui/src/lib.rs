@@ -32,8 +32,8 @@ pub use taffy::style::{
     AlignContent, AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent,
 };
 pub use tree::{
-    ActionCallback, ActionEvent, ActionKind, ActivationSource, BoxContent, CanvasContent,
+    hash_key, ActionCallback, ActionEvent, ActionKind, ActivationSource, BoxContent, CanvasContent,
     CanvasPaintCallback, CommandSink, FrameStats, KeyHash, LeafCtx, LeafText, MediaContent,
     NodeKind, NodeRecord, NodeSemantics, NodeSpec, ScrollContent, TextBacking, TextContent,
-    UiCommand, UiTree, ViewportContent, hash_key,
+    TreeFootprint, UiCommand, UiTree, ViewportContent,
 };

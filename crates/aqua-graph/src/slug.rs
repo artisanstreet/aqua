@@ -1,5 +1,5 @@
-use aqua_core::Oklch;
 use aqua_core::geometry::Rect;
+use aqua_core::Oklch;
 
 use crate::linear::Linear2;
 

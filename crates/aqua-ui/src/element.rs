@@ -443,6 +443,8 @@ pub enum ElementBinding {
     /// Register a canvas painter callback.
     Painter(CanvasPaintCallback),
     ContextPainter(crate::tree::ContextCanvasPaintCallback),
+    ScrollStablePainter(CanvasPaintCallback),
+    Observe(crate::tree::ObserveCallback),
     Prepaint(crate::tree::PrepaintCallback),
 }
 
@@ -1190,8 +1192,10 @@ pub struct Canvas {
     paint: Paint,
     typo: TypoChain,
     painter: Option<CanvasPaintCallback>,
+    scroll_stable: bool,
     context_painter: Option<crate::tree::ContextCanvasPaintCallback>,
     prepaint: Option<crate::tree::PrepaintCallback>,
+    observer: Option<crate::tree::ObserveCallback>,
     children: Vec<Element>,
 }
 
@@ -1203,8 +1207,10 @@ impl Canvas {
             paint: Paint::default(),
             typo: TypoChain::default(),
             painter: None,
+            scroll_stable: false,
             context_painter: None,
             prepaint: None,
+            observer: None,
             children: Vec::new(),
         }
     }
@@ -1227,6 +1233,19 @@ impl Canvas {
     pub fn on_paint(mut self, painter: impl Fn(Rect) -> Vec<DisplayItem> + 'static) -> Self {
         self.context_painter = None;
         self.painter = Some(std::boxed::Box::new(painter));
+        self
+    }
+
+    pub fn on_observe(
+        mut self,
+        callback: impl Fn(&crate::tree::UiTree, aqua_core::NodeId) + 'static,
+    ) -> Self {
+        self.observer = Some(std::boxed::Box::new(callback));
+        self
+    }
+
+    pub fn scroll_stable(mut self) -> Self {
+        self.scroll_stable = true;
         self
     }
 
@@ -1272,13 +1291,19 @@ impl Canvas {
         let children = std::mem::take(&mut self.children);
         let mut bindings = Vec::new();
         if let Some(painter) = self.painter.take() {
-            bindings.push(ElementBinding::Painter(painter));
+            bindings.push(match self.scroll_stable {
+                true => ElementBinding::ScrollStablePainter(painter),
+                false => ElementBinding::Painter(painter),
+            });
         }
         if let Some(painter) = self.context_painter.take() {
             bindings.push(ElementBinding::ContextPainter(painter));
         }
         if let Some(prepaint) = self.prepaint.take() {
             bindings.push(ElementBinding::Prepaint(prepaint));
+        }
+        if let Some(observer) = self.observer.take() {
+            bindings.push(ElementBinding::Observe(observer));
         }
         Element {
             kind: ElementKind::Canvas(self),
@@ -2872,7 +2897,7 @@ impl Element {
         }
         match tree.get_mut(id) {
             Some(rec) => match &mut rec.kind {
-                NodeKind::Text(cur) => *cur = fresh,
+                NodeKind::Text(cur) => **cur = fresh,
                 _ => return false,
             },
             None => return false,
@@ -3206,12 +3231,7 @@ fn lower_collection(
     let mut root = if is_table || !desc.virtualized {
         // Table root is Box in both modes (header clips wrong under Scroll);
         // a normal list is a plain column. Empty until the driver realizes.
-        NodeSpec::new(
-            NodeKind::Box(BoxContent {
-                paint: paint.clone(),
-            }),
-            layout,
-        )
+        NodeSpec::new(NodeKind::Box(BoxContent::new(paint.clone())), layout)
     } else {
         NodeSpec::new(
             NodeKind::Scroll(ScrollContent {
@@ -3265,9 +3285,7 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
     let mut spec = match &el.kind {
         ElementKind::Box(b) => {
             let mut spec = NodeSpec::new(
-                NodeKind::Box(BoxContent {
-                    paint: b.paint.clone(),
-                }),
+                NodeKind::Box(BoxContent::new(b.paint.clone())),
                 b.style.clone(),
             );
             spec.control = b.control.clone();
@@ -3278,7 +3296,7 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
                 return Err(LowerError::InvalidTextOpacity);
             }
             let eff = inherited.child(&t.typo).resolve();
-            NodeSpec::new(NodeKind::Text(text_content(t, &eff)), t.style.clone())
+            NodeSpec::new(NodeKind::text(text_content(t, &eff)), t.style.clone())
         }
         ElementKind::Media(m) => NodeSpec::new(
             NodeKind::Media(MediaContent {
@@ -3306,22 +3324,16 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
             v.style.clone(),
         ),
         ElementKind::Button(b) => NodeSpec::new(
-            NodeKind::Box(BoxContent {
-                paint: b.paint.clone(),
-            }),
+            NodeKind::Box(BoxContent::new(b.paint.clone())),
             b.style.clone(),
         ),
         ElementKind::Checkbox(c) => NodeSpec::new(
-            NodeKind::Box(BoxContent {
-                paint: c.paint.clone(),
-            }),
+            NodeKind::Box(BoxContent::new(c.paint.clone())),
             c.style.clone(),
         ),
         ElementKind::Slider(s) => {
             let mut spec = NodeSpec::new(
-                NodeKind::Box(BoxContent {
-                    paint: s.paint.clone(),
-                }),
+                NodeKind::Box(BoxContent::new(s.paint.clone())),
                 s.style.clone(),
             );
             spec.control = Some(std::boxed::Box::new(Control::Slider(SliderControl {
@@ -3333,9 +3345,7 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
         }
         ElementKind::Dropdown(d) => {
             let mut spec = NodeSpec::new(
-                NodeKind::Box(BoxContent {
-                    paint: d.paint.clone(),
-                }),
+                NodeKind::Box(BoxContent::new(d.paint.clone())),
                 d.style.clone(),
             );
             if !d.options.is_empty() {
@@ -3349,9 +3359,7 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
         }
         ElementKind::Tabs(t) => {
             let mut spec = NodeSpec::new(
-                NodeKind::Box(BoxContent {
-                    paint: t.paint.clone(),
-                }),
+                NodeKind::Box(BoxContent::new(t.paint.clone())),
                 t.style.clone(),
             );
             spec.control = Some(std::boxed::Box::new(Control::Tabs(TabsControl {
@@ -3371,7 +3379,7 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
             tc.font_size = eff.font_size;
             tc.color = eff.color;
             tc.wrap = eff.wrap;
-            NodeSpec::new(NodeKind::Text(tc), d.style.clone())
+            NodeSpec::new(NodeKind::text(tc), d.style.clone())
         }
         ElementKind::Collection(_) => {
             unreachable!("collections route through lower_specs_in, never lower_one")
@@ -3516,7 +3524,7 @@ mod tests {
 
     fn label_spec(text: &str) -> NodeSpec {
         NodeSpec::new(
-            NodeKind::Text(TextContent::label(text)),
+            NodeKind::text(TextContent::label(text)),
             LayoutStyle::default(),
         )
     }
@@ -3530,7 +3538,7 @@ mod tests {
 
     fn box_paint_of(spec: &NodeSpec) -> Paint {
         match &spec.kind {
-            NodeKind::Box(b) => b.paint.clone(),
+            NodeKind::Box(b) => b.paint().clone(),
             other => panic!("expected box, got {other:?}"),
         }
     }

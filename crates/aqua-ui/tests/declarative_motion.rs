@@ -61,13 +61,8 @@ impl Row {
             height: Length::Px(30.0),
             ..LayoutStyle::default()
         };
-        let mut spec = NodeSpec::new(
-            NodeKind::Box(BoxContent {
-                paint: paint.clone(),
-            }),
-            style,
-        )
-        .keyed(self.key);
+        let mut spec =
+            NodeSpec::new(NodeKind::Box(BoxContent::new(paint.clone())), style).keyed(self.key);
         spec.paint = paint;
         spec
     }
@@ -452,7 +447,11 @@ fn builder_methods_carry_motion_through_lowering() {
     let NodeKind::Box(content) = &specs[0].kind else {
         panic!("box")
     };
-    let spec = content.paint.motion.as_ref().expect("motion on box paint");
+    let spec = content
+        .paint()
+        .motion
+        .as_ref()
+        .expect("motion on box paint");
     assert_eq!(
         spec.animate.motion_of(AnimatedProperty::Fill),
         Some(CARD.into())

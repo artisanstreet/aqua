@@ -1,0 +1,4 @@
+aqua: clipboard backend: System
+2026-11-06T03:31:30.123396Z  INFO tm: what="ext" ms=19.0081
+2026-11-06T03:31:30.532944Z  INFO tm: what="wake" ms=3.0894999999999997
+2026-11-06T03:31:42.081992Z  INFO tm: what="wake" ms=3.5479000000000003

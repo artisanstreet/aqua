@@ -1,0 +1,2 @@
+2026-11-06T03:31:01.721955Z  INFO gpui_ce_windows::directx_devices: Using GPU: AMD Radeon RX 9070 XT
+2026-11-06T03:31:01.722417Z  INFO gpui_ce_windows::directx_devices: Created device with Direct3D 11.1 feature level.

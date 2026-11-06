@@ -1,0 +1,1 @@
+FAIL VISUAL GATE FAILED: 2 visible defect(s): aqua: jumping to different turns left the transcript unchanged

@@ -1,0 +1,36 @@
+probe-launch unix_ms=1793935669351 pid=12964
+probe-startup window_ms=133 first_content_ms=208 nondominant=0.186 rich_content_ms=208
+probe-open thread=bench-large unix_ms=1793935669832 since_launch_ms=481 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:2560x1440@165Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=5.2
+probe-cpu name=boot unix_ms=1793935684687 cpu_ms=562 user_ms=297 private_mb=115.5 working_set_mb=124.8 peak_working_set_mb=137.3 threads=35 handles=1201
+probe-gpumem name=boot dedicated_mb=49.1
+probe-cpu name=idle0 unix_ms=1793935687704 cpu_ms=562 user_ms=297 private_mb=115.5 working_set_mb=124.8 peak_working_set_mb=137.3 threads=35 handles=1201
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=0.07 max=1 top_threads=7084=0(),12592=0(),3240=0(),19812=0() attempt=1
+probe-ctxseries name=idle start_unix_ms=1793935687779 per_second=0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-thread name=idle_threads tid=7084 thread='' started_ms=8 module=ntdll.dll start_rva=0x55fe64990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=14040 thread='' started_ms=108 module=combase.dll start_rva=0x55e6621e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=12592 thread='' started_ms=108 module=ntdll.dll start_rva=0x55fe64990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=3 total=32
+probe-cpu name=idle1 unix_ms=1793935733257 cpu_ms=562 user_ms=297 private_mb=115.3 working_set_mb=124.7 peak_working_set_mb=137.3 threads=32 handles=1193
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.06 p90_ms=0.122 p99_ms=0.224 max_ms=0.662 mean_ms=0.073 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=scroll0 unix_ms=1793935738514 cpu_ms=562 user_ms=297 private_mb=115.3 working_set_mb=124.7 peak_working_set_mb=137.3 threads=32 handles=1193
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.058 p90_ms=1.889 p99_ms=2.648 max_ms=3.393 mean_ms=0.352 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/3,0.1/3,0.1/3,0.1/3,0.1/3,0.1/3
+probe-cpu name=scroll1 unix_ms=1793935755092 cpu_ms=2781 user_ms=2312 private_mb=120 working_set_mb=127.6 peak_working_set_mb=137.3 threads=34 handles=1196
+probe-changed name=pre pixels=277164 total=2135250 nondominant=0.208
+probe-cpu name=settle unix_ms=1793935759124 cpu_ms=2859 user_ms=2391 private_mb=119 working_set_mb=126.5 peak_working_set_mb=137.3 threads=34 handles=1195
+probe-gpumem name=settle dedicated_mb=51.1
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=31.226 p90_ms=37.022 p99_ms=52.98 max_ms=52.98 mean_ms=31.186 over4_ms=40 over8_ms=40 over16_ms=40 over50_ms=1 grab_p50_ms=12.7
+probe-latency name=resize_setpos kind=resize samples=120 timeouts=0 p50_ms=1.167 p90_ms=2.168 p99_ms=3.686 max_ms=3.818 mean_ms=1.352 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=1.384 p90_ms=3.1 p99_ms=3.903 max_ms=3.984 mean_ms=1.629 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 
+probe-cpu name=rs0 unix_ms=1793935773460 cpu_ms=3531 user_ms=2969 private_mb=132.6 working_set_mb=126.7 peak_working_set_mb=137.3 threads=34 handles=1194
+probe-wakes name=after_resize seconds=30 context_switches_per_sec_avg=0.07 max=1 top_threads=7084=0.1(),13328=0(forge-net),19812=0(),21036=0() attempt=1
+probe-ctxseries name=after_resize start_unix_ms=1793935773460 per_second=0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-cpu name=rs1 unix_ms=1793935803816 cpu_ms=3531 user_ms=2969 private_mb=118.1 working_set_mb=126.1 peak_working_set_mb=137.3 threads=29 handles=1186
+probe-thread name=after_resize_threads tid=7084 thread='' started_ms=8 module=ntdll.dll start_rva=0x55fe64990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=after_resize_threads tid=6320 thread='' started_ms=147187 module=ntdll.dll start_rva=0x55fe64990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=after_resize_threads seconds=15 active=2 total=30
+probe-load name=end_load seconds=3 system_cpu_pct=7.1
+pid=12964 dpi=120 working_set_mb=126 private_mb=118
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---

@@ -1,0 +1,3 @@
+2026-11-06T03:32:22.738403Z  INFO gpui_ce_windows::directx_devices: Using GPU: AMD Radeon RX 9070 XT
+2026-11-06T03:32:22.738797Z  INFO gpui_ce_windows::directx_devices: Created device with Direct3D 11.1 feature level.
+2026-11-06T03:32:22.781068Z  WARN editor_conversation: can't open a thread on an unknown host host=mch_01M628PTAMADX6D3RQRRMNSBNH thread=bench-stream

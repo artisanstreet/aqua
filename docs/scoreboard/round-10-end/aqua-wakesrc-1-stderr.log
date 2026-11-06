@@ -1,0 +1,17 @@
+aqua: clipboard backend: System
+2026-11-06T03:36:23.999214Z  INFO tm: what="ext" ms=18.2866
+2026-11-06T03:36:24.030593Z  INFO tm: what="ext" ms=3.4033
+2026-11-06T03:36:24.632784Z  INFO tm: what="wake" ms=4.5409999999999995
+aqua-shell-wakes: unix_ms=1793936186131 secs=2.16 total=53.3 [wake=6.0,loop:queue-post=5.6,loop:queue-send=4.2,hook:AquaShell32:geticon=2.3,sent:geticon=2.3,loop:queue-none=1.9,winevent:0x8001=1.9,hook:AquaShell32:paint=1.4,sent:paint=1.4,hook:AquaShell32:0x0088=0.9,hook:AquaShell32:erasebkgnd=0.9,hook:AquaShell32:getminmaxinfo=0.9,hook:AquaShell32:nccalcsize=0.9,hook:AquaShell32:ncpaint=0.9,hook:AquaShell32:size=0.9,hook:AquaShell32:windowposchanged=0.9,hook:AquaShell32:windowposchanging=0.9,hook:IME:windowposchanging=0.9,hook:MSCTFIME UI:windowposchanging=0.9,loop:queue-paint+send=0.9,sent:0x0088=0.9,sent:erasebkgnd=0.9,sent:getminmaxinfo=0.9,sent:nccalcsize=0.9,sent:ncpaint=0.9,sent:size=0.9,sent:windowposchanged=0.9,sent:windowposchanging=0.9,slow:tick:2ms=0.9,slow:woken:2ms=0.9,0xc093=0.5,dwmncrenderingchanged=0.5,hook:AquaShell32:move=0.5,hook:IME:windowposchanged=0.5,hook:MSCTFIME UI:windowposchanged=0.5,loop:queue-timer=0.5,loop:timer=0.5,paint=0.5,sent:move=0.5,slow:tick:19ms=0.5,slow:tick:3ms=0.5,slow:tick:51ms=0.5,slow:window:2ms=0.5,slow:woken:4ms=0.5,timer=0.5]
+aqua-render-runs: secs=2.51 [feedback=3.2 feedback+framed+presented=0.4 inbox+framed+presented=2.8 inbox+feedback+framed+presented=0.4 wake_due+framed+presented=0.4 forced+trim+framed+presented=0.4]
+aqua-render-damage: full=5 partial=5 culled_commands=1323
+aqua-shell-wakes: unix_ms=1793936220976 secs=34.84 total=0.1 [hook:MSCTFIME UI:windowposchanging=0.0,loop:queue-send=0.0,loop:timer=0.0]
+2026-11-06T03:37:00.984449Z  INFO tm: what="rebuild" ms=4.4412
+2026-11-06T03:37:00.984785Z  INFO tm: what="winev" ms=5.1952
+2026-11-06T03:37:00.990292Z  INFO tm: what="ext" ms=5.1962
+aqua-wakes: secs=37.04 turns[window-message=0.2,inbox-wake=0.2] unpresented_ticks=0.4 messages[focus=0.0,maximized=0.1,moved=0.1,redraw=0.1,resized=0.2] posts[messages@forge-net#host.rs:102=0.3,messages@forge-net#host.rs:155=0.0,messages@main#host.rs:102=0.3,render-events@aqua-render=0.3,window-requests@main=0.5]
+aqua-render-runs: secs=34.42 [inbox+framed+presented=0.0]
+aqua-render-damage: full=1 partial=0 culled_commands=0
+aqua-shell-wakes: unix_ms=1793936222528 secs=1.55 total=26.4 [loop:queue-send=3.9,loop:queue-post=2.6,wake=2.6,hook:AquaShell32:geticon=1.9,sent:geticon=1.9,hook:AquaShell32:0x0088=0.6,hook:AquaShell32:erasebkgnd=0.6,hook:AquaShell32:getminmaxinfo=0.6,hook:AquaShell32:nccalcsize=0.6,hook:AquaShell32:ncpaint=0.6,hook:AquaShell32:size=0.6,hook:AquaShell32:windowposchanged=0.6,hook:AquaShell32:windowposchanging=0.6,hook:IME:windowposchanging=0.6,loop:queue-paint+send=0.6,loop:timer=0.6,paint=0.6,sent:0x0088=0.6,sent:erasebkgnd=0.6,sent:getminmaxinfo=0.6,sent:nccalcsize=0.6,sent:ncpaint=0.6,sent:size=0.6,sent:windowposchanged=0.6,sent:windowposchanging=0.6,slow:tick:20ms=0.6]
+aqua-render-runs: secs=2.04 [feedback=0.5 inbox+feedback+framed+presented=1.0 forced+trim+framed+presented=0.5]
+aqua-render-damage: full=2 partial=1 culled_commands=0

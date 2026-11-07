@@ -1,0 +1,11 @@
+{
+  "source_trace_sha256": "70e1b8b4d21b86821bcc688b8a3ae2b410b96b0424cb4952ecb4fab24bce2a69",
+  "source_trace_bytes": 6781124,
+  "filter": {
+    "pid": 25096,
+    "event_id": 43
+  },
+  "retained_rows": 292,
+  "recorded_utc": "2026-11-07T03:57:22.765689+00:00",
+  "scope": "Own-process DXGI PresentStop events only. This is not physical display latency."
+}

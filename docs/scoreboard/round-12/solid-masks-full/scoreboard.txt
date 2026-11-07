@@ -1,0 +1,158 @@
+metric                                               aqua       gpui  verdict
+scroll p50 (ms)                                      0.14       0.06  FAIL
+scroll p90 (ms)                                      0.28       1.19  PASS
+scroll p99 (ms)                                      0.37       2.66  PASS
+scroll max (ms)                                      0.43       3.00  PASS
+scroll frames over 4 ms                              0.00       0.00  PASS
+scroll frames over 8.3 ms                            0.00       0.00  PASS
+scroll frames over 16.7 ms                           0.00       0.00  PASS
+CPU per scroll input (ms)                            0.81       3.93  PASS
+keystroke to present p50, ETW (ms)                   1.56      17.65  PASS
+keystroke to present p90, ETW (ms)                   1.89      19.01  PASS
+keystroke to present p99, ETW (ms)                   2.57      19.56  PASS
+keystroke to present max, ETW (ms)                   2.61      19.60  PASS
+keystrokes over 8.3 ms, ETW                          0.00     145.00  PASS
+keystrokes over 16.7 ms, ETW                         0.00     145.00  PASS
+keystroke to pixel p50, pixel probe (ms)           264.58     264.81  info FAIL
+keystroke to pixel p99, pixel probe (ms)           277.14     276.08  info FAIL
+idle CPU (% of one core)                             0.00       0.00  PASS
+idle context switches/s                              0.03       0.07  PASS
+idle threads waking at 1/s or more                   0.00       0.00  PASS
+idle busiest thread context switches/s               0.10       0.10  FAIL
+idle CPU after resize (% of one core)                0.00       0.00  PASS
+idle context switches/s after resize                 0.87       0.13  FAIL
+idle threads waking after resize                     0.00       0.00  PASS
+private MiB after startup                          105.00     115.00  PASS
+private MiB after 600 scrolls                      120.50     118.20  FAIL
+peak working set MiB after startup (untrimmed)     121.20     135.50  PASS
+peak working set MiB after 600 scrolls (untrimmed)     127.40     135.50  PASS
+working set MiB after startup (current, trim-sensitive)     120.70     124.40  info FAIL
+working set MiB after 600 scrolls (current, trim-sensitive)     127.40     125.90  info FAIL
+GPU dedicated MiB after startup                     35.40      49.10  PASS
+GPU dedicated MiB after 600 scrolls                 53.40      51.10  FAIL
+cold start to first content (ms)                   505.00     366.00  FAIL
+cold start to a frame with 15% non-dominant pixels (ms)     505.00     367.00  FAIL
+cold start to thread painted (ms)                  199.00     450.00  PASS
+open large thread, click to painted (ms)           205.00     238.00  PASS
+resize p50 (ms)                                      1.49       1.33  FAIL
+resize p99 (ms)                                      2.35       3.59  PASS
+resize max (ms)                                      2.52       4.10  PASS
+resize frames over 16.7 ms                           0.00       0.00  PASS
+streaming CPU (% of one core)                        2.45      11.28  PASS
+streaming latency p50 (ms)                           0.07       0.06  FAIL
+streaming latency p99 (ms)                           0.27       2.00  PASS
+streaming frames over 4 ms                           0.00       0.00  PASS
+streaming frames over 16.7 ms                        0.00       0.00  PASS
+streaming context switches/s                       104.50     593.60  PASS
+
+display state and system load per run
+  aqua: probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+  aqua: probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+  aqua: probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+  aqua: system CPU % per run (boot/end median): ['2.95', '6.70', '9.25']
+  aqua run 1: key present p50 1.61 ms p99 2.69 ms state fast
+  aqua run 2: key present p50 1.55 ms p99 2.57 ms state fast
+  aqua run 3: key present p50 1.56 ms p99 2.08 ms state fast
+  gpui: probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+  gpui: probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+  gpui: probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+  gpui: system CPU % per run (boot/end median): ['3.00', '6.50', '1.50']
+  gpui run 1: key present p50 17.63 ms p99 19.56 ms state slow
+  gpui run 2: key present p50 17.65 ms p99 19.45 ms state slow
+  gpui run 3: key present p50 17.69 ms p99 20.11 ms state slow
+  run 1: aqua fast vs gpui slow
+  run 2: aqua fast vs gpui slow
+  run 3: aqua fast vs gpui slow
+
+per-thread idle breakdown (run 1, threads with any context switch or CPU)
+  aqua idle: 2 active threads
+    tid20504@combase.dll                             ctx/s     0.10 cpu ms/s     0.00 started 179 ms
+    tid17400@ntdll.dll                               ctx/s     0.10 cpu ms/s     0.00 started 179 ms
+  aqua after resize: 0 active threads
+  gpui idle: 3 active threads
+    tid2344@ntdll.dll                                ctx/s     0.10 cpu ms/s     0.00 started 7 ms
+    tid4036@combase.dll                              ctx/s     0.10 cpu ms/s     0.00 started 108 ms
+    tid3016@ntdll.dll                                ctx/s     0.10 cpu ms/s     0.00 started 108 ms
+  gpui after resize: 0 active threads
+
+wake sources, aqua instrumented idle run (AQUA_WAKE_STATS, diagnostic only, not gated)
+  turns (summed rates over 2 reporting seconds): inbox-wake=9.7, window-message=4.8
+  messages (summed rates over 2 reporting seconds): resized=4.8, maximized=3.8, moved=2.9, redraw=1.9, covered=1.0, focus=1.0
+  posts (summed rates over 2 reporting seconds): window-requests@main=16.3, render-events@aqua-render=10.7, messages@forge-net#host.rs:104=8.7, messages@main#host.rs:104=8.7, messages@forge-net#host.rs:157=1.0
+  render thread runs: 2 reporting seconds; last: aqua-render-runs: secs=35.87 [inbox+framed+presented=0.0]
+  idle CPU after settle 0.00%, after setsize 0.06%
+
+frames over 4 ms, aqua spike recorder (AQUA_PROFILE, diagnostic only, not gated)
+  4 spike frames over 4 ms in 600 scroll inputs; by role {'app': 3, 'render': 1}; dominant phase {'layout': 1, 'record': 1, 'input': 2}
+  top notes: rebuild=1.64ms/a0=2, sd.events=0.39ms/a0=1, drain.shell=0.58ms/a0=1, rebuild=0.73ms/a0=1, winev=0.82ms/a0=1, rebuild=0.43ms/a0=1
+  worst: aqua-spike role=render label=0 seq=3 t_ms=165.9 unix_ms=1794023864071 work_ms=68.37 wall_ms=148.37 allocs=0 alloc_bytes=0 reallocs=0 frees=0 phases_ms={input:0.19(a0/0B),lower:6.57(a0/0B),upload:0.38(a0/0B),plan:0.17(a0/0B),record:60.87(a0/0B),present:0.21(a0/0B),wait:0.48(a0/0B)} counts={commands:543,glyphs:2122,upload_textures:45,upload_bytes:4254356,passe
+  worst: aqua-spike role=app label=26149454 seq=0 t_ms=39.1 unix_ms=1794023863945 work_ms=14.03 wall_ms=13.85 allocs=0 alloc_bytes=0 reallocs=0 frees=0 phases_ms={input:0.97(a0/0B),reactive:0.00(a0/0B),build:0.29(a0/0B),layout:12.54(a0/0B),text:0.23(a0/0B),submit:0.00(a0/0B)} counts={layouts:1,nodes_measured:39,nodes_committed:36,layout_visited:1936,nodes_visited:589
+  worst: aqua-spike role=app label=26149454 seq=4 t_ms=176.6 unix_ms=1794023864082 work_ms=4.51 wall_ms=1.99 allocs=0 alloc_bytes=0 reallocs=0 frees=0 phases_ms={input:2.69(a0/0B),reactive:0.00(a0/0B),build:0.19(a0/0B),layout:1.58(a0/0B),text:0.05(a0/0B),submit:0.00(a0/0B)} counts={layouts:1,nodes_measured:7,nodes_committed:10,layout_visited:960,nodes_visited:8789,te
+
+scroll p50 (ms): FAIL (aqua 0.14 vs gpui 0.06, must beat gpui by 3% or tie at 0)
+scroll p90 (ms): PASS (aqua 0.28 vs gpui 1.19, must beat gpui by 3% or tie at 0)
+scroll p99 (ms): PASS (aqua 0.37 vs gpui 2.66, must beat gpui by 3% or tie at 0)
+scroll max (ms): PASS (aqua 0.43 vs gpui 3.00, must beat gpui by 3% or tie at 0)
+scroll frames over 4 ms: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+scroll frames over 8.3 ms: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+scroll frames over 16.7 ms: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+CPU per scroll input (ms): PASS (aqua 0.81 vs gpui 3.93, must beat gpui by 3% or tie at 0)
+keystroke to present p50, ETW (ms): PASS (aqua 1.56 vs gpui 17.65, must beat gpui by 3% or tie at 0)
+keystroke to present p90, ETW (ms): PASS (aqua 1.89 vs gpui 19.01, must beat gpui by 3% or tie at 0)
+keystroke to present p99, ETW (ms): PASS (aqua 2.57 vs gpui 19.56, must beat gpui by 3% or tie at 0)
+keystroke to present max, ETW (ms): PASS (aqua 2.61 vs gpui 19.60, must beat gpui by 3% or tie at 0)
+keystrokes over 8.3 ms, ETW: PASS (aqua 0.00 vs gpui 145.00, must beat gpui by 3% or tie at 0)
+keystrokes over 16.7 ms, ETW: PASS (aqua 0.00 vs gpui 145.00, must beat gpui by 3% or tie at 0)
+keystroke to pixel p50, pixel probe (ms): info FAIL (aqua 264.58 vs gpui 264.81, must beat gpui by 3% or tie at 0)
+keystroke to pixel p99, pixel probe (ms): info FAIL (aqua 277.14 vs gpui 276.08, must beat gpui by 3% or tie at 0)
+idle CPU (% of one core): PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+idle context switches/s: PASS (aqua 0.03 vs gpui 0.07, must beat gpui by 3% or tie at 0)
+idle threads waking at 1/s or more: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+idle busiest thread context switches/s: FAIL (aqua 0.10 vs gpui 0.10, must beat gpui by 3% or tie at 0)
+idle CPU after resize (% of one core): PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+idle context switches/s after resize: FAIL (aqua 0.87 vs gpui 0.13, must beat gpui by 3% or tie at 0)
+idle threads waking after resize: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+private MiB after startup: PASS (aqua 105.00 vs gpui 115.00, must beat gpui by 3% or tie at 0)
+private MiB after 600 scrolls: FAIL (aqua 120.50 vs gpui 118.20, must beat gpui by 3% or tie at 0)
+peak working set MiB after startup (untrimmed): PASS (aqua 121.20 vs gpui 135.50, must beat gpui by 3% or tie at 0)
+peak working set MiB after 600 scrolls (untrimmed): PASS (aqua 127.40 vs gpui 135.50, must beat gpui by 3% or tie at 0)
+working set MiB after startup (current, trim-sensitive): info FAIL (aqua 120.70 vs gpui 124.40, must beat gpui by 3% or tie at 0)
+working set MiB after 600 scrolls (current, trim-sensitive): info FAIL (aqua 127.40 vs gpui 125.90, must beat gpui by 3% or tie at 0)
+GPU dedicated MiB after startup: PASS (aqua 35.40 vs gpui 49.10, must beat gpui by 3% or tie at 0)
+GPU dedicated MiB after 600 scrolls: FAIL (aqua 53.40 vs gpui 51.10, must beat gpui by 3% or tie at 0)
+cold start to first content (ms): FAIL (aqua 505.00 vs gpui 366.00, must beat gpui by 3% or tie at 0)
+cold start to a frame with 15% non-dominant pixels (ms): FAIL (aqua 505.00 vs gpui 367.00, must beat gpui by 3% or tie at 0)
+cold start to thread painted (ms): PASS (aqua 199.00 vs gpui 450.00, must beat gpui by 3% or tie at 0)
+open large thread, click to painted (ms): PASS (aqua 205.00 vs gpui 238.00, must beat gpui by 3% or tie at 0)
+resize p50 (ms): FAIL (aqua 1.49 vs gpui 1.33, must beat gpui by 3% or tie at 0)
+resize p99 (ms): PASS (aqua 2.35 vs gpui 3.59, must beat gpui by 3% or tie at 0)
+resize max (ms): PASS (aqua 2.52 vs gpui 4.10, must beat gpui by 3% or tie at 0)
+resize frames over 16.7 ms: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+streaming CPU (% of one core): PASS (aqua 2.45 vs gpui 11.28, must beat gpui by 3% or tie at 0)
+streaming latency p50 (ms): FAIL (aqua 0.07 vs gpui 0.06, must beat gpui by 3% or tie at 0)
+streaming latency p99 (ms): PASS (aqua 0.27 vs gpui 2.00, must beat gpui by 3% or tie at 0)
+streaming frames over 4 ms: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+streaming frames over 16.7 ms: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+streaming context switches/s: PASS (aqua 104.50 vs gpui 593.60, must beat gpui by 3% or tie at 0)
+aqua ran to completion: PASS
+aqua never took foreground: PASS
+gpui ran to completion: PASS
+gpui never took foreground: PASS
+section 11 windowed private memory (142 MiB, release): PASS (120.50)
+section 11 windowed GPU dedicated (64 MiB, release): PASS (53.40)
+visual gate (shots captured and distinct for both editors, side port; read the PNG pairs): PASS (PASS shots in /home/sander/projects/artisanstreet/aqua-optimization/target/measurements/round-12-solid-masks/visual-gate)
+aqua runs measured on a quiet machine (system CPU 5.45% median, limit 25%): PASS
+gpui runs measured on a quiet machine (system CPU 3.30% median, limit 25%): PASS
+OVERALL: FAIL (fixture-based, release, 3 interleaved runs, median)
+
+manifest
+date 2026-11-07T04:18:26+01:00
+profile release runs 3 idle_seconds 30 scroll_frames 600
+aqua_git 5f4ec00 port_git 08f2e75f dirty_aqua=24
+fixture_server bench-fixture links the port forge-http (SSE keep-alive from_secs(300)) while the GPUI repo forge-http keeps from_secs(15); both editors talk to the same fixture server in every run, so neither sees a different heartbeat, but absolute idle wakes differ from a real 15 s Forge
+gpui_baseline release build of the gpui-ce fork at rev = "6cd20f9c5deab2b160b68ac66f453ec70820e8a2", built by tools/compare-editors.sh build with the same cargo-windows toolchain as the port
+aqua exe /home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-solid-masks.exe built 2026-11-07T04:11:46+01:00 sha256 105ab67b81db2468 size 38871040
+gpui exe /home/sander/projects/artisanstreet/editor/target/x86_64-pc-windows-gnu/release/artisan-editor.exe built 2026-11-04T11:09:28+01:00 sha256 d0f3a99f1a3f6b3e size 40648704
+measured_source_override candidate is the frozen combined original WIP plus PR6/7/8/9/10/12/13/14/15 and Editor PR516; checkout git metadata above is not the measured source identity. See source-manifest.json.
+measured_source_override aqua_sha256 ae6b3361793c513a7aa0c1c746997164228eed09315d6c7225c49d336e945241 files 867 editor_sha256 3d9b9f679b64d5871c1c337a1be71b1f9a77e29334f70b8350718072b5647e1e files 1056
+measured_source_override binary_sha256 105ab67b81db24682529c466848ecd6f5e59cf4aaefc1cdfb803d16718899d6b; native driver threading prevention default enabled, stats/ledger/memory-report instrumentation off.

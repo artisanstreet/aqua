@@ -185,3 +185,60 @@ fn positions_follow_removals_and_reordering() {
     assert_eq!(scene.position(ids[3]), Some(0));
     assert_eq!(scene.item_at(2).map(|(id, _)| id), Some(ids[2]));
 }
+
+#[test]
+fn recycled_fill_batches_coalesce_writes_without_reusing_previous_indices() {
+    use aqua_core::Oklch;
+    let mut scene = Scene::new();
+    let first = scene.insert(filled(Oklch::BLACK));
+    let second = scene.insert(filled(Oklch::BLACK));
+    scene.drain_paint_changes();
+    scene.update_fill(first, Oklch::WHITE);
+    scene.update_fill(second, Oklch::WHITE);
+    scene.update_fill(first, Oklch::BLACK);
+    let (upserts, fills) = scene.drain_paint_changes();
+    assert!(upserts.is_empty());
+    assert_eq!(
+        fills,
+        vec![
+            aqua_core::FillPatch {
+                node: first,
+                fill: Oklch::BLACK
+            },
+            aqua_core::FillPatch {
+                node: second,
+                fill: Oklch::WHITE
+            },
+        ]
+    );
+    scene.recycle_fills(fills);
+    scene.update_fill(second, Oklch::BLACK);
+    scene.update_fill(first, Oklch::WHITE);
+    let (upserts, fills) = scene.drain_paint_changes();
+    assert!(upserts.is_empty());
+    assert_eq!(
+        fills,
+        vec![
+            aqua_core::FillPatch {
+                node: second,
+                fill: Oklch::BLACK
+            },
+            aqua_core::FillPatch {
+                node: first,
+                fill: Oklch::WHITE
+            },
+        ]
+    );
+    scene.recycle_fills(fills);
+    scene.update_fill(first, Oklch::BLACK);
+    assert_eq!(scene.drain_changes(), vec![(first, filled(Oklch::BLACK))]);
+    scene.update_fill(first, Oklch::WHITE);
+    let (_, fills) = scene.drain_paint_changes();
+    assert_eq!(
+        fills,
+        vec![aqua_core::FillPatch {
+            node: first,
+            fill: Oklch::WHITE
+        }]
+    );
+}

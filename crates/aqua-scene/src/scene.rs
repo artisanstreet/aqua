@@ -23,6 +23,7 @@ const CHANGE_LOG_LIMIT: usize = 2048;
 
 struct Node {
     fill_only: bool,
+    fill_index: usize,
     generation: u32,
     alive: bool,
     item: DisplayItem,
@@ -49,6 +50,8 @@ impl std::fmt::Debug for Node {
 #[derive(Debug, Default)]
 pub struct Scene {
     geometry_revision: u64,
+    fills: Vec<FillPatch>,
+    fill_capacity: usize,
     nodes: Vec<Node>,
     free: Vec<(u32, u32)>, // (index, generation) reusable slots
     /// Painter order: node indices back-to-front.
@@ -104,6 +107,7 @@ impl Scene {
             let index = self.nodes.len() as u32;
             self.nodes.push(Node {
                 fill_only: false,
+                fill_index: 0,
                 generation: 0,
                 alive: true,
                 item,
@@ -164,6 +168,17 @@ impl Scene {
         *current = fill;
         let pending = node.changed_at > self.consumed_through;
         node.fill_only = !pending || node.fill_only;
+        if node.fill_only {
+            if pending {
+                self.fills[node.fill_index].fill = fill;
+            } else {
+                if self.fills.capacity() == 0 {
+                    self.fills.reserve_exact(self.fill_capacity);
+                }
+                node.fill_index = self.fills.len();
+                self.fills.push(FillPatch { node: id, fill });
+            }
+        }
         self.revision += 1;
         node.changed_at = self.revision;
         if !pending {
@@ -335,6 +350,7 @@ impl Scene {
     /// order changed), never the full node list. A trivial update yields a
     /// one-element set, never a full rebuild.
     pub fn drain_changes(&mut self) -> Vec<(NodeId, DisplayItem)> {
+        self.fills.clear();
         self.refresh_positions();
         let mut pending: Vec<u32> = std::mem::take(&mut self.dirty);
         let positions = self.positions.borrow();
@@ -356,6 +372,14 @@ impl Scene {
     }
 
     pub fn drain_paint_changes(&mut self) -> (Vec<(NodeId, DisplayItem)>, Vec<FillPatch>) {
+        if self.geometry_revision <= self.consumed_through {
+            self.fill_capacity = self.fill_capacity.max(self.fills.len());
+            let fills = std::mem::take(&mut self.fills);
+            self.dirty.clear();
+            self.consumed_through = self.revision;
+            return (Vec::new(), fills);
+        }
+        self.fills.clear();
         let mut pending = std::mem::take(&mut self.dirty);
         let fill_capacity = pending
             .first()
@@ -398,8 +422,16 @@ impl Scene {
     }
 
     pub fn acknowledge_changes(&mut self) {
+        self.fills.clear();
         self.dirty.clear();
         self.consumed_through = self.revision;
+    }
+
+    pub fn recycle_fills(&mut self, mut fills: Vec<FillPatch>) {
+        fills.clear();
+        if self.fills.is_empty() && fills.capacity() > self.fills.capacity() {
+            self.fills = fills;
+        }
     }
 
     pub fn drain_fill_changes(&mut self, since: u64) -> Option<Vec<FillPatch>> {

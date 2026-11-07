@@ -1,6 +1,6 @@
 {
   "accepted": true,
-  "status": "Focused streaming improvement; full three-run comparison in progress",
+  "status": "Focused streaming improvement; complete full comparison 33/41 performance rows PASS, overall FAIL; visuals PASS; draft PR retained",
   "base_commit": "1faf00b",
   "code_commit": "4352103",
   "binary_sha256": "0dbc9448214659432d7a1836958dd36271c7498df4b252413888c8a7472154e8",
@@ -22,8 +22,8 @@
     "This is a focused WM_NULL round-trip improvement, not a physical display or end-to-end keystroke latency claim.",
     "Maximum medians rise slightly from 1.360 to 1.415 ms. All samples are below 4 ms; three pairs do not establish tail-latency equivalence.",
     "Streaming CPU medians rise from 3.269% to 4.291% of one core. Control range 1.470\u20133.954%, candidate 3.638\u20134.424%; three pairs do not establish a precise expected CPU cost.",
-    "Both binaries are Aqua; this is not a GPUI scoreboard. The full three-run comparison is in progress.",
-    "The latest complete full verdict remains 32/41 passing performance rows, overall FAIL; visuals pass."
+    "Both binaries in the focused pairs are Aqua; the separate full GPUI comparison is archived at ../coarse-message-full/.",
+    "The complete full verdict is 33/41 passing performance rows, overall FAIL; visuals pass. Thread opening newly fails at 222 versus 220 ms with overlapping per-run ranges."
   ],
   "design": "Three stats-off Aqua-only control/candidate streaming pairs in AB/BA/AB order; source differs only by coarse message waiting. No retries.",
   "control_sha256": "6c23ac9afea77a47f7fb68db099f5e4f8e08ed96d5df644af9e802ba80019973",

@@ -1,4 +1,3 @@
-mod children;
 pub(crate) mod interaction;
 mod layout;
 
@@ -646,7 +645,7 @@ impl Box {
         I: IntoIterator<Item = E>,
         E: Into<Element>,
     {
-        children::extend(&mut self.children, children);
+        self.children.extend(children.into_iter().map(Into::into));
         self
     }
 

@@ -103,6 +103,59 @@ fn subpixel_translation_gets_its_own_drawing() {
 }
 
 #[test]
+fn mixed_path_bounds_include_controls_and_scaled_arc_reach() {
+    let mut path = triangle(Point::new(3.25, 7.5));
+    path.commands_local = vec![
+        PathCommand::Move(Point::new(0.0, 0.0)),
+        PathCommand::Line(Point::new(-2.0, 3.0)),
+        PathCommand::Quadratic {
+            control: Point::new(-8.0, -4.0),
+            to: Point::new(6.0, 2.0),
+        },
+        PathCommand::Cubic {
+            first: Point::new(20.0, -6.0),
+            second: Point::new(9.0, 18.0),
+            to: Point::new(5.0, 5.0),
+        },
+        PathCommand::Arc {
+            radii: Point::new(2.0, 4.0),
+            rotation_radians: 0.0,
+            large: false,
+            sweep: true,
+            to: Point::new(12.0, 10.0),
+        },
+        PathCommand::Close,
+    ];
+    let mut cache = VectorCache::default();
+    let raster = cache.path(&path, Transform2D::scale(2.0, 2.0)).unwrap();
+    assert_eq!(
+        raster.placement,
+        Rect {
+            x: -19.0,
+            y: -6.0,
+            w: 75.0,
+            h: 66.0
+        }
+    );
+    assert_eq!((raster.width, raster.height), (75, 66));
+    let drawing = drawing_of(&raster);
+    assert_eq!(
+        drawing.paths[0].commands[0],
+        PathCommand::Move(Point::new(25.5, 21.0))
+    );
+    assert_eq!(
+        drawing.paths[0].commands[4],
+        PathCommand::Arc {
+            radii: Point::new(4.0, 8.0),
+            rotation_radians: 0.0,
+            large: false,
+            sweep: true,
+            to: Point::new(49.5, 41.0),
+        }
+    );
+}
+
+#[test]
 fn svg_sources_are_shared_per_tint_and_rotation() {
     let mut cache = VectorCache::default();
     let svg: Arc<str> = "<svg viewBox=\"0 0 4 4\"></svg>".into();

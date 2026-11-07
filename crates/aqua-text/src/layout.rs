@@ -901,6 +901,7 @@ impl TextLayout {
         let mut max_w = 0.0f32;
         let mut total_h = 0.0f32;
         let mut first_baseline_y = None;
+        let retain_placed = placed_paragraphs.len() > 1;
         for (paragraph_index, entry) in placed_paragraphs.iter_mut().enumerate() {
             let paragraph = Arc::clone(&entry.paragraph);
             let key = finish_key(&paragraph);
@@ -921,19 +922,27 @@ impl TextLayout {
                 );
                 entry.finished = Some(finished);
             }
-            let finished = entry.finished.as_ref().expect("finished paragraph present");
-            for line in &finished.lines {
-                let mut line = line.clone();
-                line.paragraph = paragraph_index;
-                line.y_top += total_h;
-                line.baseline_y += total_h;
-                first_baseline_y.get_or_insert(line.baseline_y);
-                lines_out.push(line);
+            let finished = entry.finished.as_mut().expect("finished paragraph present");
+            match retain_placed {
+                true => {
+                    for line in &finished.lines {
+                        let mut line = line.clone();
+                        line.paragraph = paragraph_index;
+                        line.y_top += total_h;
+                        line.baseline_y += total_h;
+                        first_baseline_y.get_or_insert(line.baseline_y);
+                        lines_out.push(line);
+                    }
+                }
+                false => {
+                    first_baseline_y = finished.lines.first().map(|line| line.baseline_y);
+                    lines_out = std::mem::take(&mut finished.lines);
+                }
             }
             max_w = max_w.max(finished.max_width);
             total_h += finished.height;
         }
-        self.placed = match placed_paragraphs.len() > 1 {
+        self.placed = match retain_placed {
             true => placed_paragraphs
                 .into_iter()
                 .map(|entry| (Arc::as_ptr(&entry.paragraph) as usize, entry))

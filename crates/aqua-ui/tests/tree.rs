@@ -5,6 +5,53 @@ use aqua_ui::style::LayoutStyle;
 use aqua_ui::tree::{NodeKind, NodeSpec, TextBacking, TextContent, UiTree};
 
 #[test]
+fn compact_box_paint_keeps_borrowed_queries_and_clones_consistent() {
+    use aqua_core::Oklch;
+    use aqua_ui::style::{Border, Paint};
+    use aqua_ui::BoxContent;
+    let mut content = BoxContent::new(Paint {
+        fill: Some(Oklch::BLACK),
+        ..Paint::default()
+    });
+    assert_eq!(content.paint().fill, Some(Oklch::BLACK));
+    let snapshot = content.clone();
+    content.set_paint(Paint {
+        fill: Some(Oklch::WHITE),
+        ..Paint::default()
+    });
+    assert_eq!(snapshot.paint().fill, Some(Oklch::BLACK));
+    assert_eq!(content.paint().fill, Some(Oklch::WHITE));
+    let mut tree = UiTree::new();
+    let node = tree.mount_spec(NodeSpec::new(
+        NodeKind::Box(content),
+        LayoutStyle::default(),
+    ));
+    let version = tree.content_version();
+    assert!(tree.set_fill(node, Some(Oklch::BLACK)));
+    assert!(tree.content_version() > version);
+    assert_eq!(tree.get(node).unwrap().paint().fill, Some(Oklch::BLACK));
+    let version = tree.content_version();
+    assert!(!tree.set_fill(node, Some(Oklch::BLACK)));
+    assert_eq!(tree.content_version(), version);
+    let border = Border {
+        width: 2.0,
+        color: Oklch::WHITE,
+    };
+    tree.set_paint(
+        node,
+        Paint {
+            fill: Some(Oklch::BLACK),
+            border: Some(border),
+            ..Paint::default()
+        },
+    );
+    tree.set_fill(node, None);
+    assert_eq!(tree.paint(node).unwrap().border, Some(border));
+    tree.set_paint(node, Paint::default());
+    assert_eq!(tree.get(node).unwrap().paint(), &Paint::default());
+}
+
+#[test]
 fn selecting_static_text_clamps_to_graphemes_without_invalidating_content() {
     let mut tree = UiTree::new();
     let node = tree.mount_spec(NodeSpec::new(

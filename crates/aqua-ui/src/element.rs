@@ -2699,7 +2699,7 @@ impl Element {
             && record.style == properties.style
             && record.children.len() == self.children.len()
             && plain(&properties.paint)
-            && plain(current.paint())
+            && current.plain_paint()
             && self
                 .children
                 .iter()
@@ -3559,7 +3559,7 @@ mod tests {
 
     fn box_paint_of(spec: &NodeSpec) -> Paint {
         match &spec.kind {
-            NodeKind::Box(b) => b.paint().clone(),
+            NodeKind::Box(b) => b.paint_ref().into_owned(),
             other => panic!("expected box, got {other:?}"),
         }
     }

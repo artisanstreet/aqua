@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
 pub mod motion;
+mod paint;
+
+pub use paint::PaintValue;
 
 use aqua_core::{CornerRadii, Insets, Oklch, Transform2D};
 use aqua_text::TextStyle;

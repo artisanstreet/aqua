@@ -503,9 +503,16 @@ impl fmt::Debug for TextContent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct BoxContent {
-    paint: Option<Box<Paint>>,
+    paint: crate::style::PaintValue,
+    materialized: std::cell::OnceCell<Box<Paint>>,
+}
+
+impl PartialEq for BoxContent {
+    fn eq(&self, other: &Self) -> bool {
+        self.paint == other.paint
+    }
 }
 
 impl BoxContent {
@@ -519,16 +526,39 @@ impl BoxContent {
     #[must_use]
     pub fn paint(&self) -> &Paint {
         match &self.paint {
-            Some(paint) => paint,
-            None => default_paint(),
+            crate::style::PaintValue::Empty => default_paint(),
+            crate::style::PaintValue::Styled(paint) => paint,
+            crate::style::PaintValue::Solid(_) => self
+                .materialized
+                .get_or_init(|| Box::new(self.paint.resolve())),
         }
     }
 
+    pub(crate) fn paint_ref(&self) -> std::borrow::Cow<'_, Paint> {
+        match &self.paint {
+            crate::style::PaintValue::Empty => std::borrow::Cow::Borrowed(default_paint()),
+            crate::style::PaintValue::Styled(paint) => std::borrow::Cow::Borrowed(paint),
+            crate::style::PaintValue::Solid(_) => std::borrow::Cow::Owned(self.paint.resolve()),
+        }
+    }
+
+    pub(crate) fn plain_paint(&self) -> bool {
+        self.paint.is_plain()
+    }
+
+    fn set_fill(&mut self, fill: Option<Oklch>) -> bool {
+        let changed = self.paint.set_fill(fill);
+        if changed {
+            self.materialized.take();
+        }
+        changed
+    }
+
     pub fn set_paint(&mut self, paint: Paint) {
-        match (paint == Paint::default(), self.paint.as_mut()) {
-            (true, _) => self.paint = None,
-            (false, Some(current)) => **current = paint,
-            (false, None) => self.paint = Some(Box::new(paint)),
+        let paint = crate::style::PaintValue::from(paint);
+        if self.paint != paint {
+            self.paint = paint;
+            self.materialized.take();
         }
     }
 }
@@ -1023,6 +1053,9 @@ fn default_paint() -> &'static Paint {
 impl NodeRecord {
     #[must_use]
     pub fn paint(&self) -> &Paint {
+        if let NodeKind::Box(content) = &self.kind {
+            return content.paint();
+        }
         match &self.paint_slot {
             Some(paint) => paint,
             None => default_paint(),
@@ -1979,7 +2012,7 @@ impl UiTree {
     #[must_use]
     pub fn motion_spec(&self, id: NodeId) -> Option<Rc<aqua_style::motion::MotionSpec>> {
         self.get(id).and_then(|rec| match &rec.kind {
-            NodeKind::Box(content) => content.paint().motion.clone(),
+            NodeKind::Box(content) => content.paint_ref().motion.clone(),
             _ => rec.paint().motion.clone(),
         })
     }
@@ -2079,7 +2112,7 @@ impl UiTree {
 
     fn paint_transform(&self, id: NodeId) -> Option<Option<Transform2D>> {
         self.get(id).map(|rec| match &rec.kind {
-            NodeKind::Box(b) => b.paint().transform,
+            NodeKind::Box(b) => b.paint_ref().transform,
             _ => rec.paint().transform,
         })
     }
@@ -2464,7 +2497,7 @@ impl UiTree {
             NodeKind::Box(b) => {
                 if let Some(rec) = self.nodes.get_mut(id.raw()) {
                     if let NodeKind::Box(ref mut cur) = rec.kind {
-                        cur.paint = b.paint;
+                        *cur = b;
                     }
                     rec.dirty_paint = true;
                 }
@@ -2531,7 +2564,7 @@ impl UiTree {
         let kind = spec.kind;
         let children = spec.children;
         self.motion_declared |= paint.motion.is_some()
-            || matches!(&kind, NodeKind::Box(content) if content.paint().motion.is_some());
+            || matches!(&kind, NodeKind::Box(content) if content.paint_ref().motion.is_some());
         let focusable = matches!(kind, NodeKind::Text(ref t) if t.is_editable())
             || control.as_deref().is_some_and(|control| {
                 matches!(
@@ -2558,6 +2591,8 @@ impl UiTree {
             .taffy
             .new_leaf_with_context(crate::style::to_taffy(&style), ctx)
             .expect("taffy leaf insertion is infallible");
+        let paint_slot = (!matches!(&kind, NodeKind::Box(_)) && paint != Paint::default())
+            .then(|| Box::new(paint));
         // Canvas painters referenced by id stay registered across rebuilds;
         // only node records are fresh.
         let id = NodeId::from_raw(self.nodes.insert(NodeRecord {
@@ -2565,7 +2600,7 @@ impl UiTree {
             control,
             kind,
             style,
-            paint_slot: (paint != Paint::default()).then(|| Box::new(paint)),
+            paint_slot,
             children: Vec::new(),
             parent: None,
             dirty_layout: true,
@@ -2838,7 +2873,7 @@ impl UiTree {
     #[must_use]
     pub fn paint(&self, id: NodeId) -> Option<Paint> {
         self.get(id).map(|rec| match &rec.kind {
-            NodeKind::Box(b) => b.paint().clone(),
+            NodeKind::Box(b) => b.paint_ref().into_owned(),
             _ => rec.paint().clone(),
         })
     }
@@ -2851,8 +2886,8 @@ impl UiTree {
             return false;
         };
         let current = match &rec.kind {
-            NodeKind::Box(b) => b.paint(),
-            _ => rec.paint(),
+            NodeKind::Box(b) => b.paint_ref(),
+            _ => std::borrow::Cow::Borrowed(rec.paint()),
         };
         if *current == paint {
             return false;
@@ -2866,7 +2901,7 @@ impl UiTree {
                 })
             })
         };
-        let layout_changed = self.gpui_layout_scale.is_some() && border(current) != border(&paint);
+        let layout_changed = self.gpui_layout_scale.is_some() && border(&current) != border(&paint);
         match &mut rec.kind {
             NodeKind::Box(b) => b.set_paint(paint),
             _ => {
@@ -2885,7 +2920,7 @@ impl UiTree {
             return false;
         };
         let changed = match &mut record.kind {
-            NodeKind::Box(content) => set_fill_slot(&mut content.paint, fill),
+            NodeKind::Box(content) => content.set_fill(fill),
             _ => set_fill_slot(&mut record.paint_slot, fill),
         };
         if changed {
@@ -3035,9 +3070,9 @@ impl UiTree {
             let Some(record) = self.get(id) else {
                 break;
             };
-            let clips = matches!(&record.kind, NodeKind::Box(b) if b.paint().clip)
+            let clips = matches!(&record.kind, NodeKind::Box(b) if b.paint_ref().clip)
                 || matches!(record.kind, NodeKind::Scroll(_))
-                || record.paint().clip;
+                || (!matches!(&record.kind, NodeKind::Box(_)) && record.paint().clip);
             if clips {
                 if let Some(rect) = self.visual_rect(id) {
                     clip = clip.intersect(rect);
@@ -3461,8 +3496,8 @@ impl UiTree {
                 Some(scale) => {
                     let mut style = crate::layout::editor::to_taffy(&record.style, scale);
                     let paint = match &record.kind {
-                        NodeKind::Box(content) => content.paint(),
-                        _ => record.paint(),
+                        NodeKind::Box(content) => content.paint_ref(),
+                        _ => std::borrow::Cow::Borrowed(record.paint()),
                     };
                     let widths = paint.gpui_border.map(|border| border.widths).or_else(|| {
                         paint.border.map(|border| {
@@ -3731,7 +3766,7 @@ impl UiTree {
             return;
         };
         let paint = match &rec.kind {
-            NodeKind::Box(content) => content.paint().clone(),
+            NodeKind::Box(content) => content.paint_ref().into_owned(),
             _ => rec.paint().clone(),
         };
         let forced = self.motion_groups.get(&id).copied().unwrap_or_default();
@@ -5092,7 +5127,7 @@ mod tests {
             {
                 let rec = tree.get_mut(kids[0]).unwrap();
                 if let NodeKind::Box(ref mut b) = rec.kind {
-                    let mut paint = b.paint().clone();
+                    let mut paint = b.paint_ref().into_owned();
                     paint.fill = Some(Oklch::from_hex("#123456").unwrap());
                     b.set_paint(paint);
                 }

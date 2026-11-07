@@ -2,7 +2,7 @@
   "code_commit": "4764869",
   "base_commit": "b0e7d51",
   "underlying_mask_commit": "0240deb",
-  "status": "Native validation PASS; release Editor comparison pending",
+  "status": "Native, paired release memory and full visual validation complete; new full GPUI performance comparison pending",
   "change": "Select the existing exact R8 mask path for linear gradients whose stop RGB components are identical after the existing HSL-to-sRGB conversion; gradient alpha remains rasterized. Multicolor gradients retain RGBA.",
   "validation": {
     "windows_render_tests": 82,
@@ -16,7 +16,9 @@
     "white_fade_maximum_channel_error": 0,
     "comparison": "Forced RGBA generic vector rendering of the same gradient drawing; this remains independent after constant-color gradients select masks.",
     "clippy": "PASS --lib --test render -D warnings",
-    "changed_file_rustfmt": "PASS"
+    "changed_file_rustfmt": "PASS",
+    "release_editor_build": "PASS",
+    "visual_gate": "PASS unchanged limits; worst whole frame 13.786%, max jump glyph region 22.7%"
   },
   "texture_workload": {
     "geometry": [
@@ -33,7 +35,7 @@
     "checks": "Solid and fading gradient paths reuse residency without uploads/rasterization; switching to a multicolor gradient retires the mask."
   },
   "limits": [
-    "This is a texture allocation result, not a measured Editor private or GPU memory improvement.",
+    "The 75% result is the texture allocation for the isolated path workload. The separate release sample has overlapping memory ranges and does not establish a precise expected saving.",
     "The latest complete full scoreboard remains 33/41 performance rows PASS, overall FAIL; visuals PASS.",
     "This branch is stacked on PR15; no shader, GPU instance layout or public API changes are needed."
   ],
@@ -41,5 +43,6 @@
     "status": "FAIL before tests",
     "run": "https://github.com/artisanstreet/aqua/actions/runs/42346264830",
     "reason": "Existing targeted-test workflow requests removed package aqua-macros on Ubuntu and Windows."
-  }
+  },
+  "release_comparison": "Three pairs: GPU boot 35.4\u219233.4 MiB; after scroll 48.7\u219246.9 MiB; private 113\u2192111 MiB. Ranges overlap and scroll p50/max rise slightly; see memory/result.json."
 }

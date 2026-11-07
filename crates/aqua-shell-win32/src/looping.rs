@@ -1,4 +1,4 @@
-use crate::event::{Handler, ShellError, ShellEvent};
+use crate::event::{win32, Handler, ShellError, ShellEvent};
 use crate::state::{self, Queued, HANDLER, IN_HANDLER, ORIGIN};
 use crate::timing;
 use crate::wake_trace::{self, Source};
@@ -117,9 +117,45 @@ pub fn set_waitables(handles: Vec<isize>) {
     state::with(|s| s.waitables = handles);
 }
 
+#[derive(Clone, Copy)]
+enum MessageWait {
+    Inactive,
+    Waiting { wake_at: Option<Instant> },
+    Notified,
+}
+
 thread_local! {
     static WATCH: std::cell::RefCell<crate::occlusion::Watch> =
         std::cell::RefCell::new(crate::occlusion::Watch::default());
+    static MESSAGE_WAIT: std::cell::Cell<MessageWait> =
+        const { std::cell::Cell::new(MessageWait::Inactive) };
+}
+
+pub(crate) fn message_waiting() -> bool {
+    matches!(MESSAGE_WAIT.get(), MessageWait::Waiting { .. })
+}
+
+pub(crate) fn message_wait_needs_wake(wake_at: Option<Instant>, pending: bool) -> bool {
+    match MESSAGE_WAIT.get() {
+        MessageWait::Waiting { wake_at: previous } => pending || wake_at != previous,
+        _ => false,
+    }
+}
+
+pub(crate) fn wake_message_wait() {
+    if message_waiting() {
+        let posted = unsafe {
+            PostThreadMessageW(
+                windows::Win32::System::Threading::GetCurrentThreadId(),
+                WM_NULL,
+                WPARAM(0),
+                LPARAM(0),
+            )
+        };
+        if posted.is_ok() {
+            MESSAGE_WAIT.set(MessageWait::Notified);
+        }
+    }
 }
 
 fn watch_occlusion(active: bool) {
@@ -186,6 +222,50 @@ fn redraw_pending() -> bool {
     state::with(|s| s.windows.values().any(|w| w.redraw_pending) || !s.queue.is_empty())
 }
 
+fn dispatch(message: &MSG) {
+    wake_trace::record(Source::Message(message.message));
+    let consumed = crate::hooks::pre_translate(&crate::hooks::RawMessage {
+        hwnd: message.hwnd.0 as isize,
+        message: message.message,
+        wparam: message.wParam.0,
+        lparam: message.lParam.0,
+    });
+    if consumed {
+        state::with(|s| s.queue.push_back(Queued::Wake));
+    } else {
+        wake_trace::dispatching(true);
+        unsafe {
+            let _ = TranslateMessage(message);
+            DispatchMessageW(message);
+        }
+        wake_trace::dispatching(false);
+    }
+}
+
+struct MessageTimer(usize);
+
+impl MessageTimer {
+    fn arm(current: Instant, wake_at: Option<Instant>) -> Option<Self> {
+        let Some(at) = wake_at else {
+            return Some(Self(0));
+        };
+        let timing::TimerPlan::Coarse { leeway_ms } = timing::plan(current, at) else {
+            return None;
+        };
+        let after_ms = timing::timeout_ms(current, Some(at)).min(USER_TIMER_MAXIMUM - leeway_ms);
+        let id = unsafe { SetCoalescableTimer(None, 0, after_ms, None, leeway_ms) };
+        (id != 0).then_some(Self(id))
+    }
+}
+
+impl Drop for MessageTimer {
+    fn drop(&mut self) {
+        if self.0 != 0 {
+            let _ = unsafe { KillTimer(None, self.0) };
+        }
+    }
+}
+
 pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
     if HANDLER.get().is_some() {
         return Err(ShellError::LoopAlreadyRunning);
@@ -206,6 +286,7 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
     .ok();
     let coarse = unsafe { CreateWaitableTimerExW(None, None, 0, TIMER_ALL_ACCESS) }.ok();
     let mut armed: Option<Instant> = None;
+    let mut outcome = Ok(());
     loop {
         let mut msg = MSG::default();
         let mut quit = false;
@@ -214,23 +295,7 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
                 quit = true;
                 break;
             }
-            wake_trace::record(Source::Message(msg.message));
-            let consumed = crate::hooks::pre_translate(&crate::hooks::RawMessage {
-                hwnd: msg.hwnd.0 as isize,
-                message: msg.message,
-                wparam: msg.wParam.0,
-                lparam: msg.lParam.0,
-            });
-            if consumed {
-                state::with(|s| s.queue.push_back(Queued::Wake));
-            } else {
-                wake_trace::dispatching(true);
-                unsafe {
-                    let _ = TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
-                }
-                wake_trace::dispatching(false);
-            }
+            dispatch(&msg);
         }
         if quit {
             break;
@@ -241,7 +306,34 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
         let current = now();
         let (handler_wake, waitables) = state::with(|s| (s.wake_at, s.waitables.clone()));
         let wake_at = [handler_wake, watch_deadline()].into_iter().flatten().min();
-        let mut handles: Vec<HANDLE> = Vec::with_capacity(waitables.len() + 1);
+        if waitables.is_empty() && !redraw_pending() {
+            if let Some(message_timer) = MessageTimer::arm(current, wake_at) {
+                if armed.take().is_some() {
+                    for timer in timer.iter().chain(coarse.iter()) {
+                        let _ = unsafe { CancelWaitableTimer(*timer) };
+                    }
+                }
+                MESSAGE_WAIT.set(MessageWait::Waiting {
+                    wake_at: handler_wake,
+                });
+                wake_trace::record(Source::MessageWait {
+                    timed: wake_at.is_some(),
+                });
+                let received = unsafe { GetMessageW(&mut msg, None, 0, 0) };
+                MESSAGE_WAIT.set(MessageWait::Inactive);
+                drop(message_timer);
+                crate::null_trace::waited();
+                match received.0 {
+                    -1 => {
+                        outcome = Err(win32("GetMessageW", windows::core::Error::from_thread()));
+                        break;
+                    }
+                    0 => break,
+                    _ => dispatch(&msg),
+                }
+                continue;
+            }
+        }
         if armed != wake_at {
             let plan = wake_at.map(|at| timing::plan(current, at));
             let arm = |timer: Option<HANDLE>, leeway_ms: Option<u32>| {
@@ -271,6 +363,7 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
             arm(coarse, coarse_leeway);
             armed = wake_at;
         }
+        let mut handles: Vec<HANDLE> = Vec::with_capacity(waitables.len() + 1);
         timer
             .iter()
             .chain(coarse.iter())
@@ -308,7 +401,7 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
     }
     HANDLER.set(None);
     drop(boxed);
-    Ok(())
+    outcome
 }
 
 const INFINITE_WAIT: u32 = u32::MAX;

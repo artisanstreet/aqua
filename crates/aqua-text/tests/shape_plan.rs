@@ -122,3 +122,48 @@ fn prewarmed_entries_pay_no_plan_cost_on_first_layout() {
     let warm_first = styled_cost(&mut warm, &style, "Hello world fn main() { 42 }");
     assert!(warm_first.0 < cold_first.0);
 }
+
+#[test]
+fn single_paragraph_reflow_stays_within_its_allocation_budget() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut fonts = FontManager::new();
+    let mut layout = TextLayout::new();
+    layout.set_line_mode(LineMode::Single);
+    layout.set_wrap(WrapMode::None);
+    layout.set_max_width(Some(400.0));
+    layout.set_text(&paragraph(1).repeat(64), &TextStyle::default());
+    layout.layout(&mut fonts);
+    layout.layout(&mut fonts);
+    let before_layout = layout.layout(&mut fonts);
+    let before = BYTES.load(Ordering::Relaxed);
+    layout.set_max_width(Some(420.0));
+    let after_layout = layout.layout(&mut fonts);
+    let allocated = BYTES.load(Ordering::Relaxed) - before;
+    let glyphs = after_layout.lines[0].glyphs.len();
+    let budget = glyphs * std::mem::size_of::<aqua_text::layout::LaidGlyph>() * 5 / 2;
+    eprintln!("single paragraph glyphs={glyphs} allocated={allocated} budget={budget}");
+    assert!(allocated < budget, "{allocated} bytes for {glyphs} glyphs");
+    assert_eq!(before_layout.size, after_layout.size);
+    assert_eq!(
+        before_layout.first_baseline_y,
+        after_layout.first_baseline_y
+    );
+    let positions = |laid: &aqua_text::layout::LaidOut| {
+        laid.lines[0]
+            .glyphs
+            .iter()
+            .map(|glyph| {
+                (
+                    glyph.glyph_id,
+                    glyph.src_byte_start,
+                    glyph.src_byte_end,
+                    glyph.x.to_bits(),
+                    glyph.y.to_bits(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(positions(&before_layout), positions(&after_layout));
+}

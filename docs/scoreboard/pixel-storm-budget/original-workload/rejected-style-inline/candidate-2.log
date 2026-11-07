@@ -1,0 +1,10 @@
+
+running 1 test
+test pixel_storm_original_construction_report ... original-construction frame=1 ms=99.288 element_bytes=160 allocations=801 reallocations=7200 allocated_bytes=262272000 freed_bytes=0 moved_reallocations=1397 moved_capacity_bytes=99860480 largest_allocation=327680
+original-construction frame=2 ms=99.610 element_bytes=160 allocations=801 reallocations=7200 allocated_bytes=262272000 freed_bytes=0 moved_reallocations=1397 moved_capacity_bytes=99860480 largest_allocation=327680
+original-construction frame=3 ms=99.949 element_bytes=160 allocations=801 reallocations=7200 allocated_bytes=262272000 freed_bytes=0 moved_reallocations=1397 moved_capacity_bytes=99860480 largest_allocation=327680
+original-construction frame=4 ms=105.834 element_bytes=160 allocations=801 reallocations=7200 allocated_bytes=262272000 freed_bytes=0 moved_reallocations=1397 moved_capacity_bytes=99860480 largest_allocation=327680
+original-construction frame=5 ms=100.833 element_bytes=160 allocations=801 reallocations=7200 allocated_bytes=262272000 freed_bytes=0 moved_reallocations=1397 moved_capacity_bytes=99860480 largest_allocation=327680
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.70s

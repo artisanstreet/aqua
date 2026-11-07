@@ -1,0 +1,19 @@
+{
+  "benchmark_sha256": "b549d8dda2775e63e018e58bf472ab794f2345dc387189656dbd3c65e51b9f4d",
+  "benchmark_changed": false,
+  "foreground_windows_opened_during_followup": false,
+  "priority": "nice 19, ionice idle, cargo -j 2",
+  "native_run_note": "Native rebuild and allocation baselines were captured before the request to protect the game screen. This follow-up launches no Windows benchmark. Windows candidate core tests are cross-compiled only.",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "normalization": "Text line endings and trailing whitespace normalized; recorded values preserved.",
+  "executables": {
+    "original-children-control": "a24f71b09818f13a09e713f8ca11e6cbd08ff3a321d2d723b6052b3f5b3e4332",
+    "original-children-candidate": "1d7c195d90428e167e08d9c3232cc39579f6dec12784609f80243e419c191396",
+    "original-style-candidate": "8c36d2e01c9c18c052d85503a3fbaea2f715f55c0f3ce2a6e53c31543af825e6",
+    "original-style-full-inline": "58e17fe633fc991c9a4fe8eb7b9489ae63ac197ce20b44fcfdb352870961ab37",
+    "original-box-inline": "1e3f6a097584d76e84f430b96174dbef6ffcb699f5f2e37f86f9fefb8f410d3c",
+    "original-compact-builder": "5e041bc1b688388416acdf4e51694cb483a0ed9f49918f879db75c1e76b934dd",
+    "original-srgb-transfer-control": "4a0b634fa4f79cf5056bfd122acf21a884675161cccceb20a2cf6950588d46a1",
+    "original-srgb-transfer-candidate": "d682b7d7bc0f4315198aaece9eb04e1ecfbe0b3d11756d84a89164da57a7070a"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "purpose": "Allocation-counted diagnostic of the original declaration-rebuilding workload. Timings are instrumented, not a benchmark speed claim.",
+  "profile_source_commit": "1ad4d76",
+  "exe_sha256": "44a2f22057fdfe0f5e413d47df95107dd5ae2af7636afa1c497da81de580eb72",
+  "arguments": "--size 1280x800",
+  "retained": false,
+  "heap_counters": "aqua-profile-start heap_counters=true spike_ms=0.0",
+  "selected_app_frames": 8,
+  "allocs": {
+    "min": 809,
+    "median": 809.0,
+    "max": 810
+  },
+  "alloc_bytes": {
+    "min": 286849648,
+    "median": 286849648.0,
+    "max": 287439504
+  },
+  "reallocs": {
+    "min": 7200,
+    "median": 7200.0,
+    "max": 7218
+  },
+  "frees": {
+    "min": 807,
+    "median": 807.0,
+    "max": 808
+  },
+  "reactive_phase": {
+    "allocations_median": 802.0,
+    "allocated_bytes_median": 262272008.0,
+    "note": "Includes positive capacity growth during reallocation, not bytes copied or peak live memory."
+  }
+}

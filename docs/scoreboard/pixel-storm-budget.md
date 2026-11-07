@@ -1,5 +1,54 @@
 # Pixel Storm: the path to a 25–50 ms frame
 
+The original declaration-rebuilding benchmark has not reached 25–50 ms. The earlier retained-mode result below uses a different application update API and does not establish a speedup for the original workload or a fair speedup over GPUI.
+
+## Original-workload follow-up
+
+The follow-up keeps `pixel_storm --size 1280x800` in its default rebuilding mode. The application still evaluates the original colour recurrence, calls the Oklch API, constructs every box declaration and submits the new tree for reconciliation. The example source is unchanged throughout this follow-up, SHA-256 `b549d8dda2775e63e018e58bf472ab794f2345dc387189656dbd3c65e51b9f4d`.
+
+A native pilot of that mode, before the request to protect the game screen, records 301.62 ms median and 325.89 ms p99 across 33 intervals in its one complete warm window. That is a single diagnostic baseline, not a paired speedup result. An allocation-counted original-mode run records a median 809 allocations, 7,200 reallocations and 286,849,648 allocated bytes within app phases. Declaration construction accounts for 802 allocations and 262,272,008 bytes of that volume. Counts include positive reallocation growth, not peak live memory or measured physical copy traffic.
+
+Subsequent work opens no Windows benchmark windows. Builds use two jobs at `nice 19` and idle I/O priority in WSL. CPU component diagnostics also run at low priority. Windows execution and presented-frame validation remain deferred while the game screen is protected.
+
+### Granular diagnostics
+
+The new ignored `element-children` construction report uses the same million-cell integer recurrence, row-dependent fold and existing builder/style/Oklch APIs. It counts all constructed cells and rows, allocations, reallocations, allocated growth, deallocations, moved reallocation addresses and the largest allocation. Counters are thread-local and confined to the test executable. The report drops its previous declaration tree between samples and excludes retained runtime/scene state; it is an isolated construction diagnostic, not an end-to-end benchmark.
+
+`moved_capacity_bytes` records the preserved capacity of allocations whose addresses changed. It is not a physical memory-copy counter: an allocator can move mappings without copying their pages. Individual allocation stacks and exact copy volume are not yet recorded.
+
+Linux user-space CPU sampling identifies style application, box construction, colour-cache lookups and libc copy instructions as investigation targets. Disassembly shows SIMD copy instructions already in use. Generic user-space hardware counters are retained, but they do not establish Windows scheduler behavior. In particular, the recorded `context-switches:u=0` must not be interpreted as zero context switches. The available perf build lacks libdw/libunwind support, so full stack attribution is unavailable; selected leaf addresses were resolved separately using ELF section offsets and `addr2line`.
+
+### Rejected candidates
+
+All trial logs and source identities are retained in `pixel-storm-budget/original-workload/`.
+
+| Candidate | Observation | Decision |
+|---|---|---|
+| Bound lazy child-vector capacity by a useful iterator upper bound | Allocation volume fell from 262,272,000 to 163,968,000 bytes; construction was slower in all three repeats | Reverted |
+| Force style/application inlining | No material repeatable construction-time improvement | Reverted |
+| Force box finishing to inline as well | No convincing improvement in the pilot | Removed |
+| Keep builder paint compact through construction | Slower in its exploratory control/candidate pair | Removed |
+
+These experiments do not establish that fewer allocated bytes or more inlining automatically makes the original workload faster. Execution conditions varied during background work; timings are compared only within each recorded experiment.
+
+### Exact channel-transfer candidate
+
+The remaining candidate changes the implementation of the existing `srgb8_to_linear` function. A lazily initialized table holds the transfer function's 256 possible channel results, calculated with the existing scalar expression on the running platform. The table payload is 1,024 bytes. Callers, the Oklch interface, colour recurrence, box declarations and application source remain unchanged. First use computes the table; warm calls perform three lookups. No approximation or benchmark-specific palette is introduced.
+
+An independent regression checks every possible byte in every channel against the previous scalar expression with exact float-bit equality. A separate direct-API diagnostic converts 1,024,000 RGB values, retains all outputs and produces the same output digest in both executables.
+
+| Direct transfer diagnostic | Control median ms | Candidate median ms |
+|---|---:|---:|
+| Repeat 1, five samples | 27.073 | 4.039 |
+| Repeat 2, five samples | 23.305 | 4.307 |
+| Repeat 3, five samples | 23.381 | 4.102 |
+
+This is a transfer-function result, not Pixel Storm frame time. The existing full-colour memo already bypasses many transfer calls, so the application benefit can be much smaller and has not been established. The 25–50 ms original-workload target remains unproven.
+
+The channel-table candidate passes 710 tests across Core, Style, UI, Runtime, Graph, Transport and the reference renderer, with zero failures and seven ignored reports/doc tests. Its Windows Core colour test executable cross-compiles successfully. Windows test execution and native frame timings have not been performed during the screen-protected follow-up.
+
+## Earlier opt-in retained workload
+
 The retained native-sRGB path demonstrates the 25–50 ms target for typical steady-state presented frames at 1,024,000 animated UI boxes. Three final native Windows runs recorded window medians of 27.59–28.65 ms and p99 of 30.03–35.76 ms over 2,120 warm frame intervals. The largest warm interval was 50.77 ms. This is measured throughput on a shared desktop, not a hard latency guarantee or a cold-start result.
 
 Every box remains a real node, every frame evaluates the original integer colour recurrence, and the current geometry, DPI coverage, clipping and frame-completion callback semantics remain. The default example retains its original descriptor-rebuilding mode. Run `pixel_storm --size 1280x800 --retained` to select the new bulk colour-update path; `--retained-oklch` selects the comparable retained Oklch path.

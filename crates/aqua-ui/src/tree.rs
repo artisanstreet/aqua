@@ -525,7 +525,34 @@ impl BoxContent {
     }
 
     pub fn set_paint(&mut self, paint: Paint) {
-        self.paint = (paint != Paint::default()).then(|| Box::new(paint));
+        match (paint == Paint::default(), self.paint.as_mut()) {
+            (true, _) => self.paint = None,
+            (false, Some(current)) => **current = paint,
+            (false, None) => self.paint = Some(Box::new(paint)),
+        }
+    }
+}
+
+fn set_fill_slot(slot: &mut Option<Box<Paint>>, fill: Option<Oklch>) -> bool {
+    match slot {
+        Some(paint) if paint.fill == fill => false,
+        Some(paint) => {
+            paint.fill = fill;
+            if fill.is_none() && **paint == Paint::default() {
+                *slot = None;
+            }
+            true
+        }
+        None => match fill {
+            Some(fill) => {
+                *slot = Some(Box::new(Paint {
+                    fill: Some(fill),
+                    ..Paint::default()
+                }));
+                true
+            }
+            None => false,
+        },
     }
 }
 
@@ -1416,6 +1443,10 @@ impl UiTree {
         if let Some(record) = self.nodes.get_mut(id.raw()) {
             record.plain_bindings = false;
         }
+    }
+
+    pub(crate) fn stable_plain_refresh(&self) -> bool {
+        self.pending_commands() == 0 && self.portal_roots.is_empty() && self.exiting.is_empty()
     }
 
     /// Exclusive node access; marks paint dirty. Callers that change layout
@@ -2847,6 +2878,20 @@ impl UiTree {
         }
         self.touch_paint(id);
         true
+    }
+
+    pub fn set_fill(&mut self, id: NodeId, fill: Option<Oklch>) -> bool {
+        let Some(record) = self.nodes.get_mut(id.raw()) else {
+            return false;
+        };
+        let changed = match &mut record.kind {
+            NodeKind::Box(content) => set_fill_slot(&mut content.paint, fill),
+            _ => set_fill_slot(&mut record.paint_slot, fill),
+        };
+        if changed {
+            self.touch_paint(id);
+        }
+        changed
     }
 
     /// Register (or replace) the painter for a canvas node. Returns the

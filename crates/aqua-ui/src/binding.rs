@@ -599,6 +599,17 @@ impl View {
         elements: Vec<Element>,
     ) -> Result<Vec<NodeId>, MountError> {
         self.content = splice_top_level(elements)?;
+        match (
+            self.content.as_slice(),
+            self.root,
+            tree.stable_plain_refresh(),
+        ) {
+            ([content], Some(root), true) if content.can_refresh_plain_boxes(tree, root) => {
+                content.refresh_plain_boxes(tree, root);
+                return Ok(vec![root]);
+            }
+            _ => {}
+        }
         let mut specs = lower_all(&self.content)?;
         aqua_core::checkpoint::reach();
         let mut synced = false;

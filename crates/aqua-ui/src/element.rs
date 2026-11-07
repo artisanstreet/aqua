@@ -2670,6 +2670,54 @@ impl Element {
         &mut self.bindings
     }
 
+    pub(crate) fn can_refresh_plain_boxes(&self, tree: &UiTree, id: NodeId) -> bool {
+        let ElementKind::Box(properties) = &self.kind else {
+            return false;
+        };
+        let Some(record) = tree.get(id) else {
+            return false;
+        };
+        let NodeKind::Box(current) = &record.kind else {
+            return false;
+        };
+        let plain = |paint: &Paint| {
+            *paint
+                == Paint {
+                    fill: paint.fill,
+                    ..Paint::default()
+                }
+        };
+        record.plain_bindings
+            && record.control.is_none()
+            && properties.control.is_none()
+            && self.bindings.is_empty()
+            && self.synth.is_empty()
+            && self.role.is_none()
+            && self.collection_semantics.is_none()
+            && properties.typo == TypoChain::default()
+            && record.key == self.key_hash()
+            && record.style == properties.style
+            && record.children.len() == self.children.len()
+            && plain(&properties.paint)
+            && plain(current.paint())
+            && self
+                .children
+                .iter()
+                .zip(&record.children)
+                .all(|(child, id)| child.can_refresh_plain_boxes(tree, *id))
+    }
+
+    pub(crate) fn refresh_plain_boxes(&self, tree: &mut UiTree, id: NodeId) {
+        let ElementKind::Box(properties) = &self.kind else {
+            unreachable!()
+        };
+        tree.set_fill(id, properties.paint.fill);
+        for (index, child) in self.children.iter().enumerate() {
+            let child_id = tree.get(id).unwrap().children[index];
+            child.refresh_plain_boxes(tree, child_id);
+        }
+    }
+
     /// Mutable flattened children (synthetic first, then explicit, splicing
     /// nested fragments). Mirrors [`Element::flat_children`] exactly —
     /// lowering and binding walks must agree.

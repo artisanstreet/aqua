@@ -107,6 +107,63 @@ fn color_refresh_preserves_identity_layout_and_updates_every_cell() {
     assert_ne!(initial, next);
 }
 
+#[test]
+fn invalid_later_sibling_does_not_commit_earlier_paint_changes() {
+    use aqua_core::Transform2D;
+    let runtime = Runtime::new();
+    let mut tree = UiTree::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    let content = |first, second| {
+        vec![ui::Box::new()
+            .child(ui::Box::new().fill(first).build())
+            .child(second)
+            .build()]
+    };
+    let root = view
+        .set_content(
+            &mut tree,
+            content(Oklch::BLACK, ui::Box::new().fill(Oklch::BLACK).build()),
+        )
+        .unwrap()[0];
+    tree.drain_commands();
+    let first = tree.get(root).unwrap().children[0];
+    let invalid = ui::Box::new()
+        .style(Style::new().transform(Transform2D {
+            a: 0.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            tx: 0.0,
+            ty: 0.0,
+        }))
+        .build();
+    assert!(view
+        .set_content(&mut tree, content(Oklch::WHITE, invalid))
+        .is_err());
+    assert_eq!(tree.paint(first).unwrap().fill, Some(Oklch::BLACK));
+}
+
+#[test]
+fn reordered_boxes_keep_their_keyed_identity() {
+    let runtime = Runtime::new();
+    let mut tree = UiTree::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    let content = |keys: [u32; 2]| {
+        vec![ui::Box::new()
+            .children(keys.map(|key| ui::Box::new().fill(Oklch::BLACK).build().with_key(key)))
+            .build()]
+    };
+    let root = view.set_content(&mut tree, content([1, 2])).unwrap()[0];
+    tree.drain_commands();
+    let original = tree.get(root).unwrap().children.clone();
+    view.set_content(&mut tree, content([2, 1])).unwrap();
+    tree.drain_commands();
+    assert_eq!(
+        tree.get(root).unwrap().children,
+        vec![original[1], original[0]]
+    );
+}
+
 fn measure<T>(label: &str, count: usize, run: impl FnOnce() -> T) -> T {
     let started = Instant::now();
     let result = black_box(run());

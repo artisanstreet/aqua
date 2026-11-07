@@ -27,6 +27,7 @@ pub enum Kind {
     BlurUp,
     ColorMatrix,
     Solid,
+    Srgba,
 }
 
 struct Shaders {
@@ -45,6 +46,12 @@ enum Blending {
 
 fn shaders(kind: Kind) -> Shaders {
     match kind {
+        Kind::Srgba => Shaders {
+            vertex: "vs_srgba",
+            pixel: "ps_solid",
+            instanced: true,
+            blend: Blending::Over,
+        },
         Kind::Solid => Shaders {
             vertex: "vs_solid",
             pixel: "ps_solid",
@@ -128,7 +135,7 @@ pub struct PipelineStats {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 12] = [
+    pub const ALL: [Kind; 13] = [
         Kind::Quad,
         Kind::Shadow,
         Kind::Glyph,
@@ -141,6 +148,7 @@ impl Kind {
         Kind::BlurUp,
         Kind::ColorMatrix,
         Kind::Solid,
+        Kind::Srgba,
     ];
 }
 
@@ -394,15 +402,23 @@ impl Pipelines {
         format: DXGI_FORMAT,
     ) -> Result<(ID3D12PipelineState, bool), Error> {
         let shaders = shaders(kind);
+        let mut color_space = instance_element(s!("COLOR_SPACE"), 2);
+        color_space.Format = DXGI_FORMAT_R32_UINT;
         let solid_layout = vec![
             instance_element(s!("BOUNDS"), 0),
             instance_element(s!("FILL"), 1),
+            color_space,
         ];
+        let mut srgba_fill = instance_element(s!("FILL"), 0);
+        srgba_fill.InputSlot = 1;
+        srgba_fill.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        let srgba_layout = vec![instance_element(s!("BOUNDS"), 0), srgba_fill];
         let glyph_layout = super::sprites::glyph_layout();
         let image_layout = super::sprites::image_layout();
         let slug_layout = super::sprites::slug_layout();
         let layout: &[D3D12_INPUT_ELEMENT_DESC] = match (shaders.instanced, kind) {
             (false, _) => &[],
+            (true, Kind::Srgba) => &srgba_layout,
             (true, Kind::Solid) => &solid_layout,
             (true, Kind::Glyph) => &glyph_layout,
             (true, Kind::Slug) => &slug_layout,

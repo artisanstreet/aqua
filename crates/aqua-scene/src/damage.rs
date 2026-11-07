@@ -209,6 +209,7 @@ impl DamageTracker {
             | DisplayItem::Shadow { .. }
             | DisplayItem::Image { .. }
             | DisplayItem::Vector { .. }
+            | DisplayItem::SrgbaRect { .. }
             | DisplayItem::Rect { .. }
             | DisplayItem::External { .. } => {
                 // Footprints are effect-inclusive by caller invariant; the

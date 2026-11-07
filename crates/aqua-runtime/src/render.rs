@@ -188,17 +188,31 @@ impl RenderSide {
         for patch in diff.fills {
             if let Some(id) = self.local_id(patch.node) {
                 if let Some(base) = self.base.get_mut(&patch.node) {
-                    match base {
-                        DisplayItem::Rect { fill, .. } | DisplayItem::Quad { fill, .. } => {
-                            *fill = patch.fill
-                        }
-                        _ => continue,
+                    if !base.set_fill(patch.fill) {
+                        continue;
                     }
                     self.dirty.push(patch.node);
                 } else {
                     self.scene.update_fill(id, patch.fill);
                 }
             }
+        }
+        for mut batch in diff.srgba_fills {
+            batch.retain_mut(|patch| {
+                let Some(id) = self.local_id(patch.node) else {
+                    return false;
+                };
+                if let Some(base) = self.base.get_mut(&patch.node) {
+                    if base.set_srgba(patch.fill) {
+                        self.dirty.push(patch.node);
+                    }
+                    false
+                } else {
+                    patch.node = id;
+                    true
+                }
+            });
+            self.scene.apply_srgba_batch(batch);
         }
         if let Some(order) = diff.order {
             let keep: HashSet<NodeId> = order.iter().copied().collect();

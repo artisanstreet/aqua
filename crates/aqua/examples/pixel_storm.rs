@@ -25,6 +25,7 @@ struct Settings {
     grid: Grid,
     mode: Mode,
     retained: bool,
+    native_rgb: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -66,11 +67,13 @@ fn parse_settings(args: &[String]) -> Settings {
         true => Mode::Static,
         false => Mode::Animated,
     };
-    let retained = args.iter().any(|arg| arg == "--retained");
+    let native_rgb = args.iter().any(|arg| arg == "--retained");
+    let retained = native_rgb || args.iter().any(|arg| arg == "--retained-oklch");
     Settings {
         grid,
         mode,
         retained,
+        native_rgb,
     }
 }
 
@@ -159,11 +162,12 @@ impl Meter {
         match self.last {
             None => {
                 eprintln!(
-                    "pixel-storm first_frame_ms={:.1} boxes={} mode={:?} retained={} grid={}x{}",
+                    "pixel-storm first_frame_ms={:.1} boxes={} mode={:?} retained={} native_rgb={} grid={}x{}",
                     (now - self.origin).as_secs_f64() * 1000.0,
                     settings.grid.width * settings.grid.height,
                     settings.mode,
                     settings.retained,
+                    settings.native_rgb,
                     settings.grid.width,
                     settings.grid.height
                 );
@@ -296,24 +300,44 @@ fn main() -> Result<(), aqua::Error> {
             .collect();
         let fills = FillGroup::new(ui.tree(), nodes).expect("mounted cells are live and unique");
         assert_eq!(fills.len(), (grid.width * grid.height) as usize);
-        fills.bind(
-            ui.scope(),
-            &ui.tree().command_sink(),
-            (frame_read,),
-            move |(t,), output| {
-                let started = WallInstant::now();
-                Oklch::extend_srgb8(
-                    output,
-                    (0..grid.height)
-                        .flat_map(|y| row_colors(y, grid.width, t))
-                        .map(|rgb| (rgb, 1.0)),
-                );
-                eprintln!(
-                    "pixel-storm colors t={t} build_ms={:.1}",
-                    started.elapsed().as_secs_f64() * 1000.0
-                );
-            },
-        );
+        if settings.native_rgb {
+            fills.bind_srgba(
+                ui.scope(),
+                &ui.tree().command_sink(),
+                (frame_read,),
+                move |(t,), output| {
+                    let started = WallInstant::now();
+                    output.extend(
+                        (0..grid.height)
+                            .flat_map(|y| row_colors(y, grid.width, t))
+                            .map(|[red, green, blue]| Srgba8::new(red, green, blue, 255)),
+                    );
+                    eprintln!(
+                        "pixel-storm colors t={t} space=srgba build_ms={:.1}",
+                        started.elapsed().as_secs_f64() * 1000.0
+                    );
+                },
+            );
+        } else {
+            fills.bind(
+                ui.scope(),
+                &ui.tree().command_sink(),
+                (frame_read,),
+                move |(t,), output| {
+                    let started = WallInstant::now();
+                    Oklch::extend_srgb8(
+                        output,
+                        (0..grid.height)
+                            .flat_map(|y| row_colors(y, grid.width, t))
+                            .map(|rgb| (rgb, 1.0)),
+                    );
+                    eprintln!(
+                        "pixel-storm colors t={t} build_ms={:.1}",
+                        started.elapsed().as_secs_f64() * 1000.0
+                    );
+                },
+            );
+        }
     } else {
         ui.mount_reactive((frame_read,), move |(t,)| {
             let started = WallInstant::now();

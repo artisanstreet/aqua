@@ -199,13 +199,24 @@ fn check_kind(plan: &FramePlan, index: usize) -> Result<(), PlanError> {
     let non_finite = PlanError::NonFiniteValue { pass: index };
     let single_target = pass.writes.len() == 1;
     match &pass.kind {
+        PassKind::SrgbaSolids { bounds, fills } => {
+            if !pass.reads.is_empty() || !single_target || bounds.len() != fills.len() {
+                return Err(bad_bindings);
+            }
+            bounds
+                .iter()
+                .copied()
+                .all(finite_rect)
+                .then_some(())
+                .ok_or(non_finite)
+        }
         PassKind::Solids { instances } => {
             if !pass.reads.is_empty() || !single_target {
                 return Err(bad_bindings);
             }
             instances
                 .iter()
-                .all(|instance| finite_quad(&instance.quad()))
+                .all(|instance| finite_rect(instance.bounds))
                 .then_some(())
                 .ok_or(non_finite)
         }

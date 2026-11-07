@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use aqua_core::{Oklch, Size};
+use aqua_core::{Oklch, Size, Srgba8};
 use aqua_protocol::{RenderCommand, RenderInput};
 use aqua_runtime::{emit_scene_diff, RenderSide, Runtime};
 use aqua_text::{SharedFonts, SharedRuns};
@@ -36,6 +36,7 @@ fn retained_million_box_cpu_report() {
     let width = 1280u32;
     let height = 800u32;
     let count = (width * height) as usize;
+    let srgba = std::env::var_os("AQUA_STORM_SRGBA").is_some_and(|value| value == "1");
     let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
     runtime.set_viewport(width as f32, height as f32, 1.25);
     let mut initial = Vec::with_capacity(count);
@@ -72,6 +73,13 @@ fn retained_million_box_cpu_report() {
         .collect::<Vec<_>>();
     assert_eq!(nodes.len(), count);
     let group = FillGroup::new(runtime.tree(), nodes).unwrap();
+    if srgba {
+        let initial = colors(width, height, 0)
+            .map(|([red, green, blue], _)| Srgba8::new(red, green, blue, 255))
+            .collect::<Vec<_>>();
+        group.apply_srgba(runtime.tree_mut(), &initial).unwrap();
+        runtime.build_frame().unwrap();
+    }
     let mut side = RenderSide::new();
     side.step(RenderInput {
         commands: vec![
@@ -87,16 +95,32 @@ fn retained_million_box_cpu_report() {
     let (read, write) = runtime.scope().signal(0u32);
     let color_time = Rc::new(Cell::new(0.0));
     let color_sample = Rc::clone(&color_time);
-    group.bind(
-        runtime.scope(),
-        &runtime.tree().command_sink(),
-        (read,),
-        move |(frame,), output| {
-            let begin = Instant::now();
-            Oklch::extend_srgb8(output, colors(width, height, frame));
-            color_sample.set(begin.elapsed().as_secs_f64() * 1000.0);
-        },
-    );
+    if srgba {
+        group.bind_srgba(
+            runtime.scope(),
+            &runtime.tree().command_sink(),
+            (read,),
+            move |(frame,), output| {
+                let begin = Instant::now();
+                output.extend(
+                    colors(width, height, frame)
+                        .map(|([red, green, blue], _)| Srgba8::new(red, green, blue, 255)),
+                );
+                color_sample.set(begin.elapsed().as_secs_f64() * 1000.0);
+            },
+        );
+    } else {
+        group.bind(
+            runtime.scope(),
+            &runtime.tree().command_sink(),
+            (read,),
+            move |(frame,), output| {
+                let begin = Instant::now();
+                Oklch::extend_srgb8(output, colors(width, height, frame));
+                color_sample.set(begin.elapsed().as_secs_f64() * 1000.0);
+            },
+        );
+    }
     let frames = std::env::var("AQUA_STORM_FRAMES")
         .ok()
         .and_then(|value| value.parse::<u32>().ok())
@@ -108,7 +132,12 @@ fn retained_million_box_cpu_report() {
         let ui_ms = begin.elapsed().as_secs_f64() * 1000.0;
         let emit = Instant::now();
         let diff = emit_scene_diff(runtime.scene_mut());
-        let fills = diff.fills.len();
+        let fills = diff.fills.len()
+            + diff
+                .srgba_fills
+                .iter()
+                .map(|batch| batch.len())
+                .sum::<usize>();
         assert!(diff.upserts.is_empty());
         assert!(diff.order.is_none());
         assert_eq!(fills, count);
@@ -127,12 +156,24 @@ fn retained_million_box_cpu_report() {
         assert_eq!(runtime.frame_work().layouts, 0);
         assert_eq!(group.take_error(), None);
         let color_ms = color_time.get();
-        println!("retained-storm-cpu frame={frame} boxes={count} color_ms={color_ms:.3} ui_ms={ui_ms:.3} emit_ms={emit_ms:.3} render_ms={render_ms:.3} total_ms={total_ms:.3}");
+        println!("retained-storm-cpu frame={frame} boxes={count} srgba={srgba} color_ms={color_ms:.3} ui_ms={ui_ms:.3} emit_ms={emit_ms:.3} render_ms={render_ms:.3} total_ms={total_ms:.3}");
     }
-    let mut next = Vec::with_capacity(count);
-    Oklch::extend_srgb8(&mut next, colors(width, height, frames + 1));
+    let next = colors(width, height, frames + 1);
+    let mut oklch = Vec::new();
+    let srgba_colors = if srgba {
+        Some(
+            next.map(|([red, green, blue], _)| Srgba8::new(red, green, blue, 255))
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        Oklch::extend_srgb8(&mut oklch, next);
+        None
+    };
     let begin = Instant::now();
-    group.apply(runtime.tree_mut(), &next).unwrap();
+    match srgba_colors {
+        Some(colors) => group.apply_srgba(runtime.tree_mut(), &colors).unwrap(),
+        None => group.apply(runtime.tree_mut(), &oklch).unwrap(),
+    }
     let apply_ms = begin.elapsed().as_secs_f64() * 1000.0;
     let begin = Instant::now();
     runtime.build_frame().unwrap();

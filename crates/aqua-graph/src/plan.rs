@@ -1,4 +1,4 @@
-use aqua_core::{geometry::Rect, Oklch};
+use aqua_core::{geometry::Rect, Oklch, Srgba8};
 
 use crate::linear::Linear2;
 use crate::slug::SlugInstance;
@@ -128,9 +128,15 @@ impl QuadInstance {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SolidColor {
+    Oklch(Oklch),
+    Srgba(Srgba8),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SolidInstance {
     pub bounds: Rect,
-    pub fill: Oklch,
+    pub fill: SolidColor,
 }
 
 impl SolidInstance {
@@ -139,7 +145,10 @@ impl SolidInstance {
             bounds: self.bounds,
             radius: 0.0,
             border_width: 0.0,
-            fill: self.fill,
+            fill: match self.fill {
+                SolidColor::Oklch(fill) => fill,
+                SolidColor::Srgba(fill) => fill.to_oklch(),
+            },
             border_color: Oklch::TRANSPARENT,
             clip: None,
             gradient: None,
@@ -343,6 +352,10 @@ impl FilterParams {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PassKind {
+    SrgbaSolids {
+        bounds: std::sync::Arc<[Rect]>,
+        fills: Vec<Srgba8>,
+    },
     Solids {
         instances: Vec<SolidInstance>,
     },
@@ -389,6 +402,7 @@ pub enum PassKind {
 impl PassKind {
     pub fn draw_count(&self) -> usize {
         match self {
+            PassKind::SrgbaSolids { fills, .. } => fills.len(),
             PassKind::Solids { instances } => instances.len(),
             PassKind::Instanced { instances, .. } => instances.len(),
             PassKind::Shadows { instances } => instances.len(),

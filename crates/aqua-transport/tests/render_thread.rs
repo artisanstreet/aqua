@@ -88,6 +88,7 @@ fn render_thread_animates_alone_and_reports_back_only_the_settle() {
         .unwrap();
     assert!(thread.send(RenderCommand::Scene(SceneDiff {
         fills: Vec::new(),
+        srgba_fills: Vec::new(),
         upserts: vec![(node, item(red))],
         order: Some(vec![node]),
     })));

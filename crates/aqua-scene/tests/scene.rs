@@ -242,3 +242,115 @@ fn recycled_fill_batches_coalesce_writes_without_reusing_previous_indices() {
         }]
     );
 }
+
+#[test]
+fn native_batches_survive_mixed_full_updates_and_stale_generations() {
+    use aqua_core::{Srgba8, SrgbaFillBatch, SrgbaFillPatch};
+    let mut scene = Scene::new();
+    let red = Srgba8::new(255, 0, 0, 255);
+    let green = Srgba8::new(0, 255, 0, 255);
+    let original = DisplayItem::SrgbaRect {
+        bounds: aqua_core::Rect {
+            x: 1.25,
+            y: 2.5,
+            w: 3.75,
+            h: 4.0,
+        },
+        fill: red,
+    };
+    let first = scene.insert(original.clone());
+    let second = scene.insert(original.clone());
+    scene.acknowledge_changes();
+    let revision = scene.revision();
+    let mut batch = SrgbaFillBatch::default();
+    batch.extend([
+        SrgbaFillPatch {
+            node: first,
+            fill: green,
+        },
+        SrgbaFillPatch {
+            node: second,
+            fill: green,
+        },
+    ]);
+    assert!(scene.apply_srgba_batch(batch));
+    let (oklch, batches) = scene.drain_color_changes(revision).unwrap();
+    assert!(oklch.is_empty());
+    assert_eq!(batches.iter().map(|batch| batch.len()).sum::<usize>(), 2);
+    assert!(
+        matches!(scene.get(first), Some(DisplayItem::SrgbaRect { fill, .. }) if *fill == green)
+    );
+    let mut next = batches[0].sibling();
+    next.push(SrgbaFillPatch {
+        node: first,
+        fill: red,
+    });
+    assert!(scene.apply_srgba_batch(next));
+    let mut moved = original.clone();
+    if let DisplayItem::SrgbaRect { bounds, .. } = &mut moved {
+        bounds.x += 1.0;
+    }
+    scene.update(first, moved);
+    scene.remove(second);
+    let replacement = scene.insert(original);
+    let mut stale = SrgbaFillBatch::default();
+    stale.push(SrgbaFillPatch {
+        node: second,
+        fill: green,
+    });
+    assert!(!scene.apply_srgba_batch(stale));
+    let (upserts, _, batches) = scene.drain_updates();
+    assert!(batches.is_empty());
+    assert!(upserts.iter().any(|(node, _)| *node == replacement));
+    assert!(
+        matches!(scene.get(replacement), Some(DisplayItem::SrgbaRect { fill, .. }) if *fill == red)
+    );
+}
+
+#[test]
+fn large_native_batches_report_lost_history_and_preserve_latest_contents() {
+    use aqua_core::{Srgba8, SrgbaFillBatch, SrgbaFillPatch};
+    let mut scene = Scene::new();
+    let black = Srgba8::new(0, 0, 0, 255);
+    let white = Srgba8::new(255, 255, 255, 255);
+    let bounds = aqua_core::Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 1.0,
+        h: 1.0,
+    };
+    let nodes = (0..5000)
+        .map(|_| {
+            scene.insert(DisplayItem::SrgbaRect {
+                bounds,
+                fill: black,
+            })
+        })
+        .collect::<Vec<_>>();
+    scene.acknowledge_changes();
+    let before = scene.revision();
+    let mut batch = SrgbaFillBatch::default();
+    batch.extend(
+        nodes
+            .iter()
+            .copied()
+            .map(|node| SrgbaFillPatch { node, fill: white }),
+    );
+    assert!(scene.apply_srgba_batch(batch));
+    assert_eq!(changed_positions(&scene, before), None);
+    let revision = scene.revision();
+    assert_eq!(changed_positions(&scene, revision), Some(Vec::new()));
+    assert!(nodes.iter().all(|node| matches!(scene.get(*node), Some(DisplayItem::SrgbaRect { fill, .. }) if *fill == white)));
+    let (_, batches) = scene.drain_color_changes(before).unwrap();
+    assert_eq!(
+        batches.iter().map(|batch| batch.len()).sum::<usize>(),
+        nodes.len()
+    );
+    let mut small = batches[0].sibling();
+    small.push(SrgbaFillPatch {
+        node: nodes[7],
+        fill: black,
+    });
+    assert!(scene.apply_srgba_batch(small));
+    assert_eq!(changed_positions(&scene, revision), Some(vec![7]));
+}

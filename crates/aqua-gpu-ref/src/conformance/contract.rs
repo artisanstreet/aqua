@@ -240,6 +240,10 @@ fn drop_shadows_stay_outside_glass<B: GpuBackend + GpuReadback>(
 pub fn run_contract<B: GpuBackend + GpuReadback>(backend: &mut B) -> Vec<ContractReport> {
     vec![
         check(
+            "retained_srgba_updates_colors_and_geometry",
+            super::solids::retained(backend),
+        ),
+        check(
             "capabilities_are_reported",
             capabilities_are_reported(backend),
         ),

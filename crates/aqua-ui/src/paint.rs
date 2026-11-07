@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::rc::Rc;
 
-use aqua_core::{NodeId, Oklch};
+use aqua_core::{NodeId, Oklch, Srgba8};
 use aqua_reactive::{DepTuple, EffectHandle, Scope};
 
 use crate::{CommandSink, UiCommand, UiTree};
@@ -30,6 +30,7 @@ struct Group {
     nodes: Vec<NodeId>,
     epoch: Cell<u64>,
     recycled: RefCell<Vec<Oklch>>,
+    recycled_srgba: RefCell<Vec<Srgba8>>,
     error: RefCell<Option<FillError>>,
 }
 
@@ -59,7 +60,8 @@ impl FillGroup {
         Ok(Self(Rc::new(Group {
             owner: Rc::clone(&tree.fill_owner),
             epoch: Cell::new(tree.structure_epoch()),
-            recycled: RefCell::new(Vec::with_capacity(nodes.len())),
+            recycled: RefCell::new(Vec::new()),
+            recycled_srgba: RefCell::new(Vec::new()),
             error: RefCell::new(None),
             nodes,
         })))
@@ -108,6 +110,54 @@ impl FillGroup {
         Ok(())
     }
 
+    pub fn apply_srgba(&self, tree: &mut UiTree, colors: &[Srgba8]) -> Result<(), FillError> {
+        if !Rc::ptr_eq(&self.0.owner, &tree.fill_owner) {
+            return Err(FillError::ForeignTree);
+        }
+        if colors.len() != self.len() {
+            return Err(FillError::Count {
+                expected: self.len(),
+                actual: colors.len(),
+            });
+        }
+        let epoch = tree.structure_epoch();
+        if self.0.epoch.get() != epoch {
+            for &node in &self.0.nodes {
+                if tree.get(node).is_none() {
+                    return Err(FillError::StaleNode(node));
+                }
+            }
+            self.0.epoch.set(epoch);
+        }
+        tree.set_srgba_fills(&self.0.nodes, colors);
+        Ok(())
+    }
+
+    pub fn bind_srgba<D, F>(
+        &self,
+        scope: &Scope,
+        sink: &CommandSink,
+        deps: D,
+        mut render: F,
+    ) -> EffectHandle
+    where
+        D: DepTuple,
+        F: FnMut(D::Values, &mut Vec<Srgba8>) + 'static,
+    {
+        let group = self.clone();
+        let sink = sink.clone();
+        let declared = deps.clone();
+        scope.effect(deps, move |values| {
+            let mut colors = std::mem::take(&mut *group.0.recycled_srgba.borrow_mut());
+            colors.clear();
+            aqua_reactive::read_check::render_scope(&declared, || render(values, &mut colors));
+            sink.push(UiCommand::Fills(FillUpdate {
+                group: group.clone(),
+                values: FillValues::Srgba(colors),
+            }));
+        })
+    }
+
     pub fn bind<D, F>(
         &self,
         scope: &Scope,
@@ -128,15 +178,20 @@ impl FillGroup {
             aqua_reactive::read_check::render_scope(&declared, || render(values, &mut colors));
             sink.push(UiCommand::Fills(FillUpdate {
                 group: group.clone(),
-                colors,
+                values: FillValues::Oklch(colors),
             }));
         })
     }
 }
 
+enum FillValues {
+    Oklch(Vec<Oklch>),
+    Srgba(Vec<Srgba8>),
+}
+
 pub struct FillUpdate {
     group: FillGroup,
-    colors: Vec<Oklch>,
+    values: FillValues,
 }
 
 impl fmt::Debug for FillUpdate {
@@ -144,20 +199,41 @@ impl fmt::Debug for FillUpdate {
         formatter
             .debug_struct("FillUpdate")
             .field("nodes", &self.group.len())
-            .field("colors", &self.colors.len())
+            .field(
+                "colors",
+                &match &self.values {
+                    FillValues::Oklch(colors) => colors.len(),
+                    FillValues::Srgba(colors) => colors.len(),
+                },
+            )
             .finish()
     }
 }
 
 impl FillUpdate {
-    pub(crate) fn apply(mut self, tree: &mut UiTree) {
-        if let Err(error) = self.group.apply(tree, &self.colors) {
-            *self.group.0.error.borrow_mut() = Some(error);
-        }
-        self.colors.clear();
-        let mut recycled = self.group.0.recycled.borrow_mut();
-        if self.colors.capacity() > recycled.capacity() {
-            *recycled = self.colors;
+    pub(crate) fn apply(self, tree: &mut UiTree) {
+        let Self { group, values } = self;
+        match values {
+            FillValues::Oklch(mut colors) => {
+                if let Err(error) = group.apply(tree, &colors) {
+                    *group.0.error.borrow_mut() = Some(error);
+                }
+                colors.clear();
+                let mut recycled = group.0.recycled.borrow_mut();
+                if colors.capacity() > recycled.capacity() {
+                    *recycled = colors;
+                }
+            }
+            FillValues::Srgba(mut colors) => {
+                if let Err(error) = group.apply_srgba(tree, &colors) {
+                    *group.0.error.borrow_mut() = Some(error);
+                }
+                colors.clear();
+                let mut recycled = group.0.recycled_srgba.borrow_mut();
+                if colors.capacity() > recycled.capacity() {
+                    *recycled = colors;
+                }
+            }
         }
     }
 }

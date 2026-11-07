@@ -1598,6 +1598,14 @@ impl Lowering {
         let at = walk.at();
         let s = at.scale();
         match item {
+            DisplayItem::SrgbaRect { bounds, fill } => {
+                walk.emit_box(
+                    at.rect(*bounds),
+                    Radii::uniform(0.0),
+                    Some(Paint::Solid(fill.to_oklch())),
+                    None,
+                );
+            }
             DisplayItem::Rect {
                 bounds,
                 radius,

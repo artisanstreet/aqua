@@ -326,7 +326,7 @@ fn cull_instances(graph: &RenderGraph, passes: &mut Vec<Pass>) -> usize {
         let target = target_extent(graph, pass);
         let before = pass.kind.draw_count();
         match &mut pass.kind {
-            PassKind::Solids { .. } => {}
+            PassKind::Solids { .. } | PassKind::SrgbaSolids { .. } => {}
             PassKind::Instanced { instances, .. } => instances.retain(|quad| {
                 let paints = quad.opacity > 0.0
                     && (quad.fill.alpha > 0.0

@@ -127,6 +127,9 @@ impl State {
 
     fn item(&mut self, item: &DisplayItem) {
         match item {
+            DisplayItem::SrgbaRect { bounds, fill } => {
+                self.quad(*bounds, 0.0, 0.0, fill.to_oklch(), Oklch::TRANSPARENT)
+            }
             DisplayItem::Rect {
                 bounds,
                 radius,

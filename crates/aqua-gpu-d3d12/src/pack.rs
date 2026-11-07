@@ -104,3 +104,26 @@ pub fn pack_shadow(instance: &ShadowInstance) -> ShadowGpu {
         color: instance.color.to_gpu(),
     }
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SolidGpu {
+    pub bounds: [f32; 4],
+    pub fill: [f32; 4],
+    pub color_space: u32,
+}
+
+pub const SOLID_STRIDE: usize = std::mem::size_of::<SolidGpu>();
+
+pub fn pack_solid(instance: &aqua_graph::SolidInstance) -> SolidGpu {
+    let bounds = instance.bounds;
+    let (fill, color_space) = match instance.fill {
+        aqua_graph::SolidColor::Oklch(fill) => ([fill.l, fill.c, fill.h, fill.alpha], 0),
+        aqua_graph::SolidColor::Srgba(fill) => (fill.to_srgba(), 1),
+    };
+    SolidGpu {
+        bounds: [bounds.x, bounds.y, bounds.w, bounds.h],
+        fill,
+        color_space,
+    }
+}

@@ -528,7 +528,7 @@ impl BoxContent {
         match &self.paint {
             crate::style::PaintValue::Empty => default_paint(),
             crate::style::PaintValue::Styled(paint) => paint,
-            crate::style::PaintValue::Solid(_) => self
+            crate::style::PaintValue::Solid(_) | crate::style::PaintValue::Srgba(_) => self
                 .materialized
                 .get_or_init(|| Box::new(self.paint.resolve())),
         }
@@ -538,12 +538,26 @@ impl BoxContent {
         match &self.paint {
             crate::style::PaintValue::Empty => std::borrow::Cow::Borrowed(default_paint()),
             crate::style::PaintValue::Styled(paint) => std::borrow::Cow::Borrowed(paint),
-            crate::style::PaintValue::Solid(_) => std::borrow::Cow::Owned(self.paint.resolve()),
+            crate::style::PaintValue::Solid(_) | crate::style::PaintValue::Srgba(_) => {
+                std::borrow::Cow::Owned(self.paint.resolve())
+            }
         }
     }
 
     pub fn plain_paint(&self) -> bool {
         self.paint.is_plain()
+    }
+
+    pub fn srgba(&self) -> Option<aqua_core::Srgba8> {
+        self.paint.srgba()
+    }
+
+    fn set_srgba(&mut self, fill: aqua_core::Srgba8) -> bool {
+        let changed = self.paint.set_srgba(fill);
+        if changed {
+            self.materialized.take();
+        }
+        changed
     }
 
     fn set_fill(&mut self, fill: Option<Oklch>) -> bool {
@@ -1064,8 +1078,10 @@ impl NodeRecord {
     fn fill_change(&mut self, fill: Option<Oklch>) -> FillMutation {
         let (changed, plain) = match &mut self.kind {
             NodeKind::Box(content) => {
-                let plain =
-                    content.plain_paint() && content.paint.fill().is_some() && fill.is_some();
+                let plain = content.plain_paint()
+                    && content.paint.srgba().is_none()
+                    && content.paint.fill().is_some()
+                    && fill.is_some();
                 (content.set_fill(fill), plain)
             }
             _ => (set_fill_slot(&mut self.paint_slot, fill), false),
@@ -1198,6 +1214,7 @@ fn rect_contains_rect(outer: Rect, inner: Rect) -> bool {
 pub struct UiTree {
     pub(crate) fill_owner: Rc<()>,
     fill_changes: Vec<aqua_core::FillPatch>,
+    srgba_changes: aqua_core::SrgbaFillBatch,
     fill_base: u64,
     non_fill_version: u64,
     interaction: interaction::InteractionStore,
@@ -1332,6 +1349,7 @@ impl UiTree {
             interaction: interaction::InteractionStore::default(),
             fill_owner: Rc::new(()),
             fill_changes: Vec::new(),
+            srgba_changes: aqua_core::SrgbaFillBatch::default(),
             fill_base: 0,
             non_fill_version: 0,
             gpui_paint: false,
@@ -1504,6 +1522,7 @@ impl UiTree {
     fn invalidate_fill_changes(&mut self) {
         self.non_fill_version = self.content_version;
         self.fill_changes.clear();
+        self.srgba_changes.clear();
     }
 
     fn touch_fill(&mut self, id: NodeId, fill: Oklch) {
@@ -1519,16 +1538,33 @@ impl UiTree {
     }
 
     pub fn take_fill_changes(&mut self) -> Option<Vec<aqua_core::FillPatch>> {
-        if self.non_fill_version > self.fill_base {
+        if self.non_fill_version > self.fill_base || !self.srgba_changes.is_empty() {
             return None;
         }
         self.fill_base = self.content_version;
         Some(std::mem::take(&mut self.fill_changes))
     }
 
+    pub fn take_color_changes(
+        &mut self,
+    ) -> Option<(Vec<aqua_core::FillPatch>, Option<aqua_core::SrgbaFillBatch>)> {
+        if self.non_fill_version > self.fill_base {
+            return None;
+        }
+        self.fill_base = self.content_version;
+        let srgba = if self.srgba_changes.is_empty() {
+            None
+        } else {
+            let next = self.srgba_changes.sibling();
+            Some(std::mem::replace(&mut self.srgba_changes, next))
+        };
+        Some((std::mem::take(&mut self.fill_changes), srgba))
+    }
+
     pub fn acknowledge_fills(&mut self) {
         self.fill_base = self.content_version;
         self.fill_changes.clear();
+        self.srgba_changes.clear();
     }
 
     pub fn recycle_fill_changes(&mut self, mut changes: Vec<aqua_core::FillPatch>) {
@@ -3051,6 +3087,47 @@ impl UiTree {
         }
     }
 
+    pub(crate) fn set_srgba_fills(&mut self, nodes: &[NodeId], colors: &[aqua_core::Srgba8]) {
+        let revision = self.content_version + 1;
+        let mut changed = false;
+        let mut other = false;
+        for (&id, &fill) in nodes.iter().zip(colors) {
+            let Some(record) = self.nodes.get_mut(id.raw()) else {
+                continue;
+            };
+            let (different, plain) = match &mut record.kind {
+                NodeKind::Box(content) => {
+                    let plain = content.srgba().is_some();
+                    (content.set_srgba(fill), plain)
+                }
+                _ => (
+                    set_fill_slot(&mut record.paint_slot, Some(fill.to_oklch())),
+                    false,
+                ),
+            };
+            if !different {
+                continue;
+            }
+            changed = true;
+            record.paint_rev = revision;
+            record.dirty_paint = true;
+            if plain {
+                if self.non_fill_version <= self.fill_base {
+                    self.srgba_changes
+                        .push(aqua_core::SrgbaFillPatch { node: id, fill });
+                }
+            } else {
+                other = true;
+            }
+        }
+        if changed {
+            self.content_version = revision;
+            if other {
+                self.invalidate_fill_changes();
+            }
+        }
+    }
+
     pub(crate) fn refresh_plain_box(
         &mut self,
         id: NodeId,
@@ -4028,6 +4105,10 @@ impl UiTree {
                 },
             ));
         }
+        let native_fill = match &rec.kind {
+            NodeKind::Box(content) if !self.gpui_paint => content.srgba(),
+            _ => None,
+        };
         let shaped = paint.gpui_background.is_some()
             || paint.gpui_border.is_some()
             || !paint.gpui_shadows.is_empty()
@@ -4037,7 +4118,9 @@ impl UiTree {
             || corners.top_left != corners.bottom_left
             || paint.border_widths.is_some()
             || paint.border_dashed;
-        if shaped {
+        if let Some(fill) = native_fill {
+            out.push((id, DisplayItem::SrgbaRect { bounds: rect, fill }));
+        } else if shaped {
             if let Some(shadow) = paint.shadow {
                 out.push((
                     id,

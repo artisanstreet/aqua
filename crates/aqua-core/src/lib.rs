@@ -23,7 +23,7 @@ pub use arena::Arena;
 pub use click::ClickSettings;
 pub use color::{
     ColorProfile, GpuiBackground, GpuiGradientColorSpace, GpuiGradientStop, GpuiHsla,
-    GpuiTextColor, Oklch,
+    GpuiTextColor, Oklch, Srgba8,
 };
 pub use cursor::CursorIcon;
 pub use event::{
@@ -40,3 +40,5 @@ pub use scene::{
 pub use semantic::{CollectionSemantics, NumericRangeSemantics, Role, SemanticNode};
 
 pub use image::ImageRef;
+
+pub use scene::fills::{SrgbaFillBatch, SrgbaFillPatch};

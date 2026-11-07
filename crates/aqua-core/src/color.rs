@@ -1,6 +1,8 @@
 #![allow(clippy::excessive_precision)]
 
 pub mod memo;
+pub mod srgba;
+pub use srgba::Srgba8;
 
 /// Authored UI color: OKLCH + alpha.
 ///

@@ -161,6 +161,7 @@ fn render_thread_paces_on_the_waitable_animates_and_goes_idle() {
         },
         RenderCommand::Scene(SceneDiff {
             fills: Vec::new(),
+            srgba_fills: Vec::new(),
             upserts: vec![(scene_node(), rect(red))],
             order: Some(vec![scene_node()]),
         }),

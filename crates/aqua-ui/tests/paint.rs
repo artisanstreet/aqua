@@ -125,3 +125,49 @@ fn a_batch_stamps_every_changed_node_and_noop_batches_preserve_the_revision() {
         .zip(&nodes)
         .all(|(patch, node)| patch.node == *node && patch.fill == Oklch::WHITE));
 }
+
+#[test]
+fn native_fills_preserve_borrowed_paint_and_switch_cleanly_to_oklch() {
+    use aqua_core::Srgba8;
+    let mut tree = UiTree::new();
+    let nodes = mounted(&mut tree);
+    let group = FillGroup::new(&tree, nodes.clone()).unwrap();
+    let colors = [
+        Srgba8::new(17, 98, 231, 102),
+        Srgba8::new(255, 0, 0, 0),
+        Srgba8::new(0, 255, 0, 255),
+    ];
+    group.apply_srgba(&mut tree, &colors).unwrap();
+    for (&node, color) in nodes.iter().zip(colors) {
+        assert_eq!(tree.paint(node).unwrap().fill, Some(color.to_oklch()));
+    }
+    tree.acknowledge_fills();
+    let mut changed = colors;
+    changed[1] = Srgba8::new(4, 8, 16, 255);
+    group.apply_srgba(&mut tree, &changed).unwrap();
+    let (oklch, batch) = tree.take_color_changes().unwrap();
+    assert!(oklch.is_empty());
+    let batch = batch.unwrap();
+    assert_eq!(
+        &batch[..],
+        &[aqua_core::SrgbaFillPatch {
+            node: nodes[1],
+            fill: changed[1]
+        }]
+    );
+    assert_eq!(
+        tree.paint(nodes[1]).unwrap().fill,
+        Some(changed[1].to_oklch())
+    );
+    group.apply(&mut tree, &[Oklch::WHITE; 3]).unwrap();
+    assert!(tree.take_color_changes().is_none());
+    assert!(nodes
+        .iter()
+        .all(|node| tree.paint(*node).unwrap().fill == Some(Oklch::WHITE)));
+    tree.remove(nodes[2]);
+    assert_eq!(
+        group.apply_srgba(&mut tree, &colors),
+        Err(FillError::StaleNode(nodes[2]))
+    );
+    assert_eq!(tree.paint(nodes[0]).unwrap().fill, Some(Oklch::WHITE));
+}

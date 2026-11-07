@@ -23,10 +23,11 @@ pub enum Kind {
     BlurUp,
     ColorMatrix,
     Solid,
+    Srgba,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 12] = [
+    pub const ALL: [Kind; 13] = [
         Kind::Quad,
         Kind::Shadow,
         Kind::Glyph,
@@ -39,6 +40,7 @@ impl Kind {
         Kind::BlurUp,
         Kind::ColorMatrix,
         Kind::Solid,
+        Kind::Srgba,
     ];
 }
 
@@ -59,6 +61,7 @@ enum Layout {
     Image,
     Slug,
     Solid,
+    Srgba,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +92,7 @@ fn shaders(kind: Kind) -> Shaders {
         blend,
     };
     match kind {
+        Kind::Srgba => instanced("vs_srgba", "ps_solid", Layout::Srgba),
         Kind::Solid => instanced("vs_solid", "ps_solid", Layout::Solid),
         Kind::Quad => instanced("vs_quad", "ps_quad", Layout::Quad),
         Kind::Shadow => instanced("vs_shadow", "ps_shadow", Layout::Shadow),
@@ -120,8 +124,19 @@ fn element(name: PCSTR, index: u32) -> D3D11_INPUT_ELEMENT_DESC {
 }
 
 fn elements(layout: Layout) -> Vec<D3D11_INPUT_ELEMENT_DESC> {
+    if layout == Layout::Srgba {
+        let mut fill = element(s!("FILL"), 0);
+        fill.InputSlot = 1;
+        fill.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        return vec![element(s!("BOUNDS"), 0), fill];
+    }
+    if layout == Layout::Solid {
+        let mut space = element(s!("COLOR_SPACE"), 2);
+        space.Format = DXGI_FORMAT_R32_UINT;
+        return vec![element(s!("BOUNDS"), 0), element(s!("FILL"), 1), space];
+    }
     let names: &[PCSTR] = match layout {
-        Layout::None => &[],
+        Layout::None | Layout::Srgba => &[],
         Layout::Solid => &[s!("BOUNDS"), s!("FILL")],
         Layout::Quad => &[
             s!("BOUNDS"),

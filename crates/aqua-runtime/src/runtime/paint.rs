@@ -14,7 +14,10 @@ impl Runtime {
             let SceneKey::Tree { node, op: 0 } = *key else {
                 continue;
             };
-            if !matches!(item, DisplayItem::Rect { .. } | DisplayItem::Quad { .. }) {
+            if !matches!(
+                item,
+                DisplayItem::Rect { .. } | DisplayItem::Quad { .. } | DisplayItem::SrgbaRect { .. }
+            ) {
                 continue;
             }
             if !self.tree.get(node).is_some_and(
@@ -42,7 +45,7 @@ impl Runtime {
     }
 
     pub(super) fn patch_fill_changes(&mut self) -> bool {
-        let Some(changes) = self.tree.take_fill_changes() else {
+        let Some((changes, mut srgba)) = self.tree.take_color_changes() else {
             return false;
         };
         let valid = changes.iter().all(|patch| {
@@ -58,6 +61,26 @@ impl Runtime {
             self.tree.recycle_fill_changes(changes);
             return false;
         }
+        if let Some(mut batch) = srgba.take() {
+            let count = batch.len();
+            let mapped = batch.iter_mut().all(|patch| {
+                self.fill_slots
+                    .get(patch.node.raw().index as usize)
+                    .and_then(|slot| *slot)
+                    .is_some_and(|slot| {
+                        if slot.generation != patch.node.raw().generation {
+                            return false;
+                        }
+                        patch.node = slot.scene;
+                        true
+                    })
+            });
+            if !mapped || !self.scene.apply_srgba_batch(batch) {
+                self.tree.recycle_fill_changes(changes);
+                return false;
+            }
+            self.frame_work.scene_items_reconciled += count;
+        }
         self.frame_work.scene_items_reconciled += changes.len();
         self.cached_fills_dirty = true;
         self.tree.recycle_fill_changes(changes);
@@ -68,16 +91,8 @@ impl Runtime {
             return;
         }
         for slot in self.fill_slots.iter().flatten() {
-            let Some(DisplayItem::Rect { fill, .. } | DisplayItem::Quad { fill, .. }) =
-                self.scene.get(slot.scene)
-            else {
-                continue;
-            };
-            match &mut self.cached_scene[slot.cached as usize].1 {
-                DisplayItem::Rect { fill: cached, .. } | DisplayItem::Quad { fill: cached, .. } => {
-                    *cached = *fill
-                }
-                _ => unreachable!(),
+            if let Some(item) = self.scene.get(slot.scene) {
+                self.cached_scene[slot.cached as usize].1 = item.clone();
             }
         }
         self.cached_fills_dirty = false;

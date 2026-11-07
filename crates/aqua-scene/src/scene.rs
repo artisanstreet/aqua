@@ -1,4 +1,4 @@
-use aqua_core::{FillPatch, Oklch};
+use aqua_core::{FillPatch, Oklch, SrgbaFillBatch};
 use std::cell::{Cell, RefCell};
 
 pub use aqua_core::geometry::Rect;
@@ -52,6 +52,7 @@ pub struct Scene {
     geometry_revision: u64,
     fills: Vec<FillPatch>,
     fill_capacity: usize,
+    srgba_batches: Vec<SrgbaFillBatch>,
     nodes: Vec<Node>,
     free: Vec<(u32, u32)>, // (index, generation) reusable slots
     /// Painter order: node indices back-to-front.
@@ -158,6 +159,20 @@ impl Scene {
         else {
             return false;
         };
+        if let DisplayItem::SrgbaRect { bounds, .. } = &node.item {
+            let bounds = *bounds;
+            return self.update(
+                id,
+                DisplayItem::Rect {
+                    bounds,
+                    radius: 0.0,
+                    fill,
+                    border_width: 0.0,
+                    border_color: Oklch::TRANSPARENT,
+                    shadow: None,
+                },
+            );
+        }
         let current = match &mut node.item {
             DisplayItem::Rect { fill, .. } | DisplayItem::Quad { fill, .. } => fill,
             _ => return false,
@@ -187,6 +202,80 @@ impl Scene {
             self.record_change(raw.index);
         }
         true
+    }
+
+    pub fn apply_srgba_batch(&mut self, mut batch: SrgbaFillBatch) -> bool {
+        let revision = self.revision + 1;
+        let retain_history = batch.len() <= CHANGE_LOG_LIMIT;
+        let mut changed = false;
+        let mut geometry = false;
+        let mut valid = true;
+        batch.retain(|patch| {
+            let raw = patch.node.raw();
+            let Some(node) = self
+                .nodes
+                .get_mut(raw.index as usize)
+                .filter(|node| node.alive && node.generation == raw.generation)
+            else {
+                valid = false;
+                return false;
+            };
+            let pending = node.changed_at > self.consumed_through;
+            let converted = match &mut node.item {
+                DisplayItem::SrgbaRect { fill, .. } => {
+                    if *fill == patch.fill {
+                        return false;
+                    }
+                    *fill = patch.fill;
+                    false
+                }
+                DisplayItem::Rect {
+                    bounds,
+                    radius: 0.0,
+                    border_width: 0.0,
+                    border_color,
+                    shadow: None,
+                    ..
+                } if border_color.alpha == 0.0 => {
+                    let bounds = *bounds;
+                    node.item = DisplayItem::SrgbaRect {
+                        bounds,
+                        fill: patch.fill,
+                    };
+                    true
+                }
+                _ => {
+                    valid = false;
+                    return false;
+                }
+            };
+            changed = true;
+            geometry |= converted;
+            node.fill_only = !converted && (!pending || node.fill_only);
+            node.changed_at = revision;
+            let journal = node.fill_only;
+            if !pending {
+                self.dirty.push(raw.index);
+            }
+            if retain_history {
+                self.record_change_at(revision, raw.index);
+            }
+            journal
+        });
+        if changed {
+            self.revision = revision;
+            if !retain_history {
+                self.log.clear();
+                self.log_floor = revision;
+            }
+            if geometry {
+                self.geometry_revision = revision;
+            }
+        }
+        if !batch.is_empty() {
+            self.srgba_batches.push(batch);
+        }
+        valid
     }
 
     /// Remove a node. Stale handles fail closed.
@@ -274,13 +363,17 @@ impl Scene {
     }
 
     fn record_change(&mut self, index: u32) {
-        if self.log.last() == Some(&(self.revision, index)) {
+        self.record_change_at(self.revision, index);
+    }
+
+    fn record_change_at(&mut self, revision: u64, index: u32) {
+        if self.log.last() == Some(&(revision, index)) {
             return;
         }
         if self.log.capacity() == 0 {
             self.log.reserve_exact(CHANGE_LOG_LIMIT * 2 + 1);
         }
-        self.log.push((self.revision, index));
+        self.log.push((revision, index));
         if self.log.len() > CHANGE_LOG_LIMIT * 2 {
             let dropped = self.log.drain(..CHANGE_LOG_LIMIT).next_back();
             self.log_floor = dropped.map_or(self.log_floor, |(revision, _)| revision);
@@ -350,6 +443,7 @@ impl Scene {
     /// order changed), never the full node list. A trivial update yields a
     /// one-element set, never a full rebuild.
     pub fn drain_changes(&mut self) -> Vec<(NodeId, DisplayItem)> {
+        self.srgba_batches.clear();
         self.fills.clear();
         self.refresh_positions();
         let mut pending: Vec<u32> = std::mem::take(&mut self.dirty);
@@ -372,14 +466,51 @@ impl Scene {
     }
 
     pub fn drain_paint_changes(&mut self) -> (Vec<(NodeId, DisplayItem)>, Vec<FillPatch>) {
+        let (mut upserts, fills, batches) = self.drain_updates();
+        if batches.is_empty() {
+            return (upserts, fills);
+        }
+        for batch in batches {
+            for patch in batch.iter() {
+                if let Some(item) = self.get(patch.node) {
+                    upserts.push((patch.node, item.clone()));
+                }
+            }
+        }
+        upserts.sort_by_key(|(node, _)| self.position(*node).unwrap_or(usize::MAX));
+        upserts.dedup_by_key(|(node, _)| *node);
+        (upserts, fills)
+    }
+
+    pub fn drain_updates(
+        &mut self,
+    ) -> (
+        Vec<(NodeId, DisplayItem)>,
+        Vec<FillPatch>,
+        Vec<SrgbaFillBatch>,
+    ) {
+        let mut batches = std::mem::take(&mut self.srgba_batches);
         if self.geometry_revision <= self.consumed_through {
             self.fill_capacity = self.fill_capacity.max(self.fills.len());
             let fills = std::mem::take(&mut self.fills);
             self.dirty.clear();
             self.consumed_through = self.revision;
-            return (Vec::new(), fills);
+            return (Vec::new(), fills, batches);
         }
         self.fills.clear();
+        for batch in &mut batches {
+            batch.retain(|patch| {
+                let raw = patch.node.raw();
+                self.nodes.get(raw.index as usize).is_some_and(|node| {
+                    node.alive
+                        && node.generation == raw.generation
+                        && node.fill_only
+                        && node.changed_at > self.consumed_through
+                        && matches!(node.item, DisplayItem::SrgbaRect { .. })
+                })
+            });
+        }
+        batches.retain(|batch| !batch.is_empty());
         let mut pending = std::mem::take(&mut self.dirty);
         let fill_capacity = pending
             .first()
@@ -397,6 +528,7 @@ impl Scene {
                 continue;
             };
             match (&node.item, node.fill_only) {
+                (DisplayItem::SrgbaRect { .. }, true) => {}
                 (DisplayItem::Rect { fill, .. } | DisplayItem::Quad { fill, .. }, true) => fills
                     .push(FillPatch {
                         node: wrap(index, node.generation),
@@ -418,10 +550,11 @@ impl Scene {
             })
             .collect();
         self.consumed_through = self.revision;
-        (upserts, fills)
+        (upserts, fills, batches)
     }
 
     pub fn acknowledge_changes(&mut self) {
+        self.srgba_batches.clear();
         self.fills.clear();
         self.dirty.clear();
         self.consumed_through = self.revision;
@@ -435,12 +568,27 @@ impl Scene {
     }
 
     pub fn drain_fill_changes(&mut self, since: u64) -> Option<Vec<FillPatch>> {
-        if self.geometry_revision > since || self.consumed_through != since {
+        if !self.srgba_batches.is_empty()
+            || self.geometry_revision > since
+            || self.consumed_through != since
+        {
             return None;
         }
         let (upserts, fills) = self.drain_paint_changes();
         debug_assert!(upserts.is_empty());
         Some(fills)
+    }
+
+    pub fn drain_color_changes(
+        &mut self,
+        since: u64,
+    ) -> Option<(Vec<FillPatch>, Vec<SrgbaFillBatch>)> {
+        if self.geometry_revision > since || self.consumed_through != since {
+            return None;
+        }
+        let (upserts, fills, batches) = self.drain_updates();
+        debug_assert!(upserts.is_empty());
+        Some((fills, batches))
     }
 
     /// Drain items removed since the last drain (old bounds for repaint).

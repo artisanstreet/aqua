@@ -13,6 +13,10 @@ struct Entry {
 const ENTRIES: &[Entry] = &[
     Entry {
         file: "quad.hlsl",
+        entry: "vs_srgba",
+    },
+    Entry {
+        file: "quad.hlsl",
         entry: "vs_solid",
     },
     Entry {

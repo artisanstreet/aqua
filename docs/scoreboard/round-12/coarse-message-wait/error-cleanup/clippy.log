@@ -1,0 +1,4 @@
+build slot 1
+warning: Git tree '/home/sander/projects/artisanstreet/editor' is dirty
+    Checking aqua-shell-win32 v0.1.0 (/home/sander/projects/artisanstreet/aqua-message-deadlines/crates/aqua-shell-win32)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.63s

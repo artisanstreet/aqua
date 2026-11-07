@@ -306,6 +306,7 @@ impl FrameWorkWindow {
 
 pub struct Runtime {
     fill_slots: Vec<Option<paint::FillSlot>>,
+    cached_fills_dirty: bool,
     color_profile: aqua_core::ColorProfile,
     interaction: TextInteraction,
     glides: crate::render::scroll::ScrollGlides,
@@ -467,6 +468,7 @@ impl Runtime {
             viewport: Rect::ZERO,
             scale: 1.0,
             fill_slots: Vec::new(),
+            cached_fills_dirty: false,
             scene_map: HashMap::new(),
             scene_order: Vec::new(),
             text_runs: HashMap::new(),
@@ -1344,6 +1346,7 @@ impl Runtime {
         if changed {
             let _span = probe::span(Phase::Build);
             self.cached_scene = self.emit_keyed();
+            self.cached_fills_dirty = false;
             self.scroll_revision = self.tree.scroll_revision();
             aqua_core::checkpoint::reach();
             self.cached_text_nodes = self
@@ -1397,6 +1400,7 @@ impl Runtime {
                 }
             }
         } else {
+            self.sync_cached_fills();
             let mut grouped: HashMap<NodeId, Vec<(SceneKey, DisplayItem)>> = HashMap::new();
             for (key, item) in dynamic {
                 grouped.entry(key.node()).or_default().push((key, item));

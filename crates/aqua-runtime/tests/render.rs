@@ -142,7 +142,7 @@ fn bulk_ui_fills_reuse_scene_and_text_then_fall_back_for_geometry_changes() {
                         .build()
                         .with_key("paint"),
                 )
-                .child(ui::Text::new("kept").build())
+                .child(ui::Text::new("kept").editable(true).build())
                 .build()
         })
         .unwrap();
@@ -182,6 +182,18 @@ fn bulk_ui_fills_reuse_scene_and_text_then_fall_back_for_geometry_changes() {
         *fill = Oklch::WHITE;
     }
     assert_eq!(after, expected);
+    let text = runtime.tree().get(root).unwrap().children[1];
+    assert!(runtime.tree_mut().set_focused(Some(text)));
+    runtime.build_frame().unwrap();
+    group.apply(runtime.tree_mut(), &[Oklch::BLACK]).unwrap();
+    runtime.build_frame().unwrap();
+    assert_eq!(runtime.frame_work().tree_scene_ops_emitted, 0);
+    assert!(runtime
+        .tree_mut()
+        .set_text_selection(text, Some(aqua_text::Selection::new(0, 1))));
+    runtime.build_frame().unwrap();
+    assert_eq!(runtime.frame_work().tree_scene_ops_emitted, 0);
+    assert!(runtime.scene().ordered().any(|(_, item)| matches!(item, DisplayItem::Rect { bounds, fill, .. } if bounds.w == 10.0 && *fill == Oklch::BLACK)));
     let mut style = runtime.tree().get(node).unwrap().style.clone();
     style.width = aqua_ui::style::Length::Px(20.0);
     runtime.tree_mut().set_style(node, style);

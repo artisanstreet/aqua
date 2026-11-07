@@ -51,7 +51,7 @@ impl Runtime {
                 .and_then(|slot| *slot)
                 .is_some_and(|slot| {
                     slot.generation == patch.node.raw().generation
-                        && self.scene.get(slot.scene).is_some()
+                        && self.scene.update_fill(slot.scene, patch.fill)
                 })
         });
         if !valid {
@@ -59,17 +59,27 @@ impl Runtime {
             return false;
         }
         self.frame_work.scene_items_reconciled += changes.len();
-        for patch in &changes {
-            let slot = self.fill_slots[patch.node.raw().index as usize].unwrap();
-            self.scene.update_fill(slot.scene, patch.fill);
+        self.cached_fills_dirty = true;
+        self.tree.recycle_fill_changes(changes);
+        true
+    }
+    pub(super) fn sync_cached_fills(&mut self) {
+        if !self.cached_fills_dirty {
+            return;
+        }
+        for slot in self.fill_slots.iter().flatten() {
+            let Some(DisplayItem::Rect { fill, .. } | DisplayItem::Quad { fill, .. }) =
+                self.scene.get(slot.scene)
+            else {
+                continue;
+            };
             match &mut self.cached_scene[slot.cached as usize].1 {
-                DisplayItem::Rect { fill, .. } | DisplayItem::Quad { fill, .. } => {
-                    *fill = patch.fill
+                DisplayItem::Rect { fill: cached, .. } | DisplayItem::Quad { fill: cached, .. } => {
+                    *cached = *fill
                 }
                 _ => unreachable!(),
             }
         }
-        self.tree.recycle_fill_changes(changes);
-        true
+        self.cached_fills_dirty = false;
     }
 }

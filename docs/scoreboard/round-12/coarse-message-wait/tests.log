@@ -1,0 +1,124 @@
+build slot 1
+warning: Git tree '/home/sander/projects/artisanstreet/editor' is dirty
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.27
+   Compiling quote v1.0.47
+   Compiling stable_deref_trait v1.2.1
+   Compiling windows-link v0.2.1
+   Compiling litemap v0.8.3
+   Compiling writeable v0.6.4
+   Compiling utf_types v1.0.0
+   Compiling simd-adler32 v0.3.10
+   Compiling windows-result v0.4.1
+   Compiling utf8_iter v1.1.0
+   Compiling windows-strings v0.5.1
+   Compiling icu_normalizer_data v2.4.0
+   Compiling crc32fast v1.5.3
+   Compiling icu_properties_data v2.4.0
+   Compiling adler2 v2.0.1
+   Compiling autocfg v1.5.1
+   Compiling cfg-if v1.0.5
+   Compiling miniz_oxide v0.9.1
+   Compiling smallvec v1.16.4
+   Compiling bitflags v2.13.2
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling num-traits v0.2.19
+   Compiling syn v3.0.9
+   Compiling syn v2.0.119
+   Compiling flate2 v1.1.10
+   Compiling aqua-core v0.1.0 (/home/sander/projects/artisanstreet/aqua-message-deadlines/crates/aqua-core)
+   Compiling pxfm v0.1.30
+   Compiling png v0.18.1
+   Compiling windows-sys v0.61.2
+   Compiling windows-threading v0.2.1
+   Compiling log v0.4.34
+   Compiling error-code v3.4.0
+   Compiling bytemuck v1.25.2
+   Compiling percent-encoding v2.3.2
+   Compiling byteorder-lite v0.1.0
+   Compiling rfd v0.17.2
+   Compiling synstructure v0.14.0
+   Compiling form_urlencoded v1.2.2
+   Compiling clipboard-win v5.4.3
+   Compiling aqua-motion v0.1.0 (/home/sander/projects/artisanstreet/aqua-message-deadlines/crates/aqua-motion)
+   Compiling aqua-graph v0.1.0 (/home/sander/projects/artisanstreet/aqua-message-deadlines/crates/aqua-graph)
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling zerovec-derive v0.11.7
+   Compiling displaydoc v0.2.7
+   Compiling windows-implement v0.60.2
+   Compiling windows-interface v0.59.3
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.4
+   Compiling moxcms v0.8.1
+   Compiling raw-window-handle v0.6.2
+   Compiling zerovec v0.11.9
+   Compiling aqua-protocol v0.1.0 (/home/sander/projects/artisanstreet/aqua-message-deadlines/crates/aqua-protocol)
+   Compiling zerotrie v0.2.5
+   Compiling windows-core v0.62.2
+   Compiling windows-registry v0.6.1
+   Compiling memchr v2.8.3
+   Compiling tinystr v0.8.5
+   Compiling potential_utf v0.1.6
+   Compiling icu_locale_core v2.4.0
+   Compiling windows-numerics v0.3.1
+   Compiling icu_collections v2.4.0
+   Compiling windows-collections v0.3.2
+   Compiling windows-future v0.3.2
+   Compiling xmlwriter v0.1.0
+   Compiling dunce v1.0.5
+   Compiling roxmltree v0.21.2
+   Compiling icu_provider v2.4.0
+   Compiling windows v0.62.2
+   Compiling icu_normalizer v2.4.0
+   Compiling icu_properties v2.4.0
+   Compiling image v0.25.10
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling url v2.5.8
+   Compiling arboard v3.7.0
+   Compiling aqua-shell-win32 v0.1.0 (/home/sander/projects/artisanstreet/aqua-message-deadlines/crates/aqua-shell-win32)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.60s
+     Running tests/looping.rs (/home/sander/projects/artisanstreet/aqua-optimization/target/coarse-message-loop-windows/x86_64-pc-windows-gnu/debug/deps/looping-06519c643b1119f4.exe)
+
+running 3 tests
+test external_waitables_still_interrupt_a_coarse_deadline ... ok
+test a_coarse_deadline_fires_without_external_messages ... ok
+test sent_messages_and_the_first_posted_input_survive_a_coarse_message_wait ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+
+     Running tests/occlusion_watch.rs (/home/sander/projects/artisanstreet/aqua-optimization/target/coarse-message-loop-windows/x86_64-pc-windows-gnu/debug/deps/occlusion_watch-8ffb0c7d47c1df5d.exe)
+
+running 5 tests
+test coverage_is_refreshed_at_most_every_quarter_second_while_hooks_are_full ... ok
+test activity_during_the_quiet_period_restarts_it ... ok
+test hooks_go_full_on_activity_and_off_after_a_quiet_period_when_visible ... ok
+test a_covered_window_settles_to_the_narrow_set_and_wakes_for_uncovering ... ok
+test reconcile_unhooks_only_stale_keys_and_hooks_only_missing_ones ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/timing.rs (/home/sander/projects/artisanstreet/aqua-optimization/target/coarse-message-loop-windows/x86_64-pc-windows-gnu/debug/deps/timing-7909a6ee7d4a1e00.exe)
+
+running 3 tests
+test near_deadlines_stay_precise_and_far_ones_get_bounded_leeway ... ok
+test timer_due_time_is_negative_relative_and_never_zero ... ok
+test timeouts_round_up_to_whole_milliseconds ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/wake_dedup.rs (/home/sander/projects/artisanstreet/aqua-optimization/target/coarse-message-loop-windows/x86_64-pc-windows-gnu/debug/deps/wake_dedup-818c0fd4346a96d5.exe)
+
+running 1 test
+test a_thousand_wakes_before_the_loop_turns_deliver_one_wake_and_a_later_wake_still_arrives ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/wake_trace.rs (/home/sander/projects/artisanstreet/aqua-optimization/target/coarse-message-loop-windows/x86_64-pc-windows-gnu/debug/deps/wake_trace-4be095b39b0ac303.exe)
+
+running 1 test
+test render_orders_by_count_and_scales_to_per_second ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

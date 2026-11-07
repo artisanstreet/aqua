@@ -831,6 +831,7 @@ pub type ActionCallback = Box<dyn Fn(ActionEvent)>;
 /// dropped (never panics, never resurrects).
 #[derive(Debug)]
 pub enum UiCommand {
+    Fills(crate::paint::FillUpdate),
     Interaction(Box<interaction::InteractionCommand>),
     EditText {
         node: NodeId,
@@ -1171,6 +1172,7 @@ fn rect_contains_rect(outer: Rect, inner: Rect) -> bool {
 }
 
 pub struct UiTree {
+    pub(crate) fill_owner: Rc<()>,
     interaction: interaction::InteractionStore,
     gpui_paint: bool,
     portal_roots: std::collections::HashSet<NodeId>,
@@ -1301,6 +1303,7 @@ impl UiTree {
     pub fn new() -> Self {
         Self {
             interaction: interaction::InteractionStore::default(),
+            fill_owner: Rc::new(()),
             gpui_paint: false,
             portal_roots: std::collections::HashSet::new(),
             follow_caret_queue: Vec::new(),
@@ -1891,6 +1894,7 @@ impl UiTree {
             count += queue.len();
             for cmd in queue {
                 match cmd {
+                    UiCommand::Fills(update) => update.apply(self),
                     UiCommand::Interaction(command) => self.apply_interaction_command(*command),
                     UiCommand::EditText {
                         node,

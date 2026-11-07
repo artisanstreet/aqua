@@ -378,7 +378,7 @@ impl WindowHandle {
                 Ok(changed) => changed,
                 Err(error) => {
                     eprintln!("aqua: swapchain settle failed: {error}");
-                    false
+                    true
                 }
             }
         }

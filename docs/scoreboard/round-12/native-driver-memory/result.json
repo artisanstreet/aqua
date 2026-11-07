@@ -1,0 +1,81 @@
+{
+  "design": "Three existing default diagnostics from the preceding buffer-settle comparison, followed by three diagnostics with AQUA_D3D11_PREVENT_THREADING=1. Same immutable executable and fixture, stats off. Grouped comparison; not interleaved.",
+  "runtime_option": "AQUA_D3D11_PREVENT_THREADING=1 passed through WSLENV and verified in Windows before the runs.",
+  "binary_sha256": "3eb8ab003c0b9da91d49e6ae06d0150e0f9cea0f89a8d9d02de7979c2b2d3c67",
+  "new_default_commit": "b9e3c65",
+  "runs": [
+    {
+      "run": "control-1",
+      "private_after_scroll_mib": 128,
+      "boot_gpu_mib": 35.4,
+      "scroll_gpu_mib": 50.9,
+      "first_content_ms": 644,
+      "scroll_p50_ms": 0.143,
+      "scroll_p99_ms": 0.391
+    },
+    {
+      "run": "control-2",
+      "private_after_scroll_mib": 122,
+      "boot_gpu_mib": 35.4,
+      "scroll_gpu_mib": 46.4,
+      "first_content_ms": 519,
+      "scroll_p50_ms": 0.14,
+      "scroll_p99_ms": 0.407
+    },
+    {
+      "run": "control-3",
+      "private_after_scroll_mib": 131,
+      "boot_gpu_mib": 37.4,
+      "scroll_gpu_mib": 53.2,
+      "first_content_ms": 626,
+      "scroll_p50_ms": 0.144,
+      "scroll_p99_ms": 0.364
+    },
+    {
+      "run": "enabled-1",
+      "private_after_scroll_mib": 115,
+      "boot_gpu_mib": 35.4,
+      "scroll_gpu_mib": 48.7,
+      "first_content_ms": 503,
+      "scroll_p50_ms": 0.14,
+      "scroll_p99_ms": 0.407
+    },
+    {
+      "run": "enabled-2",
+      "private_after_scroll_mib": 121,
+      "boot_gpu_mib": 37.4,
+      "scroll_gpu_mib": 52.9,
+      "first_content_ms": 636,
+      "scroll_p50_ms": 0.142,
+      "scroll_p99_ms": 0.391
+    },
+    {
+      "run": "enabled-3",
+      "private_after_scroll_mib": 118,
+      "boot_gpu_mib": 35.4,
+      "scroll_gpu_mib": 50.9,
+      "first_content_ms": 598,
+      "scroll_p50_ms": 0.14,
+      "scroll_p99_ms": 0.385
+    }
+  ],
+  "medians": {
+    "control": {
+      "private_after_scroll_mib": 128,
+      "boot_gpu_mib": 35.4,
+      "scroll_gpu_mib": 50.9,
+      "first_content_ms": 626,
+      "scroll_p50_ms": 0.143,
+      "scroll_p99_ms": 0.391
+    },
+    "enabled": {
+      "private_after_scroll_mib": 118,
+      "boot_gpu_mib": 35.4,
+      "scroll_gpu_mib": 50.9,
+      "first_content_ms": 598,
+      "scroll_p50_ms": 0.14,
+      "scroll_p99_ms": 0.391
+    }
+  },
+  "limitation": "This tests the existing explicit option on binary 619ffab, not the new default binary. Full joint validation of the proposed default, including startup, CPU, streaming and visuals, is pending."
+}

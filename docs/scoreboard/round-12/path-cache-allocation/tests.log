@@ -1,0 +1,116 @@
+build slot 1
+warning: Git tree '/home/sander/projects/artisanstreet/editor' is dirty
+warning: linker stderr: rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-barrier.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-clock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-cond.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-misc.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-mutex.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-nanosleep.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-rwlock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-sem.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-spinlock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-sched.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-thread.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'version.o' is neither ET_REL nor LLVM bitcode
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aqua-shaders` (build script) generated 1 warning
+   Compiling aqua v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.73s
+     Running tests/perf_scene.rs (/home/sander/projects/artisanstreet/aqua-optimization/target/vector-cache-windows/x86_64-pc-windows-gnu/debug/deps/perf_scene-41f0975ad76cbad4.exe)
+
+running 4 tests
+test perf_scene_report ... ignored
+cached path lookup: Cost { micros: 4159.7, allocations: 0, bytes: 0 }
+test cached_path_lookup_allocation_stays_bounded_as_geometry_grows ... ok
+test idle_frames_do_not_allocate_per_row ... ok
+test streaming_allocations_do_not_scale_with_transcript_length ... ok
+
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.62s
+
+     Running tests/render.rs (/home/sander/projects/artisanstreet/aqua-optimization/target/vector-cache-windows/x86_64-pc-windows-gnu/debug/deps/render-ed3e809a16df0a1c.exe)
+
+running 80 tests
+test color::legacy_map_is_a_bell_over_the_range ... ok
+test color::shimmer_peaks_at_the_middle_of_the_band_and_moves_with_phase ... ok
+test color::source_hues_are_degrees_and_text_colors_match ... ok
+test color::shimmer_leaves_pixels_outside_the_band_untouched ... ok
+test cull::shadows_reach_into_the_region_through_their_blur ... ok
+test cull::never_culls_inside_an_effect_layer ... ok
+test cull::drops_leaves_outside_the_region_and_keeps_those_that_touch_it ... ok
+test cull::keeps_populated_scopes_balanced_and_drops_emptied_ones ... ok
+test cadence::nothing_halves_before_the_period_is_known ... ok
+test cadence::bursts_and_idle_gaps_are_ignored ... ok
+test cull::thins_glyph_runs_and_drops_empty_ones ... ok
+test cadence::a_sixty_hertz_display_never_halves ... ok
+test cadence::halved_presents_do_not_pollute_the_period ... ok
+test cadence::a_fast_display_halves_only_while_gliding ... ok
+test animation::pulsing_is_reported_while_a_pulsed_quad_exists_and_stops_when_it_goes ... ok
+test animation::a_pulse_that_left_the_scene_restarts_from_full_opacity_when_it_returns ... ok
+test lowering::images_drawn_small_upload_a_reduced_copy_and_release_every_level ... ok
+test lowering::leaves_outside_the_active_clip_are_not_lowered ... ok
+test lowering::culling_while_walking_matches_culling_the_finished_commands ... ok
+test animation::a_pulse_starts_at_full_opacity_whenever_the_render_thread_first_sees_it ... ok
+test animation::the_same_times_give_the_same_commands_on_any_wall_clock ... ok
+test lowering::trimming_everything_releases_pages_that_the_last_frame_did_not_use ... ok
+test lowering::a_device_that_needs_reuploads_clears_the_atlas_through_the_listener ... ok
+test lowering::a_device_that_replayed_its_textures_keeps_the_atlas ... ok
+test lowering::atlas_uploads_are_sent_once_and_again_after_a_device_that_lost_its_textures ... ok
+test mesh::a_quad_covers_the_middle_of_the_image_only ... ok
+test mesh::nearer_surfaces_hide_farther_ones_regardless_of_draw_order ... ok
+test shape::dashed_borders_clip_the_ring_into_corners_and_dashes ... ok
+test mesh::edge_color_darkens_the_triangle_borders ... ok
+test shape::dashes_are_evenly_spaced_and_fill_two_thirds_of_each_period ... ok
+test shape::inset_shadow_with_a_collapsed_hole_fills_the_whole_box ... ok
+test shape::inset_shadows_are_four_half_planes_inside_a_clip ... ok
+test shape::outer_shadows_follow_the_corner_pieces ... ok
+test shape::oversized_radii_are_scaled_to_fit_the_box ... ok
+test shape::paired_radii_split_once_and_mixed_radii_split_in_quadrants ... ok
+test shape::quadrant_clips_tile_the_bounds_without_overlap ... ok
+test shape::uniform_border_and_fill_share_one_quad ... ok
+test shape::uniform_radii_need_a_single_unclipped_piece ... ok
+test shape::uneven_borders_become_one_ring_per_visible_side ... ok
+test host::an_explicit_trim_request_releases_unused_atlas_pages_between_frames ... ok
+test host::the_editor_class_workload_presents_with_nothing_unsupported_and_reports_its_counters ... ok
+test lowering::outline_text_raster_mode_lowers_with_exact_glyph_coverage ... ok
+test host::a_lost_device_clears_the_atlas_so_the_next_frame_uploads_it_again ... ok
+test span::fractional_scroll_offsets_land_on_whole_device_pixels ... ok
+test span::nested_translations_land_on_whole_device_pixels ... ok
+test span::editing_an_item_inside_the_span_is_never_replayed_stale ... ok
+test span::drifting_past_the_slack_records_again ... ok
+test span::structural_changes_drop_the_cached_span ... ok
+test span::flat_root_segments_replay_and_follow_edits ... ok
+test text::one_phase_per_key_within_a_frame ... ok
+test text::shimmer_clocks_drop_keys_that_were_not_drawn ... ok
+test text::shimmer_holds_at_zero_during_the_delay_then_runs_and_wraps ... ok
+test text::text_scopes_pop_only_their_own_kind ... ok
+test span::structural_changes_outside_the_span_keep_it_replaying ... ok
+test text_dpi::painted_text_fits_gpui_measured_bounds_at_each_device_scale ... ok
+test text_dpi::raster_runs_match_logical_reference_after_cached_translation_and_display_change ... ok
+test text_dpi::curve_run_scale_is_independent_of_display_scale_and_scene_transform ... ok
+test vector::gradient_axes_follow_css_angles ... ok
+test vector::mixed_path_bounds_include_controls_and_scaled_arc_reach ... ok
+test vector::rotated_svg_falls_back_to_width_and_height ... ok
+test vector::rotated_svg_wraps_the_original_around_its_view_box_centre ... ok
+test vector::rotation_quantizes_to_whole_steps_and_wraps ... ok
+test vector::subpixel_translation_gets_its_own_drawing ... ok
+test vector::svg_sources_are_shared_per_tint_and_rotation ... ok
+test vector::translating_a_path_by_whole_pixels_reuses_the_same_drawing ... ok
+test text_dpi::text_culling_uses_logical_run_extent_at_device_scale ... ok
+test lowering::gpui_inset_shadow_matches_the_native_one_in_shape ... ok
+test lowering::inset_shadows_darken_the_inside_of_the_edges_only ... ok
+test lowering::rotated_quads_are_rotated_exactly_and_not_reported_as_approximated ... ok
+test span::a_changing_scope_item_falls_back_without_going_stale ... ok
+test lowering::dashed_borders_leave_gaps_along_straight_edges ... ok
+test lowering::per_corner_radii_round_only_the_requested_corners ... ok
+test lowering::rounded_clips_cut_the_corners_of_what_they_contain ... ok
+test lowering::svg_vectors_paths_and_meshes_reach_the_surface ... ok
+test lowering::transforms_translate_and_scale_every_primitive_under_them ... ok
+test lowering::uneven_borders_draw_each_side_at_its_own_width ... ok
+test span::screen_space_canvases_that_cancel_the_scroll_are_patched_as_units ... ok
+test span::leaves_that_change_every_frame_are_patched_into_the_replay ... ok
+test span::nested_glide_wrapper_replays_while_the_outer_offset_changes_rarely ... ok
+test span::replayed_glide_frames_equal_fresh_lowering ... ok
+
+test result: ok. 80 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.22s

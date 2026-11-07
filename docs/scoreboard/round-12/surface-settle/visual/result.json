@@ -1,0 +1,23 @@
+{
+  "visual_verdict": "PASS",
+  "harness_correction_pr": "https://github.com/artisanstreet/aqua/pull/11",
+  "harness_commits": [
+    "dd3bc72",
+    "43576ef"
+  ],
+  "candidate_commit": "619ffab",
+  "candidate_binary_sha256": "3eb8ab003c0b9da91d49e6ae06d0150e0f9cea0f89a8d9d02de7979c2b2d3c67",
+  "limitation": "This binary predates f75e709, which only forces repaint after a failed settle. Healthy-path measurements and images are attributed to 619ffab. No updated full performance scoreboard yet.",
+  "worst_whole_image_changed_pct": 13.669,
+  "whole_image_limit_pct": 18,
+  "glyph_error_pct": {
+    "notch1": 0,
+    "depth1": 0,
+    "depth2": 0,
+    "depth3": 22.7,
+    "depth4": 0
+  },
+  "glyph_limit_pct": 30,
+  "functional_action_checks": "PASS",
+  "foreground_changed": false
+}

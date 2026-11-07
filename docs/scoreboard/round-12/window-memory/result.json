@@ -1,0 +1,177 @@
+{
+  "performance_rows": 41,
+  "passed": 33,
+  "overall": "FAIL",
+  "failed_rows": [
+    {
+      "metric": "scroll p50 (ms)",
+      "aqua": 0.13,
+      "gpui": 0.06,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "idle busiest thread context switches/s",
+      "aqua": 0.1,
+      "gpui": 0.1,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "private MiB after 600 scrolls",
+      "aqua": 118.1,
+      "gpui": 118.4,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "GPU dedicated MiB after 600 scrolls",
+      "aqua": 50.7,
+      "gpui": 51.1,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "cold start to first content (ms)",
+      "aqua": 444.0,
+      "gpui": 396.0,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "cold start to a frame with 15% non-dominant pixels (ms)",
+      "aqua": 444.0,
+      "gpui": 397.0,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "resize p50 (ms)",
+      "aqua": 1.5,
+      "gpui": 1.39,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "streaming latency p50 (ms)",
+      "aqua": 0.07,
+      "gpui": 0.06,
+      "verdict": "FAIL"
+    }
+  ],
+  "historical_comparison": {
+    "directory": "../joint",
+    "passed": 31,
+    "performance_rows": 41,
+    "count_correction": "Earlier prose said 30/40; recounting the unchanged raw report gives 31/41. Both reports omit no metrics.",
+    "note": "Separate earlier full comparison; unchanged GPUI executable, later frozen Aqua and Editor snapshots."
+  },
+  "visual": {
+    "verdict": "PASS",
+    "worst_whole_image_percent": 14.39,
+    "whole_image_limit_percent": 18,
+    "jump_glyph_errors_percent": [
+      0,
+      0,
+      0,
+      22.7,
+      13.6
+    ],
+    "jump_glyph_limit_percent": 30,
+    "method": "PR11 foreground glyph check at 60% luminance changes the historical raw region criterion. Raw historical verdicts remain preserved.",
+    "all_scenes_opened_first_attempt": true
+  },
+  "validation": {
+    "runs": 3,
+    "order": "Aqua/GPUI, GPUI/Aqua, Aqua/GPUI per phase",
+    "foreground_unchanged": true,
+    "quiet_machine_pass": true,
+    "retries": 0,
+    "key_traces": [
+      {
+        "target": "aqua",
+        "pid": "4072",
+        "posts": "145",
+        "matched": "145",
+        "unmatched": "0",
+        "p50_ms": "1.67",
+        "p90_ms": "2.21",
+        "p99_ms": "2.56",
+        "max_ms": "2.58",
+        "mean_ms": "1.72",
+        "over8_3": "0",
+        "over16_7": "0"
+      },
+      {
+        "target": "aqua",
+        "pid": "3568",
+        "posts": "145",
+        "matched": "145",
+        "unmatched": "0",
+        "p50_ms": "1.54",
+        "p90_ms": "1.81",
+        "p99_ms": "2.07",
+        "max_ms": "2.46",
+        "mean_ms": "1.56",
+        "over8_3": "0",
+        "over16_7": "0"
+      },
+      {
+        "target": "aqua",
+        "pid": "20680",
+        "posts": "145",
+        "matched": "145",
+        "unmatched": "0",
+        "p50_ms": "1.53",
+        "p90_ms": "1.78",
+        "p99_ms": "1.95",
+        "max_ms": "2.21",
+        "mean_ms": "1.54",
+        "over8_3": "0",
+        "over16_7": "0"
+      },
+      {
+        "target": "gpui",
+        "pid": "13628",
+        "posts": "145",
+        "matched": "145",
+        "unmatched": "0",
+        "p50_ms": "17.70",
+        "p90_ms": "18.83",
+        "p99_ms": "19.22",
+        "max_ms": "19.90",
+        "mean_ms": "17.85",
+        "over8_3": "145",
+        "over16_7": "145"
+      },
+      {
+        "target": "gpui",
+        "pid": "24076",
+        "posts": "145",
+        "matched": "145",
+        "unmatched": "0",
+        "p50_ms": "17.64",
+        "p90_ms": "18.95",
+        "p99_ms": "19.40",
+        "max_ms": "19.41",
+        "mean_ms": "17.88",
+        "over8_3": "145",
+        "over16_7": "145"
+      },
+      {
+        "target": "gpui",
+        "pid": "22560",
+        "posts": "145",
+        "matched": "145",
+        "unmatched": "0",
+        "p50_ms": "17.67",
+        "p90_ms": "18.88",
+        "p99_ms": "19.43",
+        "max_ms": "19.69",
+        "mean_ms": "17.86",
+        "over8_3": "145",
+        "over16_7": "145"
+      }
+    ]
+  },
+  "limits": [
+    "Full comparison establishes combined behavior against GPUI, not isolated causation for each patch.",
+    "Post-scroll private and GPU memory vary between runs and still miss the required 3% margin.",
+    "First-content screenshot capture and median resize remain slower than GPUI.",
+    "Key-to-Present timings are not physical display latency.",
+    "Original cache-retention and debug work remains present in the frozen baseline."
+  ]
+}

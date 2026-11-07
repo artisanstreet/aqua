@@ -21,14 +21,14 @@ fn wrap(index: u32, generation: u32) -> NodeId {
 
 const CHANGE_LOG_LIMIT: usize = 2048;
 
+#[repr(C)]
 struct Node {
-    fill_only: bool,
-    fill_index: usize,
     generation: u32,
     alive: bool,
-    item: DisplayItem,
-    /// Last commit revision at which this node changed.
+    fill_only: bool,
     changed_at: u64,
+    fill_index: usize,
+    item: DisplayItem,
 }
 
 impl std::fmt::Debug for Node {

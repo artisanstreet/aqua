@@ -504,9 +504,10 @@ impl fmt::Debug for TextContent {
 }
 
 #[derive(Debug, Clone, Default)]
+#[repr(C)]
 pub struct BoxContent {
-    paint: crate::style::PaintValue,
     materialized: std::cell::OnceCell<Box<Paint>>,
+    paint: crate::style::PaintValue,
 }
 
 impl PartialEq for BoxContent {
@@ -1025,37 +1026,26 @@ impl Default for NodeSemantics {
 }
 
 /// One retained node.
+#[repr(C)]
 pub struct NodeRecord {
+    pub key: Option<KeyHash>,
+    pub paint_rev: u64,
+    pub dirty_paint: bool,
+    pub dirty_layout: bool,
     pub(crate) plain_bindings: bool,
+    pub(crate) keyboard_release_activation: bool,
+    pub(crate) hit_test_excluded: bool,
+    pub focusable: bool,
+    pub kind: NodeKind,
     pub(crate) style_identity: Option<Rc<LayoutStyle>>,
     pub control: Option<Box<crate::controls::Control>>,
-    /// Node kind + properties.
-    pub kind: NodeKind,
-    /// Typed style.
     pub style: LayoutStyle,
     pub(crate) paint_slot: Option<Box<Paint>>,
-    /// Ordered children (paint order = child order; last is topmost).
     pub children: Vec<NodeId>,
-    /// Parent (`None` for the root).
     pub parent: Option<NodeId>,
-    /// Layout-affecting change pending.
-    pub dirty_layout: bool,
-    /// Paint-only change pending.
-    pub dirty_paint: bool,
-    /// Content version at the last paint-affecting mutation of this node.
-    /// Hosts use [`UiTree::changed_paint`] to list nodes newer than a version
-    /// without scanning the whole tree themselves.
-    pub paint_rev: u64,
-    /// Whether the node can take keyboard focus.
-    pub focusable: bool,
     pub tab_index: i32,
-    pub(crate) keyboard_release_activation: bool,
     pub description: Option<String>,
     pub debug_selector: Option<String>,
-    pub(crate) hit_test_excluded: bool,
-    /// Stable key for keyed reconciliation (`None` = positional).
-    pub key: Option<KeyHash>,
-    /// Accessibility metadata (explicit roles; see [`NodeSemantics`]).
     pub semantics: NodeSemantics,
 }
 

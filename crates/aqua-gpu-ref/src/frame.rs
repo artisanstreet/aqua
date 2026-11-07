@@ -146,12 +146,16 @@ impl<'a> Frame<'a> {
                     .for_each(|instance| draw_shadow(target, instance));
                 Ok(())
             }
-            PassKind::Glyphs { atlas, instances } => {
+            PassKind::Glyphs {
+                atlas,
+                coverage,
+                instances,
+            } => {
                 let atlas = self
                     .persistent
                     .get(*atlas)
                     .ok_or_else(|| failure(format!("unknown atlas {}", atlas.0)))?;
-                draw_glyphs(target, atlas, instances, self.plan.text_tone);
+                draw_glyphs(target, atlas, instances, coverage.tone(self.plan.text_tone));
                 Ok(())
             }
             PassKind::Slug { store, instances } => {

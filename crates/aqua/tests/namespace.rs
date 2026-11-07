@@ -43,6 +43,7 @@ fn plan() -> aqua_graph::FramePlan {
     let commands = vec![
         PaintCommand::Glyphs(GlyphRun {
             atlas: TextureHandle(2),
+            coverage: aqua_graph::Coverage::Text,
             glyphs: vec![Glyph {
                 bounds: rect(),
                 texels: rect(),

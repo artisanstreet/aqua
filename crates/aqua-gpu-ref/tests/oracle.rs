@@ -9,6 +9,28 @@ fn pixel(pixels: &aqua_protocol::SurfacePixels, x: usize, y: usize) -> [u8; 4] {
 }
 
 #[test]
+fn exact_mask_alpha_ignores_the_text_contrast_curve() {
+    let mut case = conformance::cases()
+        .into_iter()
+        .find(|case| case.name == "exact_mask_between_text_masks")
+        .unwrap();
+    case.plan.text_tone = aqua_graph::ToneCurve::new(2.4, 3.0);
+    let mut backend = RefBackend::new();
+    let image = conformance::Session::new(&mut backend)
+        .render_case(&case)
+        .unwrap();
+    let mut text_differs = false;
+    for x in 0..16 {
+        let texel = x as f32;
+        let alpha = (texel / 15.0 * 0.65 * 255.0).round() as u8;
+        let exact = pixel(&image, 32 + x, 16)[3];
+        assert!(exact.abs_diff(alpha) <= 1, "{x}: {exact} vs {alpha}");
+        text_differs |= pixel(&image, 4 + x, 16)[3].abs_diff(exact) > 5;
+    }
+    assert!(text_differs);
+}
+
+#[test]
 fn group_opacity_composites_isolated_layer_not_each_child() {
     let extent = Extent {
         width: 32,

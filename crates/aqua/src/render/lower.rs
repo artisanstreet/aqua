@@ -10,9 +10,9 @@ use aqua_core::image::ImagePlacement;
 use aqua_core::scene::{DisplayItem, ShadowLayer, TextRasterMode};
 use aqua_core::{GpuiBackground, GpuiHsla, Oklch, Point, Size, Transform2D};
 use aqua_graph::{
-    plan_paint_with, BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientQuad,
-    GradientStop, Image, Linear2, PaintCommand, PlanError, PlanLimits, Quad, Shadow, SlugInstance,
-    SlugRun, ToneCurve,
+    plan_paint_with, BackdropBlur, Coverage, Extent, FramePlan, Glyph, GlyphRun, Gradient,
+    GradientQuad, GradientStop, Image, Linear2, PaintCommand, PlanError, PlanLimits, Quad, Shadow,
+    SlugInstance, SlugRun, ToneCurve,
 };
 use aqua_media::atlas::{AtlasConfig, ImageKey, PageId, Placement, Slot, StreamBudget};
 use aqua_media::reduce::{reduce, reduction_level};
@@ -199,6 +199,7 @@ fn replaced(command: &PaintCommand, pens: &[PenY], dx: f32, base_y: f32) -> Pain
     match (command, pens) {
         (PaintCommand::Glyphs(run), pens) => PaintCommand::Glyphs(GlyphRun {
             atlas: run.atlas,
+            coverage: run.coverage,
             glyphs: run
                 .glyphs
                 .iter()
@@ -2176,6 +2177,7 @@ impl Lowering {
         for (page, glyphs, pens) in batches {
             walk.out.push(PaintCommand::Glyphs(GlyphRun {
                 atlas: texture_handle(page),
+                coverage: Coverage::Text,
                 glyphs: glyphs.into(),
             }));
             run_pens.push(pens);
@@ -2363,12 +2365,17 @@ impl Lowering {
         };
         let described = described.elapsed();
         let resident = std::time::Instant::now();
-        let slot = self.residency.vector(
-            &raster.source,
-            raster.width,
-            raster.height,
-            VectorMode::Color,
-        );
+        let tint = match path.background {
+            GpuiBackground::Solid(value) => Some(color::oklch(color::hsla(value)).with_alpha(1.0)),
+            _ => None,
+        };
+        let mode = match tint {
+            Some(_) => VectorMode::Mask,
+            None => VectorMode::Color,
+        };
+        let slot = self
+            .residency
+            .vector(&raster.source, raster.width, raster.height, mode);
         crate::profile::note(|| {
             format!(
                 "path_raster={}x{} describe_us={} resident_us={} style={}",
@@ -2386,14 +2393,26 @@ impl Lowering {
                     raster.width,
                     raster.height,
                 ));
-                push_image(
-                    &mut walk.out,
-                    &placement,
-                    raster.placement,
-                    full_source(),
-                    1.0,
-                    0.0,
-                )
+                match tint {
+                    Some(color) => walk.out.push(PaintCommand::Glyphs(GlyphRun {
+                        atlas: texture_handle(placement.page),
+                        coverage: Coverage::Exact,
+                        glyphs: vec![Glyph {
+                            bounds: raster.placement,
+                            texels: texel_rect(&placement, full_source()),
+                            color,
+                        }]
+                        .into(),
+                    })),
+                    None => push_image(
+                        &mut walk.out,
+                        &placement,
+                        raster.placement,
+                        full_source(),
+                        1.0,
+                        0.0,
+                    ),
+                }
             }
             Ok(Slot::Blank { .. }) => {}
             Err(_) => walk.skip(Unsupported::PathFailed),
@@ -2488,6 +2507,7 @@ impl Lowering {
             .for_each(|(old, _)| {
                 self.spans.clear();
                 self.residency.remove_vector(*old, VectorMode::Color);
+                self.residency.remove_vector(*old, VectorMode::Mask);
             });
     }
 

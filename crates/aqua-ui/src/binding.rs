@@ -599,6 +599,17 @@ impl View {
         elements: Vec<Element>,
     ) -> Result<Vec<NodeId>, MountError> {
         self.content = splice_top_level(elements)?;
+        match (
+            self.content.as_slice(),
+            self.root,
+            tree.stable_plain_refresh(),
+        ) {
+            ([content], Some(root), true) if content.can_refresh_plain_boxes(tree, root) => {
+                content.refresh_plain_boxes(tree, root);
+                return Ok(vec![root]);
+            }
+            _ => {}
+        }
         let mut specs = lower_all(&self.content)?;
         aqua_core::checkpoint::reach();
         let mut synced = false;
@@ -1931,62 +1942,68 @@ fn bind_new(
         return bind_collection(collections, tree, id, el, &own);
     }
     let bindings = std::mem::take(el.bindings_mut());
-    let actions: Vec<_> = bindings
-        .iter()
-        .filter_map(|binding| match binding {
-            ElementBinding::OnAction { kind, .. } => Some(*kind),
-            ElementBinding::Popup { .. } => Some(ActionKind::Activate),
-            ElementBinding::SubscribeEdit { .. } => Some(ActionKind::TextChanged),
-            _ => None,
-        })
-        .collect();
-    tree.retain_bound_actions(id, &actions);
-    let keys = effect_keys(&bindings);
-    let has_interaction_signal = bindings.iter().any(|binding| {
-        matches!(
-            binding,
-            ElementBinding::InteractionBool { .. } | ElementBinding::InteractionValue(_)
-        )
-    });
-    let same = !has_interaction_signal
-        && bound
-            .get(&id.raw())
-            .map(|s| s.effects == keys)
-            .unwrap_or(false);
-    match (keys.is_empty(), same) {
-        (true, _) => {
-            if let Some(state) = bound.remove(&id.raw()) {
-                state.scope.dispose();
+    let empty = bindings.is_empty();
+    let reuse = empty && tree.reusable_plain_bindings(id) && !bound.contains_key(&id.raw());
+    if !reuse {
+        let actions: Vec<_> = bindings
+            .iter()
+            .filter_map(|binding| match binding {
+                ElementBinding::OnAction { kind, .. } => Some(*kind),
+                ElementBinding::Popup { .. } => Some(ActionKind::Activate),
+                ElementBinding::SubscribeEdit { .. } => Some(ActionKind::TextChanged),
+                _ => None,
+            })
+            .collect();
+        tree.retain_bound_actions(id, &actions);
+        let keys = effect_keys(&bindings);
+        let has_interaction_signal = bindings.iter().any(|binding| {
+            matches!(
+                binding,
+                ElementBinding::InteractionBool { .. } | ElementBinding::InteractionValue(_)
+            )
+        });
+        let same = !has_interaction_signal
+            && bound
+                .get(&id.raw())
+                .map(|s| s.effects == keys)
+                .unwrap_or(false);
+        match (keys.is_empty(), same) {
+            (true, _) => {
+                if let Some(state) = bound.remove(&id.raw()) {
+                    state.scope.dispose();
+                }
+                apply_bindings(tree, scope, sink, id, bindings);
             }
-            apply_bindings(tree, scope, sink, id, bindings);
-        }
-        (false, true) => {
-            let plain: Vec<ElementBinding> =
-                bindings.into_iter().filter(|b| !is_effect(b)).collect();
-            apply_bindings(tree, scope, sink, id, plain);
-        }
-        (false, false) => {
-            if let Some(state) = bound.remove(&id.raw()) {
-                state.scope.dispose();
+            (false, true) => {
+                let plain: Vec<ElementBinding> =
+                    bindings.into_iter().filter(|b| !is_effect(b)).collect();
+                apply_bindings(tree, scope, sink, id, plain);
             }
-            let child = scope.child();
-            apply_bindings(tree, &child, sink, id, bindings);
-            bound.insert(
-                id.raw(),
-                BoundState {
-                    scope: child,
-                    effects: keys,
-                },
-            );
+            (false, false) => {
+                if let Some(state) = bound.remove(&id.raw()) {
+                    state.scope.dispose();
+                }
+                let child = scope.child();
+                apply_bindings(tree, &child, sink, id, bindings);
+                bound.insert(
+                    id.raw(),
+                    BoundState {
+                        scope: child,
+                        effects: keys,
+                    },
+                );
+            }
+        }
+        if let Some(record) = tree.get_mut(id) {
+            record.plain_bindings = empty && local_typography == TypoChain::default();
+            record.style_identity = el.layout_identity();
         }
     }
-    sink.interaction(
-        crate::tree::interaction::InteractionCommand::TypographyColor {
-            node: id,
-            own: local_typography.explicit_color(),
-            own_gpui: local_typography.explicit_gpui_color(),
-            own_source: local_typography.explicit_gpui_source_color(),
-        },
+    tree.queue_typography_color(
+        id,
+        local_typography.explicit_color(),
+        local_typography.explicit_gpui_color(),
+        local_typography.explicit_gpui_source_color(),
     );
     if el.role_opt().is_some() || el.collection_semantics_opt().is_some() {
         if let Some(rec) = tree.get(id) {

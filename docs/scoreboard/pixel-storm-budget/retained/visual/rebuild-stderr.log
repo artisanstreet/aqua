@@ -1,0 +1,3 @@
+aqua: clipboard backend: System
+pixel-storm render t=0 build_ms=136.6
+pixel-storm first_frame_ms=14287.7 boxes=1024000 mode=Static retained=false native_rgb=false grid=1280x800

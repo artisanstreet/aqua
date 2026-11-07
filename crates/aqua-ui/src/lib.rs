@@ -22,6 +22,7 @@ pub mod layout;
 pub mod motion;
 pub mod overlay;
 pub mod overlay_host;
+pub mod paint;
 pub mod popup;
 pub mod style;
 pub mod tree;

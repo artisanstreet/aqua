@@ -486,6 +486,7 @@ pub fn cases() -> Vec<Case> {
     cases.push(super::gpui::translucent_white_case());
     cases.extend(super::realistic::cases());
     cases.extend(super::transforms::cases());
+    cases.extend(super::solids::cases());
     cases.push(build(
         "extent_one_by_one",
         Extent {

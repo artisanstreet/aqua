@@ -128,6 +128,25 @@ impl<'a> Frame<'a> {
 
     fn execute(&self, pass: &Pass, target: &mut Layer) -> Result<(), GpuError> {
         match &pass.kind {
+            PassKind::SrgbaSolids { bounds, fills } => {
+                for (&bounds, &fill) in bounds.iter().zip(fills) {
+                    draw_quad(
+                        target,
+                        &aqua_graph::SolidInstance {
+                            bounds,
+                            fill: aqua_graph::SolidColor::Srgba(fill),
+                        }
+                        .quad(),
+                    );
+                }
+                Ok(())
+            }
+            PassKind::Solids { instances } => {
+                instances
+                    .iter()
+                    .for_each(|instance| draw_quad(target, &instance.quad()));
+                Ok(())
+            }
             PassKind::Instanced {
                 shader: ShaderId::Quad,
                 instances,

@@ -23,7 +23,7 @@ pub use arena::Arena;
 pub use click::ClickSettings;
 pub use color::{
     ColorProfile, GpuiBackground, GpuiGradientColorSpace, GpuiGradientStop, GpuiHsla,
-    GpuiTextColor, Oklch,
+    GpuiTextColor, Oklch, Srgba8,
 };
 pub use cursor::CursorIcon;
 pub use event::{
@@ -34,9 +34,11 @@ pub use geometry::{CornerRadii, Insets, Point, Rect, Size, Transform2D};
 pub use gpui_mesh::{GpuiMesh, GpuiMeshStyle, GpuiMeshVertex};
 pub use id::{ImageId, NodeId, RawId, ViewportId};
 pub use scene::{
-    decode_layer, media_layer, viewport_layer, DisplayItem, LayerKind, TextRun,
+    decode_layer, media_layer, viewport_layer, DisplayItem, FillPatch, LayerKind, TextRun,
     LAYER_MAX_GENERATION, LAYER_TAG_MASK, LAYER_TAG_MEDIA, LAYER_TAG_VIEWPORT,
 };
 pub use semantic::{CollectionSemantics, NumericRangeSemantics, Role, SemanticNode};
 
 pub use image::ImageRef;
+
+pub use scene::fills::{SrgbaFillBatch, SrgbaFillPatch};

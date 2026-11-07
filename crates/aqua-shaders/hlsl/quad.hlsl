@@ -120,3 +120,60 @@ float4 ps_quad(QuadOut i) : SV_Target
     float clip_cover = saturate(0.5 - box_distance(p, i.clip, 0.0));
     return color * (saturate(0.5 - outer) * clip_cover * i.shape.z);
 }
+
+struct SolidIn
+{
+    float4 bounds : BOUNDS;
+    float4 fill : FILL;
+    uint color_space : COLOR_SPACE;
+    uint vertex : SV_VertexID;
+};
+
+struct SolidOut
+{
+    float4 position : SV_Position;
+    nointerpolation float4 bounds : BOUNDS;
+    nointerpolation float4 fill : FILL;
+};
+
+SolidOut vs_solid(SolidIn i)
+{
+    SolidOut o;
+    float2 corner = float2(i.vertex & 1, i.vertex >> 1);
+    o.position = to_clip(i.bounds.xy - 1.0 + corner * (i.bounds.zw + 2.0));
+    o.bounds = i.bounds;
+    float alpha = saturate(i.fill.w);
+    if (i.color_space == 1)
+    {
+        o.fill = float4(i.fill.rgb * alpha, alpha);
+        return o;
+    }
+    float angle = i.fill.z * 0.017453292519943295;
+    float3 lab = float3(i.fill.x, i.fill.y * cos(angle), i.fill.y * sin(angle));
+    float3 rgb = saturate(oklab_to_linear(lab));
+    float3 encoded = float3(srgb_encode(rgb.r), srgb_encode(rgb.g), srgb_encode(rgb.b));
+    o.fill = float4(encoded * alpha, alpha);
+    return o;
+}
+
+float4 ps_solid(SolidOut i) : SV_Target
+{
+    return i.fill * saturate(0.5 - box_distance(i.position.xy, i.bounds, 0.0));
+}
+
+struct SrgbaIn
+{
+    float4 bounds : BOUNDS;
+    float4 fill : FILL;
+    uint vertex : SV_VertexID;
+};
+
+SolidOut vs_srgba(SrgbaIn i)
+{
+    SolidOut o;
+    float2 corner = float2(i.vertex & 1, i.vertex >> 1);
+    o.position = to_clip(i.bounds.xy - 1.0 + corner * (i.bounds.zw + 2.0));
+    o.bounds = i.bounds;
+    o.fill = float4(i.fill.rgb * i.fill.w, i.fill.w);
+    return o;
+}

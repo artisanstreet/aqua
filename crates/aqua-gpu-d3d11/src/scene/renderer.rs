@@ -1,4 +1,5 @@
 use aqua_graph::{Blend, Extent, FramePlan, LoadOp, PassKind, ShaderId, TextureRef};
+use std::sync::Arc;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
 use windows::Win32::Graphics::Direct3D11::*;
@@ -113,6 +114,8 @@ struct SurfaceMirror {
 enum Upload {
     None,
     Quads { offset: u64, count: u32 },
+    Solids { offset: u64, count: u32 },
+    Srgba { offset: u64, count: u32 },
     Shadows { offset: u64, count: u32 },
     Sprites { offset: u64, count: u32 },
 }
@@ -148,6 +151,16 @@ impl Scratch {
         let colors = &mut self.colors;
         for pass in &plan.passes {
             let upload = match &pass.kind {
+                PassKind::SrgbaSolids { fills, .. } if !fills.is_empty() => {
+                    let (offset, count) =
+                        append_all(bytes, fills.iter().map(|fill| u32::from_le_bytes(fill.0)));
+                    Upload::Srgba { offset, count }
+                }
+                PassKind::Solids { instances } if !instances.is_empty() => {
+                    let (offset, count) =
+                        append_all(bytes, instances.iter().map(crate::pack::pack_solid));
+                    Upload::Solids { offset, count }
+                }
                 PassKind::Instanced { instances, .. } if !instances.is_empty() => {
                     let (offset, count) = append_all(
                         bytes,
@@ -201,6 +214,8 @@ struct Bound {
 
 fn pass_label(kind: &PassKind) -> &'static str {
     match kind {
+        PassKind::SrgbaSolids { .. } => "srgba_solids",
+        PassKind::Solids { .. } => "solids",
         PassKind::Instanced { .. } => "quads",
         PassKind::Shadows { .. } => "shadows",
         PassKind::Glyphs { .. } => "glyphs",
@@ -311,6 +326,7 @@ pub struct SceneRenderer {
     scratch: Scratch,
     mirror: Option<SurfaceMirror>,
     shrink_instances: bool,
+    geometries: Vec<super::geometry::Geometry>,
 }
 
 impl SceneRenderer {
@@ -361,6 +377,7 @@ impl SceneRenderer {
             scratch: Scratch::default(),
             mirror: None,
             shrink_instances: false,
+            geometries: Vec::new(),
         };
         stages.mark("      renderer_buffers");
         Ok(renderer)
@@ -432,6 +449,11 @@ impl SceneRenderer {
 
     pub fn instance_bytes(&self) -> u64 {
         self.instances.capacity
+            + self
+                .geometries
+                .iter()
+                .map(|geometry| geometry.bounds.len() as u64 * 16)
+                .sum::<u64>()
     }
 
     pub fn constant_bytes(&self) -> u64 {
@@ -626,7 +648,17 @@ impl SceneRenderer {
 
     fn reset_bindings(&self, context: &ID3D11DeviceContext1) {
         let views: [Option<ID3D11ShaderResourceView>; MAX_INPUTS] = Default::default();
+        let buffers = [None, None];
+        let strides = [0, 0];
+        let offsets = [0, 0];
         unsafe {
+            context.IASetVertexBuffers(
+                0,
+                2,
+                Some(buffers.as_ptr()),
+                Some(strides.as_ptr()),
+                Some(offsets.as_ptr()),
+            );
             context.PSSetShaderResources(0, Some(&views));
             context.OMSetRenderTargets(None, None::<&ID3D11DepthStencilView>);
         }
@@ -674,10 +706,11 @@ impl SceneRenderer {
             timestamps.poll(context);
             timestamps.begin(context);
         }
+        let geometry_bytes = super::geometry::retain(&self.device, &mut self.geometries, plan)?;
         let mut stats = SceneStats {
             passes: plan.passes.len() as u32,
             instances: plan.instance_count() as u32,
-            upload_bytes: scratch.bytes.len() as u64,
+            upload_bytes: scratch.bytes.len() as u64 + geometry_bytes,
             ..SceneStats::default()
         };
         unsafe {
@@ -975,6 +1008,46 @@ impl SceneRenderer {
                     unsafe { context.DrawInstanced(4, count, 0, 0) };
                     stats.draws += 1;
                 }
+                (PassKind::SrgbaSolids { bounds, .. }, Upload::Srgba { offset, count }) => {
+                    let geometry = self
+                        .geometries
+                        .iter()
+                        .find(|geometry| Arc::ptr_eq(bounds, &geometry.bounds))
+                        .ok_or(Error::Unsupported("missing solid geometry"))?
+                        .buffer
+                        .clone();
+                    let program = self.pipelines.get(Kind::Srgba)?;
+                    self.write_constants(
+                        context,
+                        constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent, None),
+                    )?;
+                    self.use_program(context, &program);
+                    let buffers = [Some(geometry), Some(self.instances.buffer.clone())];
+                    let strides = [16, 4];
+                    let offsets = [0, offset as u32];
+                    unsafe {
+                        context.IASetVertexBuffers(
+                            0,
+                            2,
+                            Some(buffers.as_ptr()),
+                            Some(strides.as_ptr()),
+                            Some(offsets.as_ptr()),
+                        );
+                        context.DrawInstanced(4, count, 0, 0);
+                    }
+                    stats.draws += 1;
+                }
+                (PassKind::Solids { .. }, Upload::Solids { offset, count }) => {
+                    let program = self.pipelines.get(Kind::Solid)?;
+                    self.write_constants(
+                        context,
+                        constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent, None),
+                    )?;
+                    self.use_program(context, &program);
+                    self.instances_at(context, offset, crate::pack::SOLID_STRIDE);
+                    unsafe { context.DrawInstanced(4, count, 0, 0) };
+                    stats.draws += 1;
+                }
                 (PassKind::Shadows { .. }, Upload::Shadows { offset, count }) => {
                     let program = self.pipelines.get(Kind::Shadow)?;
                     self.write_constants(
@@ -1093,6 +1166,8 @@ impl SceneRenderer {
                 }
                 (
                     PassKind::Instanced { .. }
+                    | PassKind::Solids { .. }
+                    | PassKind::SrgbaSolids { .. }
                     | PassKind::Shadows { .. }
                     | PassKind::Glyphs { .. }
                     | PassKind::Slug { .. }
@@ -1102,6 +1177,10 @@ impl SceneRenderer {
                 _ => return Err(Error::Unsupported("pass kind")),
             }
         }
+        aqua_protocol::probe::count(
+            aqua_protocol::probe::Metric::UploadBytes,
+            stats.upload_bytes,
+        );
         Ok(stats)
     }
 }

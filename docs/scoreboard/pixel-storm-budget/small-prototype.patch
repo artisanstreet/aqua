@@ -1,0 +1,69 @@
+diff --git a/crates/aqua-ui/src/binding.rs b/crates/aqua-ui/src/binding.rs
+index ba30fd6..c21bd2c 100644
+--- a/crates/aqua-ui/src/binding.rs
++++ b/crates/aqua-ui/src/binding.rs
+@@ -786,6 +786,9 @@ impl View {
+     /// longer in the tree. Runs after every structural sync so unmounted
+     /// rows never leak subscriptions.
+     fn prune_dead(&mut self, tree: &UiTree) {
++        if self.bound.is_empty() && self.collections.is_empty() {
++            return;
++        }
+         let live: HashSet<RawId> = tree.traverse().into_iter().map(|n| n.raw()).collect();
+         let dead: Vec<RawId> = self
+             .bound
+diff --git a/crates/aqua-ui/src/tree.rs b/crates/aqua-ui/src/tree.rs
+index d591c9f..e2bd028 100644
+--- a/crates/aqua-ui/src/tree.rs
++++ b/crates/aqua-ui/src/tree.rs
+@@ -525,7 +525,11 @@ impl BoxContent {
+     }
+ 
+     pub fn set_paint(&mut self, paint: Paint) {
+-        self.paint = (paint != Paint::default()).then(|| Box::new(paint));
++        match (paint == Paint::default(), self.paint.as_mut()) {
++            (true, _) => self.paint = None,
++            (false, Some(current)) => **current = paint,
++            (false, None) => self.paint = Some(Box::new(paint)),
++        }
+     }
+ }
+ 
+@@ -2160,6 +2164,23 @@ impl UiTree {
+     /// mount-time default; explicit changes flow through `SetText`
+     /// bindings), while static labels take the descriptor text.
+     pub fn sync_children(&mut self, parent: NodeId, children: Vec<NodeSpec>) -> Vec<NodeId> {
++        let stable = self.get(parent).is_some_and(|record| {
++            record.children.len() == children.len()
++                && record.children.iter().zip(&children).all(|(id, spec)| {
++                    spec.key.is_none()
++                        && self.get(*id).is_some_and(|child| child.key.is_none())
++                        && self.kind_matches(*id, &spec.kind)
++                        && !self.portal_roots.contains(id)
++                        && !self.exiting.contains(id)
++                })
++        });
++        if stable {
++            let ids = self.get(parent).unwrap().children.clone();
++            for (id, spec) in ids.iter().zip(children) {
++                self.update_spec(*id, spec);
++            }
++            return ids;
++        }
+         let portals: Vec<_> = self
+             .get(parent)
+             .map(|record| {
+diff --git a/crates/aqua-ui/src/tree/interaction.rs b/crates/aqua-ui/src/tree/interaction.rs
+index 1766187..16507ec 100644
+--- a/crates/aqua-ui/src/tree/interaction.rs
++++ b/crates/aqua-ui/src/tree/interaction.rs
+@@ -682,6 +682,9 @@ impl super::UiTree {
+     }
+ 
+     fn has_interaction_color(&self, store: &InteractionStore, node: aqua_core::NodeId) -> bool {
++        if store.nodes.is_empty() {
++            return false;
++        }
+         let mut current = Some(node);
+         while let Some(id) = current {
+             if store

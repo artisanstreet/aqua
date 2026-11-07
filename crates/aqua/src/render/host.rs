@@ -294,7 +294,8 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
         let Some(stage) = self.damage.as_mut() else {
             return;
         };
-        let transitioning = self.host.lowering().transition_active();
+        let transitioning =
+            self.host.lowering().transition_active() || self.host.retains_solid_geometry(side);
         let plan = match side.viewport() {
             _ if transitioning => Plan::Full,
             Some((size, scale)) => stage.planner.plan(

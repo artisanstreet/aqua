@@ -13,13 +13,7 @@ pub fn apply(item: &mut DisplayItem, property: Property, value: MotionValue) -> 
             }
             _ => false,
         },
-        (Property::Fill, MotionValue::Color(color)) => match item {
-            DisplayItem::Rect { fill, .. } | DisplayItem::Quad { fill, .. } => {
-                *fill = color;
-                true
-            }
-            _ => false,
-        },
+        (Property::Fill, MotionValue::Color(color)) => item.set_fill(color),
         (Property::BorderColor, MotionValue::Color(color)) => match item {
             DisplayItem::Rect { border_color, .. } | DisplayItem::Quad { border_color, .. } => {
                 *border_color = color;
@@ -36,6 +30,7 @@ pub fn apply(item: &mut DisplayItem, property: Property, value: MotionValue) -> 
         },
         (Property::Edge(edge), MotionValue::Scalar(position)) => match item {
             DisplayItem::Rect { bounds, .. }
+            | DisplayItem::SrgbaRect { bounds, .. }
             | DisplayItem::Quad { bounds, .. }
             | DisplayItem::Shadow { bounds, .. } => {
                 *bounds = move_edge(*bounds, edge, position);

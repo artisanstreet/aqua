@@ -8,6 +8,7 @@ pub mod glass;
 pub mod gpui;
 pub mod realistic;
 pub mod session;
+pub mod solids;
 pub mod suite;
 pub mod text;
 pub mod transforms;

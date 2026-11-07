@@ -1,0 +1,27 @@
+warning: field `0` is never read
+ --> crates/aqua-reactive/src/read_check.rs:8:12
+  |
+8 |     Render(Vec<NodeId>),
+  |     ------ ^^^^^^^^^^^
+  |     |
+  |     field in this variant
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+  |
+8 -     Render(Vec<NodeId>),
+8 +     Render(()),
+  |
+
+warning: `aqua-reactive` (lib) generated 1 warning
+   Compiling aqua-ui v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-ui)
+    Finished `release` profile [optimized] target(s) in 11.01s
+     Running tests/element.rs (target/release/deps/element-db2ccc6460a45624)
+
+running 3 tests
+test pixel_storm_color_report ... ignored
+test pixel_storm_phase_report ... ignored
+test color_refresh_preserves_identity_layout_and_updates_every_cell ... ok
+
+test result: ok. 1 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

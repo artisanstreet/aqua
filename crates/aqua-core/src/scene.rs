@@ -11,9 +11,16 @@
 //! - Paint ops never carry GPU handles: images/viewports travel as opaque
 //!   `layer` keys namespaced by the media owner.
 
-use crate::color::Oklch;
+use crate::color::{Oklch, Srgba8};
+pub mod fills;
 use crate::geometry::Rect;
-use crate::id::{ImageId, RawId, ViewportId};
+use crate::id::{ImageId, NodeId, RawId, ViewportId};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FillPatch {
+    pub node: NodeId,
+    pub fill: Oklch,
+}
 
 /// Layer-namespace tags for `DisplayItem::External.layer` (contract §4).
 /// The top two bits disambiguate media frames (`01`) from viewport frames
@@ -218,6 +225,10 @@ pub struct GpuiTextOpacityRange {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DisplayItem {
+    SrgbaRect {
+        bounds: Rect,
+        fill: Srgba8,
+    },
     PushGpuiQuadPulse(GpuiQuadPulse),
     PopGpuiQuadPulse,
     GpuiSvg {
@@ -387,12 +398,58 @@ pub struct GpuiQuadPulse {
 }
 
 impl DisplayItem {
+    pub fn set_fill(&mut self, color: Oklch) -> bool {
+        match self {
+            Self::Rect { fill, .. } | Self::Quad { fill, .. } => {
+                *fill = color;
+                true
+            }
+            Self::SrgbaRect { bounds, .. } => {
+                *self = Self::Rect {
+                    bounds: *bounds,
+                    radius: 0.0,
+                    fill: color,
+                    border_width: 0.0,
+                    border_color: Oklch::TRANSPARENT,
+                    shadow: None,
+                };
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn set_srgba(&mut self, color: Srgba8) -> bool {
+        match self {
+            Self::SrgbaRect { fill, .. } => {
+                *fill = color;
+                true
+            }
+            Self::Rect {
+                bounds,
+                radius: 0.0,
+                border_width: 0.0,
+                border_color,
+                shadow: None,
+                ..
+            } if border_color.alpha == 0.0 => {
+                *self = Self::SrgbaRect {
+                    bounds: *bounds,
+                    fill: color,
+                };
+                true
+            }
+            _ => self.set_fill(color.to_oklch()),
+        }
+    }
+
     /// Conservative logical bounds of the item INCLUDING effect footprints
     /// (shadow blur/offset, backdrop sampling padding). Used for damage.
     /// Returns `None` for stack operations (`Pop*`) which cover nothing.
     #[must_use]
     pub fn bounds(&self) -> Option<Rect> {
         match self {
+            DisplayItem::SrgbaRect { bounds, .. } => Some(*bounds),
             DisplayItem::Shadow { bounds, layer, .. } => Some(layer.bounds(*bounds)),
             DisplayItem::GpuiShadow { bounds, layer, .. } => Some(layer.bounds(*bounds)),
             DisplayItem::Rect { bounds, shadow, .. } => {

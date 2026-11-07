@@ -1,0 +1,63 @@
+warning: field `0` is never read
+ --> crates/aqua-reactive/src/read_check.rs:8:12
+  |
+8 |     Render(Vec<NodeId>),
+  |     ------ ^^^^^^^^^^^
+  |     |
+  |     field in this variant
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+  |
+8 -     Render(Vec<NodeId>),
+8 +     Render(()),
+  |
+
+warning: `aqua-reactive` (lib) generated 1 warning
+   Compiling aqua-ui v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-ui)
+    Finished `release` profile [optimized] target(s) in 6.20s
+     Running tests/element.rs (target/release/deps/element-db2ccc6460a45624)
+
+running 2 tests
+storm-cpu bytes element=1208 spec=824 record=464 paint=504 display_item=200
+test color_refresh_preserves_identity_layout_and_updates_every_cell ... ok
+storm-cpu sample=1 grid=1280x800
+storm-cpu phase=integer_colors boxes=1024000 ms=4.871 ns_per_box=4.8
+storm-cpu phase=srgb_to_oklch boxes=1024000 ms=77.772 ns_per_box=75.9
+storm-cpu phase=oklch_to_gpu boxes=1024000 ms=28.388 ns_per_box=27.7
+storm-cpu phase=element_build boxes=1024000 ms=551.833 ns_per_box=538.9
+storm-cpu phase=lower_specs_diagnostic boxes=1024000 ms=1317.910 ns_per_box=1287.0
+storm-cpu phase=set_content boxes=1024000 ms=1380.200 ns_per_box=1347.9
+storm-cpu phase=drain_commands boxes=1024000 ms=475.431 ns_per_box=464.3
+storm-cpu phase=layout boxes=1024000 ms=0.000 ns_per_box=0.0
+storm-cpu phase=emit_scene boxes=1024000 ms=370.429 ns_per_box=361.7
+storm-cpu phase=direct_paint_write boxes=1024000 ms=95.499 ns_per_box=93.3
+storm-cpu phase=emit_after_direct_paint boxes=1024000 ms=261.463 ns_per_box=255.3
+storm-cpu sample=2 grid=1280x800
+storm-cpu phase=integer_colors boxes=1024000 ms=6.152 ns_per_box=6.0
+storm-cpu phase=srgb_to_oklch boxes=1024000 ms=78.328 ns_per_box=76.5
+storm-cpu phase=oklch_to_gpu boxes=1024000 ms=27.295 ns_per_box=26.7
+storm-cpu phase=element_build boxes=1024000 ms=375.018 ns_per_box=366.2
+storm-cpu phase=lower_specs_diagnostic boxes=1024000 ms=656.093 ns_per_box=640.7
+storm-cpu phase=set_content boxes=1024000 ms=1070.323 ns_per_box=1045.2
+storm-cpu phase=drain_commands boxes=1024000 ms=467.938 ns_per_box=457.0
+storm-cpu phase=layout boxes=1024000 ms=0.001 ns_per_box=0.0
+storm-cpu phase=emit_scene boxes=1024000 ms=205.018 ns_per_box=200.2
+storm-cpu phase=direct_paint_write boxes=1024000 ms=92.318 ns_per_box=90.2
+storm-cpu phase=emit_after_direct_paint boxes=1024000 ms=191.929 ns_per_box=187.4
+storm-cpu sample=3 grid=1280x800
+storm-cpu phase=integer_colors boxes=1024000 ms=4.999 ns_per_box=4.9
+storm-cpu phase=srgb_to_oklch boxes=1024000 ms=78.509 ns_per_box=76.7
+storm-cpu phase=oklch_to_gpu boxes=1024000 ms=27.969 ns_per_box=27.3
+storm-cpu phase=element_build boxes=1024000 ms=118.575 ns_per_box=115.8
+storm-cpu phase=lower_specs_diagnostic boxes=1024000 ms=724.924 ns_per_box=707.9
+storm-cpu phase=set_content boxes=1024000 ms=1201.710 ns_per_box=1173.5
+storm-cpu phase=drain_commands boxes=1024000 ms=473.295 ns_per_box=462.2
+storm-cpu phase=layout boxes=1024000 ms=0.001 ns_per_box=0.0
+storm-cpu phase=emit_scene boxes=1024000 ms=297.835 ns_per_box=290.9
+storm-cpu phase=direct_paint_write boxes=1024000 ms=86.361 ns_per_box=84.3
+storm-cpu phase=emit_after_direct_paint boxes=1024000 ms=272.532 ns_per_box=266.1
+test pixel_storm_phase_report ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.19s
+

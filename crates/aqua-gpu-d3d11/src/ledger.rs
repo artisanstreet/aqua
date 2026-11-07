@@ -7,6 +7,7 @@ pub enum Kind {
     Texture,
     TransientTexture,
     DynamicBuffer,
+    VertexBuffer,
     StagingTexture,
     Query,
     Shader,

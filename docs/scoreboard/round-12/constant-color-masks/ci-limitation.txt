@@ -1,0 +1,9 @@
+CI run: https://github.com/artisanstreet/aqua/actions/runs/42346264830
+Workflow failure occurs before tests: removed workspace package aqua-macros is still requested.
+
+check (windows-latest)	targeted tests (shared target lock)	﻿2026-11-07T06:16:46.4759947Z ##[group]Run cargo test -p aqua-core -p aqua-reactive -p aqua-platform -p aqua-text -p aqua-macros -p aqua-ui -- --nocapture
+check (windows-latest)	targeted tests (shared target lock)	2026-11-07T06:16:46.4760506Z cargo test -p aqua-core -p aqua-reactive -p aqua-platform -p aqua-text -p aqua-macros -p aqua-ui -- --nocapture
+check (windows-latest)	targeted tests (shared target lock)	2026-11-07T06:16:52.9460326Z error: package ID specification `aqua-macros` did not match any packages
+check (ubuntu-latest)	targeted tests (shared target lock)	﻿2026-11-07T06:16:38.1200951Z ##[group]Run cargo test -p aqua-core -p aqua-reactive -p aqua-platform -p aqua-text -p aqua-macros -p aqua-ui -- --nocapture
+check (ubuntu-latest)	targeted tests (shared target lock)	2026-11-07T06:16:38.1201752Z cargo test -p aqua-core -p aqua-reactive -p aqua-platform -p aqua-text -p aqua-macros -p aqua-ui -- --nocapture
+check (ubuntu-latest)	targeted tests (shared target lock)	2026-11-07T06:16:39.3412905Z error: package ID specification `aqua-macros` did not match any packages

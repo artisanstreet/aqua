@@ -509,6 +509,17 @@ impl GpuBackend for WindowHandle {
         self.hub.backend.borrow_mut().wait_for_frame_slot(surface)
     }
 
+    fn wait_for_present_slot(
+        &mut self,
+        surface: SurfaceId,
+        hint: PresentHint,
+    ) -> Result<(), GpuError> {
+        self.hub
+            .backend
+            .borrow_mut()
+            .wait_for_present_slot(surface, hint)
+    }
+
     fn present_with_damage(
         &mut self,
         surface: SurfaceId,

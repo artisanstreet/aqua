@@ -15,6 +15,7 @@ use super::damage::{Damage, DamageTracker, PixelRect};
 use super::mirror::TextureMirror;
 use super::pacing::{PaceReport, Pacer};
 use super::timing;
+use super::vblank::VblankClock;
 use crate::hal::budget::{Trim, Visibility};
 use crate::hal::{
     self, BudgetStatus, Core, DeviceOptions, PresentMode, PresentStatus, Swapchain, RENDER_FORMAT,
@@ -133,6 +134,8 @@ struct WindowSurface {
     last_present: Option<Instant>,
     monitor: isize,
     half_rate: bool,
+    clock: VblankClock,
+    clocked: bool,
 }
 
 struct Handoff<T>(T);
@@ -252,6 +255,8 @@ fn new_surface(
         last_present: None,
         monitor,
         half_rate: false,
+        clock: VblankClock::default(),
+        clocked: false,
     })
 }
 
@@ -798,9 +803,11 @@ impl WindowBackend {
                 ));
             }
         };
+        let clocked = std::mem::take(&mut entry.clocked);
         let mode = match hint {
             PresentHint::Immediate => PresentMode::Immediate,
             PresentHint::Vsync if entry.half_rate => PresentMode::HalfVsync,
+            PresentHint::Vsync if clocked => PresentMode::Latest,
             PresentHint::Vsync => PresentMode::Vsync,
         };
         let damage = match entry.damage.has_presented() {
@@ -1073,11 +1080,26 @@ impl GpuBackend for WindowBackend {
     }
 
     fn wait_for_frame_slot(&mut self, surface: SurfaceId) -> Result<(), GpuError> {
+        self.wait_for_present_slot(surface, PresentHint::Vsync)
+    }
+
+    fn wait_for_present_slot(
+        &mut self,
+        surface: SurfaceId,
+        hint: PresentHint,
+    ) -> Result<(), GpuError> {
         let entry = self
             .surfaces
-            .get(&surface)
+            .get_mut(&surface)
             .ok_or(GpuError::UnknownSurface(surface))?;
-        entry.swapchain.wait_for_frame(FRAME_WAIT_MS);
+        let monitor = timing::monitor_of(owner(entry.window, entry.kind));
+        entry.clocked = hint == PresentHint::Vsync
+            && !entry.half_rate
+            && entry.clock.wait(monitor, entry.pacer.interval());
+        entry.swapchain.wait_for_frame(match entry.clocked {
+            true => 0,
+            false => FRAME_WAIT_MS,
+        });
         Ok(())
     }
 }

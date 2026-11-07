@@ -1,14 +1,45 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aqua_gpu_d3d11::window::pacing::{
     interval_from_ticks, reconcile_interval, ticks_until_next_vblank, vblanks_spanned, Pacer,
-    FALLBACK_INTERVAL,
+    VblankGuard, FALLBACK_INTERVAL,
 };
 
 const FREQUENCY: u64 = 10_000_000;
 
 fn ms(value: f64) -> Duration {
     Duration::from_secs_f64(value / 1000.0)
+}
+
+#[test]
+fn sparse_fast_vblank_waits_do_not_disable_the_clock() {
+    let mut guard = VblankGuard::default();
+    let epoch = Instant::now();
+    for index in 0..150 {
+        let started = epoch + ms(index as f64 * 110.0);
+        assert!(guard.observe(started, started + ms(0.01), ms(6.06)));
+    }
+}
+
+#[test]
+fn three_rapid_nonblocking_vblank_waits_disable_the_clock() {
+    let mut guard = VblankGuard::default();
+    let epoch = Instant::now();
+    assert!(guard.observe(epoch, epoch + ms(0.01), ms(6.06)));
+    assert!(guard.observe(epoch + ms(0.5), epoch + ms(0.51), ms(6.06)));
+    assert!(!guard.observe(epoch + ms(1.0), epoch + ms(1.01), ms(6.06)));
+}
+
+#[test]
+fn a_blocking_vblank_wait_resets_the_fast_wait_streak() {
+    let mut guard = VblankGuard::default();
+    let epoch = Instant::now();
+    assert!(guard.observe(epoch, epoch + ms(0.01), ms(6.06)));
+    assert!(guard.observe(epoch + ms(0.5), epoch + ms(0.51), ms(6.06)));
+    assert!(guard.observe(epoch + ms(1.0), epoch + ms(4.0), ms(6.06)));
+    assert!(guard.observe(epoch + ms(4.1), epoch + ms(4.11), ms(6.06)));
+    assert!(guard.observe(epoch + ms(4.2), epoch + ms(4.21), ms(6.06)));
+    assert!(!guard.observe(epoch + ms(4.3), epoch + ms(4.31), ms(6.06)));
 }
 
 #[test]

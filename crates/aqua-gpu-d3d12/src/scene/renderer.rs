@@ -1047,9 +1047,9 @@ impl SceneRenderer {
                     }
                     stats.draws += 1;
                 }
-                (PassKind::Glyphs { .. }, Upload::Sprites { offset, count }) => unsafe {
+                (PassKind::Glyphs { coverage, .. }, Upload::Sprites { offset, count }) => unsafe {
                     list.SetPipelineState(&self.pipelines.get(Kind::Glyph, write_bound.format)?);
-                    let tone = plan.text_tone;
+                    let tone = coverage.tone(plan.text_tone);
                     let values = constants(
                         extent,
                         1.0,

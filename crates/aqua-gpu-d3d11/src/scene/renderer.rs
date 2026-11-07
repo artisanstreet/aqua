@@ -1027,6 +1027,10 @@ impl SceneRenderer {
                 }
                 (PassKind::Glyphs { .. }, Upload::Sprites { offset, count })
                 | (PassKind::Slug { .. }, Upload::Sprites { offset, count }) => {
+                    let tone = match &pass.kind {
+                        PassKind::Glyphs { coverage, .. } => coverage.tone(tone),
+                        _ => tone,
+                    };
                     let kind = match pass.kind {
                         PassKind::Glyphs { .. } => Kind::Glyph,
                         _ => Kind::Slug,

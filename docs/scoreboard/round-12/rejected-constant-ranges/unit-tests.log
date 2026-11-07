@@ -1,0 +1,11 @@
+
+running 7 tests
+test scene::hint::tests::empty_used_set_gives_no_hint_so_everything_is_warmed ... ok
+test scene::hint::tests::framed_cache_round_trips_the_used_set_and_the_library ... ok
+test scene::hint::tests::truncated_frame_degrades_to_a_bare_library ... ok
+test scene::hint::tests::unframed_blob_is_a_bare_library_with_no_hint ... ok
+test scene::renderer::tests::a_new_frame_discards_before_reusing_the_first_slot ... ok
+test scene::renderer::tests::constant_writes_append_without_overwriting_earlier_slots ... ok
+test scene::renderer::tests::legacy_and_range_constants_render_the_same_after_clearing_state ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s

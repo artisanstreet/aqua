@@ -1,0 +1,184 @@
+{
+  "verdict": "REJECTED",
+  "design": "Three Aqua control/candidate pairs ordered AB/BA/AB, existing memdiag phase once per invocation, profiling/memory report/ledger off, 600 scroll inputs. Not a GPUI scoreboard.",
+  "summary": {
+    "control": {
+      "gpu_boot_mib": 35.4,
+      "gpu_after_scroll_mib": 51.2,
+      "private_after_scroll_mib": 119.0
+    },
+    "candidate": {
+      "gpu_boot_mib": 37.4,
+      "gpu_after_scroll_mib": 53.2,
+      "private_after_scroll_mib": 120.0
+    }
+  },
+  "runs": [
+    {
+      "variant": "control",
+      "run": 1,
+      "gpu_boot_mib": 35.4,
+      "gpu_after_scroll_mib": 55.7,
+      "private_after_scroll_mib": 127.0,
+      "scroll_latency": {
+        "name": "mem_scroll",
+        "kind": "scroll",
+        "samples": "600",
+        "timeouts": "0",
+        "p50_ms": "0.142",
+        "p90_ms": "0.271",
+        "p99_ms": "0.381",
+        "max_ms": "1.457",
+        "mean_ms": "0.151",
+        "over4_ms": "0",
+        "over8_ms": "0",
+        "over16_ms": "0",
+        "over50_ms": "0",
+        "p50_max_per_100": "0.1/1,0.1/0,0.1/0,0.2/0,0.2/0,0.1/0"
+      }
+    },
+    {
+      "variant": "candidate",
+      "run": 1,
+      "gpu_boot_mib": 35.4,
+      "gpu_after_scroll_mib": 53.2,
+      "private_after_scroll_mib": 120.0,
+      "scroll_latency": {
+        "name": "mem_scroll",
+        "kind": "scroll",
+        "samples": "600",
+        "timeouts": "0",
+        "p50_ms": "0.129",
+        "p90_ms": "0.269",
+        "p99_ms": "0.376",
+        "max_ms": "1.81",
+        "mean_ms": "0.147",
+        "over4_ms": "0",
+        "over8_ms": "0",
+        "over16_ms": "0",
+        "over50_ms": "0",
+        "p50_max_per_100": "0.1/2,0.1/0,0.2/0,0.1/0,0.1/0,0.1/0"
+      }
+    },
+    {
+      "variant": "candidate",
+      "run": 2,
+      "gpu_boot_mib": 37.4,
+      "gpu_after_scroll_mib": 55.4,
+      "private_after_scroll_mib": 123.0,
+      "scroll_latency": {
+        "name": "mem_scroll",
+        "kind": "scroll",
+        "samples": "600",
+        "timeouts": "0",
+        "p50_ms": "0.145",
+        "p90_ms": "0.275",
+        "p99_ms": "0.389",
+        "max_ms": "1.528",
+        "mean_ms": "0.153",
+        "over4_ms": "0",
+        "over8_ms": "0",
+        "over16_ms": "0",
+        "over50_ms": "0",
+        "p50_max_per_100": "0.1/2,0.1/0,0.1/0,0.2/0,0.1/0,0.1/0"
+      }
+    },
+    {
+      "variant": "control",
+      "run": 2,
+      "gpu_boot_mib": 35.4,
+      "gpu_after_scroll_mib": 50.9,
+      "private_after_scroll_mib": 119.0,
+      "scroll_latency": {
+        "name": "mem_scroll",
+        "kind": "scroll",
+        "samples": "600",
+        "timeouts": "0",
+        "p50_ms": "0.137",
+        "p90_ms": "0.279",
+        "p99_ms": "0.378",
+        "max_ms": "1.541",
+        "mean_ms": "0.151",
+        "over4_ms": "0",
+        "over8_ms": "0",
+        "over16_ms": "0",
+        "over50_ms": "0",
+        "p50_max_per_100": "0.1/2,0.1/0,0.2/0,0.1/0,0.2/0,0.1/0"
+      }
+    },
+    {
+      "variant": "control",
+      "run": 3,
+      "gpu_boot_mib": 35.4,
+      "gpu_after_scroll_mib": 51.2,
+      "private_after_scroll_mib": 119.0,
+      "scroll_latency": {
+        "name": "mem_scroll",
+        "kind": "scroll",
+        "samples": "600",
+        "timeouts": "0",
+        "p50_ms": "0.142",
+        "p90_ms": "0.281",
+        "p99_ms": "0.375",
+        "max_ms": "1.834",
+        "mean_ms": "0.153",
+        "over4_ms": "0",
+        "over8_ms": "0",
+        "over16_ms": "0",
+        "over50_ms": "0",
+        "p50_max_per_100": "0.1/2,0.2/0,0.1/0,0.2/0,0.2/0,0.1/0"
+      }
+    },
+    {
+      "variant": "candidate",
+      "run": 3,
+      "gpu_boot_mib": 39.4,
+      "gpu_after_scroll_mib": 48.4,
+      "private_after_scroll_mib": 113.0,
+      "scroll_latency": {
+        "name": "mem_scroll",
+        "kind": "scroll",
+        "samples": "600",
+        "timeouts": "0",
+        "p50_ms": "0.136",
+        "p90_ms": "0.273",
+        "p99_ms": "0.395",
+        "max_ms": "1.691",
+        "mean_ms": "0.149",
+        "over4_ms": "0",
+        "over8_ms": "0",
+        "over16_ms": "0",
+        "over50_ms": "0",
+        "p50_max_per_100": "0.1/2,0.1/0,0.1/0,0.2/0,0.1/0,0.1/0"
+      }
+    }
+  ],
+  "validation": {
+    "foreground_unchanged": true,
+    "quiet_preflight": "All six passed",
+    "unit_tests": 7,
+    "conformance_tests": 7,
+    "debug_layer_tests": 3,
+    "debug_layer_errors": 0,
+    "clippy": "PASS --lib --tests -D warnings"
+  },
+  "conclusion": "No established memory improvement. Candidate GPU and private medians are numerically higher, with overlapping ranges; do not integrate or publish as a performance fix.",
+  "restoration": "Frozen source restored and verified to layout-only digest fefe9850da0aaa2ec4ffe641f547fbc59fc8d3f1a32e73f69083e181042e1443.",
+  "limits": [
+    "Focused phase-only comparison, not a full performance verdict.",
+    "Dedicated GPU allocation varies several MiB between runs.",
+    "Shared-checkout rows in harness manifests are superseded by the exact frozen source and binary manifests."
+  ],
+  "scroll_latency_medians": {
+    "control": {
+      "p50_ms": 0.142,
+      "p99_ms": 0.378,
+      "max_ms": 1.541
+    },
+    "candidate": {
+      "p50_ms": 0.136,
+      "p99_ms": 0.389,
+      "max_ms": 1.691
+    }
+  }
+}

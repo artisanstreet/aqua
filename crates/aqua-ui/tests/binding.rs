@@ -4,6 +4,73 @@ use aqua_ui::element::ui;
 use aqua_ui::tree::{NodeKind, UiTree};
 
 #[test]
+fn paint_refresh_reuses_empty_bindings_and_unbound_metadata() {
+    use aqua_core::Oklch;
+    let runtime = Runtime::new();
+    let mut tree = UiTree::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    let content = |fill| {
+        vec![ui::Box::new()
+            .children((0..100).map(|_| ui::Box::new().fill(fill).build()))
+            .build()]
+    };
+    let ids = view.set_content(&mut tree, content(Oklch::BLACK)).unwrap();
+    assert!(tree.drain_commands() > 0);
+    view.set_content(&mut tree, content(Oklch::WHITE)).unwrap();
+    assert_eq!(tree.drain_commands(), 0);
+    assert_eq!(view.root(), Some(ids[0]));
+    let child = tree.get(ids[0]).unwrap().children[0];
+    tree.get_mut(child).unwrap().debug_selector = Some("temporary".into());
+    view.set_content(&mut tree, content(Oklch::BLACK)).unwrap();
+    assert!(tree.drain_commands() > 0);
+    assert_eq!(tree.get(child).unwrap().debug_selector, None);
+    view.set_content(&mut tree, content(Oklch::WHITE)).unwrap();
+    assert_eq!(tree.drain_commands(), 0);
+}
+
+#[test]
+fn plain_refresh_removes_out_of_band_bound_input() {
+    use aqua_core::CursorIcon;
+    let runtime = Runtime::new();
+    let mut tree = UiTree::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    let plain = || vec![ui::Box::new().build()];
+    let node = view.set_content(&mut tree, plain()).unwrap()[0];
+    tree.drain_commands();
+    tree.set_cursor_bound(node, CursorIcon::Pointer);
+    view.set_content(&mut tree, plain()).unwrap();
+    assert!(tree.drain_commands() > 0);
+    view.set_content(&mut tree, plain()).unwrap();
+    assert_eq!(tree.drain_commands(), 0);
+}
+
+#[test]
+fn multiple_refreshes_before_drain_keep_the_last_typography() {
+    use aqua_core::Oklch;
+    use aqua_ui::style::Style;
+    let runtime = Runtime::new();
+    let mut tree = UiTree::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    let content = |color| {
+        vec![ui::Box::new()
+            .style(Style::new().text_color(color))
+            .child(ui::Text::new("label").build())
+            .build()]
+    };
+    let root = view.set_content(&mut tree, content(Oklch::BLACK)).unwrap()[0];
+    tree.drain_commands();
+    for color in [Oklch::WHITE, Oklch::BLACK] {
+        view.set_content(&mut tree, content(color)).unwrap();
+    }
+    tree.drain_commands();
+    let child = tree.get(root).unwrap().children[0];
+    let NodeKind::Text(text) = &tree.get(child).unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(text.color, Oklch::BLACK);
+}
+
+#[test]
 fn plain_nodes_do_not_allocate_reactive_scopes_across_refreshes() {
     let runtime = Runtime::new();
     let mut tree = UiTree::new();

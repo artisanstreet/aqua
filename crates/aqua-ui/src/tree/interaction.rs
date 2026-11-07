@@ -123,6 +123,35 @@ impl InteractionStyles {
 }
 
 impl super::UiTree {
+    pub(crate) fn reusable_plain_bindings(&self, node: aqua_core::NodeId) -> bool {
+        self.pending_commands() == 0 && self.get(node).is_some_and(|record| record.plain_bindings)
+    }
+
+    pub(crate) fn queue_typography_color(
+        &self,
+        node: aqua_core::NodeId,
+        own: Option<aqua_core::Oklch>,
+        own_gpui: Option<Option<aqua_core::GpuiHsla>>,
+        own_source: Option<Option<aqua_core::GpuiTextColor>>,
+    ) {
+        let unchanged = self.pending_commands() == 0
+            && self.interaction.nodes.get(&node).is_some_and(|entry| {
+                entry.color_registered
+                    && entry.own_color == own
+                    && entry.own_gpui_color == own_gpui
+                    && entry.own_source_color == own_source
+            });
+        if !unchanged {
+            self.command_sink()
+                .interaction(InteractionCommand::TypographyColor {
+                    node,
+                    own,
+                    own_gpui,
+                    own_source,
+                });
+        }
+    }
+
     pub fn apply_interaction_style(
         &mut self,
         node: aqua_core::NodeId,
@@ -509,6 +538,9 @@ impl super::UiTree {
                 paint,
                 styled,
             } => {
+                if styled {
+                    self.invalidate_bindings(node);
+                }
                 let (layout, paint) = (*layout, *paint);
                 if self.get(node).is_some() {
                     let modality = store.modality;
@@ -563,6 +595,7 @@ impl super::UiTree {
                 }
             }
             InteractionCommand::Style { node, kind, style } => {
+                self.invalidate_bindings(node);
                 let current = self
                     .get(node)
                     .and_then(|record| self.paint(node).map(|paint| (record.style.clone(), paint)));
@@ -621,6 +654,9 @@ impl super::UiTree {
                 own_gpui,
                 own_source,
             } => {
+                if own.is_some() || own_gpui.is_some() || own_source.is_some() {
+                    self.invalidate_bindings(node);
+                }
                 if let Some(entry) = store.nodes.get_mut(&node) {
                     entry.color_registered = true;
                     entry.own_color = own;

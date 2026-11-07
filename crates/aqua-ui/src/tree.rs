@@ -954,6 +954,7 @@ impl Default for NodeSemantics {
 
 /// One retained node.
 pub struct NodeRecord {
+    pub(crate) plain_bindings: bool,
     pub control: Option<Box<crate::controls::Control>>,
     /// Node kind + properties.
     pub kind: NodeKind,
@@ -1411,6 +1412,12 @@ impl UiTree {
         self.nodes.get(id.raw())
     }
 
+    pub(crate) fn invalidate_bindings(&mut self, id: NodeId) {
+        if let Some(record) = self.nodes.get_mut(id.raw()) {
+            record.plain_bindings = false;
+        }
+    }
+
     /// Exclusive node access; marks paint dirty. Callers that change layout
     /// inputs must additionally call [`UiTree::mark_layout_dirty`].
     /// Text content edits MUST go through [`UiTree::set_text`] or the
@@ -1421,7 +1428,10 @@ impl UiTree {
             return None;
         }
         self.touch_paint(id);
-        self.nodes.get_mut(id.raw())
+        self.nodes.get_mut(id.raw()).map(|record| {
+            record.plain_bindings = false;
+            record
+        })
     }
 
     /// Currently focused node.
@@ -1665,6 +1675,7 @@ impl UiTree {
         callback: ActionCallback,
     ) {
         if self.set_action_callback(node, kind, callback) {
+            self.invalidate_bindings(node);
             self.bound_actions.insert((node.raw(), kind));
         }
     }
@@ -2519,6 +2530,7 @@ impl UiTree {
         // Canvas painters referenced by id stay registered across rebuilds;
         // only node records are fresh.
         let id = NodeId::from_raw(self.nodes.insert(NodeRecord {
+            plain_bindings: false,
             control,
             kind,
             style,
@@ -2877,6 +2889,7 @@ impl UiTree {
             },
         );
         if let Some(rec) = self.nodes.get_mut(id.raw()) {
+            rec.plain_bindings = false;
             if let NodeKind::Canvas(ref mut c) = rec.kind {
                 c.painter = Some(pid);
             }
@@ -2908,6 +2921,7 @@ impl UiTree {
             return false;
         }
         self.prepaints.insert(id.raw(), callback);
+        self.invalidate_bindings(id);
         self.touch_paint(id);
         true
     }
@@ -2924,6 +2938,7 @@ impl UiTree {
             return false;
         }
         self.observers.insert(id.raw(), callback);
+        self.invalidate_bindings(id);
         self.observer_order.get_mut().take();
         self.observed_version.set(None);
         true

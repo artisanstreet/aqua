@@ -1,0 +1,9 @@
+probe-launch unix_ms=1794031566306 pid=15624
+probe-startup window_ms=54 first_content_ms=511 nondominant=0.161 rich_content_ms=511
+probe-cpu name=boot unix_ms=1794031579675 cpu_ms=219 user_ms=109 private_mb=90.7 working_set_mb=107.4 peak_working_set_mb=111.6 threads=30 handles=1050
+probe-open thread=bench-large unix_ms=1794031580374 since_launch_ms=14068 since_click_ms=206
+probe-cpu name=opened unix_ms=1794031583089 cpu_ms=266 user_ms=125 private_mb=107.1 working_set_mb=123.2 peak_working_set_mb=123.2 threads=31 handles=1051
+probe-gpumem name=opened dedicated_mb=43.9
+pid=15624 dpi=120 working_set_mb=123 private_mb=107
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---

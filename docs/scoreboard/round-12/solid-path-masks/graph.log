@@ -1,0 +1,17 @@
+
+running 13 tests
+test color_matrix_filters_reject_non_finite_matrices ... ok
+test compute_and_custom_passes_plan_with_unordered_access_and_declared_inputs ... ok
+test dependent_draws_do_not_cross_a_reader ... ok
+test filters_reading_and_writing_the_same_texture_are_rejected ... ok
+test glyph_passes_bind_the_atlas_and_survive_validation ... ok
+test independent_draws_hoist_into_the_earlier_batch ... ok
+test malformed_compute_and_custom_passes_are_rejected ... ok
+test overlapping_draws_to_one_target_keep_their_paint_order ... ok
+test overlapping_text_and_exact_coverage_keep_their_draw_order ... ok
+test oversized_transients_are_rejected_against_the_limits ... ok
+test passes_feeding_nothing_are_culled ... ok
+test spatially_disjoint_draws_to_one_target_reorder_into_shared_batches ... ok
+test transients_with_disjoint_lifetimes_share_heap_and_overlapping_ones_do_not ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s

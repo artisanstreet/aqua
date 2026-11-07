@@ -1,0 +1,22 @@
+{
+  "purpose": "Single pilot of original declaration-rebuilding workload; not a matched GPUI comparison.",
+  "source_commit": "9059e95a1149d7370bc5559f67a7e2e38b5a655b",
+  "exe_sha256": "2ea1748bdb0cd1d35fe087a26cef98b803dc99cc512104cf3b924e35670dcca2",
+  "arguments": "--size 1280x800",
+  "retained": false,
+  "native_rgb": false,
+  "logical_size": [
+    1280,
+    800
+  ],
+  "dpi": 120,
+  "stats": "off",
+  "placement": "bottom, no activation",
+  "reported_windows": [
+    "pixel-storm first_frame_ms=19530.7 boxes=1024000 mode=Animated retained=false native_rgb=false grid=1280x800",
+    "pixel-storm window=0 seconds=10.1 frames=18 p50_ms=328.67 p99_ms=4360.52 max_ms=4360.52",
+    "pixel-storm window=1 seconds=10.1 frames=33 p50_ms=301.62 p99_ms=325.89 max_ms=325.89"
+  ],
+  "closure_median_ms_t_at_least_20": 193.85,
+  "closure_calls_t_at_least_20": 66
+}

@@ -1,0 +1,10 @@
+
+running 1 test
+test srgb8_transfer_report ... srgb8-transfer sample=1 colors=1024000 ms=30.596 digest=0fddab6575be08e0
+srgb8-transfer sample=2 colors=1024000 ms=33.098 digest=0fddab6575be08e0
+srgb8-transfer sample=3 colors=1024000 ms=27.073 digest=0fddab6575be08e0
+srgb8-transfer sample=4 colors=1024000 ms=26.013 digest=0fddab6575be08e0
+srgb8-transfer sample=5 colors=1024000 ms=21.624 digest=0fddab6575be08e0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.15s

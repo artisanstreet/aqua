@@ -1,0 +1,164 @@
+{
+  "scope": "Component CPU diagnostics, not native Pixel Storm presented-frame results. No current end-to-end speedup claim.",
+  "trials": {
+    "child_growth": {
+      "control": [
+        {
+          "file": "control-1.log",
+          "samples": 5,
+          "median_ms": 130.039
+        },
+        {
+          "file": "control-2.log",
+          "samples": 5,
+          "median_ms": 124.443
+        },
+        {
+          "file": "control-3.log",
+          "samples": 5,
+          "median_ms": 124.105
+        }
+      ],
+      "candidate": [
+        {
+          "file": "candidate-1.log",
+          "samples": 5,
+          "median_ms": 178.652
+        },
+        {
+          "file": "candidate-2.log",
+          "samples": 5,
+          "median_ms": 172.912
+        },
+        {
+          "file": "candidate-3.log",
+          "samples": 5,
+          "median_ms": 168.877
+        }
+      ]
+    },
+    "style_inline": {
+      "control": [
+        {
+          "file": "control-1.log",
+          "samples": 5,
+          "median_ms": 102.05
+        },
+        {
+          "file": "control-2.log",
+          "samples": 5,
+          "median_ms": 101.368
+        },
+        {
+          "file": "control-3.log",
+          "samples": 5,
+          "median_ms": 102.589
+        }
+      ],
+      "candidate": [
+        {
+          "file": "candidate-1.log",
+          "samples": 5,
+          "median_ms": 101.341
+        },
+        {
+          "file": "candidate-2.log",
+          "samples": 5,
+          "median_ms": 99.949
+        },
+        {
+          "file": "candidate-3.log",
+          "samples": 5,
+          "median_ms": 100.896
+        }
+      ]
+    },
+    "full_style_inline": {
+      "control": [
+        {
+          "file": "control-1.log",
+          "samples": 5,
+          "median_ms": 108.19
+        },
+        {
+          "file": "control-2.log",
+          "samples": 5,
+          "median_ms": 104.807
+        },
+        {
+          "file": "control-3.log",
+          "samples": 5,
+          "median_ms": 104.003
+        }
+      ],
+      "candidate": [
+        {
+          "file": "candidate-1.log",
+          "samples": 5,
+          "median_ms": 105.105
+        },
+        {
+          "file": "candidate-2.log",
+          "samples": 5,
+          "median_ms": 108.761
+        },
+        {
+          "file": "candidate-3.log",
+          "samples": 5,
+          "median_ms": 103.41
+        }
+      ]
+    },
+    "transfer_kernel": {
+      "control": [
+        {
+          "file": "control-1.log",
+          "samples": 5,
+          "median_ms": 27.073
+        },
+        {
+          "file": "control-2.log",
+          "samples": 5,
+          "median_ms": 23.305
+        },
+        {
+          "file": "control-3.log",
+          "samples": 5,
+          "median_ms": 23.381
+        }
+      ],
+      "candidate": [
+        {
+          "file": "candidate-1.log",
+          "samples": 5,
+          "median_ms": 4.039
+        },
+        {
+          "file": "candidate-2.log",
+          "samples": 5,
+          "median_ms": 4.307
+        },
+        {
+          "file": "candidate-3.log",
+          "samples": 5,
+          "median_ms": 4.102
+        }
+      ]
+    }
+  },
+  "decisions": {
+    "child_growth": "Rejected: lower allocated volume, consistently slower construction.",
+    "style_inline": "Rejected: no material repeatable improvement.",
+    "full_style_inline": "Rejected: no material repeatable improvement.",
+    "box_inline": "Rejected pilot: no convincing gain.",
+    "compact_builder": "Rejected pilot: slower construction.",
+    "transfer_kernel": "Candidate: unchanged API and scalar-result bits, faster isolated channel transfer. Application gain unmeasured."
+  },
+  "profiling_limits": [
+    "WSL user-space hardware counters do not establish Windows scheduler behavior.",
+    "perf lacks libdw/libunwind support; available leaf addresses were resolved using ELF section offsets and addr2line. Full stack attribution is unavailable.",
+    "context-switches:u=0 is not evidence of zero context switches.",
+    "moved_capacity_bytes records preserved allocation capacity when an address changes, not measured physical memcpy traffic.",
+    "The isolated declaration report drops its previous tree between samples and excludes retained runtime/scene state; it is not an end-to-end benchmark."
+  ]
+}

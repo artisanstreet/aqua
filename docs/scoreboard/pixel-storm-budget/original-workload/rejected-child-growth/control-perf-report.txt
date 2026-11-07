@@ -1,0 +1,26 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 944  of event 'cycles:u'
+# Event count (approx.): 3542772194
+#
+# Overhead  Command          Shared Object              Symbol
+# ........  ...............  .........................  ......................
+#
+    16.42%  pixel_storm_ori  original-children-control  [.] 0x00000000000739cb
+    11.63%  pixel_storm_ori  libc.so.6                  [.] 0x00000000001a1653
+     7.61%  pixel_storm_ori  original-children-control  [.] 0x00000000000cbcb9
+     4.00%  pixel_storm_ori  original-children-control  [.] 0x00000000000683b7
+     3.16%  pixel_storm_ori  original-children-control  [.] 0x00000000000c85e3
+     1.59%  pixel_storm_ori  libc.so.6                  [.] 0x00000000001a19d2
+     1.54%  pixel_storm_ori  libc.so.6                  [.] 0x00000000001a1640
+     1.35%  pixel_storm_ori  original-children-control  [.] 0x0000000000068eb2
+     1.34%  pixel_storm_ori  original-children-control  [.] 0x00000000000686b3
+     1.00%  pixel_storm_ori  original-children-control  [.] 0x0000000000064a19
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

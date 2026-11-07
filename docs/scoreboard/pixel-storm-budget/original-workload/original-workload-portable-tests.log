@@ -1,0 +1,1371 @@
+   Compiling aqua-graph v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-graph)
+   Compiling aqua-motion v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-motion)
+   Compiling aqua-protocol v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-protocol)
+   Compiling aqua-media v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-media)
+   Compiling aqua-text v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-text)
+   Compiling aqua-style v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-style)
+   Compiling aqua-layout v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-layout)
+warning: field `0` is never read
+ --> crates/aqua-reactive/src/read_check.rs:8:12
+  |
+8 |     Render(Vec<NodeId>),
+  |     ------ ^^^^^^^^^^^
+  |     |
+  |     field in this variant
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+  |
+8 -     Render(Vec<NodeId>),
+8 +     Render(()),
+  |
+
+warning: `aqua-reactive` (lib) generated 1 warning
+   Compiling aqua-ui v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-ui)
+   Compiling aqua-scene v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-scene)
+   Compiling aqua-runtime v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-runtime)
+   Compiling aqua-kernels v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-kernels)
+   Compiling aqua-gpu-ref v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-gpu-ref)
+   Compiling aqua-transport v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-transport)
+   Compiling aqua-core v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-core)
+    Finished `release` profile [optimized] target(s) in 2m 17s
+     Running unittests src/lib.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/aqua_core-3906b787915ee8fb)
+
+running 38 tests
+test arena::tests::clear_invalidates_everything ... ok
+test arena::tests::generation_bump_never_aliases_on_wrap ... ok
+test arena::tests::handles_survive_growth_across_chunks_and_reuse_in_slot_order ... ok
+test arena::tests::insert_get_remove ... ok
+test arena::tests::invalid_handle_never_resolves ... ok
+test arena::tests::iter_covers_live_only ... ok
+test arena::tests::out_of_range_is_distinct_from_stale ... ok
+test arena::tests::removed_slot_reuse_does_not_alias ... ok
+test color::memo::tests::exact_conversion_survives_collisions_and_preserves_alpha ... ok
+test color::memo::tests::high_volume_growth_is_bounded_and_never_returns_a_colliding_value ... ok
+test color::memo::tests::repeated_values_are_computed_once_and_clear_discards_them ... ok
+test color::tests::const_color_construction_normalizes_hue_and_alpha ... ok
+test color::tests::hex_malformed_returns_none_never_panics ... ok
+test color::tests::hex_roundtrip_primary_colors ... ok
+test color::tests::hex_serialization_roundtrip ... ok
+test color::tests::hsl_convention_matches_css_primaries ... ok
+test color::tests::lerp_takes_short_hue_path ... ok
+test color::tests::neutral_has_near_zero_chroma ... ok
+test color::tests::shorthand_alpha_and_full_alpha ... ok
+test color::tests::translucent_output_is_premultiplied ... ok
+test event::tests::cancel_carries_contact_only ... ok
+test event::tests::modifier_composition ... ok
+test geometry::tests::composition_order ... ok
+test color::memo::tests::batch_conversion_appends_exact_colors_and_allows_reentrant_iterators ... ok
+test geometry::tests::corner_radii_clamp ... ok
+test geometry::tests::intersect_union_contains ... ok
+test geometry::tests::inverted_edges_yield_empty ... ok
+test geometry::tests::transform_bounding_box ... ok
+test hash::tests::byte_slices_of_different_length_differ ... ok
+test hash::tests::nearby_keys_spread_over_low_and_high_bits ... ok
+test id::tests::first_generation_handles_are_valid ... ok
+test id::tests::invalid_handle_never_valid ... ok
+test id::tests::typed_ids_do_not_compare_across_families ... ok
+test scene::tests::layer_keys_carry_full_generation_and_namespace ... ok
+test scene::tests::shadow_expands_bounds ... ok
+test scene::tests::layer_generation_overflow_fails_closed - should panic ... ok
+test scene::tests::stack_ops_cover_nothing ... ok
+test semantic::tests::heading_preserves_level ... ok
+
+test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/color.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/color-495da6cf5a4bd275)
+
+running 3 tests
+test gpui_hsla_conversion_retains_float_alpha_and_fractional_channels ... ok
+test srgb8_channels_match_the_scalar_transfer_curve_bit_for_bit ... ok
+test srgb8_transfer_report ... ignored
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/geometry.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/geometry-a2a34c5298170ffd)
+
+running 1 test
+test device_snapping_matches_gpui_ties_and_strokes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gpui_mesh.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/gpui_mesh-6bb5fd1a170e91aa)
+
+running 1 test
+test triangle_soup_packs_normals_and_color_and_discards_incomplete_triangles ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/image.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/image-b40b2af5c751b011)
+
+running 1 test
+test fitting_crops_preserves_aspect_and_resolves_alignment ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scene.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/scene-77eff7e5424c14b0)
+
+running 2 tests
+test shadow_bounds_include_offset_spread_and_gaussian_tail ... ok
+test native_fill_batches_keep_live_clones_independent_across_threads ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/vector.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/vector-761c4b0c0ead8439)
+
+running 1 test
+test gpui_path_places_local_geometry_before_element_and_device_scaling ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/aqua_gpu_ref-395c53de8a08d653)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/analytic.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/analytic-5fa707306ac6045a)
+
+running 7 tests
+test gradient_interpolates_lightness_in_oklab_and_encodes_srgb ... ok
+test gradient_alpha_is_interpolated_straight_then_premultiplied ... ok
+test hard_shadow_is_a_signed_distance_edge_and_zero_spread_edge_is_half_coverage ... ok
+test rounded_shadow_matches_dense_two_dimensional_integration ... ok
+test shadow_alpha_never_exceeds_the_color_alpha_and_decays_monotonically_outside ... ok
+test square_shadow_matches_the_separable_erf_closed_form ... ok
+test large_shadows_render_a_1440p_frame_quickly_and_match_dense_integration ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.11s
+
+     Running tests/blur.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/blur-194df53ab7ac4180)
+
+running 5 tests
+test backdrop_blur_only_touches_its_bounds ... ok
+test blur_of_a_uniform_backdrop_is_uniform ... ok
+test blurred_impulse_is_symmetric_and_conserves_most_of_its_mass ... ok
+test level_count_changes_do_not_step_the_output ... ok
+test blur_width_grows_smoothly_and_monotonically_with_the_radius ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/detection.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/detection-b7bf7ec8e32463f4)
+
+running 6 tests
+test an_honest_backend_passes_with_the_default_tolerance ... ok
+test a_backend_that_ignores_group_opacity_fails_the_isolation_cases ... ok
+test exact_tolerance_flags_a_single_level_error ... ok
+test edge_pixels_get_the_wider_tolerance_but_not_an_unbounded_one ... ok
+test unsupported_operations_fail_unless_explicitly_tolerated ... ok
+test small_interior_noise_is_tolerated_and_large_noise_is_caught ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.72s
+
+     Running tests/effects.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/effects-acc7ac9c2af39048)
+
+running 7 tests
+test color_matrix_grayscale_equalizes_channels ... ok
+test backdrop_blur_replaces_translucent_backdrop_rather_than_stacking ... ok
+test explicit_clear_yields_the_clear_colour_when_nothing_draws ... ok
+test custom_passes_run_registered_kernels_and_refuse_unknown_ones ... ok
+test plans_report_the_features_they_need ... ok
+test rounded_clip_removes_the_corner_and_keeps_the_middle ... ok
+test large_rounded_clip_has_no_seams_and_rounds_every_corner ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/oracle.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/oracle-3cc8912156c277fc)
+
+running 3 tests
+test group_opacity_composites_isolated_layer_not_each_child ... ok
+test exact_mask_alpha_ignores_the_text_contrast_curve ... ok
+test reference_matches_itself_on_every_case ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+
+     Running tests/realistic.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/realistic-d5afb741aa71a34f)
+
+running 5 tests
+test blur_over_text_flattens_the_glyphs_inside_and_keeps_them_outside ... ok
+test distinct_corner_radii_cut_each_corner_differently ... ok
+test glass_over_text_keeps_text_legible_above_the_pane ... ok
+test top_rounded_chip_has_square_bottom_corners ... ok
+test shadow_is_clipped_to_the_rounded_clip ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/sprites.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/sprites-dacd8e71fb153ef6)
+
+running 7 tests
+test bilinear_edges_clamp_to_the_sub_rectangle_instead_of_bleeding_from_neighbours ... ok
+test glyph_clip_and_opacity_scale_the_coverage ... ok
+test glyph_pixels_take_their_coverage_from_the_matching_atlas_texel ... ok
+test glyph_sampling_clamps_inside_its_atlas_rectangle ... ok
+test image_corners_are_rounded_and_opacity_applies ... ok
+test one_to_one_bilinear_sampling_returns_texels_exactly_at_pixel_centres ... ok
+test textures_reject_writes_outside_their_extent_and_unknown_handles ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/suite.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/suite-24b79fbf2d40db54)
+
+running 1 test
+test reference_passes_its_own_suite_exactly ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.96s
+
+     Running tests/transforms.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/transforms-ff6933a400a33dba)
+
+running 6 tests
+test glyph_alpha_follows_the_plan_tone_curve_in_encoded_space ... ok
+test a_quarter_turn_equals_the_swapped_rectangle ... ok
+test rounded_corners_and_borders_follow_the_rotation ... ok
+test shear_and_rotation_preserve_area_and_scale_multiplies_it ... ok
+test slug_counter_is_empty_and_the_stroke_is_solid ... ok
+test slug_ring_ink_matches_its_analytic_area_at_every_scale_and_placement ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/aqua_graph-962e8b0b43a82b2c)
+
+running 5 tests
+test tone::tests::alpha_keeps_endpoints_and_stays_in_range ... ok
+test tone::tests::exact_curve_is_identity ... ok
+test tone::tests::light_text_is_boosted_more_than_dark_text ... ok
+test tone::tests::luminance_of_premultiplied_color_ignores_alpha ... ok
+test tone::tests::tables_keep_endpoints_and_stay_monotonic ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/graph.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/graph-d23aa66be7b4430f)
+
+running 13 tests
+test color_matrix_filters_reject_non_finite_matrices ... ok
+test compute_and_custom_passes_plan_with_unordered_access_and_declared_inputs ... ok
+test dependent_draws_do_not_cross_a_reader ... ok
+test filters_reading_and_writing_the_same_texture_are_rejected ... ok
+test glyph_passes_bind_the_atlas_and_survive_validation ... ok
+test independent_draws_hoist_into_the_earlier_batch ... ok
+test malformed_compute_and_custom_passes_are_rejected ... ok
+test overlapping_draws_to_one_target_keep_their_paint_order ... ok
+test overlapping_text_and_exact_coverage_keep_their_draw_order ... ok
+test oversized_transients_are_rejected_against_the_limits ... ok
+test passes_feeding_nothing_are_culled ... ok
+test spatially_disjoint_draws_to_one_target_reorder_into_shared_batches ... ok
+test transients_with_disjoint_lifetimes_share_heap_and_overlapping_ones_do_not ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/linear.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/linear-304c2f13c1e600d9)
+
+running 4 tests
+test inverse_undoes_rotation_and_skew ... ok
+test pivot_rotation_moves_the_center ... ok
+test quarter_turn_cover_swaps_extents_about_the_center ... ok
+test singular_matrices_have_no_inverse ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/planner.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/planner-a5fbb21e2af59480)
+
+running 30 tests
+test backdrop_blur_reads_the_parent_directly_and_composites_the_half_resolution_level ... ok
+test aliased_reuse_carries_an_alias_barrier_and_a_clear ... ok
+test backdrop_blur_replaces_instead_of_blending ... ok
+test blur_depth_crossfades_into_the_next_level_before_each_octave_boundary ... ok
+test blur_depth_weight_never_decreases_inside_an_octave ... ok
+test clips_intersect_into_instances ... ok
+test colliding_aliases_are_rejected ... ok
+test color_matrix_effect_filters_a_bounded_layer ... ok
+test consecutive_quads_share_one_pass ... ok
+test content_blur_renders_children_to_a_layer_and_blurs_only_the_region ... ok
+test drawing_plans_clear_through_the_first_draw_instead_of_an_extra_pass ... ok
+test groups_of_disjoint_children_fold_opacity_into_instances ... ok
+test groups_of_overlapping_children_get_a_layer ... ok
+test invisible_work_is_culled ... ok
+test large_rounded_clips_layer_only_their_corners ... ok
+test layer_content_is_drawn_in_layer_local_coordinates ... ok
+test layers_covering_the_target_keep_the_fullscreen_composite ... ok
+test mismatched_effect_pops_are_rejected ... ok
+test mixed_depth_blends_two_pyramids_with_replace_instances ... ok
+test opaque_groups_draw_directly_without_a_layer ... ok
+test plans_that_never_touch_the_surface_still_clear_it ... ok
+test rounded_clip_with_no_radius_is_a_plain_clip ... ok
+test rounded_clips_isolate_their_children_and_clip_the_composite ... ok
+test shallow_backdrop_blur_keeps_the_full_resolution_output ... ok
+test sibling_layers_alias_and_nested_layers_do_not ... ok
+test single_depths_keep_the_effective_strength_equal_to_the_radius ... ok
+test surface_ends_presentable_after_render_target_use ... ok
+test unbalanced_scopes_are_rejected ... ok
+test validation_catches_broken_plans ... ok
+test zero_radius_blur_draws_nothing_and_content_blur_passes_through ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/slug_paint.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/slug_paint-5c9390572d32068b)
+
+running 5 tests
+test consecutive_slug_runs_merge_into_one_pass_reading_the_store ... ok
+test disjoint_children_fold_the_group_opacity_into_the_glyphs ... ok
+test only_quads_and_images_take_a_linear_transform ... ok
+test overlapping_children_draw_into_a_layer_with_local_origins ... ok
+test rotated_quads_are_culled_by_their_rotated_footprint ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/validate_allocation.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/validate_allocation-61f0e729544de4ff)
+
+running 1 test
+test validating_a_layered_plan_allocates_nothing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/aqua_runtime-926b4f48b60aec1a)
+
+running 20 tests
+test scheduler::tests::a_later_deadline_never_postpones_an_immediate_animation_frame ... ok
+test scheduler::tests::animation_deadline_drives_wakeup ... ok
+test scheduler::tests::animation_frames_wait_for_the_previous_present ... ok
+test scheduler::tests::animation_wakeup_fuses_gate_and_deadline ... ok
+test scheduler::tests::backpressure_defers_without_queue_growth ... ok
+test scheduler::tests::blocked_window_does_not_starve_others ... ok
+test scheduler::tests::blocked_window_sleeps_until_completion ... ok
+test scheduler::tests::damage_with_future_animation_deadline_draws_now ... ok
+test scheduler::tests::deadline_supersede_keeps_earliest ... ok
+test scheduler::tests::fps_target_accepts_any_nonzero_clears_to_unpaced ... ok
+test scheduler::tests::input_frames_do_not_wait_for_a_present ... ok
+test scheduler::tests::multiwindow_independent ... ok
+test scheduler::tests::no_idle_ticks ... ok
+test scheduler::tests::overload_recovers_to_idle ... ok
+test scheduler::tests::pacing_enforced_then_released_by_runtime_target_change ... ok
+test scheduler::tests::presented_without_produce_saturates ... ok
+test scheduler::tests::reasons_merge_and_coalesce ... ok
+test scheduler::tests::remove_window_during_flight_no_leak ... ok
+test scheduler::tests::resize_storm_coalesces ... ok
+test runtime::style_decoration_tests::caret_respects_own_and_ancestor_style_opacity ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/access.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/access-e81fb661191dea7d)
+
+running 6 tests
+test accessible_empty_editor_keeps_placeholder_out_of_text_ranges ... ok
+test accessible_multiline_text_exposes_shaped_graphemes_and_byte_selections ... ok
+test accessible_readonly_selection_updates_the_logical_copy_source ... ok
+test password_fields_do_not_expose_text_runs_or_accept_byte_selection ... ok
+test transformed_accessibility_bounds_and_character_geometry_follow_visual_positions ... ok
+test accessibility_does_not_truncate_oversized_graphemes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+
+     Running tests/accessibility_activation.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/accessibility_activation-02e5cf40742f1288)
+
+running 3 tests
+test accessibility_press_falls_back_to_existing_activation ... ok
+test accessibility_activation_is_independent_and_follows_keyed_lifecycle ... ok
+test expanding_a_disclosure_button_presses_it_only_when_the_state_changes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/canvas_visibility.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/canvas_visibility-828be35ee3b0e694)
+
+running 1 test
+test visibility_delivery_follows_emission_and_viewport_invalidation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/collection_follow.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/collection_follow-cf7cef5922ea3afa)
+
+running 1 test
+test keyed_runtime_access_reports_real_follow_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/collection_scroll_build.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/collection_scroll_build-a431c08e602de7ec)
+
+running 1 test
+test collection_scroll_build_report ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/declarative_motion.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/declarative_motion-65f1b56504b95151)
+
+running 12 tests
+test a_returning_key_slides_back_from_where_it_was_presented ... ok
+test arriving_keyed_rows_slide_in_from_their_offset_and_first_mount_does_not ... ok
+test bindings_are_sent_as_scene_nodes_not_tree_nodes ... ok
+test arriving_rows_fade_in_and_first_mount_does_not ... ok
+test exiting_keyed_rows_slide_out_and_leave_only_after_both_tracks_settle ... ok
+test exiting_rows_stay_in_the_scene_until_their_fade_settles ... ok
+test fill_changes_are_interpolated_by_the_render_side_from_one_retarget ... ok
+test frame_animation_moves_only_the_edge_that_moved_on_the_render_side ... ok
+test popups_fade_in_and_stay_mounted_until_their_exit_settles ... ok
+test popups_without_presence_close_at_once ... ok
+test rows_with_presence_fade_in_even_when_the_first_frame_had_none ... ok
+test translate_and_text_color_changes_are_presented_by_the_render_side ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/edge_in_scroll.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/edge_in_scroll-918344530f368ab7)
+
+running 2 tests
+test an_edge_that_moves_inside_a_scrolled_ancestor_animates_in_scrolled_coordinates ... ok
+test scrolling_during_an_edge_animation_keeps_the_block_continuous_and_lands_exactly ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/frame-work.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/frame_work-fc2df91d807cbe84)
+
+running 9 tests
+test changing_selection_preserves_base_scene_ids_and_paints_behind_glyphs ... ok
+test animation_deadlines_and_reduced_motion_preserve_unchanged_tree_cache ... ok
+test control_word_and_document_selection_reuse_the_entire_transcript_scene ... ok
+test loading_a_font_invalidates_idle_text_layout_and_run_revisions ... ok
+test idle_transcript_frames_reuse_the_scene_without_inspecting_text ... ok
+test moving_the_composer_caret_does_not_reshape_the_transcript ... ok
+test streaming_a_message_shapes_only_its_changed_source ... ok
+test zz_probe ... ok
+test viewport_and_scale_changes_invalidate_cached_geometry_and_runs ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running tests/glide.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/glide-410aa3c5a15bfb9f)
+
+running 2 tests
+test whole_line_deltas_are_notches_and_fractions_are_precise ... ok
+test the_glide_kind_is_a_critically_damped_spring_that_never_overshoots ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gpui_line_height.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/gpui_line_height-f374c989c1c89287)
+
+running 1 test
+test profile_applies_to_measurement_and_retained_shaping ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/gpui_text_background.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/gpui_text_background-df3f78eb66bd424e)
+
+running 2 tests
+test source_background_without_encoded_profile_is_rejected ... ok
+test wrapped_backgrounds_preserve_colors_and_exclude_selection ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/gpui_text_opacity.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/gpui_text_opacity-9bba0dcbbbd9a1f8)
+
+running 1 test
+test opacity_updates_preserve_shaping_and_selection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gpui_wrap.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/gpui_wrap-5a111d7e4a82eef1)
+
+running 1 test
+test gpui_wrap_measurement_and_retained_carets_share_visual_lines ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/input_outcome.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/input_outcome-5d4c68e12d881175)
+
+running 1 test
+test handled_input_and_redraw_are_independent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/keyed_focus.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/keyed_focus-8276455c81808f70)
+
+running 2 tests
+test duplicate_live_keys_or_selectors_do_not_choose_an_arbitrary_target ... ok
+test focus_and_selector_follow_live_keyed_nodes_through_refresh_and_removal ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/popup_close_layout.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/popup_close_layout-08fabf624701d901)
+
+running 2 tests
+test layout_survives_the_frame_after_a_popup_closes ... ok
+test dropdown_commit_and_dismiss_leave_a_layoutable_tree ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/popup_pointer_anchor.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/popup_pointer_anchor-f78c91748902af74)
+
+running 1 test
+test pointer_anchor_updates_survive_layout_and_closed_handles ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/popup_presence.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/popup_presence-d72c16c6c2e14000)
+
+running 3 tests
+test a_closing_popup_leaves_the_accessibility_tree_at_once ... ok
+test closing_slides_and_fades_out_then_removes_the_popup ... ok
+test opening_slides_and_fades_in_together_and_lands_exactly ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/render.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/render-808ad05dde3df208)
+
+running 4 tests
+test emitted_fill_deltas_preserve_render_identity_and_stale_handles_fail_closed ... ok
+test fill_deltas_update_the_base_under_an_active_motion_override ... ok
+test bulk_ui_fills_reuse_scene_and_text_then_fall_back_for_geometry_changes ... ok
+test native_ui_batches_reach_render_nodes_without_rebuilding_geometry ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/render_motion.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/render_motion-9f4c9656747e6588)
+
+running 10 tests
+test a_second_notch_mid_glide_continues_from_the_presented_position ... ok
+test a_wheel_notch_inside_the_overscan_window_patches_one_scene_item ... ok
+test a_wheel_past_the_overscan_window_re_emits_the_scene ... ok
+test closing_a_popup_removes_its_track_and_group ... ok
+test popup_fade_runs_on_the_render_side_and_completes_through_the_app ... ok
+test mounting_starts_no_motion ... ok
+test popup_first_frame_shows_the_starting_value_not_a_flash_of_the_target ... ok
+test reduced_motion_scrolls_without_a_glide ... ok
+test removing_the_scroll_node_disposes_its_track ... ok
+test wheel_moves_the_logical_offset_at_once_and_the_render_side_glides_alone ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/render_side.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/render_side-13cc28b0746549dc)
+
+running 10 tests
+test a_viewport_change_alone_requests_a_frame_and_an_unchanged_one_does_not ... ok
+test app_updates_to_an_animating_node_keep_the_presented_override ... ok
+test device_recovery_forces_a_full_resubmission ... ok
+test bound_fill_animates_on_the_render_side_while_the_app_scene_is_untouched ... ok
+test quiet_steps_submit_no_frame_and_report_idle ... ok
+test removing_the_track_restores_the_authored_item ... ok
+test scene_diff_mirrors_the_app_scene_in_order ... ok
+test replaying_the_same_inputs_reproduces_outputs_and_presented_scenes_exactly ... ok
+test wake_follows_the_tracks_through_start_cancel_and_settle ... ok
+test stepping_in_one_batch_equals_stepping_frame_by_frame_at_the_same_times ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/routed-input.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/routed_input-98483a0f6969210f)
+
+running 12 tests
+test blur_cancels_preedit_and_modifiers_even_when_focus_callback_prevents_defaults ... ok
+test autocomplete_uses_routed_editor_snapshot_and_undo_preserves_original_caret ... ok
+test editable_mention_spans_expose_transformed_inline_cells_and_preserve_edit_history ... ok
+test overlay_routing_preserves_original_contact_and_button_without_duplicate_callbacks ... ok
+test platform_drop_position_overrides_stale_hover_position ... ok
+test platform_file_drop_reaches_public_typed_listener_at_hovered_target ... ok
+test prevented_custom_key_does_not_run_editable_default_twice ... ok
+test popup_outside_dismissal_swallows_underlying_custom_pointer_actions ... ok
+test prompt_intercepts_enter_to_submit_and_shift_enter_keeps_default_line_break ... ok
+test public_text_links_route_id_range_and_modifiers_without_firing_on_drag ... ok
+test styled_text_emits_retained_underlines_and_strikes_in_the_scene ... ok
+test transformed_editable_pointer_and_ime_anchor_share_caret_geometry ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/runtime.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/runtime-ef1a5a9566f9b0d5)
+
+running 32 tests
+test a_content_change_sends_only_changed_items_without_reordering ... ok
+test a_due_wake_requests_an_animation_frame_on_tick ... ok
+test clipboard_shortcuts_become_shell_commands ... ok
+test access_tree_is_sent_once_attached_and_only_when_it_changes ... ok
+test controls::accessibility_controls_apply_range_actions_and_select_expansion_through_same_state_machine ... ok
+test controls::captured_resize_drag_clamps_and_continues_across_refresh_without_accumulating_deltas ... ok
+test controls::declarative_action_removed_by_refresh_does_not_leave_a_live_stale_callback ... ok
+test controls::declarative_popup_and_pointer_context_menu_mount_interactive_bound_content ... ok
+test controls::delayed_tooltip_uses_runtime_deadline_preserves_focus_and_cancels_on_leave ... ok
+test controls::keyboard_focus_ring_tracks_roving_focus_and_rejects_focus_inside_disabled_ancestors ... ok
+test controls::modal_bound_fields_survive_background_refresh_and_dispose_bindings_on_close ... ok
+test controls::keyed_aligned_reveal_finds_popup_and_rejects_ambiguous_keys ... ok
+test controls::popup_structural_results_update_without_losing_caret_and_stop_observing_when_closed ... ok
+test controls::select_typeahead_matches_unicode_case_and_cycles_repeated_characters ... ok
+test controls::select_skips_disabled_options_opens_bound_portal_and_restores_focus_after_commit ... ok
+test controls::static_multiline_authoring_measures_wrapped_paragraphs_and_survives_refresh ... ok
+test controls::tabs_use_roving_keyboard_focus_and_emit_selection_before_tab_exits ... ok
+test controls::slider_normalizes_ranges_tracks_captured_pointer_and_routes_keyboard_steps ... ok
+test first_frame_sends_viewport_then_full_scene_and_idle_frames_send_nothing ... ok
+test emitted_diffs_keep_a_render_side_scene_identical_across_edits ... ok
+test frame_wake_follows_motion_in_protocol_time ... ok
+test ime_follows_the_focused_editor ... ok
+test paint::retained_million_box_cpu_report ... ignored
+test input_requests_a_frame_only_for_the_bound_window ... ok
+test replay_reports_the_first_step_whose_input_was_altered ... ok
+test replaying_a_recorded_log_reproduces_every_output_and_the_scene ... ok
+test selection_sources::dispose_releases_active_and_inactive_registered_sources_and_rejects_remount ... ok
+test selection_sources::declared_source_substitutions_copy_inline_slot_literals ... ok
+test selection_sources::prepared_row_registration_is_atomic_across_documents ... ok
+test time_never_runs_backwards ... ok
+test selection_sources::shared_batches_retry_atomically_and_reregister_after_removal ... ok
+test unconsumed_input_during_motion_requests_only_animation ... ok
+
+test result: ok. 31 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/scheduler.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/scheduler-8d55bb9aa3f68a18)
+
+running 5 tests
+test live_window_rate_changes_release_only_their_own_pacing_gate ... ok
+test gpui_pulse_cadence_uses_active_state_and_invalidating_input_grace ... ok
+test removing_a_window_clears_its_resize_gate ... ok
+test resize_frames_wait_for_the_gate_while_other_reasons_do_not ... ok
+test pulse_deadlines_do_not_consume_future_application_animation ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scroll_patching.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/scroll_patching-53e9c91d501143b2)
+
+running 4 tests
+test observer_canvas_keeps_scroll_patching_and_sees_every_scroll ... ok
+test legacy_canvas_forces_reemit_on_every_scroll ... ok
+test observers_stay_quiet_when_nothing_changed ... ok
+test scroll_stable_canvas_keeps_scroll_patching ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/text-interaction.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/text_interaction-fa9cddfaadd0a3ba)
+
+running 27 tests
+test declared_source_documents_isolate_ctrl_a_and_rebind_recycled_text_nodes ... ok
+test composing_ime_owns_editing_navigation_and_default_action_keys ... ok
+test double_click_on_final_letter_right_half_selects_the_word_under_pointer ... ok
+test disabled_editor_ignores_ime_updates_and_commits ... ok
+test double_click_selects_word_with_spaces_and_triple_click_selects_paragraph ... ok
+test double_click_word_drag_grows_whole_words_and_reverses_without_losing_origin ... ok
+test drag_extends_and_reverses_across_read_only_leaves_in_source_order ... ok
+test dragging_registered_selection_keeps_anchor_after_its_geometry_unmounts ... ok
+test empty_preedit_restores_replaced_selection_before_following_commit ... ok
+test lost_focus_cancels_selection_capture_and_stale_nodes_do_not_copy ... ok
+test modal_without_autofocus_blocks_background_editing_keys_and_ime ... ok
+test multi_click_uses_configured_time_and_spatial_limits_without_losing_single_clicks ... ok
+test native_text_service_uses_live_selection_and_rejects_stale_paint ... ok
+test raw_inline_glyph_tracks_shaped_slot_and_replaces_on_command ... ok
+test registered_source_bindings_reject_gaps_and_ctrl_a_includes_unmounted_sources ... ok
+test selecting_registered_sources_copies_offscreen_rows_and_keeps_exact_separators ... ok
+test selection_surface_can_disable_drag_auto_scroll ... ok
+test shift_click_extends_existing_caret_and_cut_paste_are_undoable ... ok
+test source_select_all_does_not_capture_ctrl_alt_shortcuts ... ok
+test source_selection_does_not_copy_behind_a_new_modal ... ok
+test source_selection_rejects_disabled_owners_and_changed_mounted_text ... ok
+test source_selection_rejects_removed_document_owner ... ok
+test stationary_drag_scrolls_on_frame_deadlines_and_stops_on_release ... ok
+test typing_then_navigating_before_a_frame_uses_current_text_geometry ... ok
+test visual_end_retains_upstream_wrap_affinity_for_ime_and_arrow_navigation ... ok
+test visual_navigation_keeps_horizontal_goal_and_ctrl_down_moves_a_paragraph ... ok
+test large_read_only_transcript_selects_in_source_order_and_reuses_base_scene ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/text_appearance.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/text_appearance-953bf5da4ee32905)
+
+running 2 tests
+test selection_caret_and_composition_use_text_appearance_in_logical_pixels ... ok
+test source_text_appearance_preserves_float_colors_and_metrics_in_scene ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/text_frontier.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/text_frontier-fd68ddf6c57a1a16)
+
+running 3 tests
+test retained_frontier_supports_popup_text_after_frame_and_fails_after_close ... ok
+test retained_frontier_checks_boundaries_refresh_and_removed_nodes ... ok
+test retained_frontier_survives_unrelated_tree_changes_after_the_frame ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/typography.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/typography-7b0d8aaa40cdb3b1)
+
+running 2 tests
+test inherited_font_style_and_child_size_use_identical_measurement_and_shaping ... ok
+test rich_spans_keep_utf8_offsets_and_same_text_restyles_invalidate_the_run ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/aqua_style-2b3aeee0179783a9)
+
+running 16 tests
+test tests::const_style_builds_in_const_context ... ok
+test tests::empty_style_changes_nothing ... ok
+test tests::explicit_none_clears_optional_effects ... ok
+test tests::full_const_chain_with_oklch_new ... ok
+test tests::grid_slice_clones_and_applies ... ok
+test tests::helpers_are_const ... ok
+test tests::later_partial_overrides_only_set_fields ... ok
+test tests::margin_rejects_pct - should panic ... ok
+test tests::padding_rejects_auto - should panic ... ok
+test tests::padding_rejects_pct - should panic ... ok
+test tests::per_edge_insets_stay_exact ... ok
+test tests::px_only_rejects_pct_and_auto ... ok
+test tests::radius_rejects_auto - should panic ... ok
+test tests::radius_rejects_pct - should panic ... ok
+test tests::required_chain_resolves ... ok
+test tests::scalar_styles_leave_grid_storage_unset ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/motion.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/motion-8194bc36d4f96fb3)
+
+running 5 tests
+test animate_lists_only_declared_properties ... ok
+test replacing_one_half_of_a_spec_keeps_the_other ... ok
+test retuning_a_token_changes_every_reference ... ok
+test tokens_resolve_through_the_theme_and_literals_pass_through ... ok
+test unknown_tokens_use_the_fallback ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/aqua_transport-fda4aeb52629dc63)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gpu_host.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/gpu_host-eb38e76214540a4b)
+
+running 8 tests
+test a_frame_waits_for_the_slot_once_then_executes_and_presents ... ok
+test device_failure_reports_loss_then_recovers_and_repaints ... ok
+test lowering_applies_translation_scale_and_balances_groups ... ok
+test native_batches_update_cached_solid_pixels_with_alpha ... ok
+test present_time_is_the_clock_plus_one_frame ... ok
+test retained_solids_patch_pixels_and_rebuild_after_geometry_changes ... ok
+test slot_waits_follow_the_current_presentation_hint ... ok
+test track_driven_fill_reaches_the_pixels_through_the_host ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/inspector.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/inspector-858a72cd93e8c1fb)
+
+running 4 tests
+test only_loopback_addresses_are_accepted ... ok
+test dropping_the_server_closes_open_connections ... ok
+test stats_and_tree_answer_with_one_json_line_each ... ok
+test watch_streams_a_line_per_published_change ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+     Running tests/render_thread.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/render_thread-518386e3167eab18)
+
+running 1 test
+test render_thread_animates_alone_and_reports_back_only_the_settle ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/ring.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/ring-b9bc408c1cd81baa)
+
+running 5 tests
+test dropping_the_receiver_disconnects_the_sender ... ok
+test dropping_the_sender_still_delivers_everything_queued ... ok
+test full_ring_rejects_without_losing_the_value ... ok
+test recv_timeout_wakes_on_send_and_times_out_when_idle ... ok
+test preserves_order_across_threads_under_backpressure ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+
+     Running tests/runtime_motion.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/runtime_motion-2da1e0c0d9a9c314)
+
+running 1 test
+test runtime_motion_commands_cross_the_ring_and_settle_back_into_the_runtime ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/trim.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/trim-712a2127387c4e5a)
+
+running 6 tests
+test a_deferred_trim_happens_on_the_first_quiet_frame_afterwards ... ok
+test a_trim_requested_before_the_deadline_does_not_consume_it ... ok
+test an_explicit_request_trims_everything_immediately_and_restarts_the_interval ... ok
+test idle_deadline_follows_the_last_real_frame_and_is_consumed_by_one_trim ... ok
+test never_trims_a_frame_that_uploaded_or_that_used_most_of_its_budget ... ok
+test trims_unused_entries_once_per_interval_of_quiet_frames ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/window_host.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/window_host-fff4ac2ffaebe121)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/aqua_ui-6e83b7a65bb96bad)
+
+running 158 tests
+test binding::tests::dynamic_value_updates_like_text_signal ... ok
+test binding::tests::button_activation_runs_handler ... ok
+test binding::tests::editable_binding_writes_back_through_signal ... ok
+test binding::tests::keyed_reorder_preserves_nodes_and_retargets_effects ... ok
+test binding::tests::keyed_reorder_with_styles_keeps_nodes_and_paint ... ok
+test binding::tests::kind_change_remounts_root ... ok
+test binding::tests::mount_box_text_layout_and_scene ... ok
+test binding::tests::mount_errors_are_explicit ... ok
+test binding::tests::multiline_flag_flips_line_mode_in_place ... ok
+test binding::tests::no_duplicate_effects_across_syncs ... ok
+test binding::tests::paint_refresh_visible_via_tree_paint ... ok
+test binding::tests::placeholder_shows_when_empty_only ... ok
+test binding::tests::rebind_same_key_switches_source ... ok
+test binding::tests::refresh_subtree_touches_only_the_keyed_subtree ... ok
+test binding::tests::removed_row_disposes_scope_churn_baseline ... ok
+test binding::tests::row_scope_dispose_kills_row_effect ... ok
+test binding::tests::second_set_content_does_not_nest_root ... ok
+test binding::tests::signal_drives_after_style_refresh_no_dup_effects ... ok
+test binding::tests::signal_write_updates_mounted_label ... ok
+test binding::tests::static_to_editable_keeps_id_text_and_caret ... ok
+test binding::tests::styles_mount_inherit_and_refresh ... ok
+test binding::tests::uncontrolled_editable_survives_keyed_reorder ... ok
+test binding::tests::uncontrolled_editable_survives_style_refresh ... ok
+test collection_runtime::tests::height_change_above_anchor_shifts_scroll ... ok
+test collection_runtime::tests::invalid_estimate_and_duplicate_keys_fail ... ok
+test collection_runtime::tests::refresh_preserves_measured_heights_by_key ... ok
+test collection_runtime::tests::shell_shapes_split_all_tables ... ok
+test collection_runtime::tests::strides_fold_gap_and_margins_exactly ... ok
+test collection_runtime::tests::zero_fractional_and_negative_margin_strides ... ok
+test element::tests::box_builder_maps_design_props ... ok
+test element::tests::button_lowers_to_box_and_binds_activate ... ok
+test element::tests::checkbox_gap_default_is_initial_not_coercion ... ok
+test element::tests::checkbox_lowers_indicator_and_label ... ok
+test element::tests::children_sugar_appends_all_builders_in_order ... ok
+test element::tests::collection_duplicate_keys_fail_loudly ... ok
+test element::tests::collection_element_style_merges_in_order ... ok
+test element::tests::collection_nonvirtualized_lowers_empty_managed_shell ... ok
+test element::tests::collection_rejects_explicit_children_and_bad_policy ... ok
+test element::tests::collection_table_shell_is_box_both_modes ... ok
+test element::tests::collection_virtualized_lowers_empty_managed_shell ... ok
+test element::tests::composite_paint_comes_from_builder_not_hardcoded ... ok
+test element::tests::direct_setters_interleave_with_styles_in_call_order ... ok
+test element::tests::dynamic_inherits_typography_chain ... ok
+test element::tests::dynamic_without_source_is_an_error ... ok
+test element::tests::element_level_styles_apply_and_fragments_recurse ... ok
+test element::tests::element_role_sets_and_fragment_propagates ... ok
+test element::tests::explicit_none_clears ... ok
+test element::tests::fragment_flattens_without_layout_box ... ok
+test element::tests::key_conversions_cover_macro_with_key ... ok
+test element::tests::keyed_multi_child_fragment_is_an_error ... ok
+test element::tests::keyed_single_child_collapses_key_onto_child ... ok
+test element::tests::legacy_layout_style_replaces ... ok
+test element::tests::new_aliases_and_ui_reexports_cover_all_builders ... ok
+test element::tests::placeholder_carries_into_text_content ... ok
+test element::tests::shared_paint_applies_to_button_no_wrapper ... ok
+test element::tests::slider_size_default_is_initial_not_coercion ... ok
+test element::tests::spec_paint_set_for_nonbox_kinds ... ok
+test element::tests::styles_merge_ordered_without_defaults_clobbering ... ok
+test element::tests::tabs_build_one_button_per_tab ... ok
+test element::tests::typography_inherits_only_typography ... ok
+test events::tests::cancel_and_removal_clear_arms ... ok
+test events::tests::cancel_event_is_consumed_safely ... ok
+test events::tests::disabled_button_blocks_press_and_keyboard ... ok
+test events::tests::down_arms_without_firing_up_inside_fires_once ... ok
+test events::tests::hit_test_respects_paint_order_and_clips ... ok
+test events::tests::ime_commit_inserts_once_without_text_input ... ok
+test events::tests::ime_replace_inside_surrogate_pair_is_rejected ... ok
+test events::tests::ime_replace_uses_utf16_offsets ... ok
+test events::tests::ime_select_is_ignored_while_composing ... ok
+test events::tests::ime_select_maps_range_and_direction ... ok
+test events::tests::keyboard_space_enter_activate_focused_button ... ok
+test events::tests::keydown_char_never_inserts_text_input_does_once ... ok
+test events::tests::press_drag_out_does_not_fire ... ok
+test events::tests::scroll_gesture_scrolls_innermost_scroller ... ok
+test events::tests::secondary_button_never_arms_or_fires ... ok
+test events::tests::tab_cycles_focus ... ok
+test events::tests::typing_routes_to_focused_editable_and_fires_action ... ok
+test events::tests::surroundings_window_is_bounded_around_the_selection ... ok
+test motion::tests::cancel_reports_cancelled_and_freezes ... ok
+test motion::tests::color_spring_settles_on_target ... ok
+test motion::tests::color_tween_from_neutral_keeps_chromatic_hue ... ok
+test motion::tests::color_tween_takes_short_hue_path ... ok
+test motion::tests::completion_fires_once_on_reaching_target ... ok
+test motion::tests::controller_aggregates_deadlines_and_completions ... ok
+test motion::tests::controller_dispose_owner_is_silent_and_scoped ... ok
+test motion::tests::controller_handles_unknown_handles_without_panicking ... ok
+test motion::tests::controller_reduce_policy_propagates_to_inflight ... ok
+test motion::tests::easing_shapes_progress_monotonically ... ok
+test motion::tests::finish_snaps_and_reports_completed ... ok
+test motion::tests::reduce_collapses_future_and_inflight_motion ... ok
+test motion::tests::retarget_continues_from_displayed_value_without_jump ... ok
+test motion::tests::spring_converges_and_reports_no_deadline_when_settled ... ok
+test motion::tests::spring_retarget_preserves_motion_without_jump ... ok
+test motion::tests::spring_sample_lands_on_exact_elapsed_not_quantum ... ok
+test motion::tests::sub_millisecond_tween_stays_exact_via_duration_api ... ok
+test motion::tests::superseded_completion_never_fires_after_replace ... ok
+test motion::tests::tween_end_is_observable_for_scheduling ... ok
+test motion::tests::tween_samples_midpoint_and_settles_at_end ... ok
+test motion::tests::variant_mismatch_is_an_error_not_a_panic ... ok
+test motion::tests::zero_duration_tween_completes_on_next_sample ... ok
+test overlay::tests::centered_dialog_ignores_anchor ... ok
+test overlay::tests::close_does_not_clobber_focus_the_user_moved ... ok
+test overlay::tests::close_is_idempotent_for_unknown_handles ... ok
+test overlay::tests::degenerate_viewport_yields_empty_rect ... ok
+test overlay::tests::escape_dismisses_topmost_escape_closable_only ... ok
+test overlay::tests::flips_above_when_no_room_below ... ok
+test overlay::tests::input_router_delivers_press_key_and_ignores_moves ... ok
+test overlay::tests::manual_overlay_survives_outside_click ... ok
+test overlay::tests::modal_blocks_press_and_scroll_beneath_but_not_inside ... ok
+test overlay::tests::modal_saves_and_restores_focus ... ok
+test overlay::tests::nested_menu_outside_click_closes_whole_chain ... ok
+test overlay::tests::nested_menus_close_with_parent_but_not_vice_versa ... ok
+test overlay::tests::non_autofocus_overlay_leaves_focus_alone ... ok
+test overlay::tests::open_close_tracks_stack_and_plan ... ok
+test overlay::tests::open_rejects_stale_parent ... ok
+test overlay::tests::outside_click_inside_topmost_is_captured_not_dismissed ... ok
+test overlay::tests::oversized_overlay_pins_top_left_visible ... ok
+test overlay::tests::owner_disposal_closes_owned_chain_and_restores_focus ... ok
+test overlay::tests::preferred_side_used_when_it_fits ... ok
+test overlay::tests::reposition_reanchors_after_scroll ... ok
+test overlay::tests::shifts_to_stay_inside_viewport_edges ... ok
+test overlay::tests::viewport_resize_reclamps_open_overlays ... ok
+test overlay_host::tests::menu_inside_scroller_mounts_at_root_and_escapes_clip ... ok
+test overlay_host::tests::modal_blocks_background_press_but_captures_inside ... ok
+test overlay_host::tests::modal_tab_trap_cycles_and_close_restores_focus ... ok
+test overlay_host::tests::open_errors_leave_no_partial_state ... ok
+test overlay_host::tests::owner_removal_prunes_popup_via_sync ... ok
+test overlay_host::tests::outside_click_dismisses_and_cleans_the_mount ... ok
+test overlay_host::tests::popup_animation_spawns_a_bound_track_and_closing_removes_it ... ok
+test overlay_host::tests::scroll_routes_to_main_ui_and_reanchors ... ok
+test tree::tests::action_callbacks_fire_without_tree_access ... ok
+test tree::tests::canvas_painter_splices_ops ... ok
+test tree::tests::caret_and_revision_tracks_edits ... ok
+test tree::tests::collection_semantics_round_trip_through_emit ... ok
+test tree::tests::commands_drain_before_layout_in_order ... ok
+test tree::tests::editing_uses_editor_grapheme_safe ... ok
+test tree::tests::emit_semantics_carries_roles_bounds_focus ... ok
+test tree::tests::every_primitive_paints_without_wrapper_nodes ... ok
+test tree::tests::flex_column_layout_commits_rects ... ok
+test tree::tests::focus_and_caret_survive_keyed_reorder ... ok
+test tree::tests::insert_spec_into_empty_and_nonempty_parents ... ok
+test tree::tests::keyed_paint_update_preserves_editor_and_avoids_layout_invalidation ... ok
+test tree::tests::keyed_reorder_preserves_identity ... ok
+test tree::tests::keyed_static_label_restyles_without_text_change ... ok
+test tree::tests::kind_change_replaces_node ... ok
+test tree::tests::managed_container_skips_children_and_scroll ... ok
+test tree::tests::large_keyed_reorder_preserves_identity ... ok
+test tree::tests::placeholder_shows_only_when_empty_hides_on_type_restores_on_clear ... ok
+test tree::tests::placeholder_yields_to_ime_preedit_and_ignores_static ... ok
+test tree::tests::remove_drops_subtree_and_stale_handles_fail ... ok
+test tree::tests::removing_row_with_focused_descendant_restores_live_parent ... ok
+test tree::tests::scroll_clamps_to_content ... ok
+test tree::tests::scroll_emits_clip_ops ... ok
+test tree::tests::set_text_invalidates_and_remeasures ... ok
+test tree::tests::synchronized_fresh_children_keep_parent_chain ... ok
+test tree::tests::unknown_semantics_update_fails_closed ... ok
+test tree::tests::viewport_change_forces_layout ... ok
+test tree::tests::paint_only_change_skips_layout_at_scale ... ok
+
+test result: ok. 158 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/activation_source.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/activation_source-a1b7bb6ecb3ff0c7)
+
+running 3 tests
+test activation_preserves_pointer_and_keyboard_sources ... ok
+test gpui_keyboard_activation_waits_for_release_and_cancels_after_focus_changes ... ok
+test touch_taps_count_only_completed_stationary_gestures ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/binding.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/binding-9a02fb58ccdb540e)
+
+running 5 tests
+test multiple_refreshes_before_drain_keep_the_last_typography ... ok
+test paint_refresh_reuses_empty_bindings_and_unbound_metadata ... ok
+test plain_refresh_removes_out_of_band_bound_input ... ok
+test switching_between_reactive_and_plain_bindings_disposes_stale_sources ... ok
+test plain_nodes_do_not_allocate_reactive_scopes_across_refreshes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/canvas_context.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/canvas_context-e25764556d03d83b)
+
+running 3 tests
+test clipped_canvas_visibility_tracks_scroll_and_defers_delivery ... ok
+test deferred_actions_are_fenced_by_canvas_binding_and_node_lifetime ... ok
+test portal_canvas_uses_window_clip_instead_of_ancestor_clip ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/collection_builders.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/collection_builders-46e6ff73bf25a9fd)
+
+running 17 tests
+test fr_is_const_and_tracks_stay_const ... ok
+test cell_margin_and_width_override_fail ... ok
+test heterogeneous_columns_erase_in_arrays ... ok
+test header_body_share_column_x_positions ... ok
+test invalid_tracks_bounds_heights_fail ... ok
+test length_converts_to_fixed_track ... ok
+test list_row_wraps_inner_control_without_touching_it ... ok
+test list_snapshot_defaults_and_laziness ... ok
+test list_virtualize_and_config ... ok
+test missing_factories_keys_duplicates_fail ... ok
+test row_gap_padding_breaks_track_and_fails ... ok
+test narrow_overflow_keeps_header_body_aligned ... ok
+test table_build_mounts_all_rows_unvirtualized ... ok
+test shared_chrome_gap_padding_aligns ... ok
+test table_container_styles_forward_to_descriptor ... ok
+test width_plan_fixed_fr_pct_minmax ... ok
+test vertical_chrome_is_independent ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/collection_follow.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/collection_follow-b181f05337ef4f90)
+
+running 2 tests
+test measured_height_growth_follows_tail_and_programmatic_reveal_pauses ... ok
+test tail_tracks_growth_pauses_and_reengages_only_after_layout ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/collection_runtime.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/collection_runtime-eb186a3f60c8ff1c)
+
+running 37 tests
+test aligned_reveal_uses_fixed_and_uniform_geometry_and_waits_for_measurement ... ok
+test aligned_view_reveal_waits_for_a_committed_viewport ... ok
+test duplicate_keys_fail_mount ... ok
+test fallible_list_width_probe_uses_only_inert_factory ... ok
+test fixed_height_policy_ignores_row_measurements ... ok
+test clean_frames_make_no_factory_calls ... ok
+test initial_row_heights_and_reveal_use_cumulative_geometry ... ok
+test invalid_estimated_height_fails_mount ... ok
+test list_width_change_rebuilds_nothing ... ok
+test matching_shape_epoch_skips_the_snapshot_refresh_and_still_checks_revisions ... ok
+test measured_heights_settle_and_stay_quiet ... ok
+test pixel_overscan_and_viewport_reports_follow_measured_geometry ... ok
+test prepared_rows_fail_before_registration_and_remain_bounded_on_retry ... ok
+test focused_far_row_pins_alone ... ok
+test realized_window_holds_until_the_needed_window_escapes_then_expands_ahead ... ok
+test prepend_preserves_reading_anchor ... ok
+test refresh_keeps_mounted_rows_with_equal_revisions ... ok
+test refresh_rebuilds_rows_whose_revision_changed_or_is_unknown ... ok
+test refresh_validation_failure_surfaces ... ok
+test refresh_without_revisions_rebuilds_every_mounted_row ... ok
+test reorder_preserves_focus_and_edits ... ok
+test semantics_carry_roles_totals_and_indices ... ok
+test stable_indexed_collection_does_not_allocate_or_scan_all_rows ... ok
+test table_first_frame_stacks_rows_vertically ... ok
+test table_horizontal_scroll_moves_header_and_body_together ... ok
+test uniform_rows_use_first_row_measurement_and_keep_the_scroll_anchor ... ok
+test unmounted_rows_dispose_scopes ... ok
+test unvirtualized_mounts_every_row_exactly_once ... ok
+test viewport_callback_waits_for_a_real_viewport ... ok
+test scroll_moves_window_with_bounded_work ... ok
+test virtualized_table_bounds_and_stacks_vertically ... ok
+test width_class_keeps_rows_while_the_class_is_stable_and_rebuilds_when_it_changes ... ok
+test width_probe_measures_offscreen_row_and_updates_scroll_extent ... ok
+test width_sensitive_rows_follow_container_width_changes_at_a_fixed_viewport ... ok
+test width_sensitive_rows_use_committed_inner_width_on_first_frame_and_resize ... ok
+test zero_viewport_mounts_minimal_window ... ok
+test virtualized_100k_stays_bounded ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/declarative_motion.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/declarative_motion-c459e1b93a0035fe)
+
+running 12 tests
+test builder_methods_carry_motion_through_lowering ... ok
+test changed_value_retargets_and_interpolates_on_the_render_side ... ok
+test exit_keeps_the_node_until_its_tracks_settle ... ok
+test exit_without_declared_motion_removes_immediately ... ok
+test first_mount_spawns_tracks_without_motion ... ok
+test frame_animation_tracks_only_the_edges_that_moved ... ok
+test key_returning_mid_exit_revives_from_the_presented_state ... ok
+test literal_motions_ignore_theme_changes ... ok
+test nodes_never_unmount_above_zero_opacity ... ok
+test presence_enter_skips_first_mount_and_fades_later_arrivals ... ok
+test theme_token_change_retargets_in_flight_tracks ... ok
+test unchanged_and_undeclared_values_emit_nothing ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/drag_snapshot.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/drag_snapshot-23099593b2dd5e73)
+
+running 1 test
+test snapshot_tracks_drag_and_excluded_portal_does_not_block_drop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/editor_layout.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/editor_layout-1c1d9a5c188f4f8b)
+
+running 5 tests
+test source_border_widths_place_children_and_width_changes_relayout ... ok
+test tree_opt_in_border_changes_invalidate_layout ... ok
+test tree_opt_in_ceil_snaps_measured_text_in_device_pixels ... ok
+test tree_opt_in_preserves_shared_flex_edges ... ok
+test tree_opt_in_recomputes_on_scale_change_and_restores_legacy_layout ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/element.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/element-db2ccc6460a45624)
+
+running 6 tests
+test invalid_later_sibling_does_not_commit_earlier_paint_changes ... ok
+test color_refresh_preserves_identity_layout_and_updates_every_cell ... ok
+test pixel_storm_color_report ... ignored
+test pixel_storm_phase_report ... ignored
+test layout_reuse_survives_eviction_and_out_of_band_changes ... ok
+test reordered_boxes_keep_their_keyed_identity ... ok
+
+test result: ok. 4 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/element/children.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/element_children-208ddd8fb9c5cfdd)
+
+running 4 tests
+test bounded_lazy_children_preserve_order_and_iterator_effects ... ok
+test children_support_early_end_and_appending_more_values ... ok
+test pixel_storm_original_construction_report ... ignored
+test empty_filtered_children_do_not_allocate_a_child_buffer ... ok
+
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gpui_pulse.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/gpui_pulse-86fa3710244a97f3)
+
+running 1 test
+test pulse_scope_surrounds_descendant_quad_paint ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gpui_text_color.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/gpui_text_color-1a06693d1d103ebd)
+
+running 1 test
+test raw_colors_inherit_override_and_cover_placeholder_text ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gpui_text_opacity.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/gpui_text_opacity-cc7683c5cd5ccd26)
+
+running 1 test
+test lowering_rejects_invalid_opacity_ranges ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/input.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/input-66c0b4ad2bcb31ba)
+
+running 14 tests
+test activation_fires_for_a_button_inside_a_scrolled_container ... ok
+test capture_routes_outside_bounds_and_cancels_on_focus_loss_or_removal ... ok
+test declarative_listener_refresh_keeps_direct_registrations_and_cancels_capture ... ok
+test external_files_keep_grouped_paths_and_cancel_without_focus_fallback ... ok
+test hover_is_once_per_node_and_cursor_inherits_from_hovered_path ... ok
+test input_visits_capture_then_bubble_and_prevents_default_activation ... ok
+test nested_scroll_chains_at_edges_and_portals_keep_wheel_inside_their_scope ... ok
+test rotated_and_skewed_subtrees_hit_test_exactly_and_report_the_bounding_box ... ok
+test shortcuts_resolve_nearest_context_and_exact_modifiers ... ok
+test stopping_propagation_does_not_silently_prevent_default ... ok
+test transactional_text_commands_respect_disabled_composing_and_routed_domains ... ok
+test transformed_targets_report_local_coordinates_and_portals_escape_clipping ... ok
+test typed_drag_cancels_when_source_is_disabled_or_removed ... ok
+test typed_drag_payload_is_accepted_only_by_compatible_drop_targets ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/interaction.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/interaction-c9768ba37967db84)
+
+running 5 tests
+test modality_changes_retained_focus_and_hover_without_changing_focus ... ok
+test controlled_semantics_follow_signals_after_keyed_refresh ... ok
+test queued_events_update_retained_paint_and_semantics_at_drain ... ok
+test refinements_follow_gpui_precedence_and_restore_base ... ok
+test semantic_updates_are_ordered_and_removed_nodes_are_ignored ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/interaction_typography.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/interaction_typography-a7f87171bf035a75)
+
+running 5 tests
+test legacy_hover_color_temporarily_clears_inherited_raw_color ... ok
+test hover_color_inherits_through_descendants_and_restores_explicit_colors ... ok
+test normalized_hover_temporarily_replaces_source_color ... ok
+test raw_hover_color_inherits_and_preserves_descendant_overrides ... ok
+test source_hover_color_restores_inherited_and_explicit_color_representations ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/key_lookup.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/key_lookup-6a09c18d89340e54)
+
+running 3 tests
+test missing_keys_resolve_to_nothing ... ok
+test duplicate_keys_keep_paint_order_and_have_no_sole_node ... ok
+test unique_keys_resolve_to_one_node ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/layout_incremental.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/layout_incremental-7b2a7c8cded93d97)
+
+running 2 tests
+test a_local_text_change_commits_only_its_neighbourhood ... ok
+test incremental_commit_matches_a_full_commit_after_random_mutations ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+
+     Running tests/layout_invalidation.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/layout_invalidation-e238749e7ad56806)
+
+running 7 tests
+test a_measurer_without_an_epoch_is_asked_every_time ... ok
+test a_remeasured_leaf_reuses_its_size_until_the_measurer_epoch_moves ... ok
+test refreshing_identical_elements_does_not_remeasure_unchanged_labels ... ok
+test refreshing_identical_elements_keeps_layout_clean_until_a_label_changes ... ok
+test resyncing_unchanged_text_leaves_layout_clean_until_it_changes ... ok
+test restyling_under_the_editor_scale_matches_a_tree_built_with_that_style ... ok
+test setting_an_identical_style_leaves_layout_clean ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/motion.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/motion-9bb451f57f7f6191)
+
+running 7 tests
+test analytic_springs::clock_jump_matches_incremental_sampling ... ok
+test analytic_springs::color_spring_samples_and_retargets_without_allocating ... ok
+test analytic_springs::from_duration_bounce_converts_to_stiffness_and_damping ... ok
+test analytic_springs::critically_damped_solution_matches_rk4 ... ok
+test analytic_springs::retarget_mid_flight_is_c0_and_c1_continuous ... ok
+test analytic_springs::overdamped_solution_matches_rk4 ... ok
+test analytic_springs::underdamped_solution_matches_rk4 ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/overlay-uncontained.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/overlay_uncontained-571b42f37859ff18)
+
+running 2 tests
+test anchored_menu_keeps_its_requested_side_and_alignment_outside_viewport ... ok
+test measured_popup_accepts_content_sized_root_and_keeps_legacy_fixed_requirement ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/overlay_motion_integration.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/overlay_motion_integration-184867a77f95e5c0)
+
+running 1 test
+test menu_opens_animated_and_dismisses_outside_without_stale_completion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/paint.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/paint-47aa8a29116ace7e)
+
+running 5 tests
+test a_batch_stamps_every_changed_node_and_noop_batches_preserve_the_revision ... ok
+test invalid_batch_never_partially_changes_retained_nodes ... ok
+test groups_reject_duplicates_and_other_trees_with_equal_raw_handles ... ok
+test native_fills_preserve_borrowed_paint_and_switch_cleanly_to_oklch ... ok
+test reactive_batches_coalesce_inputs_and_report_errors_without_replacing_nodes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/pointer_click_count.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/pointer_click_count-2ff9bfed5a92c1ed)
+
+running 1 test
+test primary_down_exposes_platform_click_count_and_distance_reset ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/recipient_invalidation.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/recipient_invalidation-ec2a4c1450a3e4bc)
+
+running 1 test
+test mounted_bindings_invalidate_only_their_live_tree_on_every_signal_write ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/semantics.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/semantics-309ee33a649bc7b8)
+
+running 1 test
+test placeholder_names_the_field_without_entering_its_editable_value ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/style_builder.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/style_builder-95c322206857f28a)
+
+running 9 tests
+test agreed_chain_compiles_and_resolves ... ok
+test apply_to_preserves_unset_targets ... ok
+test fixed_array_compose_later_wins_per_field ... ok
+test merge_with_builder_form_chains ... ok
+test shadow_styles_replace_and_clear_legacy_and_stack_forms_in_order ... ok
+test source_background_preserves_float_gradient_and_overrides_legacy_fill ... ok
+test source_shadow_stack_preserves_float_colors_and_obeys_style_replacement ... ok
+test typography_defaults_match_textcontent_label ... ok
+test widths_accept_px_pct_and_auto_lengths ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/text_keyboard.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/text_keyboard-92ff0892123f9380)
+
+running 2 tests
+test ctrl_paragraph_keys_preserve_column_and_shift_anchor ... ok
+test ctrl_word_deletion_and_undo_redo_route_to_editor ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/text_wrap.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/text_wrap-d6f88f47a1f59485)
+
+running 1 test
+test wrapping_text_in_a_row_shrinks_to_the_container_instead_of_overflowing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tree.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/tree-1d7ef4e3f29ed949)
+
+running 12 tests
+test compact_box_paint_keeps_borrowed_queries_and_clones_consistent ... ok
+test empty_leaf_layout_applies_explicit_dimensions_constraints_and_padding ... ok
+test gpui_overflow_mask_insets_only_visible_source_borders ... ok
+test gpui_paint_profile_emits_uniform_quads_and_invalidates_cached_content ... ok
+test media_preserves_asset_lease_and_fit_source_then_releases_on_unmount ... ok
+test mixed_corners_and_edge_border_reach_scene_and_clip ... ok
+test non_box_paint_round_trips_and_returns_to_default ... ok
+test selecting_during_composition_restores_displaced_text_and_invalidates_layout ... ok
+test selecting_static_text_clamps_to_graphemes_without_invalidating_content ... ok
+test shadow_stack_emits_outer_then_background_then_inset_and_retains_visible_transformed_shadow ... ok
+test source_shadow_and_border_colors_preserve_layer_order_in_scene ... ok
+test transformed_subtree_culling_uses_visual_geometry_and_portals_paint_above_later_siblings ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tree_accessibility.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/tree_accessibility-a8895667cfd20e55)
+
+running 1 test
+test keyed_tree_item_refresh_updates_and_removes_level_and_expansion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tree_fuzz.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/release/deps/tree_fuzz-20530f011ef0f8e8)
+
+running 1 test
+test random_structural_edits_never_leave_stale_layout_nodes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+   Doc-tests aqua_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests aqua_gpu_ref
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests aqua_graph
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests aqua_runtime
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests aqua_style
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests aqua_transport
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests aqua_ui
+
+running 1 test
+test crates/aqua-ui/src/collection_runtime.rs - collection_runtime (line 6) ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s

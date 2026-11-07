@@ -27,5 +27,12 @@
     "Debug test timings are not a release performance comparison.",
     "No total Editor memory or latency improvement is claimed.",
     "The latest full Editor/GPUI scoreboard remains 32/41 passing performance rows, overall FAIL, on editor-solid-masks.exe; visuals pass."
-  ]
+  ],
+  "release_build": {
+    "status": "PASS",
+    "binary_sha256": "6c23ac9afea77a47f7fb68db099f5e4f8e08ed96d5df644af9e802ba80019973",
+    "framework_source_sha256": "941a08641ff04f5b1bdeadead4a088689ebe23d8c2023e8945f6b22f788fba52",
+    "editor_source_sha256": "3d9b9f679b64d5871c1c337a1be71b1f9a77e29334f70b8350718072b5647e1e",
+    "limitation": "Compilation only; no Editor performance or visual claim for this binary."
+  }
 }

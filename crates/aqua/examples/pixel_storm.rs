@@ -5,6 +5,7 @@ use aqua::{pct, px, Aqua, Style};
 use aqua_protocol::LogicalSize;
 use aqua_reactive::WriteSignal;
 use aqua_ui::element::Element;
+use aqua_ui::paint::FillGroup;
 use std::time::{Duration, Instant as WallInstant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +24,7 @@ struct Grid {
 struct Settings {
     grid: Grid,
     mode: Mode,
+    retained: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,7 +66,12 @@ fn parse_settings(args: &[String]) -> Settings {
         true => Mode::Static,
         false => Mode::Animated,
     };
-    Settings { grid, mode }
+    let retained = args.iter().any(|arg| arg == "--retained");
+    Settings {
+        grid,
+        mode,
+        retained,
+    }
 }
 
 fn base(x: u32, y: u32, t: u32) -> [u8; 3] {
@@ -152,10 +159,11 @@ impl Meter {
         match self.last {
             None => {
                 eprintln!(
-                    "pixel-storm first_frame_ms={:.1} boxes={} mode={:?} grid={}x{}",
+                    "pixel-storm first_frame_ms={:.1} boxes={} mode={:?} retained={} grid={}x{}",
                     (now - self.origin).as_secs_f64() * 1000.0,
                     settings.grid.width * settings.grid.height,
                     settings.mode,
+                    settings.retained,
                     settings.grid.width,
                     settings.grid.height
                 );
@@ -274,16 +282,50 @@ fn main() -> Result<(), aqua::Error> {
     let mut ui = UiApp::new(aqua.fonts().clone(), aqua.runs().clone());
     ui.set_frame_stats(std::env::var_os("AQUA_FRAME_STATS").is_some_and(|value| value == "1"));
     let (frame_read, frame_write) = ui.scope().signal(0u32);
-    ui.mount_reactive((frame_read,), move |(t,)| {
-        let started = WallInstant::now();
-        let element = storm(grid, t);
-        eprintln!(
-            "pixel-storm render t={t} build_ms={:.1}",
-            started.elapsed().as_secs_f64() * 1000.0
+    if settings.retained {
+        ui.mount(|_| storm(grid, 0)).map_err(aqua::Error::Mount)?;
+        let nodes = ui
+            .tree()
+            .traverse()
+            .into_iter()
+            .filter(|node| {
+                ui.tree()
+                    .get(*node)
+                    .is_some_and(|record| record.children.is_empty())
+            })
+            .collect();
+        let fills = FillGroup::new(ui.tree(), nodes).expect("mounted cells are live and unique");
+        assert_eq!(fills.len(), (grid.width * grid.height) as usize);
+        fills.bind(
+            ui.scope(),
+            &ui.tree().command_sink(),
+            (frame_read,),
+            move |(t,), output| {
+                let started = WallInstant::now();
+                Oklch::extend_srgb8(
+                    output,
+                    (0..grid.height)
+                        .flat_map(|y| row_colors(y, grid.width, t))
+                        .map(|rgb| (rgb, 1.0)),
+                );
+                eprintln!(
+                    "pixel-storm colors t={t} build_ms={:.1}",
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+            },
         );
-        element
-    })
-    .map_err(aqua::Error::Mount)?;
+    } else {
+        ui.mount_reactive((frame_read,), move |(t,)| {
+            let started = WallInstant::now();
+            let element = storm(grid, t);
+            eprintln!(
+                "pixel-storm render t={t} build_ms={:.1}",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+            element
+        })
+        .map_err(aqua::Error::Mount)?;
+    }
     aqua.run(Storm {
         ui,
         settings,

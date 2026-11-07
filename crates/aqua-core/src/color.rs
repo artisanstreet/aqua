@@ -219,17 +219,19 @@ impl Oklch {
     }
 }
 
-/// sRGB bytes to linear light (IEC 61966-2-1 transfer curve).
 #[must_use]
 pub fn srgb8_to_linear([r, g, b]: [u8; 3]) -> [f32; 3] {
-    [r, g, b].map(|v| {
-        let s = f32::from(v) / 255.0;
-        if s <= 0.04045 {
-            s / 12.92
-        } else {
-            ((s + 0.055) / 1.055).powf(2.4)
-        }
-    })
+    static CHANNELS: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let channels = CHANNELS.get_or_init(|| {
+        std::array::from_fn(|value| {
+            let encoded = value as f32 / 255.0;
+            match encoded <= 0.04045 {
+                true => encoded / 12.92,
+                false => ((encoded + 0.055) / 1.055).powf(2.4),
+            }
+        })
+    });
+    [r, g, b].map(|value| channels[usize::from(value)])
 }
 
 #[must_use]

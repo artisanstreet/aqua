@@ -36,5 +36,10 @@
     "This is a texture allocation result, not a measured Editor private or GPU memory improvement.",
     "The latest complete full scoreboard remains 33/41 performance rows PASS, overall FAIL; visuals PASS.",
     "This branch is stacked on PR15; no shader, GPU instance layout or public API changes are needed."
-  ]
+  ],
+  "repository_ci": {
+    "status": "FAIL before tests",
+    "run": "https://github.com/artisanstreet/aqua/actions/runs/42346264830",
+    "reason": "Existing targeted-test workflow requests removed package aqua-macros on Ubuntu and Windows."
+  }
 }

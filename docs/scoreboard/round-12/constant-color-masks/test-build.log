@@ -1,0 +1,168 @@
+build slot 1
+warning: Git tree '/home/sander/projects/artisanstreet/editor' is dirty
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling stable_deref_trait v1.2.1
+   Compiling smallvec v1.16.4
+   Compiling bitflags v2.13.2
+   Compiling simd-adler32 v0.3.10
+   Compiling writeable v0.6.4
+   Compiling crc32fast v1.5.3
+   Compiling adler2 v2.0.1
+   Compiling windows-link v0.2.1
+   Compiling cfg-if v1.0.5
+   Compiling aqua-core v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-core)
+   Compiling litemap v0.8.3
+   Compiling miniz_oxide v0.9.1
+   Compiling utf_types v1.0.0
+   Compiling autocfg v1.5.1
+   Compiling utf8_iter v1.1.0
+   Compiling log v0.4.34
+   Compiling miniz_oxide v0.8.9
+   Compiling aqua-motion v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-motion)
+   Compiling flate2 v1.1.10
+   Compiling num-traits v0.2.19
+   Compiling syn v3.0.9
+   Compiling aqua-graph v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-graph)
+   Compiling fdeflate v0.3.7
+   Compiling arrayvec v0.7.8
+   Compiling syn v2.0.119
+   Compiling quick-error v2.0.1
+   Compiling color_quant v1.1.0
+   Compiling png v0.18.1
+   Compiling float-cmp v0.9.0
+   Compiling byteorder-lite v0.1.0
+   Compiling weezl v0.1.12
+   Compiling zune-core v0.5.3
+   Compiling aqua-protocol v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-protocol)
+   Compiling zune-jpeg v0.5.15
+   Compiling gif v0.14.2
+   Compiling synstructure v0.14.0
+   Compiling image-webp v0.2.4
+   Compiling strict-num v0.1.1
+   Compiling polycool v0.4.0
+   Compiling windows-result v0.4.1
+   Compiling windows-strings v0.5.1
+   Compiling memchr v2.8.3
+   Compiling pxfm v0.1.30
+   Compiling arrayref v0.3.9
+   Compiling once_cell v1.21.4
+   Compiling kurbo v0.13.1
+   Compiling zerofrom-derive v0.1.8
+   Compiling bytemuck_derive v1.12.1
+   Compiling yoke-derive v0.8.4
+   Compiling zerofrom v0.1.8
+   Compiling zerovec-derive v0.11.7
+   Compiling displaydoc v0.2.7
+   Compiling yoke v0.8.4
+   Compiling windows-interface v0.59.3
+   Compiling windows-implement v0.60.2
+   Compiling bytemuck v1.25.2
+   Compiling font-types v0.12.7
+   Compiling zerotrie v0.2.5
+   Compiling moxcms v0.8.1
+   Compiling tiny-skia-path v0.12.0
+   Compiling siphasher v1.0.4
+   Compiling icu_locale_fallback_data v2.4.0
+   Compiling zerovec v0.11.9
+   Compiling svgtypes v0.16.1
+   Compiling windows-core v0.62.2
+   Compiling roxmltree v0.21.2
+   Compiling simplecss v0.2.2
+   Compiling icu_segmenter_data v2.4.0
+   Compiling imagesize v0.15.0
+   Compiling tinystr v0.8.5
+   Compiling icu_locale_core v2.4.0
+   Compiling potential_utf v0.1.6
+   Compiling data-url v0.3.2
+   Compiling icu_collections v2.4.0
+   Compiling pico-args v0.5.0
+   Compiling usvg v0.48.1
+   Compiling tiny-skia v0.12.0
+   Compiling read-fonts v0.43.3
+   Compiling rgb v0.8.53
+   Compiling icu_provider v2.4.0
+   Compiling icu_locale_fallback v2.4.0
+   Compiling image v0.25.10
+   Compiling resvg v0.48.1
+   Compiling read-fonts v0.41.0
+   Compiling windows-threading v0.2.1
+   Compiling icu_properties_data v2.4.0
+   Compiling memmap2 v0.9.12
+   Compiling icu_normalizer_data v2.4.0
+   Compiling windows-future v0.3.2
+   Compiling icu_segmenter v2.4.0
+   Compiling aqua-media v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-media)
+   Compiling windows-numerics v0.3.1
+   Compiling windows-collections v0.3.2
+   Compiling unicode-script v0.5.8
+   Compiling unicode-bidi v0.3.18
+   Compiling unicode-segmentation v1.13.3
+   Compiling zeno v0.3.3
+   Compiling windows v0.62.2
+   Compiling taffy v0.15.1 (/home/sander/projects/artisanstreet/aqua-gradient-masks/vendor/taffy)
+   Compiling skrifa v0.46.2
+   Compiling icu_properties v2.4.0
+   Compiling aqua-fonts-system v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-fonts-system)
+   Compiling harfrust v0.12.0
+   Compiling icu_normalizer v2.4.0
+   Compiling foldhash v0.2.0
+   Compiling uuid v1.29.0
+   Compiling hashbrown v0.17.1
+   Compiling accesskit v0.25.1
+   Compiling idna_adapter v1.2.2
+   Compiling windows-sys v0.61.2
+   Compiling error-code v3.4.0
+   Compiling rfd v0.17.2
+   Compiling aqua-reactive v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-reactive)
+   Compiling percent-encoding v2.3.2
+   Compiling aqua-shaders v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-shaders)
+   Compiling aqua-text v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-text)
+warning: linker stderr: rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-barrier.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-clock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-cond.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-misc.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-mutex.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-nanosleep.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-rwlock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-sem.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-spinlock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-sched.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-thread.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'version.o' is neither ET_REL nor LLVM bitcode
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aqua-shaders` (build script) generated 1 warning
+   Compiling raw-window-handle v0.6.2
+   Compiling form_urlencoded v1.2.2
+   Compiling clipboard-win v5.4.3
+   Compiling idna v1.1.0
+   Compiling accesskit_consumer v0.39.1
+   Compiling aqua-scene v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-scene)
+   Compiling zmij v1.0.23
+   Compiling static_assertions v1.1.0
+   Compiling serde_core v1.0.229
+   Compiling aqua-style v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-style)
+   Compiling aqua-layout v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-layout)
+   Compiling url v2.5.8
+   Compiling arboard v3.7.0
+   Compiling aqua-ui v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-ui)
+   Compiling windows-registry v0.6.1
+   Compiling xmlwriter v0.1.0
+   Compiling dunce v1.0.5
+   Compiling serde_json v1.0.154
+   Compiling aqua-kernels v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-kernels)
+   Compiling aqua-gpu-ref v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-gpu-ref)
+   Compiling itoa v1.0.18
+   Compiling aqua-runtime v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-runtime)
+   Compiling aqua-transport v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-transport)
+   Compiling accesskit_windows v0.35.1
+   Compiling aqua-ime-tsf v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-ime-tsf)
+   Compiling aqua-shell-win32 v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-shell-win32)
+   Compiling aqua-gpu-d3d11 v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-gpu-d3d11)
+   Compiling aqua-a11y-uia v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua-a11y-uia)
+   Compiling aqua v0.1.0 (/home/sander/projects/artisanstreet/aqua-gradient-masks/crates/aqua)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 32.61s
+  Executable tests/render.rs (/home/sander/projects/artisanstreet/aqua-optimization/target/constant-color-masks-windows/x86_64-pc-windows-gnu/debug/deps/render-ed3e809a16df0a1c.exe)

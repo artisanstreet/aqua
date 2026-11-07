@@ -494,7 +494,6 @@ macro_rules! layout_sugar {
             self
         }
 
-        #[inline(always)]
         pub fn style(mut self, style: impl StyleArg) -> Self {
             style.apply(&mut self);
             self

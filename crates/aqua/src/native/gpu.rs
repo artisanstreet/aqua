@@ -120,9 +120,22 @@ fn stage_nth(label: &str, counter: &std::sync::atomic::AtomicU32, limit: u32) {
     }
 }
 
+fn window_options() -> WindowOptions {
+    let options = WindowOptions::from_env();
+    #[cfg(not(feature = "d3d12"))]
+    let options = match std::env::var_os("AQUA_D3D11_PREVENT_THREADING") {
+        None => WindowOptions {
+            device: options.device.with_prevent_internal_threading(true),
+            ..options
+        },
+        Some(_) => options,
+    };
+    options
+}
+
 pub fn prewarm() {
     startup_mark("prewarm_start");
-    WindowBackend::begin_early(WindowOptions::from_env(), persist::load_pipeline_cache);
+    WindowBackend::begin_early(window_options(), persist::load_pipeline_cache);
 }
 
 fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
@@ -139,7 +152,7 @@ fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
         Some(backend) => backend,
         None => {
             let cache = persist::load_pipeline_cache();
-            WindowBackend::with_pipeline_cache(WindowOptions::from_env(), cache.as_deref())
+            WindowBackend::with_pipeline_cache(window_options(), cache.as_deref())
                 .map_err(|e| e.to_string())?
         }
     };

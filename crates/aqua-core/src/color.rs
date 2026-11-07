@@ -1,5 +1,7 @@
 #![allow(clippy::excessive_precision)]
 
+pub mod memo;
+
 /// Authored UI color: OKLCH + alpha.
 ///
 /// Ranges: `l` 0..=1 (perceptual lightness), `c` >= 0 (chroma),
@@ -114,10 +116,13 @@ impl Oklch {
     /// Convert 8-bit sRGB + float alpha into the canonical model.
     #[must_use]
     pub fn from_srgb8(r: u8, g: u8, b: u8, alpha: f32) -> Self {
-        let lin = srgb8_to_linear([r, g, b]);
-        let (l, a, b2) = linear_srgb_to_oklab(lin);
-        let (c, h) = oklab_to_lch(a, b2);
-        Self::oklch(l, c, h, alpha)
+        let [l, c, h] = memo::srgb([r, g, b]);
+        Self {
+            l,
+            c,
+            h,
+            alpha: alpha.clamp(0.0, 1.0),
+        }
     }
 
     /// Convert HSL to the canonical model. Convention: `h` degrees 0..360,

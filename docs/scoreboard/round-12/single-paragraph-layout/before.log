@@ -13,4 +13,3 @@ failures:
     single_paragraph_reflow_stays_within_its_allocation_budget
 
 test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.12s
-

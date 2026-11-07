@@ -1,0 +1,16 @@
+
+running 1 test
+single paragraph glyphs=4480 allocated=1810632 budget=1344000
+
+thread 'single_paragraph_reflow_stays_within_its_allocation_budget' (11088) panicked at crates/aqua-text/tests/shape_plan.rs:147:5:
+1810632 bytes for 4480 glyphs
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test single_paragraph_reflow_stays_within_its_allocation_budget ... FAILED
+
+failures:
+
+failures:
+    single_paragraph_reflow_stays_within_its_allocation_budget
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.12s
+

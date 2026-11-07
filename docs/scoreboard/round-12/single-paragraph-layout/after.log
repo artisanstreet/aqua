@@ -1,0 +1,10 @@
+
+running 4 tests
+test cold_shaping_allocations_stay_bounded_per_run ... ok
+test reused_shape_plans_leave_glyph_positions_unchanged ... ok
+test prewarmed_entries_pay_no_plan_cost_on_first_layout ... ok
+single paragraph glyphs=4480 allocated=1272744 budget=1344000
+test single_paragraph_reflow_stays_within_its_allocation_budget ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+

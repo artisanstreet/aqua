@@ -1,0 +1,448 @@
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/aqua_text-5673266a4c140b1a.exe
+
+running 73 tests
+test editor::setter_tests::set_caret_clamps_and_snaps_invalid_positions ... ok
+test editor::setter_tests::set_caret_snaps_emoji_as_one ... ok
+test editor::setter_tests::set_selection_mid_cluster_snaps_both_ends_independently ... ok
+test editor::setter_tests::set_selection_preserves_anchor_caret_extend_semantics ... ok
+test editor::setter_tests::setters_cancel_composition_losslessly_without_history ... ok
+test editor::tests::emoji_deleted_as_one ... ok
+test editor::tests::grapheme_delete_removes_whole_cluster ... ok
+test editor::tests::ime_compose_commit_cancel ... ok
+test editor::tests::ime_over_selection_cancel_is_lossless ... ok
+test editor::tests::ime_over_selection_commit_is_single_undo ... ok
+test editor::tests::ime_update_then_cancel_restores_original ... ok
+test editor::tests::insert_replaces_selection ... ok
+test editor::tests::invalid_positions_are_grapheme_safe ... ok
+test editor::tests::keystroke_during_compose_flushes_displaced_text_to_history ... ok
+test editor::tests::mode_change_to_single_clears_history_when_folding ... ok
+test editor::tests::mode_change_to_single_keeps_history_without_newlines ... ok
+test editor::tests::multiline_keeps_newlines ... ok
+test editor::tests::replace_selection_is_single_undo_restoring_content_and_selection ... ok
+test editor::tests::single_line_strips_newlines ... ok
+test editor::tests::typing_merges_but_replace_does_not ... ok
+test editor::tests::undo_limit_bounds_history ... ok
+test editor::tests::undo_redo_delete ... ok
+test editor::tests::undo_redo_insert ... ok
+test fallback::tests::a_changed_file_invalidates_its_record ... ok
+test fallback::tests::corrupt_or_truncated_input_is_rejected ... ok
+test fallback::tests::coverage_merges_runs_and_answers_membership ... ok
+test fallback::tests::encode_decode_round_trips_and_clears_dirty ... ok
+test font::tests::bounded_insert_never_exceeds_the_limit_and_keeps_the_newest ... ok
+test font::tests::empty_manager_has_no_faces ... ok
+test font::tests::font_loads_bump_revision ... ok
+test font::tests::shared_fonts_are_send_sync ... ok
+test layout::display_tests::masking_still_goes_through_graphemes ... ok
+test layout::display_tests::plain_display_matches_grapheme_segmentation ... ok
+test layout::tests::ascii_measures_positive_width ... ok
+test layout::tests::combining_marks_shape ... ok
+test layout::tests::emoji_shapes ... ok
+test layout::tests::empty_layout_has_one_line_height ... ok
+test layout::tests::font_load_invalidates_shared_cache ... ok
+test layout::tests::hit_roundtrip_ltr ... ok
+test layout::tests::masked_layout_maps_source_coords ... ok
+test layout::tests::multiline_height_grows ... ok
+test layout::tests::rtl_paragraph_detected ... ok
+test layout::tests::scale_changes_size_and_invalidates ... ok
+test layout::tests::shared_cache_evicts_oldest_and_disposes_on_clear ... ok
+test layout::tests::word_wrap_keeps_long_word_intact ... ok
+test layout::tests::wrap_constrains_width ... ok
+test lines::tests::glyph_mode_fills_every_line ... ok
+test lines::tests::no_wrap_or_no_limit_is_one_line ... ok
+test lines::tests::tabs_advance_to_the_next_stop ... ok
+test lines::tests::word_mode_never_splits_a_word ... ok
+test lines::tests::word_or_glyph_splits_overlong_words_only ... ok
+test lines::tests::word_wrap_breaks_after_spaces_and_hangs_blanks ... ok
+test model::tests::combining_mark_is_one_grapheme ... ok
+test model::tests::delete_snaps_to_cluster ... ok
+test model::tests::emoji_zwj_sequence_is_one_grapheme ... ok
+test model::tests::word_movement ... ok
+test runs::tests::default_path_matches_new ... ok
+test runs::tests::expected_revision_distinguishes_stale_and_unknown ... ok
+test runs::tests::ids_are_unique ... ok
+test runs::tests::mint_update_remove ... ok
+test runs::tests::shared_runs_are_send_sync ... ok
+test selection::tests::range_orders_ends ... ok
+test strike::shift_tests::eight_bit_masks_become_alpha_only_pixels ... ok
+test strike::shift_tests::shifting_conserves_ink_and_widens_by_one_column ... ok
+test strike::shift_tests::shifting_conserves_ink_when_scaling_up_and_down ... ok
+test strike::tests::bgra_is_swizzled_to_rgba ... ok
+test strike::tests::cbdt_strikes_hang_from_the_baseline_by_their_bearings ... ok
+test strike::tests::corrupt_png_is_rejected ... ok
+test strike::tests::downscaling_preserves_total_energy_and_flat_color ... ok
+test strike::tests::png_decoding_premultiplies_straight_alpha ... ok
+test strike::tests::sbix_strikes_scale_and_place_relative_to_the_glyph_origin ... ok
+test strike::tests::upscaling_interpolates_between_texels ... ok
+test style::tests::cache_key_changes_with_style_fields ... ok
+
+test result: ok. 73 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/advance_widths-f2a55bb68077dc7b.exe
+
+running 2 tests
+test glyph_advances_match_unhinted_reference_shaping ... ok
+test tracking_shifts_every_advance_by_em_fraction_of_size ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/background_parity-9f369004afbe0c53.exe
+
+running 1 test
+test backgrounds_follow_pinned_reference_painter_for_clusters_bidi_and_wraps ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/browser_editing-2cbff44c2a1f10d7.exe
+
+running 9 tests
+test arrows_collapse_ranges_without_skipping_a_grapheme ... ok
+test composition_restores_or_commits_at_original_boundary_after_grapheme_join ... ok
+test movement_and_paste_separate_typing_history ... ok
+test paste_normalizes_line_endings_once ... ok
+test replacement_keeps_original_byte_position_when_deletion_joins_graphemes ... ok
+test transactional_range_replacement_keeps_history_and_rejects_active_composition ... ok
+test undo_inserted_combining_marks_keeps_original_base ... ok
+test vertical_and_paragraph_movement_preserve_grapheme_column ... ok
+test word_deletion_restores_text_and_original_caret_on_undo ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/browser_geometry-61b5103d442b8e7c.exe
+
+running 8 tests
+test affinity_distinguishes_both_sides_of_a_soft_wrap ... ok
+test affinity_resolves_distinct_bidi_junction_edges ... ok
+test paragraph_navigation_skips_wrapped_rows_and_preserves_x ... ok
+test rtl_hit_testing_tracks_logical_source_spans ... ok
+test selected_combining_cluster_covers_visual_glyph_only ... ok
+test word_hit_retains_rtl_and_combining_grapheme_boundaries ... ok
+test word_hit_uses_the_glyph_under_pointer_instead_of_nearest_caret ... ok
+test wrapped_rows_have_distinct_source_ranges_and_vertical_targets ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/color_glyph-f4387315ac0c6569.exe
+
+running 1 test
+test emoji_falls_back_to_a_color_font_and_rasterizes_rgba ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/decorations-faa076a2455d1b27.exe
+
+running 5 tests
+test decorations_follow_styled_source_ranges_across_wrapped_lines ... ok
+test gpui_backgrounds_follow_glyph_boundaries_and_preserve_float_colors ... ok
+test inline_cell_does_not_compress_glyphs_wider_than_the_cell ... ok
+test inline_cells_keep_exact_advance_wrapping_and_source_hit_mapping ... ok
+test interaction_ids_preserve_exact_source_offsets_through_styling ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/document-a58560d2ae88b6a3.exe
+
+running 7 tests
+test copy_substitutions_are_sorted_and_can_remove_decorative_slots ... ok
+test copy_substitutions_preserve_literals_and_omit_partially_selected_slots ... ok
+test copy_uses_source_order_and_includes_unmounted_rows_with_exact_separators ... ok
+test malformed_copy_substitutions_are_rejected_without_partial_batch_registration ... ok
+test replacements_retain_stable_endpoints_and_clamp_to_graphemes ... ok
+test select_all_includes_empty_source_separators_and_rejects_unknown_endpoints ... ok
+test source_slices_share_selection_without_duplicating_source_copy ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/editing_layout-15a993b97f61f49e.exe
+
+running 3 tests
+test composing_text_lays_out_and_exposes_ime_anchor ... ok
+test editor_text_lays_out_with_caret ... ok
+test shared_cache_reuses_identical_layouts ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/fallback-4a3fb632b098a25b.exe
+
+running 3 tests
+test full_cluster_and_formation_determine_native_first_fallback ... ok
+test partial_coverage_keeps_cluster_whole_and_uses_first_scalar_rule ... ok
+test primary_and_ascii_do_not_probe_fallback ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/fallback_index-6facfe20c8751b37.exe
+
+running 2 tests
+test a_corrupt_persisted_index_is_ignored ... ok
+test indexed_fallback_resolves_like_the_direct_scan_and_persists ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/gpui_wrap-9f7e567157afcb4c.exe
+
+running 2 tests
+test unicode_clusters_and_rtl_keep_valid_byte_mapping ... ok
+test wrapped_lines_share_one_paragraph_and_keep_selection_boundaries ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/navigation-8e5bce10c98f64e7.exe
+
+running 15 tests
+test click_counts_map_to_units ... ok
+test dictionary_word_units_cover_thai_japanese_and_chinese ... ok
+test double_click_never_selects_a_line_break ... ok
+test double_click_selects_the_word_under_the_pointer ... ok
+test identifiers_and_contractions_are_one_word ... ok
+test mixed_dictionary_scripts_keep_windows_spaces_and_chromium_punctuation ... ok
+test next_word_matches_blink_basic ... ok
+test next_word_matches_blink_emoji ... ok
+test next_word_matches_blink_punctuation ... ok
+test next_word_skipping_spaces_matches_blink_windows ... ok
+test next_word_stops_at_line_breaks ... ok
+test previous_word_matches_blink ... ok
+test triple_click_selects_the_line_with_its_break ... ok
+test unicode_words_keep_script_boundaries_and_combining_sequences ... ok
+test word_drag_omits_initial_windows_trailing_spaces ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/overflow-74d9d043260168dd.exe
+
+running 6 tests
+test end_and_start_keep_source_boundaries ... ok
+test end_trims_punctuation_without_splitting_clusters ... ok
+test fits_and_clip_leave_original_intact ... ok
+test shaped_overflow_keeps_full_source_and_maps_visible_glyphs ... ok
+test shaped_text_that_fits_is_not_truncated ... ok
+test source_character_spacing_changes_the_cut_boundary ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/paragraph-f5acf3be5def4dba.exe
+
+running 6 tests
+test alignment_moves_lines_inside_the_constraint ... ok
+test changing_only_the_width_does_not_reshape ... ok
+test hebrew_run_inside_latin_paragraph_is_reordered_visually ... ok
+test justify_fills_wrapped_lines_but_not_the_last ... ok
+test tabs_land_on_multiples_of_eight_spaces ... ok
+test trailing_newline_yields_an_empty_final_line_with_line_height ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/placed_lines-aaf1093438f532c7.exe
+
+running 3 tests
+test recoloring_an_earlier_span_changes_only_that_paragraph ... ok
+test streamed_growth_matches_a_fresh_layout_at_every_step ... ok
+test width_changes_replace_cached_lines ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/prewarm-bda783c3e7929e2e.exe
+
+running 2 tests
+test entries_built_before_the_font_set_changed_are_discarded ... ok
+test faces_built_on_workers_install_once_and_lay_out_identically ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/raster-b45ffbaa40b68f77.exe
+
+running 4 tests
+test bold_requests_never_lose_ink_and_fake_bold_widens_stems ... ok
+test capital_h_has_stem_coverage_and_cap_height_extent ... ok
+test quarter_pixel_quantization_rounds_to_nearest_step ... ok
+test subpixel_offsets_shift_coverage_without_changing_total_ink ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/real_strikes-0323f1ee014b1d86.exe
+
+running 3 tests
+test cbdt_emoji_scale_from_the_nearest_strike_and_keep_ink_across_subpixel_bins ... AQUA_CBDT_FONT not set; skipping
+ok
+test cbdt_subpixel_bins_differ_in_pixels_but_not_in_geometry_class ... okAQUA_CBDT_FONT not set; skipping
+
+test ebdt_mask_strikes_are_used_at_their_exact_ppem_and_are_one_bit_hinted ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/residency-186787e7db085c2c.exe
+
+running 4 tests
+test glyph_keys_are_stable_and_distinguish_subpixel_and_size ... ok
+test lowering_a_laid_out_run_yields_one_instance_per_inked_glyph_hanging_from_the_baseline ... ok
+test recovery_clear_makes_the_same_glyph_upload_again ... ok
+test repeated_glyphs_upload_once_and_spaces_stay_blank ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/shape_atlas_probe-3df9d04778ed0c1c.exe
+
+running 1 test
+test shaping_and_atlas_costs ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/shape_cache-9260678292f19319.exe
+
+running 6 tests
+test a_new_layout_of_unchanged_text_shapes_nothing ... ok
+test a_span_boundary_inside_a_paragraph_changes_the_key ... ok
+test a_style_change_is_not_served_from_the_cache ... ok
+test appending_text_shapes_only_the_changed_paragraph ... ok
+test cached_shaping_is_identical_to_shaping_from_scratch ... ok
+test the_cache_stays_within_twice_its_budget ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/shape_plan-ff0eebd7392a6caa.exe
+
+running 4 tests
+test cold_shaping_allocations_stay_bounded_per_run ... ok
+test prewarmed_entries_pay_no_plan_cost_on_first_layout ... ok
+test reused_shape_plans_leave_glyph_positions_unchanged ... ok
+test single_paragraph_reflow_stays_within_its_allocation_budget ... single paragraph glyphs=4480 allocated=1272744 budget=1344000
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/slug-7c7370c84ba79ffa.exe
+
+running 6 tests
+test bands_partition_curves_by_extent_and_sort_for_early_exit ... ok
+test cubics_split_into_quadratics_that_hug_the_curve ... ok
+test degenerate_paths_produce_no_glyph ... ok
+test disc_ink_matches_its_analytic_area_at_every_scale ... ok
+test opposite_winding_hole_cuts_out_the_inner_square ... ok
+test square_is_solid_inside_empty_outside_and_half_on_the_edge ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/slug_fonts-aaf773dc68e91dc8.exe
+
+running 3 tests
+test cache_reuses_outlines_across_sizes_and_reports_blank_and_color_glyphs ... ok
+test slug_coverage_matches_the_exact_area_rasterizer_on_real_glyphs ... ok
+test slug_follows_the_synthetic_italic_skew ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/slug_store-c2303bf1c5c694dc.exe
+
+running 11 tests
+test clearing_keeps_the_gpu_texture_and_rewrites_it_in_place ... ok
+test empty_store_uploads_nothing ... ok
+test eviction::a_full_frame_of_live_glyphs_grows_past_the_budget_and_counts_it ... ok
+test eviction::least_recently_used_glyphs_make_room_and_current_frame_glyphs_stay ... ok
+test eviction::reused_blocks_upload_only_their_rows_and_evicted_glyphs_read_back_exactly ... ok
+test eviction::shrinking_far_below_the_texture_recreates_it_smaller ... ok
+test fonts::outline_cache_stays_within_its_budget ... ok
+test fonts::resident_lookup_refuses_a_stale_font_revision ... ok
+test fonts::uploads_create_once_and_a_warmed_face_never_grows_the_store ... ok
+test packed_buffers_evaluate_exactly_like_the_cpu_glyph ... ok
+test shared_curve_lists_never_alias_between_the_two_band_sets ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/source_style-19d881b0d9aac710.exe
+
+running 3 tests
+test font_features_change_cache_identity ... ok
+test gpui_profile_snaps_line_spacing_without_changing_default_layout ... ok
+test raw_base_color_yields_to_explicit_span_colors ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/spans-25c83e80cd855470.exe
+
+running 2 tests
+test gpui_span_color_retains_float_components_through_shaping ... ok
+test shared_cache_distinguishes_styled_boundaries_and_colors ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/svg-017ad5cb0d26d484.exe
+
+running 8 tests
+test documents_without_text_pass_through_untouched ... ok
+test with_fonts::anchors_move_the_ink_around_the_anchor_point ... ok
+test with_fonts::em_and_percent_font_sizes_resolve_through_ancestors ... ok
+test with_fonts::style_sheets_set_size_and_paint ... ok
+test with_fonts::text_becomes_outlines_that_resvg_paints ... ok
+test with_fonts::text_on_a_curve_rotates_and_start_offset_with_anchor_shift_it ... ok
+test with_fonts::text_on_a_straight_path_matches_plain_text ... ok
+test with_fonts::tspans_take_their_own_fill_and_position ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/svg_length-7e981e8d86e03732.exe
+
+running 3 tests
+test font_sizes_inherit_em_percent_and_keywords_from_the_parent ... ok
+test length_lists_keep_unresolvable_entries_in_place ... ok
+test units_resolve_against_the_font_size ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/svg_path-3d234ad339be607c.exe
+
+running 3 tests
+test arcs_and_curves_approximate_their_true_length ... ok
+test compact_arc_flags_and_implicit_commands_parse ... ok
+test polylines_measure_and_sample_straight_runs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/svg_sheet-6606149d16a4401b.exe
+
+running 3 tests
+test descendant_selectors_comma_lists_comments_and_at_rules ... ok
+test documents_without_style_elements_have_empty_sheets ... ok
+test higher_specificity_wins_regardless_of_order_and_later_rules_break_ties ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+/home/sander/projects/artisanstreet/aqua-optimization/target/layout-ownership-windows/x86_64-pc-windows-gnu/debug/deps/throughput-b0a082a6dddba28c.exe
+
+running 2 tests
+test shaping_and_wrapping_throughput ... ignored
+test startup_and_first_layout_cost ... ignored
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+

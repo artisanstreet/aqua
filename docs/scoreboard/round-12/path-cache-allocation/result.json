@@ -1,0 +1,31 @@
+{
+  "base_commit": "1faf00b",
+  "code_commit": "b62ffdf",
+  "scenario": "Warm VectorCache lookup of a 10,000-cubic-segment path, plus Move/Close; source geometry and first cache population are outside measurement.",
+  "metric": "Requested heap allocation on the measuring thread, not retained process memory.",
+  "baseline": {
+    "requested_bytes": 764512,
+    "allocations": 10020,
+    "allocation_guard": "FAIL as expected"
+  },
+  "candidate": {
+    "requested_bytes": 0,
+    "allocations": 0,
+    "allocation_guard": "PASS"
+  },
+  "guard_budget_bytes": 2048,
+  "validation": {
+    "windows_render_tests": 80,
+    "windows_perf_scene_tests": 3,
+    "existing_ignored_benchmark": 1,
+    "windows_library_and_targeted_test_clippy": "PASS -D warnings",
+    "changed_file_rustfmt": "PASS",
+    "workspace_cargo_fmt_all": "FAIL on preexisting vendored Taffy formatting; excerpt preserved, vendored files unchanged",
+    "workspace_format_log_sha256": "a5b4abab0b4cc6680350565be42a7b5300447f35dc4444638b2641b720464abf"
+  },
+  "limitations": [
+    "Debug test timings are not a release performance comparison.",
+    "No total Editor memory or latency improvement is claimed.",
+    "The latest full Editor/GPUI scoreboard remains 32/41 passing performance rows, overall FAIL, on editor-solid-masks.exe; visuals pass."
+  ]
+}

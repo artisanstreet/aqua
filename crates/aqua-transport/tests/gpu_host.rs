@@ -162,6 +162,7 @@ fn setup(side: &mut RenderSide, items: Vec<(NodeId, DisplayItem)>) {
                 scale: 1.0,
             },
             RenderCommand::Scene(SceneDiff {
+                fills: Vec::new(),
                 upserts: items,
                 order: Some(order),
             }),

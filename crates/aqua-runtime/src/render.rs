@@ -31,6 +31,7 @@ struct Submitted {
 pub struct RenderSide {
     scene: Scene,
     local: HashMap<NodeId, NodeId>,
+    local_slots: Vec<Option<(u32, NodeId)>>,
     base: HashMap<NodeId, DisplayItem>,
     overrides: HashMap<NodeId, Overrides>,
     bindings: HashMap<TrackId, Vec<(Binding, f32)>>,
@@ -55,6 +56,7 @@ impl RenderSide {
         Self {
             scene: Scene::new(),
             local: HashMap::new(),
+            local_slots: Vec::new(),
             base: HashMap::new(),
             overrides: HashMap::new(),
             bindings: HashMap::new(),
@@ -89,7 +91,18 @@ impl RenderSide {
 
     #[must_use]
     pub fn presented(&self, node: NodeId) -> Option<&DisplayItem> {
-        self.local.get(&node).and_then(|id| self.scene.get(*id))
+        self.local_id(node).and_then(|id| self.scene.get(id))
+    }
+
+    #[inline]
+    fn local_id(&self, node: NodeId) -> Option<NodeId> {
+        let raw = node.raw();
+        self.local_slots
+            .get(raw.index as usize)
+            .and_then(|entry| *entry)
+            .filter(|&(generation, _)| generation == raw.generation)
+            .map(|(_, id)| id)
+            .or_else(|| self.local.get(&node).copied())
     }
 
     pub fn step(&mut self, input: RenderInput) -> RenderOutput {
@@ -172,6 +185,21 @@ impl RenderSide {
                 false => self.write(node, item),
             }
         }
+        for patch in diff.fills {
+            if let Some(id) = self.local_id(patch.node) {
+                if let Some(base) = self.base.get_mut(&patch.node) {
+                    match base {
+                        DisplayItem::Rect { fill, .. } | DisplayItem::Quad { fill, .. } => {
+                            *fill = patch.fill
+                        }
+                        _ => continue,
+                    }
+                    self.dirty.push(patch.node);
+                } else {
+                    self.scene.update_fill(id, patch.fill);
+                }
+            }
+        }
         if let Some(order) = diff.order {
             let keep: HashSet<NodeId> = order.iter().copied().collect();
             let gone: Vec<NodeId> = self
@@ -183,6 +211,11 @@ impl RenderSide {
             for node in gone {
                 if let Some(id) = self.local.remove(&node) {
                     self.scene.remove(id);
+                }
+                if let Some(slot) = self.local_slots.get_mut(node.raw().index as usize) {
+                    if slot.is_some_and(|(generation, _)| generation == node.raw().generation) {
+                        *slot = None;
+                    }
                 }
                 self.base.remove(&node);
                 self.overrides.remove(&node);
@@ -203,6 +236,12 @@ impl RenderSide {
             None => {
                 let id = self.scene.insert(item);
                 self.local.insert(node, id);
+                let raw = node.raw();
+                let index = raw.index as usize;
+                if self.local_slots.len() <= index {
+                    self.local_slots.resize(index + 1, None);
+                }
+                self.local_slots[index] = Some((raw.generation, id));
             }
         }
     }

@@ -267,6 +267,7 @@ fn an_explicit_trim_request_releases_unused_atlas_pages_between_frames() {
     let frame = start(&mut side, diff);
     host.execute(&mut side, frame);
     let blank = SceneDiff {
+        fills: Vec::new(),
         upserts: Vec::new(),
         order: Some(Vec::new()),
     };

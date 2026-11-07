@@ -542,7 +542,7 @@ impl BoxContent {
         }
     }
 
-    pub(crate) fn plain_paint(&self) -> bool {
+    pub fn plain_paint(&self) -> bool {
         self.paint.is_plain()
     }
 
@@ -1173,6 +1173,9 @@ fn rect_contains_rect(outer: Rect, inner: Rect) -> bool {
 
 pub struct UiTree {
     pub(crate) fill_owner: Rc<()>,
+    fill_changes: Vec<aqua_core::FillPatch>,
+    fill_base: u64,
+    non_fill_version: u64,
     interaction: interaction::InteractionStore,
     gpui_paint: bool,
     portal_roots: std::collections::HashSet<NodeId>,
@@ -1304,6 +1307,9 @@ impl UiTree {
         Self {
             interaction: interaction::InteractionStore::default(),
             fill_owner: Rc::new(()),
+            fill_changes: Vec::new(),
+            fill_base: 0,
+            non_fill_version: 0,
             gpui_paint: false,
             portal_roots: std::collections::HashSet::new(),
             follow_caret_queue: Vec::new(),
@@ -1374,6 +1380,7 @@ impl UiTree {
         if self.gpui_paint != enabled {
             self.gpui_paint = enabled;
             self.content_version += 1;
+            self.invalidate_fill_changes();
         }
     }
 
@@ -1452,15 +1459,58 @@ impl UiTree {
     fn bump_layout(&mut self) {
         self.layout_version += 1;
         self.content_version += 1;
+        self.invalidate_fill_changes();
     }
 
     /// Bump content only (paint-affecting mutation) and stamp the node.
     fn touch_paint(&mut self, id: NodeId) {
         self.content_version += 1;
+        self.invalidate_fill_changes();
         let rev = self.content_version;
         if let Some(rec) = self.nodes.get_mut(id.raw()) {
             rec.paint_rev = rev;
             rec.dirty_paint = true;
+        }
+    }
+
+    pub fn descriptor_version(&self) -> u64 {
+        self.non_fill_version
+    }
+
+    fn invalidate_fill_changes(&mut self) {
+        self.non_fill_version = self.content_version;
+        self.fill_changes.clear();
+    }
+
+    fn touch_fill(&mut self, id: NodeId, fill: Oklch) {
+        self.content_version += 1;
+        if let Some(record) = self.nodes.get_mut(id.raw()) {
+            record.paint_rev = self.content_version;
+            record.dirty_paint = true;
+        }
+        if self.non_fill_version <= self.fill_base {
+            self.fill_changes
+                .push(aqua_core::FillPatch { node: id, fill });
+        }
+    }
+
+    pub fn take_fill_changes(&mut self) -> Option<Vec<aqua_core::FillPatch>> {
+        if self.non_fill_version > self.fill_base {
+            return None;
+        }
+        self.fill_base = self.content_version;
+        Some(std::mem::take(&mut self.fill_changes))
+    }
+
+    pub fn acknowledge_fills(&mut self) {
+        self.fill_base = self.content_version;
+        self.fill_changes.clear();
+    }
+
+    pub fn recycle_fill_changes(&mut self, mut changes: Vec<aqua_core::FillPatch>) {
+        changes.clear();
+        if self.fill_changes.is_empty() && changes.capacity() > self.fill_changes.capacity() {
+            self.fill_changes = changes;
         }
     }
 
@@ -1581,6 +1631,7 @@ impl UiTree {
         };
         if changed {
             self.content_version += 1;
+            self.invalidate_fill_changes();
         }
     }
 
@@ -2034,6 +2085,7 @@ impl UiTree {
             false => {
                 self.motion_groups = groups;
                 self.content_version += 1;
+                self.invalidate_fill_changes();
                 true
             }
         }
@@ -2925,12 +2977,19 @@ impl UiTree {
         let Some(record) = self.nodes.get_mut(id.raw()) else {
             return false;
         };
-        let changed = match &mut record.kind {
-            NodeKind::Box(content) => content.set_fill(fill),
-            _ => set_fill_slot(&mut record.paint_slot, fill),
+        let (changed, eligible) = match &mut record.kind {
+            NodeKind::Box(content) => {
+                let eligible =
+                    content.plain_paint() && content.paint.fill().is_some() && fill.is_some();
+                (content.set_fill(fill), eligible)
+            }
+            _ => (set_fill_slot(&mut record.paint_slot, fill), false),
         };
         if changed {
-            self.touch_paint(id);
+            match (eligible, fill) {
+                (true, Some(fill)) => self.touch_fill(id, fill),
+                _ => self.touch_paint(id),
+            }
         }
         changed
     }
@@ -2951,12 +3010,18 @@ impl UiTree {
         {
             record.style_identity = Some(Rc::clone(style));
         }
-        let changed = match &mut record.kind {
-            NodeKind::Box(content) => content.set_fill(fill),
-            _ => false,
+        let (changed, had_fill) = match &mut record.kind {
+            NodeKind::Box(content) => {
+                let had_fill = content.paint.fill().is_some();
+                (content.set_fill(fill), had_fill)
+            }
+            _ => (false, false),
         };
         if changed {
-            self.touch_paint(id);
+            match (had_fill, fill) {
+                (true, Some(fill)) => self.touch_fill(id, fill),
+                _ => self.touch_paint(id),
+            }
         }
     }
 
@@ -3428,6 +3493,7 @@ impl UiTree {
                 true => {
                     self.scroll_patches += 1;
                     self.content_version += 1;
+                    self.invalidate_fill_changes();
                     let rev = self.content_version;
                     if let Some(rec) = self.nodes.get_mut(id.raw()) {
                         rec.paint_rev = rev;

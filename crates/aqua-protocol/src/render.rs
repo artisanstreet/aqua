@@ -1,4 +1,4 @@
-use aqua_core::{DisplayItem, NodeId, Size};
+use aqua_core::{DisplayItem, FillPatch, NodeId, Size};
 use aqua_motion::{MotionCommand, MotionEvent};
 
 use crate::gpu::FrameReport;
@@ -8,13 +8,14 @@ pub type FrameId = u64;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SceneDiff {
+    pub fills: Vec<FillPatch>,
     pub upserts: Vec<(NodeId, DisplayItem)>,
     pub order: Option<Vec<NodeId>>,
 }
 
 impl SceneDiff {
     pub fn is_empty(&self) -> bool {
-        self.upserts.is_empty() && self.order.is_none()
+        self.fills.is_empty() && self.upserts.is_empty() && self.order.is_none()
     }
 }
 

@@ -13,7 +13,13 @@
 
 use crate::color::Oklch;
 use crate::geometry::Rect;
-use crate::id::{ImageId, RawId, ViewportId};
+use crate::id::{ImageId, NodeId, RawId, ViewportId};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FillPatch {
+    pub node: NodeId,
+    pub fill: Oklch,
+}
 
 /// Layer-namespace tags for `DisplayItem::External.layer` (contract §4).
 /// The top two bits disambiguate media frames (`01`) from viewport frames

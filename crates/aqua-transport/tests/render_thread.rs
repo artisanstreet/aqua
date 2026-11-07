@@ -87,6 +87,7 @@ fn render_thread_animates_alone_and_reports_back_only_the_settle() {
     app.set_target(track, MotionValue::Color(blue), 0.0)
         .unwrap();
     assert!(thread.send(RenderCommand::Scene(SceneDiff {
+        fills: Vec::new(),
         upserts: vec![(node, item(red))],
         order: Some(vec![node]),
     })));

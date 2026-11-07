@@ -1,6 +1,98 @@
 use aqua_core::{DisplayItem, NodeId};
 use aqua_scene::Scene;
 
+fn filled(color: aqua_core::Oklch) -> DisplayItem {
+    DisplayItem::Rect {
+        bounds: aqua_core::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+        },
+        radius: 0.0,
+        fill: color,
+        border_width: 0.0,
+        border_color: aqua_core::Oklch::TRANSPARENT,
+        shadow: None,
+    }
+}
+
+#[test]
+fn fill_changes_coalesce_without_losing_pending_geometry() {
+    use aqua_core::Oklch;
+    let mut scene = Scene::new();
+    let node = scene.insert(filled(Oklch::BLACK));
+    scene.update_fill(node, Oklch::WHITE);
+    let (upserts, fills) = scene.drain_paint_changes();
+    assert_eq!(upserts, vec![(node, filled(Oklch::WHITE))]);
+    assert!(fills.is_empty());
+    let geometry = scene.geometry_revision();
+    scene.update_fill(node, Oklch::BLACK);
+    scene.update_fill(node, Oklch::WHITE);
+    let (upserts, fills) = scene.drain_paint_changes();
+    assert!(upserts.is_empty());
+    assert_eq!(
+        fills,
+        vec![aqua_core::FillPatch {
+            node,
+            fill: Oklch::WHITE
+        }]
+    );
+    assert_eq!(scene.geometry_revision(), geometry);
+    scene.update_fill(node, Oklch::BLACK);
+    let mut changed = filled(Oklch::BLACK);
+    if let DisplayItem::Rect { bounds, .. } = &mut changed {
+        bounds.w = 20.0;
+    }
+    scene.update(node, changed.clone());
+    scene.update_fill(node, Oklch::WHITE);
+    let (upserts, fills) = scene.drain_paint_changes();
+    assert!(fills.is_empty());
+    if let DisplayItem::Rect { fill, .. } = &mut changed {
+        *fill = Oklch::WHITE;
+    }
+    assert_eq!(upserts, vec![(node, changed)]);
+}
+
+#[test]
+fn retained_fill_reads_require_a_complete_acknowledged_baseline() {
+    use aqua_core::Oklch;
+    let mut scene = Scene::new();
+    let node = scene.insert(filled(Oklch::BLACK));
+    assert!(scene.drain_fill_changes(scene.revision()).is_none());
+    scene.acknowledge_changes();
+    let baseline = scene.revision();
+    scene.update_fill(node, Oklch::WHITE);
+    assert_eq!(
+        scene.drain_fill_changes(baseline).unwrap(),
+        vec![aqua_core::FillPatch {
+            node,
+            fill: Oklch::WHITE
+        }]
+    );
+    assert!(scene.drain_fill_changes(baseline).is_none());
+    let baseline = scene.revision();
+    scene.update(node, filled(Oklch::BLACK));
+    assert!(scene.drain_fill_changes(baseline).is_none());
+    assert_eq!(scene.drain_changes(), vec![(node, filled(Oklch::BLACK))]);
+}
+
+#[test]
+fn removed_and_reused_fill_slots_never_accept_stale_generations() {
+    use aqua_core::Oklch;
+    let mut scene = Scene::new();
+    let old = scene.insert(filled(Oklch::BLACK));
+    scene.drain_paint_changes();
+    scene.update_fill(old, Oklch::WHITE);
+    scene.remove(old);
+    let new = scene.insert(filled(Oklch::BLACK));
+    assert_eq!(old.raw().index, new.raw().index);
+    assert!(!scene.update_fill(old, Oklch::WHITE));
+    let (upserts, fills) = scene.drain_paint_changes();
+    assert!(fills.is_empty());
+    assert_eq!(upserts, vec![(new, filled(Oklch::BLACK))]);
+}
+
 fn quad(x: f32, _y: f32) -> DisplayItem {
     DisplayItem::PushOpacity(x / 1000.0)
 }

@@ -1,3 +1,4 @@
+use aqua_core::{FillPatch, Oklch};
 use std::cell::{Cell, RefCell};
 
 pub use aqua_core::geometry::Rect;
@@ -21,6 +22,7 @@ fn wrap(index: u32, generation: u32) -> NodeId {
 const CHANGE_LOG_LIMIT: usize = 2048;
 
 struct Node {
+    fill_only: bool,
     generation: u32,
     alive: bool,
     item: DisplayItem,
@@ -46,6 +48,7 @@ impl std::fmt::Debug for Node {
 /// O(changed log changed + changed), independent of total scene size.
 #[derive(Debug, Default)]
 pub struct Scene {
+    geometry_revision: u64,
     nodes: Vec<Node>,
     free: Vec<(u32, u32)>, // (index, generation) reusable slots
     /// Painter order: node indices back-to-front.
@@ -79,9 +82,14 @@ impl Scene {
         self.revision
     }
 
+    pub fn geometry_revision(&self) -> u64 {
+        self.geometry_revision
+    }
+
     /// Insert a node at the back (top) of painter order.
     pub fn insert(&mut self, item: DisplayItem) -> NodeId {
         self.revision += 1;
+        self.geometry_revision = self.revision;
         let rev = self.revision;
         let (index, generation) = if let Some((index, generation)) = self.free.pop() {
             let node = &mut self.nodes[index as usize];
@@ -89,11 +97,13 @@ impl Scene {
             node.alive = true;
             node.item = item;
             node.changed_at = rev;
+            node.fill_only = false;
             self.order.push(index);
             (index, generation)
         } else {
             let index = self.nodes.len() as u32;
             self.nodes.push(Node {
+                fill_only: false,
                 generation: 0,
                 alive: true,
                 item,
@@ -125,10 +135,41 @@ impl Scene {
         let already_pending = node.changed_at > self.consumed_through;
         self.revision += 1;
         node.item = item;
+        node.fill_only = false;
+        self.geometry_revision = self.revision;
         node.changed_at = self.revision;
         self.record_change(raw.index);
         if !already_pending {
             self.mark_dirty(raw.index);
+        }
+        true
+    }
+
+    pub fn update_fill(&mut self, id: NodeId, fill: Oklch) -> bool {
+        let raw = id.raw();
+        let Some(node) = self
+            .nodes
+            .get_mut(raw.index as usize)
+            .filter(|node| node.alive && node.generation == raw.generation)
+        else {
+            return false;
+        };
+        let current = match &mut node.item {
+            DisplayItem::Rect { fill, .. } | DisplayItem::Quad { fill, .. } => fill,
+            _ => return false,
+        };
+        if *current == fill {
+            return true;
+        }
+        *current = fill;
+        let pending = node.changed_at > self.consumed_through;
+        node.fill_only = !pending || node.fill_only;
+        self.revision += 1;
+        node.changed_at = self.revision;
+        if !pending {
+            self.mark_dirty(raw.index);
+        } else {
+            self.record_change(raw.index);
         }
         true
     }
@@ -144,6 +185,7 @@ impl Scene {
         }
         self.revision += 1;
         node.alive = false;
+        self.geometry_revision = self.revision;
         self.removed.push(std::mem::replace(
             &mut node.item,
             DisplayItem::PopClip, // placeholder; node is dead
@@ -173,6 +215,7 @@ impl Scene {
             self.order_dirty.set(true);
             self.struct_version += 1;
             self.revision += 1;
+            self.geometry_revision = self.revision;
         }
         true
     }
@@ -310,6 +353,62 @@ impl Scene {
         }
         self.consumed_through = self.revision;
         out
+    }
+
+    pub fn drain_paint_changes(&mut self) -> (Vec<(NodeId, DisplayItem)>, Vec<FillPatch>) {
+        let mut pending = std::mem::take(&mut self.dirty);
+        let fill_capacity = pending
+            .first()
+            .and_then(|&index| self.nodes.get(index as usize))
+            .filter(|node| node.fill_only)
+            .map_or(0, |_| pending.len());
+        let mut fills = Vec::with_capacity(fill_capacity);
+        let mut full = Vec::new();
+        for index in pending.drain(..) {
+            let Some(node) = self
+                .nodes
+                .get(index as usize)
+                .filter(|node| node.alive && node.changed_at > self.consumed_through)
+            else {
+                continue;
+            };
+            match (&node.item, node.fill_only) {
+                (DisplayItem::Rect { fill, .. } | DisplayItem::Quad { fill, .. }, true) => fills
+                    .push(FillPatch {
+                        node: wrap(index, node.generation),
+                        fill: *fill,
+                    }),
+                _ => full.push(index),
+            }
+        }
+        self.dirty = pending;
+        self.refresh_positions();
+        let positions = self.positions.borrow();
+        full.sort_by_key(|&index| positions.get(index as usize).copied().unwrap_or(u32::MAX));
+        full.dedup();
+        let upserts = full
+            .into_iter()
+            .map(|index| {
+                let node = &self.nodes[index as usize];
+                (wrap(index, node.generation), node.item.clone())
+            })
+            .collect();
+        self.consumed_through = self.revision;
+        (upserts, fills)
+    }
+
+    pub fn acknowledge_changes(&mut self) {
+        self.dirty.clear();
+        self.consumed_through = self.revision;
+    }
+
+    pub fn drain_fill_changes(&mut self, since: u64) -> Option<Vec<FillPatch>> {
+        if self.geometry_revision > since || self.consumed_through != since {
+            return None;
+        }
+        let (upserts, fills) = self.drain_paint_changes();
+        debug_assert!(upserts.is_empty());
+        Some(fills)
     }
 
     /// Drain items removed since the last drain (old bounds for repaint).

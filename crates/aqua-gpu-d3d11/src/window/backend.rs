@@ -461,28 +461,33 @@ impl WindowBackend {
     }
 
     pub fn settle_surfaces(&mut self) -> Result<(), GpuError> {
+        self.core.as_ref().ok_or_else(no_device)?;
+        let surfaces: Vec<_> = self.surfaces.keys().copied().collect();
+        for surface in surfaces {
+            self.settle_surface(surface)?;
+        }
+        Ok(())
+    }
+
+    pub fn settle_surface(&mut self, surface: SurfaceId) -> Result<bool, GpuError> {
         let core = self.core.as_ref().ok_or_else(no_device)?;
-        let mut failure = None;
-        for entry in self.surfaces.values_mut() {
-            match core.settle_swapchain(&mut entry.swapchain) {
-                Ok(true) => {
+        let entry = self
+            .surfaces
+            .get_mut(&surface)
+            .ok_or(GpuError::UnknownSurface(surface))?;
+        match core.settle_swapchain(&mut entry.swapchain) {
+            Ok(changed) => {
+                if changed {
                     entry.damage.reset();
                     entry.rendered = None;
                     entry.pending = false;
                 }
-                Ok(false) => {}
-                Err(error) => {
-                    failure = Some(error);
-                    break;
-                }
+                Ok(changed)
             }
-        }
-        match failure {
-            Some(error) => {
+            Err(error) => {
                 self.note_failure();
                 Err(error.into())
             }
-            None => Ok(()),
         }
     }
 

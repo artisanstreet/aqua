@@ -1,5 +1,5 @@
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant as WallInstant};
 
@@ -23,6 +23,9 @@ struct Probe {
     visibility: Mutex<Vec<bool>>,
     startup_left: AtomicU32,
     startup_done: AtomicU32,
+    maintenance_at: Mutex<Option<WallInstant>>,
+    maintenance_done: AtomicU32,
+    maintenance_changes: AtomicBool,
 }
 
 struct Fake {
@@ -55,6 +58,20 @@ impl FrameTarget for Fake {
     fn startup_step(&mut self) {
         self.probe.startup_left.fetch_sub(1, Relaxed);
         self.probe.startup_done.fetch_add(1, Relaxed);
+    }
+
+    fn maintenance_in(&self) -> Option<Duration> {
+        self.probe
+            .maintenance_at
+            .lock()
+            .unwrap()
+            .map(|at| at.saturating_duration_since(WallInstant::now()))
+    }
+
+    fn maintenance(&mut self) -> bool {
+        *self.probe.maintenance_at.lock().unwrap() = None;
+        self.probe.maintenance_done.fetch_add(1, Relaxed);
+        self.probe.maintenance_changes.load(Relaxed)
     }
 
     fn invalidate(&mut self) {
@@ -153,6 +170,43 @@ fn presented_events(link: &mut RenderLink) -> usize {
 
 fn stats_of(link: &RenderLink) -> &Arc<RenderStats> {
     link.stats()
+}
+
+#[test]
+fn scheduled_maintenance_repaints_once_without_trimming() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    let invalidations = probe.invalidations.load(Relaxed);
+    probe.maintenance_changes.store(true, Relaxed);
+    *probe.maintenance_at.lock().unwrap() = Some(WallInstant::now() + Duration::from_millis(20));
+    link.push_scene(&mut scene_with("#336699"));
+    wait_until("the maintenance repaint", || {
+        probe.presents.load(Relaxed) >= base + 2 && probe.maintenance_done.load(Relaxed) == 1
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(probe.presents.load(Relaxed), base + 2);
+    assert_eq!(probe.maintenance_done.load(Relaxed), 1);
+    assert_eq!(stats_of(&link).trims.load(Relaxed), 0);
+    assert!(probe.invalidations.load(Relaxed) > invalidations);
+}
+
+#[test]
+fn unchanged_maintenance_returns_to_sleep_without_repainting() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    *probe.maintenance_at.lock().unwrap() = Some(WallInstant::now() + Duration::from_millis(20));
+    link.push_scene(&mut scene_with("#336699"));
+    wait_until("the maintenance check", || {
+        probe.maintenance_done.load(Relaxed) == 1
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(probe.presents.load(Relaxed), base + 1);
+    assert_eq!(probe.maintenance_done.load(Relaxed), 1);
+    assert_eq!(stats_of(&link).trims.load(Relaxed), 0);
 }
 
 #[test]

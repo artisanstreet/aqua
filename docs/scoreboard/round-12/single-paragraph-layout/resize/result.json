@@ -1,0 +1,248 @@
+{
+  "design": "Three control/candidate release pairs ordered AB/BA/AB; each run measures two 120-sample resize traces, profiling off. Both executables are Aqua; no GPUI comparison or full scoreboard.",
+  "control_binary_sha256": "196d23a0fdafadedace2de70db92a3844e02a7de6df63e8beae5c0981ec900dc",
+  "candidate_binary_sha256": "f5b6dc86cf05ff47d5fb92beb5ab84514349a951081d37023569d738c79eea17",
+  "summary_median_of_six_trace_percentiles": {
+    "control": {
+      "p50_ms": 1.5975000000000001,
+      "p99_ms": 2.4690000000000003,
+      "max_ms": 5.1045,
+      "mean_ms": 1.597
+    },
+    "candidate": {
+      "p50_ms": 1.521,
+      "p99_ms": 2.5460000000000003,
+      "max_ms": 6.777,
+      "mean_ms": 1.5815000000000001
+    }
+  },
+  "runs": [
+    {
+      "variant": "control",
+      "run": 1,
+      "metrics": [
+        {
+          "name": "resize",
+          "kind": "resize",
+          "samples": "120",
+          "timeouts": "0",
+          "p50_ms": "1.6",
+          "p90_ms": "1.981",
+          "p99_ms": "2.453",
+          "max_ms": "8.041",
+          "mean_ms": "1.657",
+          "over4_ms": "1",
+          "over8_ms": "0",
+          "over16_ms": "0",
+          "over50_ms": "0"
+        },
+        {
+          "name": "resize2",
+          "kind": "resize",
+          "samples": "120",
+          "timeouts": "0",
+          "p50_ms": "1.608",
+          "p90_ms": "2.052",
+          "p99_ms": "2.458",
+          "max_ms": "2.547",
+          "mean_ms": "1.604",
+          "over4_ms": "0",
+          "over8_ms": "0",
+          "over16_ms": "0",
+          "over50_ms": "0"
+        }
+      ]
+    },
+    {
+      "variant": "candidate",
+      "run": 1,
+      "metrics": [
+        {
+          "name": "resize",
+          "kind": "resize",
+          "samples": "120",
+          "timeouts": "0",
+          "p50_ms": "1.553",
+          "p90_ms": "2.013",
+          "p99_ms": "2.315",
+          "max_ms": "7.575",
+          "mean_ms": "1.629",
+          "over4_ms": "1",
+          "over8_ms": "0",
+          "over16_ms": "0",
+          "over50_ms": "0"
+        },
+        {
+          "name": "resize2",
+          "kind": "resize",
+          "samples": "120",
+          "timeouts": "0",
+          "p50_ms": "1.519",
+          "p90_ms": "2.041",
+          "p99_ms": "2.738",
+          "max_ms": "2.843",
+          "mean_ms": "1.534",
+          "over4_ms": "0",
+          "over8_ms": "0",
+          "over16_ms": "0",
+          "over50_ms": "0"
+        }
+      ]
+    },
+    {
+      "variant": "candidate",
+      "run": 2,
+      "metrics": [
+        {
+          "name": "resize",
+          "kind": "resize",
+          "samples": "120",
+          "timeouts": "0",
+          "p50_ms": "1.511",
+          "p90_ms": "1.991",
+          "p99_ms": "2.356",
+          "max_ms": "8.06",
+          "mean_ms": "1.591",
+          "over4_ms": "1",
+          "over8_ms": "0",
+          "over16_ms": "0",
+          "over50_ms": "0"
+        },
+        {
+          "name": "resize2",
+          "kind": "resize",
+          "samples": "120",
+          "timeouts": "0",
+          "p50_ms": "1.523",
+          "p90_ms": "2.112",
+          "p99_ms": "2.591",
+          "max_ms": "5.979",
+          "mean_ms": "1.603",
+          "over4_ms": "1",
+          "over8_ms": "0",
+          "over16_ms": "0",
+          "over50_ms": "0"
+        }
+      ]
+    },
+    {
+      "variant": "control",
+      "run": 2,
+      "metrics": [
+        {
+          "name": "resize",
+          "kind": "resize",
+          "samples": "120",
+          "timeouts": "0",
+          "p50_ms": "1.774",
+          "p90_ms": "2.344",
+          "p99_ms": "3.387",
+          "max_ms": "7.603",
+          "mean_ms": "1.838",
+          "over4_ms": "1",
+          "over8_ms": "0",
+          "over16_ms": "0",
+          "over50_ms": "0"
+        },
+        {
+          "name": "resize2",
+          "kind": "resize",
+          "samples": "120",
+          "timeouts": "0",
+          "p50_ms": "1.595",
+          "p90_ms": "2.086",
+          "p99_ms": "2.53",
+          "max_ms": "2.626",
+          "mean_ms": "1.59",
+          "over4_ms": "0",
+          "over8_ms": "0",
+          "over16_ms": "0",
+          "over50_ms": "0"
+        }
+      ]
+    },
+    {
+      "variant": "control",
+      "run": 3,
+      "metrics": [
+        {
+          "name": "resize",
+          "kind": "resize",
+          "samples": "120",
+          "timeouts": "0",
+          "p50_ms": "1.46",
+          "p90_ms": "1.91",
+          "p99_ms": "2.292",
+          "max_ms": "7.552",
+          "mean_ms": "1.538",
+          "over4_ms": "1",
+          "over8_ms": "0",
+          "over16_ms": "0",
+          "over50_ms": "0"
+        },
+        {
+          "name": "resize2",
+          "kind": "resize",
+          "samples": "120",
+          "timeouts": "0",
+          "p50_ms": "1.512",
+          "p90_ms": "1.971",
+          "p99_ms": "2.48",
+          "max_ms": "2.657",
+          "mean_ms": "1.536",
+          "over4_ms": "0",
+          "over8_ms": "0",
+          "over16_ms": "0",
+          "over50_ms": "0"
+        }
+      ]
+    },
+    {
+      "variant": "candidate",
+      "run": 3,
+      "metrics": [
+        {
+          "name": "resize",
+          "kind": "resize",
+          "samples": "120",
+          "timeouts": "0",
+          "p50_ms": "1.484",
+          "p90_ms": "2.13",
+          "p99_ms": "2.501",
+          "max_ms": "8.129",
+          "mean_ms": "1.572",
+          "over4_ms": "1",
+          "over8_ms": "0",
+          "over16_ms": "0",
+          "over50_ms": "0"
+        },
+        {
+          "name": "resize2",
+          "kind": "resize",
+          "samples": "120",
+          "timeouts": "0",
+          "p50_ms": "1.554",
+          "p90_ms": "2.034",
+          "p99_ms": "2.68",
+          "max_ms": "2.731",
+          "mean_ms": "1.554",
+          "over4_ms": "0",
+          "over8_ms": "0",
+          "over16_ms": "0",
+          "over50_ms": "0"
+        }
+      ]
+    }
+  ],
+  "validation": {
+    "foreground_unchanged": true,
+    "timeouts": 0,
+    "preflight_quiet_checks": "All six passed; load 1.0\u20134.5% against 25% limit."
+  },
+  "conclusion": "Resize results overlap; the allocation saving is established, but this comparison does not establish an Editor resize-latency improvement.",
+  "limits": [
+    "Median of trace percentiles is not a pooled raw-sample percentile.",
+    "The phase-only report lists missing unrelated metrics and exits FAIL; that is not a new full scoreboard.",
+    "Original shared-checkout source rows in harness manifests are superseded by the exact binary hashes and source manifests here."
+  ]
+}

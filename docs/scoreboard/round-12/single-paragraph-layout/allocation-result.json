@@ -17,6 +17,6 @@
   "limits": [
     "This is a focused allocation measurement, not an Editor latency or retained-memory claim.",
     "Multi-paragraph placement caching is preserved. Single-paragraph finished output was already discarded after cloning.",
-    "Release Editor resize comparison is pending."
+    "Release Editor resize comparison is recorded in resize/: percentile ranges overlap; no established application latency gain."
   ]
 }

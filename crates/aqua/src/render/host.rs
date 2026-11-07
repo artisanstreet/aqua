@@ -49,6 +49,12 @@ pub trait FrameTarget {
         false
     }
     fn startup_step(&mut self) {}
+    fn maintenance_in(&self) -> Option<Duration> {
+        None
+    }
+    fn maintenance(&mut self) -> bool {
+        false
+    }
     fn idle_trim_in(&mut self) -> Option<Duration> {
         None
     }

@@ -123,6 +123,7 @@ pub fn shadow(
 pub fn glyph_run(glyphs: &[(Rect, Rect, &str, f32)]) -> PaintCommand {
     PaintCommand::Glyphs(GlyphRun {
         atlas: ATLAS,
+        coverage: aqua_graph::Coverage::Text,
         glyphs: glyphs
             .iter()
             .map(|(bounds, texels, color, alpha)| Glyph {
@@ -255,7 +256,66 @@ fn deep_commands() -> Vec<PaintCommand> {
 
 pub fn cases() -> Vec<Case> {
     let mut nested = nested_commands();
+    let exact_mask = PaintCommand::Glyphs(GlyphRun {
+        atlas: ATLAS,
+        coverage: aqua_graph::Coverage::Exact,
+        glyphs: vec![Glyph {
+            bounds: Rect {
+                x: 32.0,
+                y: 8.0,
+                w: 16.0,
+                h: 16.0,
+            },
+            texels: Rect {
+                x: 16.0,
+                y: 0.0,
+                w: 16.0,
+                h: 16.0,
+            },
+            color: hex("#808080", 0.65),
+        }]
+        .into(),
+    });
     let mut cases = vec![
+        standard(
+            "exact_mask_between_text_masks",
+            Oklch::TRANSPARENT,
+            vec![
+                glyph_run(&[(
+                    Rect {
+                        x: 4.0,
+                        y: 8.0,
+                        w: 16.0,
+                        h: 16.0,
+                    },
+                    Rect {
+                        x: 16.0,
+                        y: 0.0,
+                        w: 16.0,
+                        h: 16.0,
+                    },
+                    "#808080",
+                    0.65,
+                )]),
+                exact_mask,
+                glyph_run(&[(
+                    Rect {
+                        x: 60.0,
+                        y: 8.0,
+                        w: 16.0,
+                        h: 16.0,
+                    },
+                    Rect {
+                        x: 16.0,
+                        y: 0.0,
+                        w: 16.0,
+                        h: 16.0,
+                    },
+                    "#808080",
+                    0.65,
+                )]),
+            ],
+        ),
         standard(
             "solid_rect",
             Oklch::TRANSPARENT,

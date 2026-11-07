@@ -1,0 +1,9 @@
+{
+  "status": "Incomplete benchmark; no new full scoreboard",
+  "reason": "Key fixture used default port 47961 instead of the intended port 48961. Serve reproduces Windows os error 10048 (address already in use).",
+  "reproduction": "bench-fixture.exe serve with identical failed key fixture inputs and --listen 127.0.0.1:47961 exits 1: Only one usage of each socket address is normally permitted.",
+  "available_port": "A Windows loopback TcpListener starts and stops successfully on port 48961.",
+  "observation": "Get-NetTCPConnection did not identify an owner. Current IPv4 and IPv6 excluded ranges contain only 50000-50059; no current exclusion for 47961 was established.",
+  "effect": "First repetition main, open and stream phases completed for both editors. Key server failed twice before editor launch; subsequent phases did not run. Preserve this attempt separately and rerun the complete comparison.",
+  "prevention": "Derive default key port as selected main fixture port +11; preserve explicit KEY_LATENCY_PORT override."
+}

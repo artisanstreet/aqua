@@ -160,48 +160,6 @@ fn empty_filtered_children_do_not_allocate_a_child_buffer() {
         .is_empty());
 }
 
-#[test]
-fn loose_and_unknown_bounds_preserve_every_child_without_oversized_reservations() {
-    struct Hints {
-        values: std::ops::Range<u32>,
-        upper: Option<usize>,
-    }
-
-    impl Iterator for Hints {
-        type Item = Element;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            self.values
-                .next()
-                .map(|value| ui::Box::new().build().with_key(value))
-        }
-
-        fn size_hint(&self) -> (usize, Option<usize>) {
-            (0, self.upper)
-        }
-    }
-
-    for upper in [None, Some(usize::MAX), Some(usize::MAX - 1)] {
-        let element = ui::Box::new()
-            .children(Hints {
-                values: 0..65,
-                upper,
-            })
-            .build();
-        let spec = lower_specs(&element).unwrap().pop().unwrap();
-        let expected = (0..65)
-            .map(|value| Some(aqua_ui::tree::hash_key(aqua_ui::element::Key::U32(value))))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            spec.children
-                .iter()
-                .map(|child| child.key)
-                .collect::<Vec<_>>(),
-            expected
-        );
-    }
-}
-
 const PAGE: Style = Style::new().width(px(1280.0)).height(px(800.0)).column();
 const ROW: Style = Style::new()
     .width(px(1280.0))

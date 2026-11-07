@@ -1,0 +1,20 @@
+{
+  "editor_pr": "https://github.com/artisanstreet/editor/pull/516",
+  "editor_fix_commit": "98ff20099d178e5c5e08dd6e02024a0ded2ecc9c",
+  "candidate_sha256": "ba9a14654a9e5476bb68267892c020b5f95204645b6390b49ae6aab8af91bd4a",
+  "visual_verdict": "FAIL",
+  "worst_whole_image_changed_pct": 15.366,
+  "whole_image_limit_pct": 18,
+  "jump_button_limit_pct": 30,
+  "jump_regions_changed_pct": {
+    "notch1": 0.2,
+    "depth1": 1.9,
+    "depth2": 2.8,
+    "depth3": 2.9,
+    "depth4": 96.6
+  },
+  "inspection": "Jump button present in all five checked captures. Depth4 has text behind the GPUI glass button and empty background behind Aqua. Transcript is approximately 127 physical pixels higher in Aqua; raw region gate remains failed.",
+  "functional_action_checks": "PASS",
+  "foreground_changed": false,
+  "performance_verdict": "Not rerun; historical joint verdict remains 30/40 FAIL."
+}

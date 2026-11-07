@@ -28,10 +28,12 @@ impl From<Paint> for PaintValue {
 }
 
 impl PaintValue {
+    #[inline]
     pub fn is_plain(&self) -> bool {
         matches!(self, Self::Empty | Self::Solid(_))
     }
 
+    #[inline]
     pub fn fill(&self) -> Option<Oklch> {
         match self {
             Self::Empty => None,
@@ -40,6 +42,7 @@ impl PaintValue {
         }
     }
 
+    #[inline]
     pub fn set_fill(&mut self, fill: Option<Oklch>) -> bool {
         if self.fill() == fill {
             return false;
@@ -56,6 +59,7 @@ impl PaintValue {
         true
     }
 
+    #[inline]
     pub fn resolve(&self) -> Paint {
         match self {
             Self::Empty => Paint::default(),

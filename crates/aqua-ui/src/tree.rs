@@ -1052,7 +1052,31 @@ fn default_paint() -> &'static Paint {
     DEFAULT.with(|paint| *paint)
 }
 
+#[derive(Clone, Copy)]
+enum FillMutation {
+    Unchanged,
+    Plain,
+    Other,
+}
+
 impl NodeRecord {
+    #[inline]
+    fn fill_change(&mut self, fill: Option<Oklch>) -> FillMutation {
+        let (changed, plain) = match &mut self.kind {
+            NodeKind::Box(content) => {
+                let plain =
+                    content.plain_paint() && content.paint.fill().is_some() && fill.is_some();
+                (content.set_fill(fill), plain)
+            }
+            _ => (set_fill_slot(&mut self.paint_slot, fill), false),
+        };
+        match (changed, plain) {
+            (false, _) => FillMutation::Unchanged,
+            (true, true) => FillMutation::Plain,
+            (true, false) => FillMutation::Other,
+        }
+    }
+
     #[must_use]
     pub fn paint(&self) -> &Paint {
         if let NodeKind::Box(content) = &self.kind {
@@ -2977,21 +3001,54 @@ impl UiTree {
         let Some(record) = self.nodes.get_mut(id.raw()) else {
             return false;
         };
-        let (changed, eligible) = match &mut record.kind {
-            NodeKind::Box(content) => {
-                let eligible =
-                    content.plain_paint() && content.paint.fill().is_some() && fill.is_some();
-                (content.set_fill(fill), eligible)
+        let change = record.fill_change(fill);
+        if matches!(change, FillMutation::Unchanged) {
+            return false;
+        }
+        self.content_version += 1;
+        record.paint_rev = self.content_version;
+        record.dirty_paint = true;
+        match (change, fill) {
+            (FillMutation::Plain, Some(fill)) if self.non_fill_version <= self.fill_base => {
+                self.fill_changes
+                    .push(aqua_core::FillPatch { node: id, fill });
             }
-            _ => (set_fill_slot(&mut record.paint_slot, fill), false),
-        };
-        if changed {
-            match (eligible, fill) {
-                (true, Some(fill)) => self.touch_fill(id, fill),
-                _ => self.touch_paint(id),
+            (FillMutation::Plain, _) => {}
+            _ => self.invalidate_fill_changes(),
+        }
+        true
+    }
+
+    pub(crate) fn set_fills(&mut self, nodes: &[NodeId], colors: &[Oklch]) {
+        let revision = self.content_version + 1;
+        let mut changed = false;
+        let mut other = false;
+        for (&id, &fill) in nodes.iter().zip(colors) {
+            let Some(record) = self.nodes.get_mut(id.raw()) else {
+                continue;
+            };
+            let change = record.fill_change(Some(fill));
+            if matches!(change, FillMutation::Unchanged) {
+                continue;
+            }
+            changed = true;
+            record.paint_rev = revision;
+            record.dirty_paint = true;
+            match change {
+                FillMutation::Plain if self.non_fill_version <= self.fill_base => {
+                    self.fill_changes
+                        .push(aqua_core::FillPatch { node: id, fill });
+                }
+                FillMutation::Plain => {}
+                _ => other = true,
             }
         }
-        changed
+        if changed {
+            self.content_version = revision;
+            if other {
+                self.invalidate_fill_changes();
+            }
+        }
     }
 
     pub(crate) fn refresh_plain_box(

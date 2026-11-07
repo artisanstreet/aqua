@@ -100,3 +100,28 @@ fn reactive_batches_coalesce_inputs_and_report_errors_without_replacing_nodes() 
     runtime.flush();
     assert_eq!(tree.pending_commands(), 0);
 }
+
+#[test]
+fn a_batch_stamps_every_changed_node_and_noop_batches_preserve_the_revision() {
+    let mut tree = UiTree::new();
+    let nodes = mounted(&mut tree);
+    let group = FillGroup::new(&tree, nodes.clone()).unwrap();
+    group.apply(&mut tree, &[Oklch::BLACK; 3]).unwrap();
+    tree.acknowledge_fills();
+    let before = tree.content_version();
+    group.apply(&mut tree, &[Oklch::WHITE; 3]).unwrap();
+    let revision = tree.content_version();
+    assert!(revision > before);
+    assert_eq!(tree.changed_paint(before), nodes);
+    assert!(nodes
+        .iter()
+        .all(|node| tree.get(*node).unwrap().paint_rev == revision));
+    group.apply(&mut tree, &[Oklch::WHITE; 3]).unwrap();
+    assert_eq!(tree.content_version(), revision);
+    let fills = tree.take_fill_changes().unwrap();
+    assert_eq!(fills.len(), nodes.len());
+    assert!(fills
+        .iter()
+        .zip(&nodes)
+        .all(|(patch, node)| patch.node == *node && patch.fill == Oklch::WHITE));
+}

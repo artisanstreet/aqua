@@ -104,9 +104,7 @@ impl FillGroup {
             }
             self.0.epoch.set(epoch);
         }
-        for (&node, &color) in self.0.nodes.iter().zip(colors) {
-            tree.set_fill(node, Some(color));
-        }
+        tree.set_fills(&self.0.nodes, colors);
         Ok(())
     }
 

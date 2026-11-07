@@ -22,10 +22,11 @@ pub enum Kind {
     BlurDown,
     BlurUp,
     ColorMatrix,
+    Solid,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 11] = [
+    pub const ALL: [Kind; 12] = [
         Kind::Quad,
         Kind::Shadow,
         Kind::Glyph,
@@ -37,6 +38,7 @@ impl Kind {
         Kind::BlurDown,
         Kind::BlurUp,
         Kind::ColorMatrix,
+        Kind::Solid,
     ];
 }
 
@@ -56,6 +58,7 @@ enum Layout {
     Glyph,
     Image,
     Slug,
+    Solid,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +89,7 @@ fn shaders(kind: Kind) -> Shaders {
         blend,
     };
     match kind {
+        Kind::Solid => instanced("vs_solid", "ps_solid", Layout::Solid),
         Kind::Quad => instanced("vs_quad", "ps_quad", Layout::Quad),
         Kind::Shadow => instanced("vs_shadow", "ps_shadow", Layout::Shadow),
         Kind::Glyph => instanced("vs_glyph", "ps_glyph", Layout::Glyph),
@@ -118,6 +122,7 @@ fn element(name: PCSTR, index: u32) -> D3D11_INPUT_ELEMENT_DESC {
 fn elements(layout: Layout) -> Vec<D3D11_INPUT_ELEMENT_DESC> {
     let names: &[PCSTR] = match layout {
         Layout::None => &[],
+        Layout::Solid => &[s!("BOUNDS"), s!("FILL")],
         Layout::Quad => &[
             s!("BOUNDS"),
             s!("CLIP"),

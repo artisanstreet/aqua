@@ -71,6 +71,7 @@ struct Slot {
 
 fn pass_label(kind: &PassKind) -> &'static str {
     match kind {
+        PassKind::Solids { .. } => "solids",
         PassKind::Instanced { .. } => "quads",
         PassKind::Shadows { .. } => "shadows",
         PassKind::Glyphs { .. } => "glyphs",
@@ -192,6 +193,7 @@ fn srv_desc(format: DXGI_FORMAT) -> D3D12_SHADER_RESOURCE_VIEW_DESC {
 enum Upload {
     None,
     Quads { offset: u64, count: u32 },
+    Solids { offset: u64, count: u32 },
     Shadows { offset: u64, count: u32 },
     Sprites { offset: u64, count: u32 },
     Parameters { offset: u64 },
@@ -236,6 +238,20 @@ impl Scratch {
         let bytes = &mut self.bytes;
         for pass in &plan.passes {
             let upload = match &pass.kind {
+                PassKind::Solids { instances } if !instances.is_empty() => {
+                    let (offset, count) = append_all(
+                        bytes,
+                        instances.iter().map(|instance| {
+                            let bounds = instance.bounds;
+                            let fill = instance.fill;
+                            [
+                                bounds.x, bounds.y, bounds.w, bounds.h, fill.l, fill.c, fill.h,
+                                fill.alpha,
+                            ]
+                        }),
+                    );
+                    Upload::Solids { offset, count }
+                }
                 PassKind::Instanced { instances, .. } if !instances.is_empty() => {
                     let (offset, count) = append_all(bytes, instances.iter().map(pack_quad));
                     Upload::Quads { offset, count }
@@ -989,6 +1005,23 @@ impl SceneRenderer {
                     list.DrawInstanced(4, count, 0, 0);
                     stats.draws += 1;
                 },
+                (PassKind::Solids { .. }, Upload::Solids { offset, count }) => unsafe {
+                    list.SetPipelineState(&self.pipelines.get(Kind::Solid, write_bound.format)?);
+                    let values = constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent);
+                    self.active
+                        .binding
+                        .set_constants(list, &values, bound_index);
+                    list.IASetVertexBuffers(
+                        0,
+                        Some(&[D3D12_VERTEX_BUFFER_VIEW {
+                            BufferLocation: upload_address + offset,
+                            SizeInBytes: count * 32,
+                            StrideInBytes: 32,
+                        }]),
+                    );
+                    list.DrawInstanced(4, count, 0, 0);
+                    stats.draws += 1;
+                },
                 (PassKind::Shadows { .. }, Upload::Shadows { offset, count }) => unsafe {
                     list.SetPipelineState(&self.pipelines.get(Kind::Shadow, write_bound.format)?);
                     let values = constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent);
@@ -1101,6 +1134,7 @@ impl SceneRenderer {
                 },
                 (
                     PassKind::Instanced { .. }
+                    | PassKind::Solids { .. }
                     | PassKind::Shadows { .. }
                     | PassKind::Glyphs { .. }
                     | PassKind::Slug { .. }

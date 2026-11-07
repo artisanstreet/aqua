@@ -128,6 +128,12 @@ impl<'a> Frame<'a> {
 
     fn execute(&self, pass: &Pass, target: &mut Layer) -> Result<(), GpuError> {
         match &pass.kind {
+            PassKind::Solids { instances } => {
+                instances
+                    .iter()
+                    .for_each(|instance| draw_quad(target, &instance.quad()));
+                Ok(())
+            }
             PassKind::Instanced {
                 shader: ShaderId::Quad,
                 instances,

@@ -26,6 +26,7 @@ pub enum Kind {
     BlurDown,
     BlurUp,
     ColorMatrix,
+    Solid,
 }
 
 struct Shaders {
@@ -44,6 +45,12 @@ enum Blending {
 
 fn shaders(kind: Kind) -> Shaders {
     match kind {
+        Kind::Solid => Shaders {
+            vertex: "vs_solid",
+            pixel: "ps_solid",
+            instanced: true,
+            blend: Blending::Over,
+        },
         Kind::Quad => Shaders {
             vertex: "vs_quad",
             pixel: "ps_quad",
@@ -121,7 +128,7 @@ pub struct PipelineStats {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 11] = [
+    pub const ALL: [Kind; 12] = [
         Kind::Quad,
         Kind::Shadow,
         Kind::Glyph,
@@ -133,6 +140,7 @@ impl Kind {
         Kind::BlurDown,
         Kind::BlurUp,
         Kind::ColorMatrix,
+        Kind::Solid,
     ];
 }
 
@@ -386,11 +394,16 @@ impl Pipelines {
         format: DXGI_FORMAT,
     ) -> Result<(ID3D12PipelineState, bool), Error> {
         let shaders = shaders(kind);
+        let solid_layout = vec![
+            instance_element(s!("BOUNDS"), 0),
+            instance_element(s!("FILL"), 1),
+        ];
         let glyph_layout = super::sprites::glyph_layout();
         let image_layout = super::sprites::image_layout();
         let slug_layout = super::sprites::slug_layout();
         let layout: &[D3D12_INPUT_ELEMENT_DESC] = match (shaders.instanced, kind) {
             (false, _) => &[],
+            (true, Kind::Solid) => &solid_layout,
             (true, Kind::Glyph) => &glyph_layout,
             (true, Kind::Slug) => &slug_layout,
             (true, Kind::Image | Kind::ImageReplace) => &image_layout,

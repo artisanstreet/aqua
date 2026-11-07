@@ -128,6 +128,28 @@ impl QuadInstance {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SolidInstance {
+    pub bounds: Rect,
+    pub fill: Oklch,
+}
+
+impl SolidInstance {
+    pub fn quad(self) -> QuadInstance {
+        QuadInstance {
+            bounds: self.bounds,
+            radius: 0.0,
+            border_width: 0.0,
+            fill: self.fill,
+            border_color: Oklch::TRANSPARENT,
+            clip: None,
+            gradient: None,
+            opacity: 1.0,
+            linear: Linear2::IDENTITY,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadowInstance {
     pub bounds: Rect,
     pub radius: f32,
@@ -321,6 +343,9 @@ impl FilterParams {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PassKind {
+    Solids {
+        instances: Vec<SolidInstance>,
+    },
     Instanced {
         shader: ShaderId,
         instances: Vec<QuadInstance>,
@@ -364,6 +389,7 @@ pub enum PassKind {
 impl PassKind {
     pub fn draw_count(&self) -> usize {
         match self {
+            PassKind::Solids { instances } => instances.len(),
             PassKind::Instanced { instances, .. } => instances.len(),
             PassKind::Shadows { instances } => instances.len(),
             PassKind::Glyphs { instances, .. } => instances.len(),

@@ -360,3 +360,49 @@ fn lowering_applies_translation_scale_and_balances_groups() {
         .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn retained_solids_patch_pixels_and_rebuild_after_geometry_changes() {
+    let log = Log::default();
+    let mut host = host(&log, SharedClock::default());
+    let mut side = RenderSide::new();
+    setup(
+        &mut side,
+        vec![(node(0), solid_rect(0.0, color("#ff0000")))],
+    );
+    host.execute(&mut side, 1);
+    assert!(host.retains_solid_geometry(&side));
+    assert_eq!(pixel(&mut host, 4, 4), [255, 0, 0, 255]);
+    side.step(input(
+        vec![RenderCommand::Scene(SceneDiff {
+            fills: vec![aqua_core::FillPatch {
+                node: node(0),
+                fill: color("#00ff00"),
+            }],
+            ..SceneDiff::default()
+        })],
+        1.0,
+    ));
+    host.execute(&mut side, 2);
+    assert!(host.retains_solid_geometry(&side));
+    assert_eq!(pixel(&mut host, 4, 4), [0, 255, 0, 255]);
+    side.step(input(
+        vec![RenderCommand::Scene(SceneDiff {
+            upserts: vec![(node(0), solid_rect(16.0, color("#0000ff")))],
+            ..SceneDiff::default()
+        })],
+        2.0,
+    ));
+    assert!(!host.retains_solid_geometry(&side));
+    host.execute(&mut side, 3);
+    assert_eq!(pixel(&mut host, 20, 4), [0, 0, 255, 255]);
+    assert_eq!(pixel(&mut host, 4, 4), [0, 0, 0, 255]);
+}
+
+fn solid_rect(x: f32, fill: Oklch) -> DisplayItem {
+    let mut item = rect_item(x, fill);
+    if let DisplayItem::Rect { border_color, .. } = &mut item {
+        *border_color = Oklch::TRANSPARENT;
+    }
+    item
+}

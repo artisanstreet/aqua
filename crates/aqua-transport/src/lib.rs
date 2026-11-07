@@ -4,6 +4,7 @@ pub mod gpu_host;
 pub mod inspector;
 pub mod lower;
 pub mod ring;
+mod solid;
 pub mod thread;
 pub mod trim;
 

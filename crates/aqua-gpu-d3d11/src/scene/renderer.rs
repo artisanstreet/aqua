@@ -113,6 +113,7 @@ struct SurfaceMirror {
 enum Upload {
     None,
     Quads { offset: u64, count: u32 },
+    Solids { offset: u64, count: u32 },
     Shadows { offset: u64, count: u32 },
     Sprites { offset: u64, count: u32 },
 }
@@ -148,6 +149,20 @@ impl Scratch {
         let colors = &mut self.colors;
         for pass in &plan.passes {
             let upload = match &pass.kind {
+                PassKind::Solids { instances } if !instances.is_empty() => {
+                    let (offset, count) = append_all(
+                        bytes,
+                        instances.iter().map(|instance| {
+                            let bounds = instance.bounds;
+                            let fill = instance.fill;
+                            [
+                                bounds.x, bounds.y, bounds.w, bounds.h, fill.l, fill.c, fill.h,
+                                fill.alpha,
+                            ]
+                        }),
+                    );
+                    Upload::Solids { offset, count }
+                }
                 PassKind::Instanced { instances, .. } if !instances.is_empty() => {
                     let (offset, count) = append_all(
                         bytes,
@@ -201,6 +216,7 @@ struct Bound {
 
 fn pass_label(kind: &PassKind) -> &'static str {
     match kind {
+        PassKind::Solids { .. } => "solids",
         PassKind::Instanced { .. } => "quads",
         PassKind::Shadows { .. } => "shadows",
         PassKind::Glyphs { .. } => "glyphs",
@@ -975,6 +991,17 @@ impl SceneRenderer {
                     unsafe { context.DrawInstanced(4, count, 0, 0) };
                     stats.draws += 1;
                 }
+                (PassKind::Solids { .. }, Upload::Solids { offset, count }) => {
+                    let program = self.pipelines.get(Kind::Solid)?;
+                    self.write_constants(
+                        context,
+                        constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent, None),
+                    )?;
+                    self.use_program(context, &program);
+                    self.instances_at(context, offset, 32);
+                    unsafe { context.DrawInstanced(4, count, 0, 0) };
+                    stats.draws += 1;
+                }
                 (PassKind::Shadows { .. }, Upload::Shadows { offset, count }) => {
                     let program = self.pipelines.get(Kind::Shadow)?;
                     self.write_constants(
@@ -1093,6 +1120,7 @@ impl SceneRenderer {
                 }
                 (
                     PassKind::Instanced { .. }
+                    | PassKind::Solids { .. }
                     | PassKind::Shadows { .. }
                     | PassKind::Glyphs { .. }
                     | PassKind::Slug { .. }

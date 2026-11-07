@@ -20,8 +20,8 @@ pub use paint::{
 pub use plan::{
     Barrier, Blend, ColorMatrix, Coverage, CustomPassSpec, CustomShaderId, Extent, FilterParams,
     FramePlan, GlyphInstance, Gradient, GradientStop, ImageInstance, LoadOp, Pass, PassKind,
-    QuadInstance, ResourceState, ShaderId, ShadowCast, ShadowInstance, SpecConstant, TextureFormat,
-    TextureHandle, TextureRef, TransientId, TransientTexture,
+    QuadInstance, ResourceState, ShaderId, ShadowCast, ShadowInstance, SolidInstance, SpecConstant,
+    TextureFormat, TextureHandle, TextureRef, TransientId, TransientTexture,
 };
 pub use slug::SlugInstance;
 pub use tone::ToneCurve;

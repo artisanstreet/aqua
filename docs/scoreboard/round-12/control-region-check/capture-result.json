@@ -16,5 +16,5 @@
   "inspection": "Jump button present in all five checked captures. Depth4 has text behind the GPUI glass button and empty background behind Aqua. Transcript is approximately 127 physical pixels higher in Aqua; raw region gate remains failed.",
   "functional_action_checks": "PASS",
   "foreground_changed": false,
-  "performance_verdict": "Not rerun; historical joint verdict remains 30/40 FAIL."
+  "performance_verdict": "Not rerun; historical joint verdict remains 31/41 FAIL."
 }

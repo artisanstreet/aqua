@@ -1620,3 +1620,7 @@ Visuals pass under PR11's foreground-glyph comparison: worst whole-image changed
 ### 14.CG Round 12 rejected fast window capture (2026-11-07)
 
 Three settled capture runs per editor compare PrintWindow flags 0 and 2 in AB/BA/AB order. Flags 0 return success in about 5–15 ms but produce black frames for both renderers; flags 2 retain complete, stable content. All six valid runs open the fixture thread and preserve foreground without retries. The faster path is rejected; normal capture and performance criteria are unchanged. Probe source, raw valid logs and limitations are under `docs/scoreboard/round-12/rejected-print-window-flags/`. This is a capture diagnostic, not a new scoreboard or a startup-overhead estimate.
+
+### 14.CH Round 12 focused thread opening (2026-11-07)
+
+Three stats-off Aqua-only pairs compare the immutable path-cache control and coarse-message candidate in AB/BA/AB order. Control opening times are 206/210/206 ms; candidate times are 218/209/205 ms. Medians are 206 and 209 ms with overlapping ranges. This small sample establishes neither a repeatable regression nor equivalence; the full 222-versus-220 ms opening failure remains. All six opens complete without retries or foreground changes. One preflight CPU sample is 19.5%, below the existing 25% limit but much higher than the others. Exact identities and raw logs are under `docs/scoreboard/round-12/coarse-message-open/`.

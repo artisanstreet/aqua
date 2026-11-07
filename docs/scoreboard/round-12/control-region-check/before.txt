@@ -1,0 +1,12 @@
+depth1         changed=  113680 px ( 5.324%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,2=14.0% 2,3=12.2% 1,5=11.8% 
+depth2         changed=  122774 px ( 5.750%) bbox=1876x1122+22+0 worst_tiles(row,col)=0,3=16.3% 0,2=16.3% 1,5=11.8% 
+depth3         changed=  181540 px ( 8.502%) bbox=1876x1122+22+0 worst_tiles(row,col)=1,2=27.4% 1,3=25.6% 0,2=17.1% 
+depth4         changed=  184618 px ( 8.646%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,2=35.5% 2,3=31.3% 3,2=17.6% 
+notch1         changed=   65567 px ( 3.071%) bbox=1876x1107+22+0 worst_tiles(row,col)=1,5=11.8% 2,2=7.3% 2,3=6.4% 
+region notch1       jump-latest    changed=   22 px (100.0%, limit 30%, reference_pixels=22 foreground=60%)
+region depth1       jump-latest    changed=  134 px (609.1%, limit 30%, reference_pixels=22 foreground=60%)
+region depth2       jump-latest    changed=  130 px (590.9%, limit 30%, reference_pixels=22 foreground=60%)
+region depth3       jump-latest    changed=  122 px (554.5%, limit 30%, reference_pixels=22 foreground=60%)
+region depth4       jump-latest    changed=  144 px (654.5%, limit 30%, reference_pixels=22 foreground=60%)
+worst_changed_pct=8.646
+PIXEL DIFF OVER LIMIT: notch1@jump-latest:100.0% depth1@jump-latest:609.1% depth2@jump-latest:590.9% depth3@jump-latest:554.5% depth4@jump-latest:654.5%

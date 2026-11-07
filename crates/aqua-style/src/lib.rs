@@ -827,10 +827,12 @@ impl Style {
         self
     }
 
+    #[inline]
     pub const fn gpui_source_text_color_opt(&self) -> Option<Option<aqua_core::GpuiTextColor>> {
         self.gpui_source_text_color
     }
 
+    #[inline]
     pub const fn gpui_text_color_opt(&self) -> Option<Option<aqua_core::GpuiHsla>> {
         self.gpui_text_color
     }
@@ -860,20 +862,24 @@ impl Style {
         self
     }
 
+    #[inline]
     pub fn text_style_opt(&self) -> Option<&TextStyle> {
         self.text_style.as_ref()
     }
 
+    #[inline]
     pub fn font_size_opt(&self) -> Option<f32> {
         self.font_size
     }
 
     #[must_use]
+    #[inline]
     pub fn text_color_opt(&self) -> Option<Oklch> {
         self.text_color
     }
 
     #[must_use]
+    #[inline]
     pub fn text_wrap_opt(&self) -> Option<bool> {
         self.text_wrap
     }
@@ -960,6 +966,7 @@ impl Style {
         out
     }
 
+    #[inline]
     pub fn apply_to(&self, layout: &mut LayoutStyle, paint: &mut Paint) {
         if let Some(v) = self.width {
             layout.width = v;

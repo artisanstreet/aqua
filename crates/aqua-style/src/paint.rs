@@ -11,6 +11,7 @@ pub enum PaintValue {
 }
 
 impl From<Paint> for PaintValue {
+    #[inline]
     fn from(paint: Paint) -> Self {
         match paint
             == (Paint {
@@ -63,6 +64,19 @@ impl PaintValue {
                 ..Paint::default()
             },
             Self::Styled(paint) => paint.as_ref().clone(),
+        }
+    }
+}
+
+impl From<PaintValue> for Paint {
+    fn from(value: PaintValue) -> Self {
+        match value {
+            PaintValue::Empty => Self::default(),
+            PaintValue::Solid(fill) => Self {
+                fill: Some(fill),
+                ..Self::default()
+            },
+            PaintValue::Styled(paint) => *paint,
         }
     }
 }

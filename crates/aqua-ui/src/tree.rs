@@ -1012,6 +1012,7 @@ impl Default for NodeSemantics {
 /// One retained node.
 pub struct NodeRecord {
     pub(crate) plain_bindings: bool,
+    pub(crate) style_identity: Option<Rc<LayoutStyle>>,
     pub control: Option<Box<crate::controls::Control>>,
     /// Node kind + properties.
     pub kind: NodeKind,
@@ -2597,6 +2598,7 @@ impl UiTree {
         // only node records are fresh.
         let id = NodeId::from_raw(self.nodes.insert(NodeRecord {
             plain_bindings: false,
+            style_identity: None,
             control,
             kind,
             style,
@@ -2929,6 +2931,31 @@ impl UiTree {
         changed
     }
 
+    pub(crate) fn refresh_plain_box(
+        &mut self,
+        id: NodeId,
+        fill: Option<Oklch>,
+        style: &Rc<LayoutStyle>,
+    ) {
+        let Some(record) = self.nodes.get_mut(id.raw()) else {
+            return;
+        };
+        if !record
+            .style_identity
+            .as_ref()
+            .is_some_and(|current| Rc::ptr_eq(current, style))
+        {
+            record.style_identity = Some(Rc::clone(style));
+        }
+        let changed = match &mut record.kind {
+            NodeKind::Box(content) => content.set_fill(fill),
+            _ => false,
+        };
+        if changed {
+            self.touch_paint(id);
+        }
+    }
+
     /// Register (or replace) the painter for a canvas node. Returns the
     /// painter id. The callback runs at emission with the committed bounds.
     pub fn set_canvas_painter(&mut self, id: NodeId, paint: CanvasPaintCallback) -> Option<u64> {
@@ -3122,6 +3149,7 @@ impl UiTree {
             .expect("taffy set_style");
         if let Some(rec) = self.nodes.get_mut(id.raw()) {
             rec.style = style;
+            rec.style_identity = None;
         }
         self.mark_layout_dirty(id);
         true

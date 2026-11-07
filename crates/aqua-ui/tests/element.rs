@@ -164,6 +164,57 @@ fn reordered_boxes_keep_their_keyed_identity() {
     );
 }
 
+#[test]
+fn layout_reuse_survives_eviction_and_out_of_band_changes() {
+    let runtime = Runtime::new();
+    let mut tree = UiTree::new();
+    let mut view = View::new(runtime.create_scope(), tree.command_sink());
+    let content = |first| {
+        let children = (0..45)
+            .map(|index| {
+                ui::Box::new()
+                    .style(
+                        Style::new()
+                            .width(px(10.0 + index as f32))
+                            .height(px(10.0))
+                            .flex_shrink(0.0),
+                    )
+                    .build()
+            })
+            .collect::<Vec<_>>();
+        let mut children = children.into_iter();
+        let first = children
+            .next()
+            .unwrap()
+            .style(Style::new().width(px(first)));
+        vec![ui::Box::new()
+            .style(Style::new().width(px(4000.0)).height(px(10.0)))
+            .child(first)
+            .children(children)
+            .build()]
+    };
+    let root = view.set_content(&mut tree, content(15.0)).unwrap()[0];
+    tree.drain_commands();
+    tree.compute_layout(Size::new(4000.0, 10.0), &NaiveMeasurer)
+        .unwrap();
+    let ids = tree.get(root).unwrap().children.clone();
+    assert_eq!(tree.rect(ids[0]).unwrap().w, 15.0);
+    assert_eq!(tree.rect(ids[1]).unwrap().w, 11.0);
+    let mut changed = tree.get(ids[0]).unwrap().style.clone();
+    changed.width = aqua_ui::style::Length::Px(100.0);
+    tree.set_style(ids[0], changed);
+    tree.compute_layout(Size::new(4000.0, 10.0), &NaiveMeasurer)
+        .unwrap();
+    assert_eq!(tree.rect(ids[0]).unwrap().w, 100.0);
+    view.set_content(&mut tree, content(17.0)).unwrap();
+    tree.drain_commands();
+    tree.compute_layout(Size::new(4000.0, 10.0), &NaiveMeasurer)
+        .unwrap();
+    assert_eq!(tree.get(root).unwrap().children, ids);
+    assert_eq!(tree.rect(ids[0]).unwrap().w, 17.0);
+    assert_eq!(tree.rect(ids[1]).unwrap().w, 11.0);
+}
+
 fn measure<T>(label: &str, count: usize, run: impl FnOnce() -> T) -> T {
     let started = Instant::now();
     let result = black_box(run());

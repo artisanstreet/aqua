@@ -1996,6 +1996,7 @@ fn bind_new(
         }
         if let Some(record) = tree.get_mut(id) {
             record.plain_bindings = empty && local_typography == TypoChain::default();
+            record.style_identity = el.layout_identity();
         }
     }
     tree.queue_typography_color(

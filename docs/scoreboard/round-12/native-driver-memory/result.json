@@ -77,5 +77,5 @@
       "scroll_p99_ms": 0.391
     }
   },
-  "limitation": "This tests the existing explicit option on binary 619ffab, not the new default binary. Full joint validation of the proposed default, including startup, CPU, streaming and visuals, is pending."
+  "limitation": "This tests the existing explicit option on binary 619ffab, not the new default binary. The later combined unset-environment comparison is recorded separately in ../window-memory/."
 }

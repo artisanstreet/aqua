@@ -321,15 +321,17 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
                 });
                 let received = unsafe { GetMessageW(&mut msg, None, 0, 0) };
                 MESSAGE_WAIT.set(MessageWait::Inactive);
-                drop(message_timer);
-                crate::null_trace::waited();
                 match received.0 {
                     -1 => {
                         outcome = Err(win32("GetMessageW", windows::core::Error::from_thread()));
                         break;
                     }
                     0 => break,
-                    _ => dispatch(&msg),
+                    _ => {
+                        drop(message_timer);
+                        crate::null_trace::waited();
+                        dispatch(&msg);
+                    }
                 }
                 continue;
             }

@@ -16,3 +16,7 @@ aqua-text = { workspace = true }
 taffy = { workspace = true }
 
 [dev-dependencies]
+
+[[test]]
+name = "element-children"
+path = "tests/element/children.rs"

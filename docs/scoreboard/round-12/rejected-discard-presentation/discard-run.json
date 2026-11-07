@@ -1,0 +1,7 @@
+{
+  "variant": "flip-discard",
+  "binary_sha256": "fbb39345639fd8a6483f5e0feab751eb1235cca4aa80e5a114ba316df862aea7",
+  "exit_code": 0,
+  "foreground_before": "131864",
+  "foreground_after": "131864"
+}

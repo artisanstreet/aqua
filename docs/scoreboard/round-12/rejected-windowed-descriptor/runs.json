@@ -1,0 +1,16 @@
+[
+  {
+    "variant": "before",
+    "binary_sha256": "879c76adb8b421ac993cd3c47f8242e22ec9a3a8ab807edfa82eba6ccaaa2843",
+    "exit_code": 0,
+    "foreground_before": "131864",
+    "foreground_after": "131864"
+  },
+  {
+    "variant": "after",
+    "binary_sha256": "0bc48459b07bb5ba81d86adc12cf5c24f371f5cd1ba1ac0d2f12c38450fa4fd8",
+    "exit_code": 0,
+    "foreground_before": "131864",
+    "foreground_after": "131864"
+  }
+]

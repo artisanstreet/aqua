@@ -1,0 +1,29 @@
+{
+  "verdict": "REJECTED",
+  "purpose": "Bare probe comparing full-frame FLIP_DISCARD for HWND surfaces against the preceding FLIP_SEQUENTIAL ten-frame probe. DirectComposition remains sequential.",
+  "profile": "debug, ten steady frames plus existing resize/idle sequence; foreground unchanged; AQUA_D3D11_PREVENT_THREADING=1.",
+  "results": {
+    "sequential": {
+      "startup_gpu_mib": 26.4,
+      "after_10_gpu_mib": 34.9,
+      "startup_dxgi_mib": 23.8,
+      "after_10_dxgi_mib": 32.3,
+      "private_after_10_mib": 56.2
+    },
+    "discard": {
+      "startup_gpu_mib": 26.4,
+      "after_10_gpu_mib": 34.9,
+      "startup_dxgi_mib": 23.8,
+      "after_10_dxgi_mib": 32.3,
+      "private_after_10_mib": 55.3
+    }
+  },
+  "conclusion": "No GPU allocation improvement is observed, so no Editor implementation or default change is justified.",
+  "limits": [
+    "One grouped debug probe comparison, not an Editor scoreboard or latency comparison.",
+    "The probe renders full frames and presents no dirty rectangles. An Editor implementation would need to disable partial rendering for discard surfaces; no such change was made.",
+    "Timing and CPU figures from this background-waiting probe are not performance evidence.",
+    "Results do not establish general equivalence on every DXGI driver."
+  ],
+  "source": "https://learn.microsoft.com/en-us/windows/win32/api/dxgi/ne-dxgi-dxgi_swap_effect"
+}

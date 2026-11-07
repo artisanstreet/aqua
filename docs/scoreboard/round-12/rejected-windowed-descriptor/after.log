@@ -1,0 +1,5 @@
+probe backend=d3d11 adapter="AMD Radeon RX 9070 XT" device_ms=96.7 first_present_ms=145.7 first_present_since_process_ms=185.5
+probe backend=d3d11 stage=startup private_mib=55.7 dxgi_local_mib=23.8 gpu_dedicated_mib=26.4
+probe backend=d3d11 stage=after_10_frames private_mib=56.0 dxgi_local_mib=32.3 gpu_dedicated_mib=34.9
+probe backend=d3d11 frame_cpu_ms=1.562
+probe backend=d3d11 idle_cpu_ms_per_s_after_resizes=5.19 pipelines=Some(PipelineStats { compiled: 11, loaded: 0, late: 2 })

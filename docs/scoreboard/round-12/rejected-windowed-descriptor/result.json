@@ -1,0 +1,35 @@
+{
+  "verdict": "REJECTED",
+  "purpose": "Bare D3D11 allocation check for an explicit Windowed=true fullscreen descriptor versus the existing NULL descriptor.",
+  "profile": "debug probe, 10 steady frames plus existing resize/idle sequence; both variants use identical shortened fixture.",
+  "runtime": "AQUA_D3D11_PREVENT_THREADING=1; WS_EX_NOACTIVATE, SW_SHOWNOACTIVATE, HWND_BOTTOM.",
+  "measurements": {
+    "before": {
+      "startup_gpu_mib": 26.4,
+      "after_10_gpu_mib": 34.9,
+      "startup_dxgi_mib": 23.8,
+      "after_10_dxgi_mib": 32.3,
+      "private_after_10_mib": 56.2
+    },
+    "after": {
+      "startup_gpu_mib": 26.4,
+      "after_10_gpu_mib": 34.9,
+      "startup_dxgi_mib": 23.8,
+      "after_10_dxgi_mib": 32.3,
+      "private_after_10_mib": 56.0
+    }
+  },
+  "foreground_unchanged": true,
+  "initial_attempt": {
+    "frames": 600,
+    "outcome": "Cancelled the control during background presentation waits before any summary was produced. No measurements used. Both variants were then rebuilt with 10 frames.",
+    "exit_code": 255
+  },
+  "conclusion": "No allocation improvement is observed. Do not integrate the constructor change.",
+  "limits": [
+    "One focused debug pair, not an Editor benchmark or performance scoreboard.",
+    "CPU and timing figures are invalid for performance claims with this short, background-waiting probe.",
+    "This does not establish general memory equivalence on all DXGI drivers."
+  ],
+  "source": "https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/dxgi-flip-model"
+}

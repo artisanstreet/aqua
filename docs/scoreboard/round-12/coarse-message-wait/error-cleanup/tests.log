@@ -1,0 +1,46 @@
+build slot 1
+warning: Git tree '/home/sander/projects/artisanstreet/editor' is dirty
+   Compiling aqua-shell-win32 v0.1.0 (/home/sander/projects/artisanstreet/aqua-message-deadlines/crates/aqua-shell-win32)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.11s
+     Running tests/looping.rs (/home/sander/projects/artisanstreet/aqua-optimization/target/coarse-message-loop-windows/x86_64-pc-windows-gnu/debug/deps/looping-06519c643b1119f4.exe)
+
+running 3 tests
+test external_waitables_still_interrupt_a_coarse_deadline ... ok
+test a_coarse_deadline_fires_without_external_messages ... ok
+test sent_messages_and_the_first_posted_input_survive_a_coarse_message_wait ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.04s
+
+     Running tests/occlusion_watch.rs (/home/sander/projects/artisanstreet/aqua-optimization/target/coarse-message-loop-windows/x86_64-pc-windows-gnu/debug/deps/occlusion_watch-8ffb0c7d47c1df5d.exe)
+
+running 5 tests
+test coverage_is_refreshed_at_most_every_quarter_second_while_hooks_are_full ... ok
+test activity_during_the_quiet_period_restarts_it ... ok
+test a_covered_window_settles_to_the_narrow_set_and_wakes_for_uncovering ... ok
+test hooks_go_full_on_activity_and_off_after_a_quiet_period_when_visible ... ok
+test reconcile_unhooks_only_stale_keys_and_hooks_only_missing_ones ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/timing.rs (/home/sander/projects/artisanstreet/aqua-optimization/target/coarse-message-loop-windows/x86_64-pc-windows-gnu/debug/deps/timing-7909a6ee7d4a1e00.exe)
+
+running 3 tests
+test near_deadlines_stay_precise_and_far_ones_get_bounded_leeway ... ok
+test timer_due_time_is_negative_relative_and_never_zero ... ok
+test timeouts_round_up_to_whole_milliseconds ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/wake_dedup.rs (/home/sander/projects/artisanstreet/aqua-optimization/target/coarse-message-loop-windows/x86_64-pc-windows-gnu/debug/deps/wake_dedup-818c0fd4346a96d5.exe)
+
+running 1 test
+test a_thousand_wakes_before_the_loop_turns_deliver_one_wake_and_a_later_wake_still_arrives ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/wake_trace.rs (/home/sander/projects/artisanstreet/aqua-optimization/target/coarse-message-loop-windows/x86_64-pc-windows-gnu/debug/deps/wake_trace-4be095b39b0ac303.exe)
+
+running 1 test
+test render_orders_by_count_and_scales_to_per_second ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

@@ -1,0 +1,67 @@
+{
+  "description": "Instrumented streaming activation diagnostic of coarse GetMessage experiment 4352103; not a performance comparison.",
+  "source_digest_method": "Python pathlib.Path component ordering via sorted(paths); per path: relative POSIX path UTF-8, NUL, raw file bytes, NUL; extensions .rs .toml .lock .hlsl .wgsl; exclude .git and target",
+  "aqua_source": {
+    "sha256": "93899dce34c2fe0000a8756262f31b2ba3dd6e7330c0ff312a4a7c3f0bfe060c",
+    "files": 868
+  },
+  "editor_source": {
+    "sha256": "3d9b9f679b64d5871c1c337a1be71b1f9a77e29334f70b8350718072b5647e1e",
+    "files": 1056
+  },
+  "aqua_base_commit": "5f4ec00",
+  "applied_commits": [
+    "36cd19a",
+    "4cb0559",
+    "4fff52e",
+    "9077af9",
+    "670b4c1",
+    "86a25f7",
+    "619ffab",
+    "f75e709",
+    "b9e3c65",
+    "6314c9c",
+    "0240deb",
+    "b62ffdf",
+    "4352103"
+  ],
+  "editor_patch_sha256": "88f90289e0e2529630eed4281f231bd93a792234dcb882b8268cc676d127d667",
+  "editor_pr_base": "6606f059",
+  "previous_aqua_source": {
+    "sha256": "941a08641ff04f5b1bdeadead4a088689ebe23d8c2023e8945f6b22f788fba52",
+    "files": 867
+  },
+  "binary": "/home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-coarse-message-wait.exe",
+  "binary_sha256": "0dbc9448214659432d7a1836958dd36271c7498df4b252413888c8a7472154e8",
+  "runtime_environment": {
+    "AQUA_D3D11_PREVENT_THREADING": "unset; new native-host default enables it",
+    "stats": "profilewakes",
+    "AQUA_LEDGER": "unset",
+    "AQUA_MEMORY_REPORT": "unset",
+    "AQUA_PROFILE": "1",
+    "AQUA_WAKE_STATS": "1"
+  },
+  "validation": {
+    "combined_checkout": "4ef5231",
+    "windows_scheduler_tests": 14,
+    "windows_gpu_conformance_tests": 6,
+    "library_clippy": "PASS -D warnings",
+    "d3d12_host_check": "PASS",
+    "windows_text_tests": 211,
+    "windows_text_suites": 33,
+    "windows_text_ignored": 3,
+    "layout_library_and_tests_clippy": "PASS -D warnings",
+    "solid_path_mask_render_tests": 81,
+    "solid_path_mask_graph_tests": 13,
+    "solid_path_mask_oracle_tests": 3,
+    "solid_path_mask_d3d11_conformance_tests": 6,
+    "solid_path_mask_d3d12_conformance_tests": 4,
+    "solid_path_mask_clippy": "PASS Windows --lib --tests -D warnings",
+    "path_cache_windows_render_tests": 80,
+    "path_cache_windows_perf_scene_tests": 3,
+    "path_cache_clippy": "PASS --lib --test render --test perf_scene -D warnings",
+    "coarse_message_windows_tests": 13,
+    "coarse_message_clippy": "PASS --lib and five targeted test suites -D warnings",
+    "coarse_message_foreground": "unchanged HWND 131864 before/after hidden native tests"
+  }
+}

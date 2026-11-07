@@ -1,0 +1,654 @@
+waiting for /tmp/aqua-scoreboard.lock (one scoreboard at a time)
+date 2026-11-07T06:00:06+01:00
+profile release runs 3 idle_seconds 30 scroll_frames 600
+aqua_git 5f4ec00 port_git 08f2e75f dirty_aqua=25
+fixture_server bench-fixture links the port forge-http (SSE keep-alive from_secs(300)) while the GPUI repo forge-http keeps from_secs(15); both editors talk to the same fixture server in every run, so neither sees a different heartbeat, but absolute idle wakes differ from a real 15 s Forge
+gpui_baseline release build of the gpui-ce fork at rev = "6cd20f9c5deab2b160b68ac66f453ec70820e8a2", built by tools/compare-editors.sh build with the same cargo-windows toolchain as the port
+aqua exe /home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-coarse-message-wait.exe built 2026-11-07T05:48:17+01:00 sha256 0dbc944821465943 size 38900224
+gpui exe /home/sander/projects/artisanstreet/editor/target/x86_64-pc-windows-gnu/release/artisan-editor.exe built 2026-11-04T11:09:28+01:00 sha256 d0f3a99f1a3f6b3e size 40648704
+machine load 3.7% (limit 25%), starting
+=== run 1 aqua main ===
+probe-launch unix_ms=1794027619094 pid=1944
+probe-startup window_ms=57 first_content_ms=592 nondominant=0.165 rich_content_ms=592
+probe-open thread=bench-large unix_ms=1794027619289 since_launch_ms=195 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=5.1
+probe-cpu name=boot unix_ms=1794027634993 cpu_ms=391 user_ms=219 private_mb=106.7 working_set_mb=122.7 peak_working_set_mb=123 threads=30 handles=1050
+probe-gpumem name=boot dedicated_mb=35.4
+probe-cpu name=idle0 unix_ms=1794027638016 cpu_ms=391 user_ms=219 private_mb=106.7 working_set_mb=122.7 peak_working_set_mb=123 threads=30 handles=1050
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=0.03 max=1 top_threads=1864=0(),24228=0(),20664=0(),9008=0(artisan-markdown-stored) attempt=1
+probe-ctxseries name=idle start_unix_ms=1794027638090 per_second=0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-thread name=idle_threads tid=19108 thread='' started_ms=180 module=combase.dll start_rva=0x55dc421e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=1864 thread='' started_ms=181 module=ntdll.dll start_rva=0x55f444990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=2 total=27
+probe-cpu name=idle1 unix_ms=1794027683571 cpu_ms=391 user_ms=219 private_mb=106.6 working_set_mb=122.6 peak_working_set_mb=123 threads=27 handles=1048
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.058 p90_ms=0.107 p99_ms=0.246 max_ms=1.237 mean_ms=0.071 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=scroll0 unix_ms=1794027689146 cpu_ms=422 user_ms=234 private_mb=106.6 working_set_mb=122.6 peak_working_set_mb=123 threads=27 handles=1048
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.093 p90_ms=0.237 p99_ms=0.366 max_ms=0.435 mean_ms=0.122 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/0,0.1/0,0.1/0,0.1/0,0.1/0,0.1/0
+probe-cpu name=scroll1 unix_ms=1794027705924 cpu_ms=859 user_ms=609 private_mb=117.6 working_set_mb=127.3 peak_working_set_mb=127.5 threads=27 handles=1048
+probe-changed name=pre pixels=304359 total=2135250 nondominant=0.219
+probe-cpu name=settle unix_ms=1794027709973 cpu_ms=875 user_ms=625 private_mb=117.7 working_set_mb=127.4 peak_working_set_mb=127.5 threads=29 handles=1050
+probe-gpumem name=settle dedicated_mb=50.9
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=264.815 p90_ms=272.818 p99_ms=276.611 max_ms=276.611 mean_ms=264.928 over4_ms=40 over8_ms=40 over16_ms=40 over50_ms=40 grab_p50_ms=264.6
+probe-latency name=resize_setpos kind=resize samples=120 timeouts=0 p50_ms=1.492 p90_ms=1.971 p99_ms=2.424 max_ms=17.727 mean_ms=1.61 over4_ms=1 over8_ms=1 over16_ms=1 over50_ms=0
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=1.637 p90_ms=2.183 p99_ms=2.626 max_ms=17.916 mean_ms=1.782 over4_ms=1 over8_ms=1 over16_ms=1 over50_ms=0
+probe-cpu name=rs0 unix_ms=1794027741690 cpu_ms=1500 user_ms=1172 private_mb=158.6 working_set_mb=147 peak_working_set_mb=154.2 threads=29 handles=1056
+probe-wakes name=after_resize seconds=30 context_switches_per_sec_avg=0 max=0 top_threads=24228=0(),9008=0(artisan-markdown-stored),20664=0(),25216=0() attempt=1
+probe-ctxseries name=after_resize start_unix_ms=1794027741693 per_second=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-cpu name=rs1 unix_ms=1794027772055 cpu_ms=1500 user_ms=1172 private_mb=158.4 working_set_mb=147 peak_working_set_mb=154.2 threads=24 handles=1046
+probe-threads-done name=after_resize_threads seconds=15 active=0 total=24
+probe-load name=end_load seconds=3 system_cpu_pct=2.9
+pid=1944 dpi=120 working_set_mb=147 private_mb=158
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== run 1 gpui main ===
+probe-launch unix_ms=1794027801361 pid=24212
+probe-startup window_ms=129 first_content_ms=330 nondominant=0.155 rich_content_ms=331
+probe-open thread=bench-large unix_ms=1794027801820 since_launch_ms=459 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=2.7
+probe-cpu name=boot unix_ms=1794027816866 cpu_ms=375 user_ms=219 private_mb=115.2 working_set_mb=124.5 peak_working_set_mb=136.3 threads=35 handles=1201
+probe-gpumem name=boot dedicated_mb=49.1
+probe-cpu name=idle0 unix_ms=1794027819897 cpu_ms=375 user_ms=219 private_mb=115.2 working_set_mb=124.5 peak_working_set_mb=136.3 threads=35 handles=1201
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=0.07 max=1 top_threads=8104=0(),16296=0(),19560=0(),13376=0() attempt=1
+probe-ctxseries name=idle start_unix_ms=1794027819992 per_second=0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-thread name=idle_threads tid=8104 thread='' started_ms=7 module=ntdll.dll start_rva=0x477344990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=23208 thread='' started_ms=104 module=combase.dll start_rva=0x475b421e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=16296 thread='' started_ms=104 module=ntdll.dll start_rva=0x477344990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=3 total=32
+probe-cpu name=idle1 unix_ms=1794027865466 cpu_ms=375 user_ms=219 private_mb=115.1 working_set_mb=124.4 peak_working_set_mb=136.3 threads=32 handles=1193
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.059 p90_ms=0.111 p99_ms=0.227 max_ms=1.243 mean_ms=0.071 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=scroll0 unix_ms=1794027870784 cpu_ms=375 user_ms=219 private_mb=115.1 working_set_mb=124.5 peak_working_set_mb=136.3 threads=32 handles=1193
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.065 p90_ms=1.39 p99_ms=2.808 max_ms=5.461 mean_ms=0.351 over4_ms=1 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/5,0.1/3,0.1/3,0.1/3,0.1/3,0.1/3
+probe-cpu name=scroll1 unix_ms=1794027888120 cpu_ms=2984 user_ms=2422 private_mb=119.6 working_set_mb=127.1 peak_working_set_mb=136.3 threads=34 handles=1196
+probe-changed name=pre pixels=158804 total=2135250 nondominant=0.282
+probe-cpu name=settle unix_ms=1794027892358 cpu_ms=3031 user_ms=2469 private_mb=118.5 working_set_mb=126.1 peak_working_set_mb=136.3 threads=34 handles=1194
+probe-gpumem name=settle dedicated_mb=51.1
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=263.914 p90_ms=271.937 p99_ms=275.166 max_ms=275.166 mean_ms=264.581 over4_ms=40 over8_ms=40 over16_ms=40 over50_ms=40 grab_p50_ms=263.6
+probe-latency name=resize_setpos kind=resize samples=120 timeouts=0 p50_ms=1.136 p90_ms=1.802 p99_ms=3.299 max_ms=3.414 mean_ms=1.27 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=1.308 p90_ms=2.029 p99_ms=3.544 max_ms=3.556 mean_ms=1.468 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0
+probe-cpu name=rs0 unix_ms=1794027924497 cpu_ms=3703 user_ms=2969 private_mb=118.8 working_set_mb=126.6 peak_working_set_mb=136.3 threads=33 handles=1192
+probe-wakes name=after_resize seconds=30 context_switches_per_sec_avg=0.13 max=1 top_threads=8104=0.1(),19560=0(),13376=0(),10880=0() attempt=1
+probe-ctxseries name=after_resize start_unix_ms=1794027924500 per_second=1,0,0,0,0,1,0,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-cpu name=rs1 unix_ms=1794027954846 cpu_ms=3703 user_ms=2969 private_mb=118 working_set_mb=125.9 peak_working_set_mb=136.3 threads=30 handles=1188
+probe-threads-done name=after_resize_threads seconds=15 active=0 total=30
+probe-load name=end_load seconds=3 system_cpu_pct=1.9
+pid=24212 dpi=120 working_set_mb=126 private_mb=118
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== run 1 aqua open ===
+probe-launch unix_ms=1794027984212 pid=18668
+probe-startup window_ms=54 first_content_ms=532 nondominant=0.161 rich_content_ms=532
+probe-cpu name=boot unix_ms=1794027997603 cpu_ms=312 user_ms=125 private_mb=91.1 working_set_mb=107.7 peak_working_set_mb=110.7 threads=30 handles=1050
+probe-open thread=bench-large unix_ms=1794027998524 since_launch_ms=14312 since_click_ms=222
+probe-cpu name=opened unix_ms=1794028001104 cpu_ms=344 user_ms=156 private_mb=107.1 working_set_mb=123.1 peak_working_set_mb=123.1 threads=31 handles=1051
+probe-gpumem name=opened dedicated_mb=43.9
+pid=18668 dpi=120 working_set_mb=123 private_mb=107
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== run 1 gpui open ===
+probe-launch unix_ms=1794028012960 pid=20712
+probe-startup window_ms=145 first_content_ms=393 nondominant=0.155 rich_content_ms=394
+probe-cpu name=boot unix_ms=1794028026209 cpu_ms=484 user_ms=219 private_mb=106.6 working_set_mb=112.4 peak_working_set_mb=124.2 threads=34 handles=1199
+probe-open thread=bench-large unix_ms=1794028027159 since_launch_ms=14199 since_click_ms=236
+probe-cpu name=opened unix_ms=1794028029849 cpu_ms=578 user_ms=250 private_mb=116 working_set_mb=125 peak_working_set_mb=129.9 threads=37 handles=1203
+probe-gpumem name=opened dedicated_mb=49.6
+pid=20712 dpi=120 working_set_mb=125 private_mb=116
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== run 1 aqua stream ===
+probe-launch unix_ms=1794028041948 pid=19812
+probe-startup window_ms=56 first_content_ms=498 nondominant=0.221 rich_content_ms=498
+probe-open thread=bench-stream unix_ms=1794028042142 since_launch_ms=194 since_click_ms=-1
+probe-cpu name=stream0 unix_ms=1794028054304 cpu_ms=375 user_ms=109 private_mb=101.9 working_set_mb=119.2 peak_working_set_mb=123.1 threads=32 handles=1052
+probe-trigger unix_ms=1794028054312
+probe-latency name=stream_latency kind=idle samples=300 timeouts=0 p50_ms=0.059 p90_ms=0.124 p99_ms=0.31 max_ms=1.134 mean_ms=0.074 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=stream1 unix_ms=1794028063766 cpu_ms=672 user_ms=344 private_mb=127.1 working_set_mb=126.4 peak_working_set_mb=126.4 threads=32 handles=1052
+probe-wakes name=stream seconds=10 context_switches_per_sec_avg=98.2 max=135 top_threads=17836=50.5(main),7220=18.4(forge-net),23800=16.4(forge-net),6004=12(aqua-render) attempt=1
+probe-ctxseries name=stream start_unix_ms=1794028063842 per_second=74,94,112,76,135,80,85,115,94,117 hard_faults=0,0,0,0,0,0,0,8,3,0 page_faults=103,548,639,103,509,144,48,209,25,18
+probe-cpu name=stream2 unix_ms=1794028074050 cpu_ms=953 user_ms=609 private_mb=141.5 working_set_mb=133.7 peak_working_set_mb=133.7 threads=32 handles=1053
+probe-gpumem name=stream dedicated_mb=68.7
+pid=19812 dpi=120 working_set_mb=134 private_mb=142
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+stream grace wait 0s
+=== run 1 gpui stream ===
+probe-launch unix_ms=1794028094638 pid=24056
+probe-startup window_ms=134 first_content_ms=398 nondominant=0.155 rich_content_ms=399
+probe-open thread=bench-stream unix_ms=1794028095070 since_launch_ms=432 since_click_ms=-1
+probe-cpu name=stream0 unix_ms=1794028106902 cpu_ms=297 user_ms=172 private_mb=111.7 working_set_mb=120.8 peak_working_set_mb=133.1 threads=36 handles=1206
+probe-trigger unix_ms=1794028106910
+probe-latency name=stream_latency kind=idle samples=300 timeouts=0 p50_ms=0.062 p90_ms=0.641 p99_ms=2.167 max_ms=2.547 mean_ms=0.246 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/2,0.1/3,0.1/2
+probe-cpu name=stream1 unix_ms=1794028116448 cpu_ms=1438 user_ms=1188 private_mb=114.1 working_set_mb=123.4 peak_working_set_mb=133.1 threads=37 handles=1212
+probe-wakes name=stream seconds=10 context_switches_per_sec_avg=587.5 max=599 top_threads=20528=269.2(main),24488=127.3(WindowVSync),21584=119.4(),13352=28.8(artisan-markdown) attempt=1
+probe-ctxseries name=stream start_unix_ms=1794028116525 per_second=591,587,580,585,599,593,591,579,596,574 hard_faults=0,0,0,0,0,0,0,5,0,0 page_faults=245,555,243,238,273,264,418,273,287,268
+probe-cpu name=stream2 unix_ms=1794028126730 cpu_ms=2641 user_ms=2234 private_mb=114.5 working_set_mb=123.8 peak_working_set_mb=133.1 threads=37 handles=1211
+probe-gpumem name=stream dedicated_mb=49.1
+pid=24056 dpi=120 working_set_mb=123 private_mb=113
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+stream grace wait 0s
+=== run 1 aqua keys ===
+probe-launch unix_ms=1794028144440 pid=17292
+probe-startup window_ms=52 first_content_ms=481 nondominant=0.165 rich_content_ms=481
+probe-open thread=bench-large unix_ms=1794028144646 since_launch_ms=206 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=17292
+probe-latency name=type kind=type samples=32 timeouts=28 p50_ms=268.68 p90_ms=271.147 p99_ms=276.491 max_ms=276.491 mean_ms=267.998 over4_ms=32 over8_ms=32 over16_ms=32 over50_ms=32 grab_p50_ms=265
+pid=17292 dpi=120 working_set_mb=122 private_mb=105
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+key-latency target=aqua pid=17292 posts=145 matched=145 unmatched=0 p50_ms=1.56 p90_ms=1.86 p99_ms=2.08 max_ms=2.12 mean_ms=1.58 over8_3=0 over16_7=0
+=== run 1 gpui keys ===
+probe-launch unix_ms=1794028259351 pid=23660
+probe-startup window_ms=147 first_content_ms=392 nondominant=0.155 rich_content_ms=393
+probe-open thread=bench-large unix_ms=1794028259795 since_launch_ms=444 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=23660
+probe-latency name=type kind=type samples=32 timeouts=28 p50_ms=262.554 p90_ms=264.887 p99_ms=268.971 max_ms=268.971 mean_ms=262.087 over4_ms=32 over8_ms=32 over16_ms=32 over50_ms=32 grab_p50_ms=263.9
+pid=23660 dpi=120 working_set_mb=124 private_mb=115
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+key-latency target=gpui pid=23660 posts=145 matched=145 unmatched=0 p50_ms=17.68 p90_ms=18.98 p99_ms=19.57 max_ms=19.60 mean_ms=17.90 over8_3=145 over16_7=145
+=== run 2 gpui main ===
+probe-launch unix_ms=1794028377133 pid=25252
+probe-startup window_ms=132 first_content_ms=397 nondominant=0.155 rich_content_ms=397
+probe-open thread=bench-large unix_ms=1794028377596 since_launch_ms=463 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=2.3
+probe-cpu name=boot unix_ms=1794028392660 cpu_ms=359 user_ms=125 private_mb=115.4 working_set_mb=124.7 peak_working_set_mb=135.8 threads=35 handles=1201
+probe-gpumem name=boot dedicated_mb=49.1
+probe-cpu name=idle0 unix_ms=1794028395692 cpu_ms=359 user_ms=125 private_mb=115.4 working_set_mb=124.7 peak_working_set_mb=135.8 threads=35 handles=1201
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=0.07 max=1 top_threads=23060=0(),2308=0(),22012=0(),9988=0(DManip Delegate Thread) attempt=1
+probe-ctxseries name=idle start_unix_ms=1794028395788 per_second=0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-thread name=idle_threads tid=23060 thread='' started_ms=7 module=ntdll.dll start_rva=0x48dc74990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=17508 thread='' started_ms=105 module=combase.dll start_rva=0x48c4721e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=2308 thread='' started_ms=105 module=ntdll.dll start_rva=0x48dc74990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=3 total=32
+probe-cpu name=idle1 unix_ms=1794028441229 cpu_ms=359 user_ms=125 private_mb=115.2 working_set_mb=124.7 peak_working_set_mb=135.8 threads=32 handles=1193
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.058 p90_ms=0.093 p99_ms=0.214 max_ms=1.243 mean_ms=0.069 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=scroll0 unix_ms=1794028446782 cpu_ms=375 user_ms=141 private_mb=115.2 working_set_mb=124.7 peak_working_set_mb=135.8 threads=32 handles=1193
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.066 p90_ms=1.238 p99_ms=2.77 max_ms=4.163 mean_ms=0.346 over4_ms=1 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/4,0.1/3,0.1/3,0.1/3,0.1/3,0.1/3
+probe-cpu name=scroll1 unix_ms=1794028464130 cpu_ms=2672 user_ms=2219 private_mb=119.5 working_set_mb=127 peak_working_set_mb=135.8 threads=34 handles=1196
+probe-changed name=pre pixels=231226 total=2135250 nondominant=0.281
+probe-cpu name=settle unix_ms=1794028468253 cpu_ms=2719 user_ms=2266 private_mb=118.6 working_set_mb=126.3 peak_working_set_mb=135.8 threads=34 handles=1194
+probe-gpumem name=settle dedicated_mb=51.1
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=265.244 p90_ms=272.204 p99_ms=278.082 max_ms=278.082 mean_ms=265.24 over4_ms=40 over8_ms=40 over16_ms=40 over50_ms=40 grab_p50_ms=264.9
+probe-latency name=resize_setpos kind=resize samples=120 timeouts=0 p50_ms=1.152 p90_ms=2.155 p99_ms=3.753 max_ms=4.09 mean_ms=1.33 over4_ms=1 over8_ms=0 over16_ms=0 over50_ms=0
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=1.324 p90_ms=2.351 p99_ms=3.915 max_ms=4.347 mean_ms=1.529 over4_ms=1 over8_ms=0 over16_ms=0 over50_ms=0
+probe-cpu name=rs0 unix_ms=1794028500194 cpu_ms=3516 user_ms=2859 private_mb=118.8 working_set_mb=126.7 peak_working_set_mb=135.8 threads=33 handles=1192
+probe-wakes name=after_resize seconds=30 context_switches_per_sec_avg=0.13 max=1 top_threads=23060=0.1(),22012=0(),13376=0(),17380=0(forge-net) attempt=1
+probe-ctxseries name=after_resize start_unix_ms=1794028500197 per_second=1,0,0,0,0,0,1,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-cpu name=rs1 unix_ms=1794028530512 cpu_ms=3516 user_ms=2859 private_mb=118 working_set_mb=126 peak_working_set_mb=135.8 threads=30 handles=1188
+probe-thread name=after_resize_threads tid=23060 thread='' started_ms=7 module=ntdll.dll start_rva=0x48dc74990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=after_resize_threads tid=2308 thread='' started_ms=105 module=ntdll.dll start_rva=0x48dc74990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=after_resize_threads seconds=15 active=2 total=30
+probe-load name=end_load seconds=3 system_cpu_pct=2.4
+pid=25252 dpi=120 working_set_mb=126 private_mb=118
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== run 2 aqua main ===
+probe-launch unix_ms=1794028560230 pid=19980
+probe-startup window_ms=57 first_content_ms=407 nondominant=0.165 rich_content_ms=407
+probe-open thread=bench-large unix_ms=1794028560425 since_launch_ms=195 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=4.6
+probe-cpu name=boot unix_ms=1794028575789 cpu_ms=219 user_ms=94 private_mb=104.7 working_set_mb=120.9 peak_working_set_mb=121.4 threads=30 handles=1050
+probe-gpumem name=boot dedicated_mb=35.4
+probe-cpu name=idle0 unix_ms=1794028578828 cpu_ms=219 user_ms=94 private_mb=104.7 working_set_mb=120.9 peak_working_set_mb=121.4 threads=30 handles=1050
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=0.03 max=1 top_threads=12824=0(),13380=0(),17936=0(),17656=0(forge-net) attempt=1
+probe-ctxseries name=idle start_unix_ms=1794028578902 per_second=0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-thread name=idle_threads tid=3452 thread='' started_ms=178 module=combase.dll start_rva=0x5453321e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=12824 thread='' started_ms=178 module=ntdll.dll start_rva=0x546b34990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=2 total=27
+probe-cpu name=idle1 unix_ms=1794028624378 cpu_ms=219 user_ms=94 private_mb=104.6 working_set_mb=120.8 peak_working_set_mb=121.4 threads=27 handles=1048
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.06 p90_ms=0.097 p99_ms=0.235 max_ms=1.22 mean_ms=0.07 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=scroll0 unix_ms=1794028630093 cpu_ms=219 user_ms=94 private_mb=104.6 working_set_mb=120.8 peak_working_set_mb=121.4 threads=27 handles=1048
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.104 p90_ms=0.242 p99_ms=0.38 max_ms=0.46 mean_ms=0.127 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/0,0.1/0,0.1/0,0.1/0,0.1/0,0.1/0
+probe-cpu name=scroll1 unix_ms=1794028646796 cpu_ms=828 user_ms=656 private_mb=120.7 working_set_mb=127.7 peak_working_set_mb=127.7 threads=27 handles=1048
+probe-changed name=pre pixels=302051 total=2135250 nondominant=0.2
+probe-cpu name=settle unix_ms=1794028650891 cpu_ms=844 user_ms=672 private_mb=122.7 working_set_mb=127.8 peak_working_set_mb=127.8 threads=27 handles=1048
+probe-gpumem name=settle dedicated_mb=55.7
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=265.174 p90_ms=273.856 p99_ms=529.844 max_ms=529.844 mean_ms=271.739 over4_ms=40 over8_ms=40 over16_ms=40 over50_ms=40 grab_p50_ms=264.9
+probe-latency name=resize_setpos kind=resize samples=120 timeouts=0 p50_ms=1.412 p90_ms=1.814 p99_ms=2.297 max_ms=2.457 mean_ms=1.412 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=1.58 p90_ms=2.003 p99_ms=2.46 max_ms=2.629 mean_ms=1.587 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0
+probe-cpu name=rs0 unix_ms=1794028682737 cpu_ms=1438 user_ms=1188 private_mb=135.4 working_set_mb=133.6 peak_working_set_mb=140 threads=29 handles=1071
+probe-wakes name=after_resize seconds=30 context_switches_per_sec_avg=0 max=0 top_threads=21052=0(),17936=0(),17656=0(forge-net),17052=0(aqua-render) attempt=1
+probe-ctxseries name=after_resize start_unix_ms=1794028682740 per_second=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-cpu name=rs1 unix_ms=1794028713079 cpu_ms=1438 user_ms=1188 private_mb=135.2 working_set_mb=133.5 peak_working_set_mb=140 threads=23 handles=1058
+probe-thread name=after_resize_threads tid=6068 thread='' started_ms=154923 module=ntdll.dll start_rva=0x546b34990 ctx_per_s=0.9 cpu_ms_per_s=0
+probe-threads-done name=after_resize_threads seconds=15 active=1 total=24
+probe-load name=end_load seconds=3 system_cpu_pct=1.4
+pid=19980 dpi=120 working_set_mb=134 private_mb=135
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== run 2 gpui open ===
+probe-launch unix_ms=1794028742606 pid=2852
+probe-startup window_ms=152 first_content_ms=402 nondominant=0.155 rich_content_ms=402
+probe-cpu name=boot unix_ms=1794028755880 cpu_ms=469 user_ms=234 private_mb=106.4 working_set_mb=112.1 peak_working_set_mb=125.3 threads=34 handles=1199
+probe-open thread=bench-large unix_ms=1794028756811 since_launch_ms=14205 since_click_ms=220
+probe-cpu name=opened unix_ms=1794028759502 cpu_ms=578 user_ms=281 private_mb=115.7 working_set_mb=124.5 peak_working_set_mb=130.5 threads=37 handles=1203
+probe-gpumem name=opened dedicated_mb=49.6
+pid=2852 dpi=120 working_set_mb=125 private_mb=116
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== run 2 aqua open ===
+probe-launch unix_ms=1794028771424 pid=11780
+probe-startup window_ms=56 first_content_ms=638 nondominant=0.161 rich_content_ms=638
+probe-cpu name=boot unix_ms=1794028784925 cpu_ms=328 user_ms=250 private_mb=90.8 working_set_mb=107.3 peak_working_set_mb=110.5 threads=32 handles=1051
+probe-open thread=bench-large unix_ms=1794028785811 since_launch_ms=14387 since_click_ms=205
+probe-cpu name=opened unix_ms=1794028788547 cpu_ms=406 user_ms=281 private_mb=106.3 working_set_mb=122.6 peak_working_set_mb=122.6 threads=32 handles=1051
+probe-gpumem name=opened dedicated_mb=43.9
+pid=11780 dpi=120 working_set_mb=123 private_mb=106
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== run 2 gpui stream ===
+probe-launch unix_ms=1794028800551 pid=2072
+probe-startup window_ms=143 first_content_ms=453 nondominant=0.163 rich_content_ms=453
+probe-open thread=bench-stream unix_ms=1794028801023 since_launch_ms=472 since_click_ms=-1
+probe-cpu name=stream0 unix_ms=1794028812862 cpu_ms=562 user_ms=234 private_mb=111.7 working_set_mb=120.9 peak_working_set_mb=135.5 threads=35 handles=1201
+probe-trigger unix_ms=1794028812870
+probe-latency name=stream_latency kind=idle samples=300 timeouts=0 p50_ms=0.064 p90_ms=0.432 p99_ms=1.894 max_ms=2.169 mean_ms=0.175 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/2,0.1/2,0.1/2
+probe-cpu name=stream1 unix_ms=1794028822589 cpu_ms=1672 user_ms=1094 private_mb=114.1 working_set_mb=123.5 peak_working_set_mb=135.5 threads=36 handles=1205
+probe-wakes name=stream seconds=10 context_switches_per_sec_avg=584 max=605 top_threads=22936=266.5(main),24668=126.5(WindowVSync),17704=119.9(),25584=33(forge-net) attempt=1
+probe-ctxseries name=stream start_unix_ms=1794028822666 per_second=593,593,572,583,594,582,605,577,565,576 hard_faults=0,0,0,0,0,0,5,0,0,0 page_faults=336,444,242,275,337,313,385,291,370,352
+probe-cpu name=stream2 unix_ms=1794028832870 cpu_ms=2859 user_ms=2125 private_mb=114.7 working_set_mb=124.1 peak_working_set_mb=135.5 threads=36 handles=1206
+probe-gpumem name=stream dedicated_mb=49.1
+pid=2072 dpi=120 working_set_mb=123 private_mb=113
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+stream grace wait 0s
+=== run 2 aqua stream ===
+probe-launch unix_ms=1794028853554 pid=25328
+probe-startup window_ms=57 first_content_ms=577 nondominant=0.221 rich_content_ms=577
+probe-open thread=bench-stream unix_ms=1794028853750 since_launch_ms=196 since_click_ms=-1
+probe-cpu name=stream0 unix_ms=1794028866022 cpu_ms=422 user_ms=172 private_mb=102.2 working_set_mb=119.7 peak_working_set_mb=124.6 threads=30 handles=1050
+probe-trigger unix_ms=1794028866030
+probe-latency name=stream_latency kind=idle samples=300 timeouts=0 p50_ms=0.061 p90_ms=0.089 p99_ms=0.272 max_ms=1.202 mean_ms=0.072 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=stream1 unix_ms=1794028875460 cpu_ms=625 user_ms=359 private_mb=120 working_set_mb=126.4 peak_working_set_mb=126.4 threads=32 handles=1052
+probe-wakes name=stream seconds=10 context_switches_per_sec_avg=116.1 max=168 top_threads=24860=56.5(main),24136=26.8(forge-net),8592=23.1(aqua-render),5664=8.8(forge-net) attempt=1
+probe-ctxseries name=stream start_unix_ms=1794028875535 per_second=160,115,96,77,115,78,135,168,91,126 hard_faults=0,3,0,0,0,0,0,8,0,0 page_faults=2231,162,90,77,77,18,185,149,0,2
+probe-cpu name=stream2 unix_ms=1794028885725 cpu_ms=797 user_ms=531 private_mb=143.6 working_set_mb=134.2 peak_working_set_mb=134.2 threads=30 handles=1051
+probe-gpumem name=stream dedicated_mb=71.4
+pid=25328 dpi=120 working_set_mb=134 private_mb=146
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+stream grace wait 0s
+=== run 2 gpui keys ===
+probe-launch unix_ms=1794028903310 pid=25316
+probe-startup window_ms=147 first_content_ms=286 nondominant=0.155 rich_content_ms=287
+probe-open thread=bench-large unix_ms=1794028903788 since_launch_ms=478 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=25316
+probe-latency name=type kind=type samples=32 timeouts=28 p50_ms=261.612 p90_ms=265.026 p99_ms=265.822 max_ms=265.822 mean_ms=261.588 over4_ms=32 over8_ms=32 over16_ms=32 over50_ms=32 grab_p50_ms=264.1
+pid=25316 dpi=120 working_set_mb=125 private_mb=115
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+key-latency target=gpui pid=25316 posts=145 matched=145 unmatched=0 p50_ms=17.65 p90_ms=18.94 p99_ms=19.91 max_ms=20.22 mean_ms=17.86 over8_3=145 over16_7=145
+=== run 2 aqua keys ===
+probe-launch unix_ms=1794029018117 pid=22080
+probe-startup window_ms=55 first_content_ms=496 nondominant=0.165 rich_content_ms=496
+probe-open thread=bench-large unix_ms=1794029018310 since_launch_ms=193 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=22080
+probe-latency name=type kind=type samples=32 timeouts=28 p50_ms=267.482 p90_ms=271.027 p99_ms=277.014 max_ms=277.014 mean_ms=267.319 over4_ms=32 over8_ms=32 over16_ms=32 over50_ms=32 grab_p50_ms=264.8
+pid=22080 dpi=120 working_set_mb=122 private_mb=106
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+key-latency target=aqua pid=22080 posts=145 matched=145 unmatched=0 p50_ms=1.59 p90_ms=1.84 p99_ms=2.08 max_ms=2.33 mean_ms=1.60 over8_3=0 over16_7=0
+=== run 3 aqua main ===
+probe-launch unix_ms=1794029136123 pid=22932
+probe-startup window_ms=62 first_content_ms=458 nondominant=0.165 rich_content_ms=458
+probe-open thread=bench-large unix_ms=1794029136308 since_launch_ms=185 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=0.8
+probe-cpu name=boot unix_ms=1794029151735 cpu_ms=250 user_ms=141 private_mb=105.4 working_set_mb=120.6 peak_working_set_mb=122.6 threads=32 handles=1053
+probe-gpumem name=boot dedicated_mb=35.4
+probe-cpu name=idle0 unix_ms=1794029154762 cpu_ms=250 user_ms=141 private_mb=105.4 working_set_mb=120.6 peak_working_set_mb=122.6 threads=32 handles=1053
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=0.07 max=1 top_threads=10000=0(),12988=0(),2160=0(),16492=0() attempt=1
+probe-ctxseries name=idle start_unix_ms=1794029154838 per_second=0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-thread name=idle_threads tid=13984 thread='' started_ms=177 module=combase.dll start_rva=0x4eb2521e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=12988 thread='' started_ms=178 module=ntdll.dll start_rva=0x4eca54990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=2 total=27
+probe-cpu name=idle1 unix_ms=1794029200311 cpu_ms=266 user_ms=156 private_mb=105.2 working_set_mb=120.5 peak_working_set_mb=122.6 threads=27 handles=1049
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.06 p90_ms=0.094 p99_ms=0.222 max_ms=1.168 mean_ms=0.071 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=scroll0 unix_ms=1794029205667 cpu_ms=281 user_ms=172 private_mb=105.2 working_set_mb=120.5 peak_working_set_mb=122.6 threads=27 handles=1049
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.101 p90_ms=0.247 p99_ms=0.374 max_ms=0.468 mean_ms=0.129 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/0,0.1/0,0.1/0,0.1/0,0.1/0,0.1/0
+probe-cpu name=scroll1 unix_ms=1794029221996 cpu_ms=797 user_ms=656 private_mb=120.2 working_set_mb=127.5 peak_working_set_mb=127.6 threads=27 handles=1049
+probe-changed name=pre pixels=273813 total=2135250 nondominant=0.196
+probe-cpu name=settle unix_ms=1794029226201 cpu_ms=812 user_ms=672 private_mb=120.8 working_set_mb=128 peak_working_set_mb=128 threads=29 handles=1051
+probe-gpumem name=settle dedicated_mb=53.4
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=264.546 p90_ms=272.42 p99_ms=276.153 max_ms=276.153 mean_ms=264.965 over4_ms=40 over8_ms=40 over16_ms=40 over50_ms=40 grab_p50_ms=264.4
+probe-latency name=resize_setpos kind=resize samples=120 timeouts=0 p50_ms=1.321 p90_ms=1.728 p99_ms=2.064 max_ms=2.177 mean_ms=1.324 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=1.484 p90_ms=1.914 p99_ms=2.295 max_ms=2.344 mean_ms=1.498 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0
+probe-cpu name=rs0 unix_ms=1794029257966 cpu_ms=1250 user_ms=1109 private_mb=133.6 working_set_mb=131 peak_working_set_mb=136.7 threads=29 handles=1052
+probe-wakes name=after_resize seconds=30 context_switches_per_sec_avg=0.13 max=4 top_threads=23964=0.1(main),16492=0(),2160=0(),7696=0() attempt=1
+probe-ctxseries name=after_resize start_unix_ms=1794029257969 per_second=0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-cpu name=rs1 unix_ms=1794029288308 cpu_ms=1250 user_ms=1109 private_mb=133.4 working_set_mb=131 peak_working_set_mb=136.7 threads=24 handles=1042
+probe-threads-done name=after_resize_threads seconds=15 active=0 total=24
+probe-load name=end_load seconds=3 system_cpu_pct=1.7
+pid=22932 dpi=120 working_set_mb=131 private_mb=133
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== run 3 gpui main ===
+probe-launch unix_ms=1794029318077 pid=24896
+probe-startup window_ms=141 first_content_ms=407 nondominant=0.155 rich_content_ms=407
+probe-open thread=bench-large unix_ms=1794029318578 since_launch_ms=501 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=6.8
+probe-cpu name=boot unix_ms=1794029333621 cpu_ms=422 user_ms=156 private_mb=115.3 working_set_mb=124.7 peak_working_set_mb=136.2 threads=35 handles=1201
+probe-gpumem name=boot dedicated_mb=49.1
+probe-cpu name=idle0 unix_ms=1794029336652 cpu_ms=422 user_ms=156 private_mb=115.3 working_set_mb=124.7 peak_working_set_mb=136.2 threads=35 handles=1201
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=0.13 max=1 top_threads=15872=0.1(),24220=0.1(),8668=0(WindhawkMainLoopThreadAttachExempt),2880=0() attempt=1
+probe-ctxseries name=idle start_unix_ms=1794029336745 per_second=0,0,0,0,0,0,0,0,1,1,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-thread name=idle_threads tid=15872 thread='' started_ms=7 module=ntdll.dll start_rva=0x4f56d4990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=8284 thread='' started_ms=116 module=combase.dll start_rva=0x4f3ed21e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=24220 thread='' started_ms=116 module=ntdll.dll start_rva=0x4f56d4990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=3 total=32
+probe-cpu name=idle1 unix_ms=1794029382223 cpu_ms=422 user_ms=156 private_mb=115.1 working_set_mb=124.6 peak_working_set_mb=136.2 threads=32 handles=1193
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.061 p90_ms=0.118 p99_ms=0.216 max_ms=1.274 mean_ms=0.074 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=scroll0 unix_ms=1794029387770 cpu_ms=422 user_ms=156 private_mb=115.2 working_set_mb=124.6 peak_working_set_mb=136.2 threads=32 handles=1193
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.06 p90_ms=1.449 p99_ms=2.686 max_ms=2.924 mean_ms=0.352 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/3,0.1/2,0.1/3,0.1/3,0.1/3,0.1/2
+probe-cpu name=scroll1 unix_ms=1794029404931 cpu_ms=2781 user_ms=2203 private_mb=119.8 working_set_mb=127.4 peak_working_set_mb=136.2 threads=34 handles=1196
+probe-changed name=pre pixels=246941 total=2135250 nondominant=0.288
+probe-cpu name=settle unix_ms=1794029409234 cpu_ms=2828 user_ms=2234 private_mb=118.8 working_set_mb=126.3 peak_working_set_mb=136.2 threads=34 handles=1194
+probe-gpumem name=settle dedicated_mb=51.1
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=265.891 p90_ms=272.209 p99_ms=276.957 max_ms=276.957 mean_ms=265.618 over4_ms=40 over8_ms=40 over16_ms=40 over50_ms=40 grab_p50_ms=265.7
+probe-latency name=resize_setpos kind=resize samples=120 timeouts=0 p50_ms=1.172 p90_ms=2.196 p99_ms=3.763 max_ms=4.277 mean_ms=1.343 over4_ms=1 over8_ms=0 over16_ms=0 over50_ms=0
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=1.35 p90_ms=3.203 p99_ms=4.125 max_ms=4.497 mean_ms=1.65 over4_ms=3 over8_ms=0 over16_ms=0 over50_ms=0
+probe-cpu name=rs0 unix_ms=1794029441168 cpu_ms=3594 user_ms=2797 private_mb=118.7 working_set_mb=126.6 peak_working_set_mb=136.2 threads=33 handles=1192
+probe-wakes name=after_resize seconds=30 context_switches_per_sec_avg=0.13 max=1 top_threads=15872=0.1(),2480=0(),7856=0(forge-net),13016=0() attempt=1
+probe-ctxseries name=after_resize start_unix_ms=1794029441170 per_second=1,0,0,0,0,0,1,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-cpu name=rs1 unix_ms=1794029471501 cpu_ms=3594 user_ms=2797 private_mb=118.1 working_set_mb=126.1 peak_working_set_mb=136.2 threads=30 handles=1188
+probe-threads-done name=after_resize_threads seconds=15 active=0 total=30
+probe-load name=end_load seconds=3 system_cpu_pct=4.9
+pid=24896 dpi=120 working_set_mb=126 private_mb=118
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== run 3 aqua open ===
+probe-launch unix_ms=1794029501085 pid=13552
+probe-startup window_ms=59 first_content_ms=579 nondominant=0.161 rich_content_ms=579
+probe-cpu name=boot unix_ms=1794029514525 cpu_ms=234 user_ms=156 private_mb=92.1 working_set_mb=108 peak_working_set_mb=111.9 threads=30 handles=1050
+probe-open thread=bench-large unix_ms=1794029515447 since_launch_ms=14362 since_click_ms=223
+probe-cpu name=opened unix_ms=1794029518116 cpu_ms=297 user_ms=188 private_mb=106.4 working_set_mb=123 peak_working_set_mb=123 threads=31 handles=1051
+probe-gpumem name=opened dedicated_mb=43.9
+pid=13552 dpi=120 working_set_mb=123 private_mb=106
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== run 3 gpui open ===
+probe-launch unix_ms=1794029530131 pid=9252
+probe-startup window_ms=131 first_content_ms=396 nondominant=0.155 rich_content_ms=397
+probe-cpu name=boot unix_ms=1794029543379 cpu_ms=484 user_ms=266 private_mb=106.5 working_set_mb=112.2 peak_working_set_mb=125.1 threads=34 handles=1199
+probe-open thread=bench-large unix_ms=1794029544309 since_launch_ms=14178 since_click_ms=218
+probe-cpu name=opened unix_ms=1794029546813 cpu_ms=594 user_ms=297 private_mb=115.8 working_set_mb=124.6 peak_working_set_mb=130.8 threads=37 handles=1203
+probe-gpumem name=opened dedicated_mb=49.6
+pid=9252 dpi=120 working_set_mb=125 private_mb=116
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== run 3 aqua stream ===
+probe-launch unix_ms=1794029558813 pid=23372
+probe-startup window_ms=61 first_content_ms=459 nondominant=0.221 rich_content_ms=459
+probe-open thread=bench-stream unix_ms=1794029558998 since_launch_ms=185 since_click_ms=-1
+probe-cpu name=stream0 unix_ms=1794029571135 cpu_ms=281 user_ms=156 private_mb=102.8 working_set_mb=120.1 peak_working_set_mb=120.2 threads=30 handles=1050
+probe-trigger unix_ms=1794029571143
+probe-latency name=stream_latency kind=idle samples=300 timeouts=0 p50_ms=0.06 p90_ms=0.09 p99_ms=0.216 max_ms=1.138 mean_ms=0.069 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=stream1 unix_ms=1794029580679 cpu_ms=641 user_ms=438 private_mb=122 working_set_mb=125.9 peak_working_set_mb=125.9 threads=32 handles=1052
+probe-wakes name=stream seconds=10 context_switches_per_sec_avg=101.1 max=132 top_threads=23432=49.3(main),19764=19(forge-net),7500=16.9(forge-net),17212=14.9(aqua-render) attempt=1
+probe-ctxseries name=stream start_unix_ms=1794029580753 per_second=87,113,117,84,132,79,82,128,90,99 hard_faults=0,0,0,0,0,0,3,8,0,0 page_faults=340,154,158,497,1154,0,122,154,4,89
+probe-cpu name=stream2 unix_ms=1794029590956 cpu_ms=891 user_ms=625 private_mb=141.8 working_set_mb=133.2 peak_working_set_mb=133.2 threads=30 handles=1051
+probe-gpumem name=stream dedicated_mb=71.2
+pid=23372 dpi=120 working_set_mb=134 private_mb=145
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+stream grace wait 0s
+=== run 3 gpui stream ===
+probe-launch unix_ms=1794029611519 pid=7540
+probe-startup window_ms=176 first_content_ms=410 nondominant=0.155 rich_content_ms=410
+probe-open thread=bench-stream unix_ms=1794029611995 since_launch_ms=476 since_click_ms=-1
+probe-cpu name=stream0 unix_ms=1794029623791 cpu_ms=391 user_ms=266 private_mb=111.3 working_set_mb=120.6 peak_working_set_mb=134.8 threads=35 handles=1201
+probe-trigger unix_ms=1794029623800
+probe-latency name=stream_latency kind=idle samples=300 timeouts=0 p50_ms=0.063 p90_ms=0.56 p99_ms=2.083 max_ms=2.278 mean_ms=0.227 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/2,0.1/2,0.1/2
+probe-cpu name=stream1 unix_ms=1794029633464 cpu_ms=1516 user_ms=1219 private_mb=113.7 working_set_mb=123.1 peak_working_set_mb=134.8 threads=36 handles=1207
+probe-wakes name=stream seconds=10 context_switches_per_sec_avg=590.7 max=604 top_threads=11388=270.3(main),8344=128.9(WindowVSync),24564=119.7(),23132=33(forge-net) attempt=1
+probe-ctxseries name=stream start_unix_ms=1794029633538 per_second=596,593,589,592,585,582,589,589,588,604 hard_faults=0,0,0,0,0,0,5,0,0,0 page_faults=302,487,225,238,265,250,323,206,228,243
+probe-cpu name=stream2 unix_ms=1794029643744 cpu_ms=2719 user_ms=2328 private_mb=114.1 working_set_mb=123.6 peak_working_set_mb=134.8 threads=36 handles=1206
+probe-gpumem name=stream dedicated_mb=49.1
+pid=7540 dpi=120 working_set_mb=122 private_mb=113
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+stream grace wait 0s
+=== run 3 aqua keys ===
+probe-launch unix_ms=1794029661557 pid=18520
+probe-startup window_ms=57 first_content_ms=601 nondominant=0.165 rich_content_ms=601
+probe-open thread=bench-large unix_ms=1794029661753 since_launch_ms=196 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=18520
+probe-latency name=type kind=type samples=32 timeouts=28 p50_ms=268.187 p90_ms=273.364 p99_ms=276.94 max_ms=276.94 mean_ms=268.338 over4_ms=32 over8_ms=32 over16_ms=32 over50_ms=32 grab_p50_ms=265.4
+pid=18520 dpi=120 working_set_mb=123 private_mb=106
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+key-latency target=aqua pid=18520 posts=145 matched=145 unmatched=0 p50_ms=1.54 p90_ms=1.89 p99_ms=2.50 max_ms=2.96 mean_ms=1.60 over8_3=0 over16_7=0
+=== run 3 gpui keys ===
+probe-launch unix_ms=1794029776693 pid=6884
+probe-startup window_ms=129 first_content_ms=347 nondominant=0.155 rich_content_ms=347
+probe-open thread=bench-large unix_ms=1794029777152 since_launch_ms=459 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=6884
+probe-latency name=type kind=type samples=32 timeouts=28 p50_ms=260.825 p90_ms=265.042 p99_ms=265.775 max_ms=265.775 mean_ms=261.236 over4_ms=32 over8_ms=32 over16_ms=32 over50_ms=32 grab_p50_ms=263.9
+pid=6884 dpi=120 working_set_mb=125 private_mb=115
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+key-latency target=gpui pid=6884 posts=145 matched=145 unmatched=0 p50_ms=17.65 p90_ms=18.89 p99_ms=19.24 max_ms=19.52 mean_ms=17.85 over8_3=145 over16_7=145
+=== run 1 aqua wakesrc ===
+probe-launch unix_ms=1794029894662 pid=24360
+probe-startup window_ms=61 first_content_ms=471 nondominant=0.165 rich_content_ms=471
+probe-open thread=bench-large unix_ms=1794029894861 since_launch_ms=199 since_click_ms=-1
+probe-cpu name=wake0 unix_ms=1794029912003 cpu_ms=359 user_ms=94 private_mb=106.3 working_set_mb=122.4 peak_working_set_mb=122.5 threads=30 handles=1050
+probe-cpu name=wake1 unix_ms=1794029932012 cpu_ms=359 user_ms=94 private_mb=106.3 working_set_mb=122.4 peak_working_set_mb=122.5 threads=30 handles=1050
+probe-cpu name=wake2 unix_ms=1794029956022 cpu_ms=375 user_ms=109 private_mb=107.3 working_set_mb=119.3 peak_working_set_mb=126.2 threads=27 handles=1048
+pid=24360 dpi=120 working_set_mb=119 private_mb=107
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== run 1 aqua spikes ===
+probe-launch unix_ms=1794029966759 pid=18496
+probe-startup window_ms=66 first_content_ms=572 nondominant=0.273 rich_content_ms=572
+probe-open thread=bench-large unix_ms=1794029966980 since_launch_ms=221 since_click_ms=-1
+probe-latency name=spike_scroll kind=scroll samples=300 timeouts=0 p50_ms=0.144 p90_ms=0.266 p99_ms=0.602 max_ms=1.674 mean_ms=0.156 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/2,0.1/1,0.2/1
+probe-latency name=spike_scroll2 kind=scroll samples=300 timeouts=0 p50_ms=0.183 p90_ms=0.365 p99_ms=0.464 max_ms=0.837 mean_ms=0.178 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.2/1,0.1/0,0.1/1
+pid=18496 dpi=120 working_set_mb=126 private_mb=111
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+=== visual gate ===
+visual gate shots in /home/sander/projects/artisanstreet/aqua-optimization/target/measurements/round-12-coarse-message/visual-gate: read the *-NAME.png pairs and compare gpui against aqua
+bottom         changed=   59617 px ( 2.792%) bbox=1876x1107+22+0 worst_tiles(row,col)=1,5=11.8% 1,3=7.2% 1,2=6.5%
+depth1         changed=  143629 px ( 6.727%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,2=17.3% 2,3=15.1% 0,2=14.8%
+depth2         changed=  143478 px ( 6.719%) bbox=1876x1122+22+0 worst_tiles(row,col)=0,2=19.7% 0,3=19.6% 3,2=14.1%
+depth3         changed=  194225 px ( 9.096%) bbox=1876x1122+22+0 worst_tiles(row,col)=1,2=29.8% 1,3=28.1% 0,2=18.1%
+depth4         changed=  185528 px ( 8.689%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,2=36.0% 2,3=31.7% 3,2=16.7%
+depth5         changed=  147505 px ( 6.908%) bbox=1876x1122+22+0 worst_tiles(row,col)=0,2=22.7% 2,3=22.0% 2,2=20.1%
+depth6         changed=  187212 px ( 8.768%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,2=23.1% 2,3=21.7% 1,2=20.8%
+depth7         changed=  149831 px ( 7.017%) bbox=1876x1122+22+0 worst_tiles(row,col)=1,2=22.7% 2,2=22.5% 2,3=21.3%
+depth8         changed=  135236 px ( 6.333%) bbox=1876x1122+22+0 worst_tiles(row,col)=0,3=23.6% 0,2=20.2% 1,2=17.4%
+dialog         changed=  187862 px ( 8.798%) bbox=1893x1121+5+0 worst_tiles(row,col)=0,3=26.8% 0,2=23.2% 1,2=18.1%
+edge           changed=  144095 px ( 6.748%) bbox=1876x1107+22+0 worst_tiles(row,col)=0,3=26.9% 0,2=22.8% 1,2=16.2%
+edge2          changed=  154410 px ( 7.231%) bbox=1876x1120+22+0 worst_tiles(row,col)=0,3=23.7% 1,2=23.6% 0,2=21.5%
+emoji          changed=  189345 px ( 8.868%) bbox=1876x1111+22+0 worst_tiles(row,col)=2,2=37.8% 2,3=32.6% 2,4=15.8%
+far1           changed=  132416 px ( 6.201%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,2=18.6% 2,3=17.7% 1,2=14.0%
+far10          changed=  239929 px (11.237%) bbox=1876x1122+22+0 worst_tiles(row,col)=1,2=35.0% 1,3=34.3% 2,2=26.2%
+far11          changed=  165091 px ( 7.732%) bbox=1876x1118+22+0 worst_tiles(row,col)=2,3=29.0% 2,2=24.4% 2,4=13.7%
+far12          changed=  190935 px ( 8.942%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,2=33.0% 2,3=27.7% 0,2=16.8%
+far2           changed=  172894 px ( 8.097%) bbox=1876x1109+22+0 worst_tiles(row,col)=2,2=23.8% 2,3=23.5% 1,2=20.1%
+far3           changed=  270380 px (12.663%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,3=52.7% 2,2=39.3% 2,4=30.4%
+far4           changed=  193081 px ( 9.043%) bbox=1876x1108+22+0 worst_tiles(row,col)=3,3=20.8% 2,2=20.7% 2,3=19.7%
+far5           changed=  174318 px ( 8.164%) bbox=1876x1122+22+0 worst_tiles(row,col)=1,3=22.5% 1,2=21.8% 2,2=19.8%
+far6           changed=  185214 px ( 8.674%) bbox=1876x1122+22+0 worst_tiles(row,col)=0,3=30.5% 0,2=26.4% 2,2=19.9%
+far7           changed=  209892 px ( 9.830%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,3=31.1% 2,2=28.7% 1,2=28.4%
+far8           changed=  252041 px (11.804%) bbox=1876x1117+22+0 worst_tiles(row,col)=2,3=54.2% 2,2=42.1% 2,4=29.5%
+far9           changed=  258651 px (12.113%) bbox=1876x1112+22+0 worst_tiles(row,col)=2,3=40.4% 2,2=36.3% 1,2=26.5%
+jump-a         changed=  284680 px (13.332%) bbox=1876x1107+22+0 worst_tiles(row,col)=2,3=43.1% 0,4=39.4% 0,3=38.2%
+jump-b         changed=  158200 px ( 7.409%) bbox=1876x1122+22+0 worst_tiles(row,col)=0,3=21.7% 0,2=18.8% 2,2=17.2%
+menu           changed=  133142 px ( 6.235%) bbox=1876x1107+22+0 worst_tiles(row,col)=0,3=24.4% 1,3=21.1% 2,3=16.9%
+notch1         changed=   65353 px ( 3.061%) bbox=1876x1107+22+0 worst_tiles(row,col)=1,5=11.8% 2,2=7.3% 2,3=6.4%
+v-account      changed=   86646 px ( 4.058%) bbox=1893x1121+5+0 worst_tiles(row,col)=1,2=12.3% 2,2=12.2% 1,3=10.7%
+v-emoji        changed=   82185 px ( 3.849%) bbox=1876x1121+22+0 worst_tiles(row,col)=1,2=12.3% 2,2=12.2% 1,3=10.7%
+v-lightbox     changed=     697 px ( 0.033%) bbox=1200x675+349+225 worst_tiles(row,col)=0,4=0.6% 3,4=0.0% 3,1=0.0%
+v-menu         changed=   70615 px ( 3.307%) bbox=1876x1122+22+0 worst_tiles(row,col)=1,3=14.6% 0,3=9.4% 0,2=9.1%
+v-scroll       changed=   41707 px ( 1.953%) bbox=1876x1122+22+0 worst_tiles(row,col)=0,3=9.4% 0,2=9.1% 0,5=4.0%
+v-tail         changed=   37542 px ( 1.758%) bbox=1876x1107+22+0 worst_tiles(row,col)=2,3=8.8% 2,2=8.3% 0,5=4.0%
+v-top          changed=   80191 px ( 3.756%) bbox=1876x1121+22+0 worst_tiles(row,col)=1,2=12.3% 2,2=12.2% 1,3=10.7%
+region notch1       jump-latest    changed=    0 px (  0.0%, limit 30%, reference_pixels=22 foreground=60%)
+region depth1       jump-latest    changed=    1 px (  4.5%, limit 30%, reference_pixels=22 foreground=60%)
+region depth2       jump-latest    changed=    1 px (  4.5%, limit 30%, reference_pixels=22 foreground=60%)
+region depth3       jump-latest    changed=    4 px ( 18.2%, limit 30%, reference_pixels=22 foreground=60%)
+region depth4       jump-latest    changed=    0 px (  0.0%, limit 30%, reference_pixels=22 foreground=60%)
+worst_changed_pct=13.332
+metric                                               aqua       gpui  verdict
+scroll p50 (ms)                                      0.10       0.07  FAIL
+scroll p90 (ms)                                      0.24       1.39  PASS
+scroll p99 (ms)                                      0.37       2.77  PASS
+scroll max (ms)                                      0.46       4.16  PASS
+scroll frames over 4 ms                              0.00       1.00  PASS
+scroll frames over 8.3 ms                            0.00       0.00  PASS
+scroll frames over 16.7 ms                           0.00       0.00  PASS
+CPU per scroll input (ms)                            0.86       3.93  PASS
+keystroke to present p50, ETW (ms)                   1.56      17.65  PASS
+keystroke to present p90, ETW (ms)                   1.86      18.94  PASS
+keystroke to present p99, ETW (ms)                   2.08      19.57  PASS
+keystroke to present max, ETW (ms)                   2.33      19.60  PASS
+keystrokes over 8.3 ms, ETW                          0.00     145.00  PASS
+keystrokes over 16.7 ms, ETW                         0.00     145.00  PASS
+keystroke to pixel p50, pixel probe (ms)           264.81     265.24  info FAIL
+keystroke to pixel p99, pixel probe (ms)           276.61     276.96  info FAIL
+idle CPU (% of one core)                             0.00       0.00  PASS
+idle context switches/s                              0.03       0.07  PASS
+idle threads waking at 1/s or more                   0.00       0.00  PASS
+idle busiest thread context switches/s               0.10       0.10  FAIL
+idle CPU after resize (% of one core)                0.00       0.00  PASS
+idle context switches/s after resize                 0.00       0.13  PASS
+idle threads waking after resize                     0.00       0.00  PASS
+private MiB after startup                          105.40     115.30  PASS
+private MiB after 600 scrolls                      120.80     118.60  FAIL
+peak working set MiB after startup (untrimmed)     122.60     136.20  PASS
+peak working set MiB after 600 scrolls (untrimmed)     127.80     136.20  PASS
+working set MiB after startup (current, trim-sensitive)     120.90     124.70  info PASS
+working set MiB after 600 scrolls (current, trim-sensitive)     127.80     126.30  info FAIL
+GPU dedicated MiB after startup                     35.40      49.10  PASS
+GPU dedicated MiB after 600 scrolls                 53.40      51.10  FAIL
+cold start to first content (ms)                   458.00     397.00  FAIL
+cold start to a frame with 15% non-dominant pixels (ms)     458.00     397.00  FAIL
+cold start to thread painted (ms)                  195.00     463.00  PASS
+open large thread, click to painted (ms)           222.00     220.00  FAIL
+resize p50 (ms)                                      1.58       1.32  FAIL
+resize p99 (ms)                                      2.46       3.92  PASS
+resize max (ms)                                      2.63       4.35  PASS
+resize frames over 16.7 ms                           0.00       0.00  PASS
+streaming CPU (% of one core)                        3.14      11.63  PASS
+streaming latency p50 (ms)                           0.06       0.06  PASS
+streaming latency p99 (ms)                           0.27       2.08  PASS
+streaming frames over 4 ms                           0.00       0.00  PASS
+streaming frames over 16.7 ms                        0.00       0.00  PASS
+streaming context switches/s                       101.10     587.50  PASS
+
+display state and system load per run
+  aqua: probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+  aqua: probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+  aqua: probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+  aqua: system CPU % per run (boot/end median): ['4.00', '3.00', '1.25']
+  aqua run 1: key present p50 1.56 ms p99 2.08 ms state fast
+  aqua run 2: key present p50 1.59 ms p99 2.08 ms state fast
+  aqua run 3: key present p50 1.54 ms p99 2.50 ms state fast
+  gpui: probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+  gpui: probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+  gpui: probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+  gpui: system CPU % per run (boot/end median): ['2.30', '2.35', '5.85']
+  gpui run 1: key present p50 17.68 ms p99 19.57 ms state slow
+  gpui run 2: key present p50 17.65 ms p99 19.91 ms state slow
+  gpui run 3: key present p50 17.65 ms p99 19.24 ms state slow
+  run 1: aqua fast vs gpui slow
+  run 2: aqua fast vs gpui slow
+  run 3: aqua fast vs gpui slow
+
+per-thread idle breakdown (run 1, threads with any context switch or CPU)
+  aqua idle: 2 active threads
+    tid19108@combase.dll                             ctx/s     0.10 cpu ms/s     0.00 started 180 ms
+    tid1864@ntdll.dll                                ctx/s     0.10 cpu ms/s     0.00 started 181 ms
+  aqua after resize: 0 active threads
+  gpui idle: 3 active threads
+    tid8104@ntdll.dll                                ctx/s     0.10 cpu ms/s     0.00 started 7 ms
+    tid23208@combase.dll                             ctx/s     0.10 cpu ms/s     0.00 started 104 ms
+    tid16296@ntdll.dll                               ctx/s     0.10 cpu ms/s     0.00 started 104 ms
+  gpui after resize: 0 active threads
+
+wake sources, aqua instrumented idle run (AQUA_WAKE_STATS, diagnostic only, not gated)
+  turns (summed rates over 2 reporting seconds): inbox-wake=8.4, window-message=4.2
+  messages (summed rates over 2 reporting seconds): resized=4.2, maximized=3.4, moved=2.5, redraw=1.7, covered=0.8, focus=0.8
+  posts (summed rates over 2 reporting seconds): window-requests@main=14.3, render-events@aqua-render=7.6, messages@main#host.rs:104=5.9, messages@forge-net#host.rs:104=4.2, messages@forge-net#host.rs:157=0.8, messages@main#host.rs:157=0.8
+  render thread runs: 2 reporting seconds; last: aqua-render-runs: secs=36.12 [inbox+framed+presented=0.0 forced+repaint+framed+presented=0.0]
+  idle CPU after settle 0.00%, after setsize 0.07%
+
+frames over 4 ms, aqua spike recorder (AQUA_PROFILE, diagnostic only, not gated)
+  3 spike frames over 4 ms in 600 scroll inputs; by role {'app': 2, 'render': 1}; dominant phase {'layout': 1, 'record': 1, 'input': 1}
+  top notes: dd.conversation=0.82ms/a0=1, sd.domains=0.85ms/a0=1, drain.shell=0.89ms/a0=1, rebuild=1.24ms/a0=1, wake=2.20ms/a0=1, rebuild_reason=FrameReason(INPUT | ANIMATION | EXPLICIT)=1
+  worst: aqua-spike role=render label=0 seq=3 t_ms=161.9 unix_ms=1794029966961 work_ms=66.12 wall_ms=143.83 allocs=0 alloc_bytes=0 reallocs=0 frees=0 phases_ms={input:0.18(a0/0B),lower:4.48(a0/0B),upload:0.36(a0/0B),plan:0.17(a0/0B),record:60.70(a0/0B),present:0.22(a0/0B),wait:0.44(a0/0B)} counts={commands:442,glyphs:197,upload_textures:43,upload_bytes:3808788,passes
+  worst: aqua-spike role=app label=26609384 seq=1 t_ms=72.3 unix_ms=1794029966872 work_ms=14.84 wall_ms=15.63 allocs=0 alloc_bytes=0 reallocs=0 frees=0 phases_ms={input:0.00(a0/0B),reactive:0.00(a0/0B),build:0.15(a0/0B),layout:14.51(a0/0B),text:0.18(a0/0B),submit:0.00(a0/0B)} counts={layouts:1,nodes_measured:39,nodes_committed:36,layout_visited:1606,nodes_visited:598
+  worst: aqua-spike role=app label=26609384 seq=7 t_ms=188.9 unix_ms=1794029966988 work_ms=4.35 wall_ms=2.37 allocs=0 alloc_bytes=0 reallocs=0 frees=0 phases_ms={input:2.13(a0/0B),reactive:0.00(a0/0B),build:0.18(a0/0B),layout:1.92(a0/0B),text:0.12(a0/0B),submit:0.00(a0/0B)} counts={layouts:1,nodes_measured:1052,nodes_committed:191,layout_visited:438,nodes_visited:985
+
+scroll p50 (ms): FAIL (aqua 0.10 vs gpui 0.07, must beat gpui by 3% or tie at 0)
+scroll p90 (ms): PASS (aqua 0.24 vs gpui 1.39, must beat gpui by 3% or tie at 0)
+scroll p99 (ms): PASS (aqua 0.37 vs gpui 2.77, must beat gpui by 3% or tie at 0)
+scroll max (ms): PASS (aqua 0.46 vs gpui 4.16, must beat gpui by 3% or tie at 0)
+scroll frames over 4 ms: PASS (aqua 0.00 vs gpui 1.00, must beat gpui by 3% or tie at 0)
+scroll frames over 8.3 ms: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+scroll frames over 16.7 ms: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+CPU per scroll input (ms): PASS (aqua 0.86 vs gpui 3.93, must beat gpui by 3% or tie at 0)
+keystroke to present p50, ETW (ms): PASS (aqua 1.56 vs gpui 17.65, must beat gpui by 3% or tie at 0)
+keystroke to present p90, ETW (ms): PASS (aqua 1.86 vs gpui 18.94, must beat gpui by 3% or tie at 0)
+keystroke to present p99, ETW (ms): PASS (aqua 2.08 vs gpui 19.57, must beat gpui by 3% or tie at 0)
+keystroke to present max, ETW (ms): PASS (aqua 2.33 vs gpui 19.60, must beat gpui by 3% or tie at 0)
+keystrokes over 8.3 ms, ETW: PASS (aqua 0.00 vs gpui 145.00, must beat gpui by 3% or tie at 0)
+keystrokes over 16.7 ms, ETW: PASS (aqua 0.00 vs gpui 145.00, must beat gpui by 3% or tie at 0)
+keystroke to pixel p50, pixel probe (ms): info FAIL (aqua 264.81 vs gpui 265.24, must beat gpui by 3% or tie at 0)
+keystroke to pixel p99, pixel probe (ms): info FAIL (aqua 276.61 vs gpui 276.96, must beat gpui by 3% or tie at 0)
+idle CPU (% of one core): PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+idle context switches/s: PASS (aqua 0.03 vs gpui 0.07, must beat gpui by 3% or tie at 0)
+idle threads waking at 1/s or more: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+idle busiest thread context switches/s: FAIL (aqua 0.10 vs gpui 0.10, must beat gpui by 3% or tie at 0)
+idle CPU after resize (% of one core): PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+idle context switches/s after resize: PASS (aqua 0.00 vs gpui 0.13, must beat gpui by 3% or tie at 0)
+idle threads waking after resize: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+private MiB after startup: PASS (aqua 105.40 vs gpui 115.30, must beat gpui by 3% or tie at 0)
+private MiB after 600 scrolls: FAIL (aqua 120.80 vs gpui 118.60, must beat gpui by 3% or tie at 0)
+peak working set MiB after startup (untrimmed): PASS (aqua 122.60 vs gpui 136.20, must beat gpui by 3% or tie at 0)
+peak working set MiB after 600 scrolls (untrimmed): PASS (aqua 127.80 vs gpui 136.20, must beat gpui by 3% or tie at 0)
+working set MiB after startup (current, trim-sensitive): info PASS (aqua 120.90 vs gpui 124.70, must beat gpui by 3% or tie at 0)
+working set MiB after 600 scrolls (current, trim-sensitive): info FAIL (aqua 127.80 vs gpui 126.30, must beat gpui by 3% or tie at 0)
+GPU dedicated MiB after startup: PASS (aqua 35.40 vs gpui 49.10, must beat gpui by 3% or tie at 0)
+GPU dedicated MiB after 600 scrolls: FAIL (aqua 53.40 vs gpui 51.10, must beat gpui by 3% or tie at 0)
+cold start to first content (ms): FAIL (aqua 458.00 vs gpui 397.00, must beat gpui by 3% or tie at 0)
+cold start to a frame with 15% non-dominant pixels (ms): FAIL (aqua 458.00 vs gpui 397.00, must beat gpui by 3% or tie at 0)
+cold start to thread painted (ms): PASS (aqua 195.00 vs gpui 463.00, must beat gpui by 3% or tie at 0)
+open large thread, click to painted (ms): FAIL (aqua 222.00 vs gpui 220.00, must beat gpui by 3% or tie at 0)
+resize p50 (ms): FAIL (aqua 1.58 vs gpui 1.32, must beat gpui by 3% or tie at 0)
+resize p99 (ms): PASS (aqua 2.46 vs gpui 3.92, must beat gpui by 3% or tie at 0)
+resize max (ms): PASS (aqua 2.63 vs gpui 4.35, must beat gpui by 3% or tie at 0)
+resize frames over 16.7 ms: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+streaming CPU (% of one core): PASS (aqua 3.14 vs gpui 11.63, must beat gpui by 3% or tie at 0)
+streaming latency p50 (ms): PASS (aqua 0.06 vs gpui 0.06, must beat gpui by 3% or tie at 0)
+streaming latency p99 (ms): PASS (aqua 0.27 vs gpui 2.08, must beat gpui by 3% or tie at 0)
+streaming frames over 4 ms: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+streaming frames over 16.7 ms: PASS (aqua 0.00 vs gpui 0.00, must beat gpui by 3% or tie at 0)
+streaming context switches/s: PASS (aqua 101.10 vs gpui 587.50, must beat gpui by 3% or tie at 0)
+aqua ran to completion: PASS
+aqua never took foreground: PASS
+gpui ran to completion: PASS
+gpui never took foreground: PASS
+section 11 windowed private memory (142 MiB, release): PASS (120.80)
+section 11 windowed GPU dedicated (64 MiB, release): PASS (53.40)
+visual gate (shots captured and distinct for both editors, side port; read the PNG pairs): PASS (PASS shots in /home/sander/projects/artisanstreet/aqua-optimization/target/measurements/round-12-coarse-message/visual-gate)
+aqua runs measured on a quiet machine (system CPU 2.30% median, limit 25%): PASS
+gpui runs measured on a quiet machine (system CPU 2.55% median, limit 25%): PASS
+OVERALL: FAIL (fixture-based, release, 3 interleaved runs, median)
+
+manifest
+date 2026-11-07T06:00:06+01:00
+profile release runs 3 idle_seconds 30 scroll_frames 600
+aqua_git 5f4ec00 port_git 08f2e75f dirty_aqua=25
+fixture_server bench-fixture links the port forge-http (SSE keep-alive from_secs(300)) while the GPUI repo forge-http keeps from_secs(15); both editors talk to the same fixture server in every run, so neither sees a different heartbeat, but absolute idle wakes differ from a real 15 s Forge
+gpui_baseline release build of the gpui-ce fork at rev = "6cd20f9c5deab2b160b68ac66f453ec70820e8a2", built by tools/compare-editors.sh build with the same cargo-windows toolchain as the port
+aqua exe /home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-coarse-message-wait.exe built 2026-11-07T05:48:17+01:00 sha256 0dbc944821465943 size 38900224
+gpui exe /home/sander/projects/artisanstreet/editor/target/x86_64-pc-windows-gnu/release/artisan-editor.exe built 2026-11-04T11:09:28+01:00 sha256 d0f3a99f1a3f6b3e size 40648704
+measured_source_override explicit frozen binary SHA-256 0dbc9448214659432d7a1836958dd36271c7498df4b252413888c8a7472154e8; framework SHA-256 93899dce34c2fe0000a8756262f31b2ba3dd6e7330c0ff312a4a7c3f0bfe060c (868 files), Editor SHA-256 3d9b9f679b64d5871c1c337a1be71b1f9a77e29334f70b8350718072b5647e1e (1056 files). See source-manifest.json; shared-checkout git header does not identify measured source.

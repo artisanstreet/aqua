@@ -1,0 +1,9 @@
+date 2026-11-07T05:55:55+01:00
+profile release runs 1 idle_seconds 30 scroll_frames 600
+aqua_git 5f4ec00 port_git 08f2e75f dirty_aqua=25
+fixture_server bench-fixture links the port forge-http (SSE keep-alive from_secs(300)) while the GPUI repo forge-http keeps from_secs(15); both editors talk to the same fixture server in every run, so neither sees a different heartbeat, but absolute idle wakes differ from a real 15 s Forge
+gpui_baseline release build of the gpui-ce fork at rev = "6cd20f9c5deab2b160b68ac66f453ec70820e8a2", built by tools/compare-editors.sh build with the same cargo-windows toolchain as the port
+aqua exe /home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-coarse-message-wait.exe built 2026-11-07T05:48:17+01:00 sha256 0dbc944821465943 size 38900224
+gpui exe /home/sander/projects/artisanstreet/editor/target/x86_64-pc-windows-gnu/release/artisan-editor.exe built 2026-11-04T11:09:28+01:00 sha256 d0f3a99f1a3f6b3e size 40648704
+measured_source_override explicit frozen executable and complete source identity from source-manifest.json; source hashes use pathlib.Path component ordering.
+measurement_environment stats off, profile/ledger/memory-report/wake-attribution unset; native driver threading prevention default enabled.

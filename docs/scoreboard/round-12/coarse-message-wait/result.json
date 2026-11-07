@@ -1,0 +1,118 @@
+{
+  "accepted": true,
+  "status": "Focused streaming improvement; complete full comparison 33/41 performance rows PASS, overall FAIL; visuals PASS; draft PR retained",
+  "base_commit": "1faf00b",
+  "code_commit": "4352103",
+  "binary_sha256": "0dbc9448214659432d7a1836958dd36271c7498df4b252413888c8a7472154e8",
+  "validation": {
+    "targeted_windows_tests": 13,
+    "library_and_targeted_test_clippy": "PASS -D warnings",
+    "changed_file_rustfmt": "PASS",
+    "foreground_before_after_hwnd": 131864,
+    "release_editor_build": "PASS",
+    "activation": "Instrumented streaming reports loop:message-timer during live updates; this is not a performance comparison."
+  },
+  "policy": "Existing TimerPlan::Coarse deadlines (>100 ms) use a coalescable message timer and GetMessage; precise deadlines and external wait handles retain MsgWait. Sent callbacks post a notification when queue/redraw/deadline/handle state changes. Unchanged deadline reads do not post.",
+  "prior_attempt": "Rejected 27f7f65 only used GetMessage when no deadline existed, usually bypassing active occlusion-watch deadlines. This experiment handles those coarse deadlines.",
+  "references": [
+    "https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setcoalescabletimer",
+    "https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmessagew"
+  ],
+  "limitations": [
+    "This is a focused WM_NULL round-trip improvement, not a physical display or end-to-end keystroke latency claim.",
+    "Maximum medians rise slightly from 1.360 to 1.415 ms. All samples are below 4 ms; three pairs do not establish tail-latency equivalence.",
+    "Streaming CPU medians rise from 3.269% to 4.291% of one core. Control range 1.470\u20133.954%, candidate 3.638\u20134.424%; three pairs do not establish a precise expected CPU cost.",
+    "Both binaries in the focused pairs are Aqua; the separate full GPUI comparison is archived at ../coarse-message-full/.",
+    "The complete full verdict is 33/41 passing performance rows, overall FAIL; visuals pass. Thread opening newly fails at 222 versus 220 ms with overlapping per-run ranges."
+  ],
+  "design": "Three stats-off Aqua-only control/candidate streaming pairs in AB/BA/AB order; source differs only by coarse message waiting. No retries.",
+  "control_sha256": "6c23ac9afea77a47f7fb68db099f5e4f8e08ed96d5df644af9e802ba80019973",
+  "runs": [
+    {
+      "arm": "control",
+      "run": 1,
+      "p50_ms": 0.07,
+      "p99_ms": 0.285,
+      "max_ms": 1.166,
+      "cpu_percent_one_core": 3.954027836355968,
+      "samples": 300,
+      "timeouts": 0,
+      "over4_ms": 0,
+      "foreground_unchanged": true
+    },
+    {
+      "arm": "control",
+      "run": 2,
+      "p50_ms": 0.067,
+      "p99_ms": 0.299,
+      "max_ms": 1.36,
+      "cpu_percent_one_core": 1.4702793530770846,
+      "samples": 300,
+      "timeouts": 0,
+      "over4_ms": 0,
+      "foreground_unchanged": true
+    },
+    {
+      "arm": "control",
+      "run": 3,
+      "p50_ms": 0.066,
+      "p99_ms": 0.256,
+      "max_ms": 1.367,
+      "cpu_percent_one_core": 3.269412134548884,
+      "samples": 300,
+      "timeouts": 0,
+      "over4_ms": 0,
+      "foreground_unchanged": true
+    },
+    {
+      "arm": "candidate",
+      "run": 1,
+      "p50_ms": 0.06,
+      "p99_ms": 0.259,
+      "max_ms": 1.158,
+      "cpu_percent_one_core": 4.424407632627386,
+      "samples": 300,
+      "timeouts": 0,
+      "over4_ms": 0,
+      "foreground_unchanged": true
+    },
+    {
+      "arm": "candidate",
+      "run": 2,
+      "p50_ms": 0.06,
+      "p99_ms": 0.246,
+      "max_ms": 1.415,
+      "cpu_percent_one_core": 3.6382866208355367,
+      "samples": 300,
+      "timeouts": 0,
+      "over4_ms": 0,
+      "foreground_unchanged": true
+    },
+    {
+      "arm": "candidate",
+      "run": 3,
+      "p50_ms": 0.062,
+      "p99_ms": 0.233,
+      "max_ms": 1.457,
+      "cpu_percent_one_core": 4.290847600930036,
+      "samples": 300,
+      "timeouts": 0,
+      "over4_ms": 0,
+      "foreground_unchanged": true
+    }
+  ],
+  "medians": {
+    "control": {
+      "p50_ms": 0.067,
+      "p99_ms": 0.285,
+      "max_ms": 1.36,
+      "cpu_percent_one_core": 3.269412134548884
+    },
+    "candidate": {
+      "p50_ms": 0.06,
+      "p99_ms": 0.246,
+      "max_ms": 1.415,
+      "cpu_percent_one_core": 4.290847600930036
+    }
+  }
+}

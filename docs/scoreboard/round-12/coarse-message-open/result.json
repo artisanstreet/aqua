@@ -1,0 +1,55 @@
+{
+  "design": "Three stats-off Aqua-only control/candidate open pairs in AB/BA/AB order; same fixture, helper f009029 and unchanged readiness metric.",
+  "control_sha256": "6c23ac9afea77a47f7fb68db099f5e4f8e08ed96d5df644af9e802ba80019973",
+  "candidate_sha256": "0dbc9448214659432d7a1836958dd36271c7498df4b252413888c8a7472154e8",
+  "runs": [
+    {
+      "arm": "control",
+      "run": 1,
+      "open_ms": 206,
+      "preflight_cpu_percent": 2.6
+    },
+    {
+      "arm": "control",
+      "run": 2,
+      "open_ms": 210,
+      "preflight_cpu_percent": 3.4
+    },
+    {
+      "arm": "control",
+      "run": 3,
+      "open_ms": 206,
+      "preflight_cpu_percent": 0.9
+    },
+    {
+      "arm": "candidate",
+      "run": 1,
+      "open_ms": 218,
+      "preflight_cpu_percent": 2.2
+    },
+    {
+      "arm": "candidate",
+      "run": 2,
+      "open_ms": 209,
+      "preflight_cpu_percent": 19.5
+    },
+    {
+      "arm": "candidate",
+      "run": 3,
+      "open_ms": 205,
+      "preflight_cpu_percent": 3.4
+    }
+  ],
+  "medians_ms": {
+    "control": 206,
+    "candidate": 209
+  },
+  "foreground_unchanged": true,
+  "retries": 0,
+  "limitations": [
+    "Three pairs are a small sample; CPU preflight varies, with one 19.5% sample below the existing 25% limit.",
+    "Phase-only reports intentionally lack GPUI metrics and exit FAIL. This is not a replacement full scoreboard.",
+    "The full comparison still fails thread opening at 222 versus 220 ms."
+  ],
+  "conclusion": "Control 206/210/206 ms and candidate 218/209/205 ms have overlapping ranges. Candidate median is 3 ms higher; this small sample does not establish a repeatable regression or equivalence. Keep the full open gate failure and draft status."
+}

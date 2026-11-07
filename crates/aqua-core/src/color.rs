@@ -125,6 +125,10 @@ impl Oklch {
         }
     }
 
+    pub fn extend_srgb8(output: &mut Vec<Self>, colors: impl IntoIterator<Item = ([u8; 3], f32)>) {
+        memo::extend_srgb(output, colors);
+    }
+
     /// Convert HSL to the canonical model. Convention: `h` degrees 0..360,
     /// `s`/`l` 0..=1, CSS Color 4 semantics (gray when `s == 0`).
     #[must_use]

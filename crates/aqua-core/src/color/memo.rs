@@ -77,16 +77,36 @@ pub(super) fn decode_srgb([r, g, b]: [u8; 3]) -> [f32; 3] {
     [l, c.max(0.0), h.rem_euclid(360.0)]
 }
 
-pub(super) fn srgb(color: [u8; 3]) -> [f32; 3] {
+#[inline]
+fn lookup_srgb(memo: &mut Memo<u32, [f32; 3]>, color: [u8; 3]) -> [f32; 3] {
     let [r, g, b] = color;
     let key = (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b);
-    SRGB.with_borrow_mut(|memo| {
-        memo.lookup(
-            key,
-            |key| u64::from(key.wrapping_mul(0x9e3779b9)) << 32,
-            || decode_srgb(color),
-        )
-    })
+    memo.lookup(
+        key,
+        |key| u64::from(key.wrapping_mul(0x9e3779b9)) << 32,
+        || decode_srgb(color),
+    )
+}
+
+pub(super) fn srgb(color: [u8; 3]) -> [f32; 3] {
+    SRGB.with_borrow_mut(|memo| lookup_srgb(memo, color))
+}
+
+pub(super) fn extend_srgb(
+    output: &mut Vec<super::Oklch>,
+    colors: impl IntoIterator<Item = ([u8; 3], f32)>,
+) {
+    let mut memo = SRGB.with_borrow_mut(std::mem::take);
+    output.extend(colors.into_iter().map(|(color, alpha)| {
+        let [l, c, h] = lookup_srgb(&mut memo, color);
+        super::Oklch {
+            l,
+            c,
+            h,
+            alpha: alpha.clamp(0.0, 1.0),
+        }
+    }));
+    SRGB.with_borrow_mut(|cached| *cached = memo);
 }
 
 #[cfg(test)]

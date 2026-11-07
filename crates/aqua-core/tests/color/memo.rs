@@ -51,3 +51,23 @@ fn high_volume_growth_is_bounded_and_never_returns_a_colliding_value() {
     }
     assert_eq!(memo.slots(), 65536);
 }
+
+#[test]
+fn batch_conversion_appends_exact_colors_and_allows_reentrant_iterators() {
+    let mut output = vec![Oklch::WHITE];
+    let input = (0..20000u32).map(|index| {
+        let color = [(index * 17) as u8, (index >> 3) as u8, (index * 59) as u8];
+        let alpha = (index % 19) as f32 / 17.0;
+        let actual = Oklch::from_srgb8(color[0], color[1], color[2], alpha);
+        assert_eq!(actual.l.to_bits(), decode_srgb(color)[0].to_bits());
+        (color, alpha)
+    });
+    Oklch::extend_srgb8(&mut output, input);
+    assert_eq!(output[0], Oklch::WHITE);
+    for (index, actual) in output[1..].iter().enumerate() {
+        let index = index as u32;
+        let color = [(index * 17) as u8, (index >> 3) as u8, (index * 59) as u8];
+        let expected = Oklch::from_srgb8(color[0], color[1], color[2], (index % 19) as f32 / 17.0);
+        assert_eq!(*actual, expected);
+    }
+}

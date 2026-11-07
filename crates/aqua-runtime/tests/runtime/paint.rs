@@ -10,7 +10,7 @@ use aqua_ui::element::ui;
 use aqua_ui::paint::FillGroup;
 use aqua_ui::style::{px, Style};
 
-fn colors(width: u32, height: u32, frame: u32) -> impl Iterator<Item = Oklch> {
+fn colors(width: u32, height: u32, frame: u32) -> impl Iterator<Item = ([u8; 3], f32)> {
     (0..height).flat_map(move |y| {
         (0..width).scan([0u8; 3], move |previous, x| {
             let red = (x.wrapping_pow(2).wrapping_add(frame.wrapping_mul(3)) & 255) as u8;
@@ -25,7 +25,7 @@ fn colors(width: u32, height: u32, frame: u32) -> impl Iterator<Item = Oklch> {
                 green,
                 blue ^ (previous[0] >> 3),
             ];
-            Some(Oklch::from_srgb8(previous[0], previous[1], previous[2], 1.0))
+            Some((*previous, 1.0))
         })
     })
 }
@@ -38,7 +38,8 @@ fn retained_million_box_cpu_report() {
     let count = (width * height) as usize;
     let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
     runtime.set_viewport(width as f32, height as f32, 1.25);
-    let initial = colors(width, height, 0).collect::<Vec<_>>();
+    let mut initial = Vec::with_capacity(count);
+    Oklch::extend_srgb8(&mut initial, colors(width, height, 0));
     runtime
         .mount(|_| {
             ui::Box::new()
@@ -92,7 +93,7 @@ fn retained_million_box_cpu_report() {
         (read,),
         move |(frame,), output| {
             let begin = Instant::now();
-            output.extend(colors(width, height, frame));
+            Oklch::extend_srgb8(output, colors(width, height, frame));
             color_sample.set(begin.elapsed().as_secs_f64() * 1000.0);
         },
     );
@@ -128,7 +129,8 @@ fn retained_million_box_cpu_report() {
         let color_ms = color_time.get();
         println!("retained-storm-cpu frame={frame} boxes={count} color_ms={color_ms:.3} ui_ms={ui_ms:.3} emit_ms={emit_ms:.3} render_ms={render_ms:.3} total_ms={total_ms:.3}");
     }
-    let next = colors(width, height, frames + 1).collect::<Vec<_>>();
+    let mut next = Vec::with_capacity(count);
+    Oklch::extend_srgb8(&mut next, colors(width, height, frames + 1));
     let begin = Instant::now();
     group.apply(runtime.tree_mut(), &next).unwrap();
     let apply_ms = begin.elapsed().as_secs_f64() * 1000.0;

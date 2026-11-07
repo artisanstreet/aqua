@@ -95,5 +95,5 @@
   "private_result": "No established improvement: 128 versus 129 MiB medians with overlapping 122\u2013131 and 128\u2013133 ranges.",
   "candidate_binary_sha256": "3eb8ab003c0b9da91d49e6ae06d0150e0f9cea0f89a8d9d02de7979c2b2d3c67",
   "control_binary_sha256": "ba9a14654a9e5476bb68267892c020b5f95204645b6390b49ae6aab8af91bd4a",
-  "limit": "No full joint scoreboard rerun; no claim that the historical 30/40 performance verdict has changed. Binary predates error-only follow-up f75e709."
+  "limit": "No full joint scoreboard rerun; no claim that the historical 31/41 performance verdict has changed. Binary predates error-only follow-up f75e709."
 }

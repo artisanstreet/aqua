@@ -299,8 +299,12 @@ impl WindowHandle {
                 .map(|pass| format!("{}={:.3}", pass.label, pass.duration.as_secs_f64() * 1000.0))
                 .collect();
             let phases = backend.phases();
+            let api = match cfg!(feature = "d3d12") {
+                true => "d3d12",
+                false => "d3d11",
+            };
             format!(
-                "d3d12 gpu_ms={:.3} passes_ms=[{}] slot_wait_us={} reserve_us={} resize_us={} transients_recreated={} late_pso={:?} window={:?}",
+                "{api} gpu_ms={:.3} passes_ms=[{}] slot_wait_us={} reserve_us={} resize_us={} transients_recreated={} late_pso={:?} window={:?}",
                 backend
                     .gpu_frame_time()
                     .map_or(0.0, |time| time.as_secs_f64() * 1000.0),

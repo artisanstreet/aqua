@@ -19,18 +19,10 @@ jobs:
           targets: x86_64-pc-windows-gnu
       - name: fmt
         run: cargo fmt --check
-      - name: targeted tests (shared target lock)
+      - name: workspace tests
         env:
           CARGO_BUILD_JOBS: 2
-        run: cargo test -p aqua-core -p aqua-reactive -p aqua-platform -p aqua-text -p aqua-macros -p aqua-ui -- --nocapture
-      - name: render tests (GPU serial, honest skip on no adapter)
-        env:
-          CARGO_BUILD_JOBS: 2
-        run: cargo test -p aqua-render -- --nocapture --test-threads=1
-      - name: facade + verification suite
-        env:
-          CARGO_BUILD_JOBS: 2
-        run: cargo test -p aqua -- --nocapture --test-threads=1
+        run: cargo test --workspace --locked -- --nocapture --test-threads=1
       - name: clippy (all targets)
         env:
           CARGO_BUILD_JOBS: 2

@@ -23,11 +23,13 @@ aqua-ime-tsf = { path = "../aqua-ime-tsf" }
 aqua-gpu-ref = { path = "../aqua-gpu-ref" }
 aqua-shell-win32 = { path = "../aqua-shell-win32" }
 
+serde_json = "1"
+
 [target.'cfg(windows)'.dependencies]
 aqua-gpu-d3d11 = { path = "../aqua-gpu-d3d11" }
 aqua-gpu-d3d12 = { path = "../aqua-gpu-d3d12", optional = true }
 aqua-a11y-uia = { path = "../aqua-a11y-uia" }
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_Diagnostics_Debug", "Win32_System_LibraryLoader"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_Diagnostics_Debug", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging"] }
 
 [features]
 d3d12 = ["dep:aqua-gpu-d3d12"]

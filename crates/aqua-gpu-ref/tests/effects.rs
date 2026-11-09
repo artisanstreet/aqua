@@ -93,6 +93,7 @@ fn color_matrix_grayscale_equalizes_channels() {
 #[test]
 fn custom_passes_run_registered_kernels_and_refuse_unknown_ones() {
     let spec = |name: &str| CustomPassSpec {
+        reference: None,
         name: name.into(),
         hlsl: String::new(),
         entry: "main".into(),

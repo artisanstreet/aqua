@@ -852,6 +852,14 @@ impl Emitter {
         let Some(region) = pixel_region(exact) else {
             return;
         };
+        if let (Effect::Custom(spec), true) = (effect, children.is_empty()) {
+            let output = self.graph.create(region.extent, TextureFormat::Rgba16Float);
+            let mut spec = spec.clone();
+            spec.bounds = region.extent.bounds();
+            self.draw(PassKind::Custom(spec), Vec::new(), output);
+            self.composite(output, region, context.opacity, Blend::Over, context);
+            return;
+        }
         let layer = self.graph.create(region.extent, TextureFormat::Rgba16Float);
         self.emit(
             children,

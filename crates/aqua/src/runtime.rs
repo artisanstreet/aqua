@@ -613,6 +613,7 @@ impl Aqua {
         mut config: AquaConfig,
         prefs: OsPreferences,
     ) -> Result<Self, String> {
+        crate::debug::init_from_environment();
         crate::profile::init_from_environment();
         config
             .validated()
@@ -1252,6 +1253,19 @@ impl Aqua {
     ) -> bool {
         let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Input);
         let count_activity = !matches!(event, CoreInputEvent::Focused(_));
+        if let CoreInputEvent::PointerMove(pointer) = event {
+            crate::profile::note(|| {
+                format!(
+                    "pointer_unix_us={} x={} y={}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_micros(),
+                    pointer.position.x,
+                    pointer.position.y
+                )
+            });
+        }
         crate::profile::note(|| {
             let text = format!("{event:?}");
             let kind = text.split(['(', ' ', '{']).next().unwrap_or("");
@@ -1717,8 +1731,9 @@ impl Aqua {
         }
         aqua_core::checkpoint::reach();
         if let Some(scene) = app.scene_mut(id) {
-            link.push_scene(scene);
-            self.scheduler.await_present(id);
+            if link.push_scene(scene) {
+                self.scheduler.await_present(id);
+            }
         }
         aqua_core::checkpoint::reach();
         if let Some(probe) = self.input_latency.as_mut() {
@@ -1898,7 +1913,7 @@ pub fn physical_extent(window: &ObservedWindowState) -> Extent {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 #[path = "../../aqua-verify/tests/support/desktop.rs"]
 mod desktop;
 
@@ -2110,6 +2125,7 @@ mod tests {
 
     #[test]
     fn clipboard_round_trips_through_ctx_and_reports_backend() {
+        #[cfg(windows)]
         if !super::desktop::require("clipboard_round_trips_through_ctx") {
             return;
         }

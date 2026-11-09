@@ -1,5 +1,5 @@
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant as WallInstant};
 
@@ -25,6 +25,7 @@ struct Probe {
     visibility: Mutex<Vec<bool>>,
     startup_left: AtomicU32,
     startup_done: AtomicU32,
+    native_pacing: AtomicBool,
 }
 
 struct Fake {
@@ -33,6 +34,13 @@ struct Fake {
 }
 
 impl FrameTarget for Fake {
+    fn animation_interval(&self, fallback: Duration) -> Duration {
+        match self.probe.native_pacing.load(Relaxed) {
+            true => Duration::ZERO,
+            false => fallback,
+        }
+    }
+
     fn wait_frame(&mut self) {
         self.probe.frame_waits.fetch_add(1, Relaxed);
     }
@@ -287,7 +295,7 @@ fn continuous_animation_keeps_presenting_until_it_stops() {
 }
 
 #[test]
-fn an_animating_scene_repaints_at_a_capped_rate_without_waking_the_app_or_the_damage_baseline() {
+fn an_animating_scene_uses_the_display_interval_without_waking_the_app_or_the_damage_baseline() {
     let service = RenderService::new().unwrap();
     let probe = Arc::new(Probe::default());
     let mut link = settled_link(&service, &probe);
@@ -302,7 +310,7 @@ fn an_animating_scene_repaints_at_a_capped_rate_without_waking_the_app_or_the_da
     std::thread::sleep(Duration::from_millis(300));
     let presents = probe.presents.load(Relaxed) - base;
     assert!(
-        (10..=25).contains(&presents),
+        (35..=95).contains(&presents),
         "{presents} animation presents in 300 ms"
     );
     assert_eq!(
@@ -410,4 +418,36 @@ fn startup_steps_run_one_per_idle_turn_without_presenting() {
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(probe.startup_done.load(Relaxed), 6);
     assert_eq!(probe.presents.load(Relaxed), presents);
+}
+
+#[test]
+fn hardware_paced_animation_does_not_sleep_between_available_slots() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    probe.native_pacing.store(true, Relaxed);
+    *probe.script.lock().unwrap() = vec![Repaint::Animating; 40];
+    let started = WallInstant::now();
+    link.set_viewport(Size { w: 100.0, h: 101.0 }, 1.0);
+    wait_until("the hardware-paced frames", || {
+        probe.presents.load(Relaxed) >= base + 41
+    });
+    assert!(started.elapsed() < INTERVAL * 30);
+}
+
+#[test]
+fn expensive_background_repaints_remain_bounded_with_immediate_presentation() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    probe.native_pacing.store(true, Relaxed);
+    *probe.script.lock().unwrap() = vec![Repaint::Heavy; 8];
+    let started = WallInstant::now();
+    link.set_viewport(Size { w: 100.0, h: 101.0 }, 1.0);
+    wait_until("the bounded background frames", || {
+        probe.presents.load(Relaxed) >= base + 9
+    });
+    assert!(started.elapsed() >= Duration::from_millis(230));
 }

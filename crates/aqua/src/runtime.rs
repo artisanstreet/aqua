@@ -746,6 +746,19 @@ impl Aqua {
     }
 
     pub fn flush_output(&mut self, app: &mut impl Application, id: AquaWindowId) {
+        let requests = std::mem::take(&mut self.window_requests);
+        for request in requests {
+            match &request {
+                WindowRequest::BeginSnapshotTransition(window, _)
+                | WindowRequest::BeginGpuiSnapshotTransition(window, _)
+                | WindowRequest::BeginGpuiSourceSnapshotTransition(window, _) if *window == id => {
+                    if let Err(error) = self.apply_window_request(app, &request) {
+                        app.on_window_request_error(&request, &error);
+                    }
+                }
+                _ => self.window_requests.push_back(request),
+            }
+        }
         let mut rounds = 0;
         let mut output = app.take_output(id);
         loop {
@@ -1987,6 +2000,8 @@ mod tests {
             self.errors.push(message.to_string());
         }
     }
+
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/runtime/snapshot.rs"));
 
     fn headless() -> (Aqua, Probe, AquaWindowId) {
         let mut aqua = Aqua::new(AquaConfig {

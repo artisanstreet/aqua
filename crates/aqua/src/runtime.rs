@@ -1913,7 +1913,7 @@ pub fn physical_extent(window: &ObservedWindowState) -> Extent {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 #[path = "../../aqua-verify/tests/support/desktop.rs"]
 mod desktop;
 
@@ -2125,6 +2125,7 @@ mod tests {
 
     #[test]
     fn clipboard_round_trips_through_ctx_and_reports_backend() {
+        #[cfg(windows)]
         if !super::desktop::require("clipboard_round_trips_through_ctx") {
             return;
         }

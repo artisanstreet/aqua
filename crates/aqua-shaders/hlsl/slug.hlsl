@@ -162,8 +162,58 @@ float slug_coverage(uint glyph, float2 sample_point, float ppem)
     float weight_y;
     float coverage_x = scan(glyph, sample_point, ppem, true, weight_x).x;
     float coverage_y = scan(glyph, sample_point, ppem, false, weight_y).x;
+    if (texel(glyph + 3).z > 0.5)
+    {
+        coverage_x = 1.0 - abs(fmod(abs(coverage_x), 2.0) - 1.0);
+        coverage_y = 1.0 - abs(fmod(abs(coverage_y), 2.0) - 1.0);
+    }
     float blended = abs(coverage_x * weight_x + coverage_y * weight_y) / max(weight_x + weight_y, 1.0 / 65536.0);
     return saturate(max(blended, min(abs(coverage_x), abs(coverage_y))));
+}
+
+float4 curve_paint(uint paint, float2 em)
+{
+    float4 header = texel(paint);
+    if (header.y == 1.0)
+    {
+        float4 color = texel(paint + 6);
+        return float4(color.rgb * color.a, color.a);
+    }
+    float4 mapping = texel(paint + 1);
+    float2 p = xform_apply(mapping, em) + texel(paint + 2).xy;
+    float4 axis = texel(paint + 3);
+    float along = 0.0;
+    if (uint(header.x) == 2u)
+    {
+        float2 delta = axis.zw - axis.xy;
+        along = dot(p - axis.xy, delta) / max(dot(delta, delta), 1.0e-20);
+    }
+    else if (uint(header.x) == 3u)
+    {
+        float radius = texel(paint + 4).x;
+        float2 ray = p - axis.zw;
+        float2 focal = axis.zw - axis.xy;
+        float a = dot(ray, ray);
+        float b = dot(focal, ray);
+        float c = dot(focal, focal) - radius * radius;
+        along = a / max(-b + sqrt(max(b * b - a * c, 0.0)), 1.0e-20);
+    }
+    uint count = uint(header.y);
+    float left = texel(paint + 5).x;
+    float4 color = texel(paint + 6);
+    for (uint index = 1; index < count; index++)
+    {
+        float right = texel(paint + 5 + index * 2).x;
+        float4 next = texel(paint + 6 + index * 2);
+        if (along < right)
+        {
+            color = lerp(color, next, saturate((along - left) / max(right - left, 1.0e-20)));
+            break;
+        }
+        left = right;
+        color = next;
+    }
+    return float4(color.rgb * color.a, color.a);
 }
 
 float4 ps_slug(SlugOut i) : SV_Target
@@ -178,6 +228,17 @@ float4 ps_slug(SlugOut i) : SV_Target
         return float4(0.0, 0.0, 0.0, 0.0);
     }
     float coverage = slug_coverage(uint(i.glyph.z), em, ppem);
-    float toned = tone_alpha(coverage, text_luminance(i.color));
-    return i.color * (toned * clip_cover(p, i.clip));
+    uint paint = uint(texel(uint(i.glyph.z) + 3).y);
+    float4 color = i.color;
+    float toned;
+    if (paint == 0u)
+    {
+        toned = tone_alpha(coverage, text_luminance(color));
+    }
+    else
+    {
+        color *= curve_paint(paint, em);
+        toned = coverage;
+    }
+    return color * (toned * clip_cover(p, i.clip));
 }

@@ -1,5 +1,10 @@
 # Aqua implementation plan
 
+Historical foundation plan. The native backend replacements have since landed;
+see `ARCHITECTURE.md` for the current Windows implementation and remaining work.
+References below to winit, wgpu, aqua-render, and aqua-platform describe the
+original implementation phase, not the current dependency graph.
+
 The user authorized building Aqua from `GUI_FRAMEWORK_DESIGN.md`, using Artisan MCP agents on Muse Spark 1.3 Contributor with requested xhigh effort. Build one shared Rust codebase, with a Windows adapter first. Other OS adapters may remain explicitly unsupported while portable headless tests run on this Linux development host.
 
 ## Integration rules

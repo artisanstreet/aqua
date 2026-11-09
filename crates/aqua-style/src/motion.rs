@@ -191,6 +191,7 @@ pub struct Presence {
     enter: Option<MotionRef>,
     exit: Option<MotionRef>,
     slide: Option<(f32, f32)>,
+    no_fade: bool,
 }
 
 impl Presence {
@@ -215,6 +216,17 @@ impl Presence {
     pub fn slide(mut self, dx: f32, dy: f32) -> Self {
         self.slide = Some((dx, dy));
         self
+    }
+
+    #[must_use]
+    pub fn without_fade(mut self) -> Self {
+        self.no_fade = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn fades(self) -> bool {
+        !self.no_fade
     }
 
     #[must_use]

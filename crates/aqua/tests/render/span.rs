@@ -451,3 +451,47 @@ fn screen_space_canvases_that_cancel_the_scroll_are_patched_as_units() {
     }
     assert!(cached.span_replays() > 30);
 }
+
+#[test]
+fn retiring_changing_paths_keeps_unrelated_scene_spans_reusable() {
+    use aqua_core::vector::{FillRule, GpuiPath, GpuiPathStyle, PathCommand};
+    use aqua_core::{GpuiBackground, GpuiHsla, Point};
+    use std::sync::Arc;
+    let mut rig = rig(120);
+    let path = |width| DisplayItem::GpuiPath {
+        transformed_window_logical_bounds: rect(0.0, 0.0, width, 20.0),
+        path: Arc::new(GpuiPath {
+            commands_local: vec![
+                PathCommand::Move(Point::new(0.0, 0.0)),
+                PathCommand::Line(Point::new(width, 0.0)),
+                PathCommand::Line(Point::new(width, 20.0)),
+                PathCommand::Line(Point::new(0.0, 20.0)),
+                PathCommand::Close,
+            ],
+            origin_window_logical: Point::ZERO,
+            element_transform: Transform2D::IDENTITY,
+            style: GpuiPathStyle::Fill {
+                rule: FillRule::NonZero,
+            },
+            background: GpuiBackground::Solid(GpuiHsla {
+                h: 0.0,
+                s: 0.0,
+                l: 0.5,
+                a: 1.0,
+            }),
+        }),
+    };
+    let changing = rig.scene.insert(path(100.0));
+    let mut cached = lowering();
+    frame(&mut cached, &rig.scene, 1.0);
+    for step in 1..20 {
+        rig.scene.update(changing, path(100.0 + step as f32));
+        scroll(&mut rig, step as f32 * 2.6);
+        frame(&mut cached, &rig.scene, 1.0);
+    }
+    assert!(
+        cached.span_replays() >= 18,
+        "{} span replays",
+        cached.span_replays()
+    );
+}

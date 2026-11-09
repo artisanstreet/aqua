@@ -1,5 +1,5 @@
-use aqua_core::geometry::Rect;
 use aqua_core::Oklch;
+use aqua_core::geometry::Rect;
 
 use crate::linear::Linear2;
 
@@ -140,6 +140,13 @@ pub fn combine(across_x: Accumulator, across_y: Accumulator) -> f32 {
     saturate(blended.max(across_x.coverage.abs().min(across_y.coverage.abs())))
 }
 
+fn winding(mut value: Accumulator, even_odd: bool) -> Accumulator {
+    if even_odd {
+        value.coverage = 1.0 - (value.coverage.abs().rem_euclid(2.0) - 1.0).abs();
+    }
+    value
+}
+
 fn scan(
     fetch: &impl Fn(u32) -> [f32; 4],
     glyph: u32,
@@ -196,7 +203,8 @@ pub fn coverage(
 ) -> f32 {
     let across_x = scan(&fetch, glyph, sample, pixels_per_em, true);
     let across_y = scan(&fetch, glyph, sample, pixels_per_em, false);
-    combine(across_x, across_y)
+    let even_odd = fetch(glyph + 3)[2] > 0.5;
+    combine(winding(across_x, even_odd), winding(across_y, even_odd))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -267,6 +275,8 @@ pub struct SlugGlyph {
     pub curves: Vec<SlugCurve>,
     pub horizontal: BandSet,
     pub vertical: BandSet,
+    pub paint: Option<crate::curve_paint::CurvePaint>,
+    pub fill_rule: aqua_core::vector::FillRule,
 }
 
 fn midpoint(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
@@ -455,6 +465,8 @@ impl SlugGlyph {
             curves,
             horizontal,
             vertical,
+            paint: None,
+            fill_rule: aqua_core::vector::FillRule::NonZero,
         })
     }
 
@@ -482,7 +494,8 @@ impl SlugGlyph {
         };
         let across_x = scan(&self.horizontal, y, true);
         let across_y = scan(&self.vertical, x, false);
-        combine(across_x, across_y)
+        let even_odd = self.fill_rule == aqua_core::vector::FillRule::EvenOdd;
+        combine(winding(across_x, even_odd), winding(across_y, even_odd))
     }
 
     pub fn texels(&self) -> Vec<[f32; 4]> {
@@ -501,6 +514,7 @@ impl SlugGlyph {
         self.curves.len() * std::mem::size_of::<SlugCurve>()
             + (self.horizontal.curves.len() + self.vertical.curves.len()) * 4
             + (self.horizontal.ranges.len() + self.vertical.ranges.len()) * 8
+            + self.paint.as_ref().map_or(0, |paint| paint.heap_bytes())
     }
 }
 
@@ -526,7 +540,12 @@ pub fn pack_glyph(glyph: &SlugGlyph, base: u32) -> Vec<[f32; 4]> {
         h_ranges_at as f32,
         v_ranges_at as f32,
     ]);
-    texels.push([lists_at as f32, 0.0, 0.0, 0.0]);
+    texels.push([
+        lists_at as f32,
+        0.0,
+        f32::from(glyph.fill_rule == aqua_core::vector::FillRule::EvenOdd),
+        0.0,
+    ]);
     texels.extend(
         horizontal
             .ranges
@@ -556,5 +575,9 @@ pub fn pack_glyph(glyph: &SlugGlyph, base: u32) -> Vec<[f32; 4]> {
         texel[..lane.len()].copy_from_slice(lane);
         texel
     }));
+    if let Some(paint) = &glyph.paint {
+        texels[3][1] = (base as usize + texels.len()) as f32;
+        texels.extend(paint.texels());
+    }
     texels
 }

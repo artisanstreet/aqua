@@ -1,16 +1,56 @@
 # Aqua architecture: pure core, native adapters
 
-Last updated: 2026-11-04.
+Last updated: 2026-11-08.
 
-Implementation update (2026-11-03): the scene/protocol/runtime extractions,
-explicit time and analytic springs have landed, together with text, native
-Windows rasterization and full Editor application qualification in
-[`docs/EDITOR_READINESS.md`](docs/EDITOR_READINESS.md).
-The native host backend and render transport replacements below
-remain the target architecture. The historical current-state descriptions
-are not the latest feature ledger.
+## Implementation status, Windows Editor
 
-This document supersedes the foundation choices in `GUI_FRAMEWORK_DESIGN.md` (winit and wgpu) and records the target architecture. It is a design, not an implementation ledger: nothing below the "Current state" sections exists yet. Numbers marked "estimate" are unmeasured.
+The native Windows architecture described here is implemented in the current
+source. The application uses `aqua-shell-win32`, the retained `aqua-scene` and
+`aqua-protocol`, a render service in `aqua-transport`, and the D3D11 backend in
+`aqua-gpu-d3d11`. DirectWrite supplies Windows text services and rasterization;
+curve text also has a GPU path. UI Automation and TSF have native adapters.
+D3D12 is an optional backend. Linux and macOS window adapters remain future work.
+The older “Current state” sections below describe the migration baseline,
+not the current executable. This design supersedes the original winit/wgpu
+foundation in `GUI_FRAMEWORK_DESIGN.md`.
+
+The November 8 implementation closes several additional gaps:
+
+- Editor update causes select mounted sidebar and transcript subtrees, with
+  full workspace fallback for structural changes or failed subtree refresh.
+  Cause collection works with profiling disabled.
+- Work-clock reels use declarative render tracks. The connected tab/card
+  outline uses retained procedural shape transitions, including continuous
+  interruption and reduced motion, rather than per-frame application rebuilds.
+- The transport reuses an unchanged drawing plan, and can update one custom
+  shader's uniforms without replanning. D3D11 retains packed geometry and skips
+  instance-buffer uploads when drawable instances are unchanged. Draw calls
+  are still recorded for rendered frames; this is not command-list reuse.
+- Vector fills and strokes use the GPU curve store, including even-odd holes,
+  multi-stop linear/radial gradients, and transformed Drawing/SVG geometry.
+  SVG paint order, group opacity, and post-composite tinting are preserved.
+  SVG masks, filters, pattern paints, non-pad gradients, and other unsupported
+  combinations keep the existing raster fallback rather than losing content.
+- Raw SVG/drawing sources, compiled curves, and vector tiles have independent
+  byte and entry bounds. Their ownership keeps source identities valid until
+  eviction. Full trim drops vector/run caches;
+  oversize run and outline-cache entries are not retained. Full trims flush
+  GPU texture releases before idling, and discard obsolete frame references.
+  The application
+  uses bounded curve insertion with raster fallback when the store is full.
+- Curve-store texture handles leave the upper byte available for per-window
+  namespaces. Retained rendering tests cover trim and device recovery.
+
+Sidebar width, wordmark, and footer animation refresh the mounted sidebar frame;
+transcript changes can refresh alongside it. Width animation still runs layout
+on the UI thread so text and hit regions reflow correctly. One workspace build
+at the end resolves width-dependent structural choices. Navigation and other
+structural changes also retain the full workspace fallback.
+Cache budgets do not constitute a hard process-RAM limit: live document data,
+decoded media, driver allocations, and OS resources have separate lifetimes.
+No current result establishes lower memory use or greater stability than GPUI.
+`docs/PERFORMANCE.md` records the distinction between operation-count tests,
+native rendering checks, and measured application resource use.
 
 ## 1. Goals
 

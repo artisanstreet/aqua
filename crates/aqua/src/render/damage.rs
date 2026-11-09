@@ -101,6 +101,16 @@ fn traits_of(scene: &Scene, ink: &FastMap<u64, Rect>) -> SceneTraits {
             {
                 traits.animated.push(transformed(*bounds, world));
             }
+            DisplayItem::Shader {
+                bounds,
+                animated: true,
+                ..
+            } => {
+                traits.animated.push(transformed(*bounds, world));
+            }
+            DisplayItem::Shape { damage, .. } => {
+                traits.animated.push(transformed(*damage, world));
+            }
             DisplayItem::Text { run, .. } => {
                 if let Some(map) = maps.iter().rev().find_map(|map| *map) {
                     let local = ink.get(&run.id).map_or(map, |ink| ink.union(map));

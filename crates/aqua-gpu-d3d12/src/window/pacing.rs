@@ -1,28 +1,23 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-pub const FALLBACK_INTERVAL: Duration = Duration::from_nanos(16_666_667);
-const MIN_INTERVAL: Duration = Duration::from_micros(2_000);
-const MAX_INTERVAL: Duration = Duration::from_millis(200);
 const WINDOW: usize = 240;
 
 pub fn interval_from_ticks(period: u64, frequency: u64) -> Duration {
     match (period, frequency) {
-        (0, _) | (_, 0) => FALLBACK_INTERVAL,
+        (0, _) | (_, 0) => Duration::ZERO,
         (period, frequency) => {
             let nanos = (period as u128 * 1_000_000_000) / frequency as u128;
-            let interval = Duration::from_nanos(nanos.min(u64::MAX as u128) as u64);
-            match interval < MIN_INTERVAL || interval > MAX_INTERVAL {
-                true => FALLBACK_INTERVAL,
-                false => interval,
-            }
+            u64::try_from(nanos)
+                .map(Duration::from_nanos)
+                .unwrap_or(Duration::ZERO)
         }
     }
 }
 
 pub fn reconcile_interval(composition: Duration, monitor_hz: u32) -> Duration {
     match monitor_hz {
-        0 => composition,
+        0 | 1 => composition,
         hz => {
             let nominal = Duration::from_secs_f64(1.0 / hz as f64);
             let drift =

@@ -1,4 +1,5 @@
 mod compile;
+mod geometry;
 mod custom;
 pub(crate) mod debug;
 mod formats;

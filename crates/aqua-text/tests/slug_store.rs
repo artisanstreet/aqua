@@ -1,5 +1,5 @@
 use aqua_graph::slug::coverage;
-use aqua_text::slug::{pack_glyph, PathCommand, SlugGlyph, SlugStore};
+use aqua_text::slug::{PathCommand, SlugGlyph, SlugStore, pack_glyph};
 
 fn rounded_blob() -> Vec<PathCommand> {
     vec![
@@ -61,19 +61,23 @@ fn clearing_keeps_the_gpu_texture_and_rewrites_it_in_place() {
     let mut store: SlugStore<u32> = SlugStore::with_budget(1 << 20);
     store.insert(1, &glyph);
     let first = store.uploads();
-    assert!(first
-        .textures
-        .iter()
-        .any(|upload| matches!(upload.op, TextureOp::Create { .. })));
+    assert!(
+        first
+            .textures
+            .iter()
+            .any(|upload| matches!(upload.op, TextureOp::Create { .. }))
+    );
     store.clear();
     assert!(store.is_empty());
     assert!(store.uploads().textures.is_empty());
     store.insert(2, &glyph);
     let second = store.uploads();
-    assert!(second
-        .textures
-        .iter()
-        .all(|upload| matches!(upload.op, TextureOp::Write { .. })));
+    assert!(
+        second
+            .textures
+            .iter()
+            .all(|upload| matches!(upload.op, TextureOp::Write { .. }))
+    );
     assert!(!second.textures.is_empty());
 }
 
@@ -144,10 +148,12 @@ mod fonts {
             .filter(|upload| matches!(upload.op, TextureOp::Create { .. }))
             .count();
         assert_eq!(creates, 1);
-        assert!(batch
-            .textures
-            .iter()
-            .all(|upload| upload.handle == STORE_HANDLE));
+        assert!(
+            batch
+                .textures
+                .iter()
+                .all(|upload| upload.handle == STORE_HANDLE)
+        );
         if let TextureOp::Create { extent, format } = &batch.textures[0].op {
             assert_eq!(extent.width, STORE_WIDTH);
             assert_eq!(*format, TextureFormat::Rgba32Float);
@@ -245,10 +251,12 @@ mod eviction {
             store.insert(key, &glyph);
         });
         let first = store.uploads();
-        assert!(first
-            .textures
-            .iter()
-            .any(|upload| matches!(upload.op, TextureOp::Create { .. })));
+        assert!(
+            first
+                .textures
+                .iter()
+                .any(|upload| matches!(upload.op, TextureOp::Create { .. }))
+        );
         store.uploads();
         (1..count as u32).for_each(|key| {
             store.touch(&key);
@@ -284,4 +292,67 @@ mod eviction {
         });
         assert!(small.resident_bytes() < big);
     }
+}
+
+#[test]
+fn bounded_insertion_preserves_live_curves_and_reuses_unpinned_blocks() {
+    use aqua_text::slug::StoreLookup;
+    let glyph = SlugGlyph::from_path(&rounded_blob()).unwrap();
+    let len = pack_glyph(&glyph, 0).len();
+    let mut store: SlugStore<u32> = SlugStore::with_budget((len * 2 * 16) as u64);
+    let StoreLookup::Stored(first) = store.insert_bounded(0, &glyph) else {
+        panic!("stored")
+    };
+    let StoreLookup::Stored(second) = store.insert_bounded(1, &glyph) else {
+        panic!("stored")
+    };
+    assert_eq!(store.insert_bounded(2, &glyph), StoreLookup::Unsupported);
+    assert_eq!(store.live_texels(), len * 2);
+    assert_eq!(store.overruns(), 0);
+    store.uploads();
+    assert!(store.touch_index(first.index));
+    let StoreLookup::Stored(reused) = store.insert_bounded(2, &glyph) else {
+        panic!("stored")
+    };
+    assert_eq!(reused.index, second.index);
+    assert!(store.touch(&1).is_none());
+    assert!(store.touch_index(first.index));
+    store.clear();
+    assert!(!store.touch_index(first.index));
+    let mut too_small: SlugStore<u32> = SlugStore::with_budget(((len - 1) * 16) as u64);
+    assert_eq!(
+        too_small.insert_bounded(0, &glyph),
+        StoreLookup::Unsupported
+    );
+    assert_eq!(too_small.texel_count(), 0);
+}
+
+#[test]
+fn releasing_curve_resources_retires_the_texture_and_recreates_it_on_demand() {
+    use aqua_protocol::TextureOp;
+    let glyph = SlugGlyph::from_path(&rounded_blob()).unwrap();
+    let mut store: SlugStore<u32> = SlugStore::default();
+    store.insert_bounded(1, &glyph);
+    store.uploads();
+    assert!(store.resident_bytes() > 0);
+    store.release_resources();
+    assert_eq!(store.resident_bytes(), 0);
+    assert_eq!(store.texel_count(), 0);
+    let released = store.uploads();
+    assert_eq!(released.textures.len(), 1);
+    assert!(matches!(released.textures[0].op, TextureOp::Release));
+    assert!(store.uploads().textures.is_empty());
+    store.insert_bounded(2, &glyph);
+    let recreated = store.uploads();
+    assert!(
+        recreated
+            .textures
+            .iter()
+            .any(|upload| matches!(upload.op, TextureOp::Create { .. }))
+    );
+    store.release_resources();
+    store.insert_bounded(3, &glyph);
+    let replaced = store.uploads();
+    assert!(matches!(replaced.textures[0].op, TextureOp::Release));
+    assert!(matches!(replaced.textures[1].op, TextureOp::Create { .. }));
 }

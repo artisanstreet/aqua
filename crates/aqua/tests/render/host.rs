@@ -1,6 +1,6 @@
+use aqua::UiApp;
 use aqua::render::lower::{Lowering, RecoverySignal};
 use aqua::ui::Text;
-use aqua::UiApp;
 use aqua_core::geometry::{CornerRadii, Insets, Rect};
 use aqua_core::scene::{DisplayItem, ShadowLayer};
 use aqua_core::{Oklch, Size};
@@ -11,20 +11,26 @@ use aqua_protocol::{
     Instant, PresentHint, PresentTimes, RecoveryReport, RenderCommand, RenderInput, SceneDiff,
     SurfaceId, SurfacePixels, SurfaceTarget, UploadBatch,
 };
-use aqua_runtime::{emit_scene_diff, RenderSide};
+use aqua_runtime::{RenderSide, emit_scene_diff};
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_transport::{GpuRenderHost, HostConfig, Inspector, RenderHost, SharedClock};
 
 struct Flaky {
     inner: RefBackend,
     fail_next: bool,
+    curve_stores: Vec<aqua_graph::TextureHandle>,
+    released: Vec<aqua_graph::TextureHandle>,
 }
 
 impl Flaky {
     fn new() -> Self {
+        let mut inner = RefBackend::new();
+        aqua::render::transition::register(inner.kernels_mut());
         Self {
-            inner: RefBackend::new(),
+            inner,
             fail_next: false,
+            curve_stores: Vec::new(),
+            released: Vec::new(),
         }
     }
 }
@@ -41,6 +47,16 @@ impl GpuBackend for Flaky {
     }
 
     fn upload(&mut self, batch: UploadBatch) -> Result<(), GpuError> {
+        for upload in &batch.textures {
+            match upload.op {
+                aqua_protocol::TextureOp::Create {
+                    format: aqua_graph::TextureFormat::Rgba32Float,
+                    ..
+                } => self.curve_stores.push(upload.handle),
+                aqua_protocol::TextureOp::Release => self.released.push(upload.handle),
+                _ => {}
+            }
+        }
         self.inner.upload(batch)
     }
 
@@ -57,6 +73,7 @@ impl GpuBackend for Flaky {
 
     fn recover(&mut self) -> Result<RecoveryReport, GpuError> {
         self.inner = RefBackend::new();
+        aqua::render::transition::register(self.inner.kernels_mut());
         self.inner.recover()
     }
 
@@ -229,4 +246,65 @@ fn an_explicit_trim_request_releases_unused_atlas_pages_between_frames() {
     host.execute(&mut side, cleared.frame.unwrap_or(frame + 1));
     let trimmed = inspector.snapshot().last.unwrap().trimmed_entries;
     assert!(trimmed > 0, "{trimmed}");
+}
+
+#[test]
+fn full_trim_flushes_curve_releases_before_idle_and_theme_changes_rebuild_safely() {
+    use aqua_core::vector::VectorSource;
+    use aqua_scene::Scene;
+    use std::time::Duration;
+    let mut scene = Scene::new();
+    scene.insert(DisplayItem::Vector {
+        bounds: Rect { x: 10.0, y: 10.0, w: 40.0, h: 40.0 },
+        source: VectorSource::svg(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><path d="M 0 0 H 40 V 40 H 0 Z" fill="white"/></svg>"#),
+        opacity: 1.0,
+    });
+    let clock = SharedClock::default();
+    let mut host = GpuRenderHost::new(
+        Flaky::new(),
+        Lowering::new(SharedFonts::new(), SharedRuns::new()),
+        clock.clone(),
+        HostConfig::offscreen(Oklch::BLACK),
+    );
+    let mut side = RenderSide::new();
+    let frame = start(&mut side, emit_scene_diff(&mut scene));
+    clock.set(Instant::from_secs_f64(1.0));
+    assert!(
+        host.execute(&mut side, frame)
+            .contains(&Feedback::Presented(frame))
+    );
+    let surface = host.surface().unwrap();
+    let before = host.backend_mut().read_surface(surface).unwrap();
+    let stores = host.backend().curve_stores.clone();
+    assert!(!stores.is_empty());
+    host.trim_handle().request();
+    clock.set(Instant::from_secs_f64(2.0));
+    assert!(
+        host.execute(&mut side, frame + 1)
+            .contains(&Feedback::Presented(frame + 1))
+    );
+    assert!(
+        stores
+            .iter()
+            .all(|store| host.backend().released.contains(store))
+    );
+    host.lowering_mut()
+        .begin_transition(aqua::render::transition::Settings {
+            duration: Duration::from_millis(200),
+            band: 0.2,
+            tint: [0.0; 4],
+            sweep: aqua::render::transition::Sweep::Soft,
+        });
+    clock.set(Instant::from_secs_f64(3.0));
+    assert!(
+        host.execute(&mut side, frame + 2)
+            .contains(&Feedback::Presented(frame + 2))
+    );
+    clock.set(Instant::from_secs_f64(4.0));
+    assert!(
+        host.execute(&mut side, frame + 3)
+            .contains(&Feedback::Presented(frame + 3))
+    );
+    assert_eq!(host.backend_mut().read_surface(surface).unwrap(), before);
+    assert!(host.backend().curve_stores.len() > stores.len());
 }

@@ -45,7 +45,7 @@ impl Default for AquaConfig {
         Self {
             window: WindowOptions::default(),
             fps_target: None,
-            vsync: true,
+            vsync: false,
             material: aqua_protocol::WindowMaterial::Solid,
             headless: false,
             reduced_motion: false,
@@ -337,14 +337,12 @@ pub struct Config {
 }
 
 impl Config {
-    /// Defaults mirror [`AquaConfig::default`]: default window, unpaced,
-    /// vsync on, windowed, full motion.
     #[must_use]
     pub fn new() -> Self {
         Self {
             window: Window::new(),
             fps: None,
-            vsync: true,
+            vsync: false,
             headless: false,
             reduced_motion: false,
         }
@@ -373,7 +371,6 @@ impl Config {
         self
     }
 
-    /// Vsync-paced presentation (`true`, default) vs immediate. Last call wins.
     #[must_use]
     pub fn vsync(mut self, vsync: bool) -> Self {
         self.vsync = vsync;
@@ -765,7 +762,7 @@ mod tests {
         let r = Config::new().resolve(&OsPreferences::fallback()).unwrap();
         assert_eq!(r.runtime.window, WindowOptions::default());
         assert_eq!(r.runtime.fps_target, None);
-        assert!(r.runtime.vsync);
+        assert!(!r.runtime.vsync);
         assert_eq!(r.runtime.material, aqua_protocol::WindowMaterial::Solid);
         assert!(!r.runtime.headless);
         assert!(!r.runtime.reduced_motion);

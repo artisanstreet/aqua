@@ -7,7 +7,7 @@ use aqua_runtime::{RenderSide, Runtime};
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::element::ui::Box as UiBox;
 use aqua_ui::motion::{Animate, Motion, Presence};
-use aqua_ui::style::{px, Axis, Style};
+use aqua_ui::style::{Axis, Style, px};
 
 mod support;
 
@@ -492,6 +492,43 @@ fn rows_with_presence_fade_in_even_when_the_first_frame_had_none() {
     assert!(rig.opacities().iter().all(|o| *o < 0.05));
     rig.render_only(3.0);
     assert!(rig.opacities().iter().all(|o| *o == 1.0));
+}
+
+#[test]
+fn slide_only_presence_keeps_ink_opaque_and_finishes_on_the_render_side() {
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime.set_viewport(300.0, 200.0, 1.0);
+    let (shown, set_shown) = runtime.scope().signal(false);
+    runtime
+        .mount_reactive((shown,), |(shown,)| {
+            UiBox::new()
+                .width(300.0)
+                .height(200.0)
+                .children(shown.then(|| {
+                    UiBox::new()
+                        .width(100.0)
+                        .height(20.0)
+                        .fill(red())
+                        .presence(Presence::new().enter(FADE).slide(40.0, 0.0).without_fade())
+                        .build()
+                        .with_key("opaque-slide")
+                }))
+                .build()
+        })
+        .unwrap();
+    let mut rig = Rig::new(runtime);
+    rig.app_frame(0.0);
+    set_shown.set(true);
+    rig.app_frame(1.0);
+    assert_eq!(translations(&rig), [40.0]);
+    assert!(rig.opacities().is_empty());
+    assert_eq!(rig.fills(), [red()]);
+    rig.render_only(1.5);
+    assert_eq!(translations(&rig), [20.0]);
+    assert_eq!(rig.fills(), [red()]);
+    rig.render_only(2.1);
+    assert_eq!(translations(&rig), [0.0]);
+    assert!(rig.render.tracks().is_idle());
 }
 
 fn sliding_list_runtime() -> (Runtime, aqua_reactive::WriteSignal<Vec<u32>>) {

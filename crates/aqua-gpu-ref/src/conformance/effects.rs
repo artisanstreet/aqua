@@ -69,6 +69,7 @@ float4 invert(CustomInput input) : SV_Target {\n\
 
 fn invert_spec(amount: f32) -> CustomPassSpec {
     CustomPassSpec {
+        reference: None,
         name: INVERT.into(),
         hlsl: INVERT_HLSL.into(),
         entry: "invert".into(),

@@ -1,7 +1,5 @@
 #[path = "render/animation.rs"]
 mod animation;
-#[path = "render/cadence.rs"]
-mod cadence;
 #[path = "render/color.rs"]
 mod color;
 #[path = "render/cull.rs"]
@@ -16,6 +14,8 @@ mod mesh;
 mod shape;
 #[path = "render/span.rs"]
 mod span;
+#[path = "render/shader.rs"]
+mod shader;
 mod support;
 #[path = "render/text.rs"]
 mod text;
@@ -24,3 +24,6 @@ mod text;
 mod text_dpi;
 #[path = "render/vector.rs"]
 mod vector;
+
+#[path = "render/shape-motion.rs"]
+mod shape_motion;

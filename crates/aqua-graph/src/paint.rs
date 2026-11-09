@@ -861,11 +861,17 @@ impl Emitter {
             return;
         }
         let layer = self.graph.create(region.extent, TextureFormat::Rgba16Float);
+        let inner = context.layer(layer, region);
+        let behind = match effect {
+            Effect::Custom(spec) if spec.isolate_backdrop => None,
+            _ => inner.behind,
+        };
         self.emit(
             children,
             Context {
                 clip: Some(exact),
-                ..context.layer(layer, region)
+                behind,
+                ..inner
             },
         );
         if !self.written(layer) {

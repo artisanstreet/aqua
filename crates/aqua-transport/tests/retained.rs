@@ -33,6 +33,7 @@ fn shader(time: f32) -> Vec<PaintCommand> {
         PaintCommand::PushCustomEffect {
             bounds,
             spec: CustomPassSpec {
+                isolate_backdrop: false,
                 reference: None,
                 name: "retained.test".into(),
                 hlsl: "float4 main() : SV_Target { return 1.0; }".into(),

@@ -18,11 +18,13 @@ fn rect() -> Rect {
 
 #[test]
 fn curve_stores_are_distinct_between_windows_and_match_their_upload_namespace() {
-    use aqua_graph::{SlugInstance, SlugRun};
     use aqua_graph::linear::Linear2;
+    use aqua_graph::{SlugInstance, SlugRun};
     use aqua_text::slug::STORE_HANDLE;
-    let plan = plan_paint(Extent::new(32, 32), Oklch::BLACK, &[
-        PaintCommand::Slug(SlugRun {
+    let plan = plan_paint(
+        Extent::new(32, 32),
+        Oklch::BLACK,
+        &[PaintCommand::Slug(SlugRun {
             store: STORE_HANDLE,
             glyphs: vec![SlugInstance {
                 origin: [0.0, 0.0],
@@ -32,9 +34,11 @@ fn curve_stores_are_distinct_between_windows_and_match_their_upload_namespace() 
                 color: Oklch::new(0.9, 0.0, 0.0),
                 clip: None,
                 opacity: 1.0,
-            }].into(),
-        }),
-    ]).unwrap();
+            }]
+            .into(),
+        })],
+    )
+    .unwrap();
     let mut seen = Vec::new();
     for namespace in [0, 1, 2, 255] {
         let mut namespaced = plan.clone();
@@ -44,10 +48,12 @@ fn curve_stores_are_distinct_between_windows_and_match_their_upload_namespace() 
         assert_eq!(handle >> NAMESPACE_SHIFT, namespace);
         assert!(!seen.contains(&handle));
         seen.push(handle);
-        let mut uploads = UploadBatch { textures: vec![TextureUpload {
-            handle: STORE_HANDLE,
-            op: TextureOp::Release,
-        }] };
+        let mut uploads = UploadBatch {
+            textures: vec![TextureUpload {
+                handle: STORE_HANDLE,
+                op: TextureOp::Release,
+            }],
+        };
         namespace_uploads(namespace, &mut uploads);
         assert_eq!(uploads.textures[0].handle.0, handle);
     }

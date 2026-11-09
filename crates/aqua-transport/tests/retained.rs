@@ -3,7 +3,7 @@ mod retained;
 
 use aqua_core::{Oklch, Rect};
 use aqua_graph::{
-    CustomPassSpec, Extent, PaintCommand, PlanLimits, Quad, ToneCurve, plan_paint_with,
+    plan_paint_with, CustomPassSpec, Extent, PaintCommand, PlanLimits, Quad, ToneCurve,
 };
 use retained::RetainedPlan;
 
@@ -160,11 +160,9 @@ fn resizing_theme_text_tone_and_backend_limits_invalidate_retained_plans() {
             },
         ),
     ] {
-        assert!(
-            cache
-                .reuse(extent, clear, tone, limits, &commands)
-                .is_none()
-        );
+        assert!(cache
+            .reuse(extent, clear, tone, limits, &commands)
+            .is_none());
     }
 }
 

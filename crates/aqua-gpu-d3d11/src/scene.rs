@@ -1,8 +1,8 @@
 mod compile;
-mod geometry;
 mod custom;
 pub(crate) mod debug;
 mod formats;
+mod geometry;
 mod hint;
 mod offscreen;
 mod persistent;

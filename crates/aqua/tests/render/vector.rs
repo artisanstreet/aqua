@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use aqua::render::vector::{VectorCache, gradient_axis, rotated_svg, rotation_steps};
+use aqua::render::vector::{gradient_axis, rotated_svg, rotation_steps, VectorCache};
 use aqua_core::geometry::Rect;
 use aqua_core::vector::{FillRule, GpuiPath, GpuiPathStyle, PathCommand};
 use aqua_core::{GpuiBackground, GpuiHsla, Point, Transform2D};
@@ -150,7 +150,7 @@ fn large_paths_survive_monitor_scale_round_trips() {
 #[test]
 fn tiled_path_gradients_match_the_unsplit_raster_at_tile_boundaries() {
     use aqua_core::{GpuiGradientColorSpace, GpuiGradientStop};
-    use aqua_media::vector::{VectorBudget, rasterize};
+    use aqua_media::vector::{rasterize, VectorBudget};
 
     let mut path = triangle(Point::new(20.0, 12.0));
     path.commands_local = vec![

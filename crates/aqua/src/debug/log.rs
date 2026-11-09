@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use aqua_protocol::probe::{Metric, Phase};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 use super::history::{Sample, Thread};
 
@@ -24,12 +24,22 @@ pub fn frame_line(sample: &Sample) -> String {
     let phases: Map<String, Value> = Phase::ALL
         .iter()
         .filter(|phase| sample.phases[phase.index()] > 0)
-        .map(|phase| (phase.name().to_owned(), json!(micros(sample.phases[phase.index()]))))
+        .map(|phase| {
+            (
+                phase.name().to_owned(),
+                json!(micros(sample.phases[phase.index()])),
+            )
+        })
         .collect();
     let metrics: Map<String, Value> = Metric::ALL
         .iter()
         .filter(|metric| sample.metrics[metric.index()] > 0)
-        .map(|metric| (metric.name().to_owned(), json!(sample.metrics[metric.index()])))
+        .map(|metric| {
+            (
+                metric.name().to_owned(),
+                json!(sample.metrics[metric.index()]),
+            )
+        })
         .collect();
     json!({
         "kind": "frame",
@@ -69,7 +79,10 @@ impl Log {
     }
 
     pub fn line(&self, text: &str) {
-        let mut guard = self.out.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut guard = self
+            .out
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (out, flushed) = &mut *guard;
         let _ = writeln!(out, "{text}");
         if flushed.elapsed() >= FLUSH_EVERY {

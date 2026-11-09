@@ -1,18 +1,18 @@
 use aqua_core::hash::FastMap;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::time::Instant as WallInstant;
 
-use aqua_core::geometry::{CornerRadii, Rect, snap_device_pixel, snap_device_stroke};
+use aqua_core::geometry::{snap_device_pixel, snap_device_stroke, CornerRadii, Rect};
 use aqua_core::image::ImagePlacement;
 use aqua_core::scene::{DisplayItem, ShadowLayer, TextRasterMode};
 use aqua_core::{GpuiBackground, GpuiHsla, Oklch, Point, Size, Transform2D};
 use aqua_graph::{
-    BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientQuad, GradientStop, Image,
-    Linear2, PaintCommand, PlanError, PlanLimits, Quad, Shadow, SlugInstance, SlugRun, ToneCurve,
-    plan_paint_with,
+    plan_paint_with, BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientQuad,
+    GradientStop, Image, Linear2, PaintCommand, PlanError, PlanLimits, Quad, Shadow, SlugInstance,
+    SlugRun, ToneCurve,
 };
 use aqua_media::atlas::{AtlasConfig, ImageKey, PageId, Placement, Slot, StreamBudget};
 use aqua_media::reduce::{reduce, reduction_level};
@@ -22,10 +22,10 @@ use aqua_motion::{Cycle, CycleSet};
 use aqua_protocol::{Instant, UploadBatch};
 use aqua_scene::Scene;
 use aqua_text::layout::LaidOut;
-use aqua_text::raster::{SUBPIXEL_STEPS, quantize_size, quantize_x, raster_key};
+use aqua_text::raster::{quantize_size, quantize_x, raster_key, SUBPIXEL_STEPS};
 use aqua_text::residency::GlyphResolver;
 use aqua_text::runs::RunId;
-use aqua_text::slug::{STORE_HANDLE, SlugCache, SlugStore, StoreLookup};
+use aqua_text::slug::{SlugCache, SlugStore, StoreLookup, STORE_HANDLE};
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_transport::{LowerContext, Lowered as Commands, TrimRequest};
 
@@ -38,7 +38,7 @@ use super::shape::{self, Border, Fidelity, Paint, Radii, ShadowSpec, Sides};
 use super::span::{self, SpanCache};
 use super::text::{ShimmerClocks, TextScope, TextStack};
 use super::transition::{Phase, Settings, Transition};
-use super::vector::{VectorCache, gradient_axis, rotation_steps};
+use super::vector::{gradient_axis, rotation_steps, VectorCache};
 
 const MESH_TAG: u64 = 0xC000_0000_0000_0000;
 const SLUG_TEXT_PX: f32 = 160.0;
@@ -49,10 +49,19 @@ const TEXT_OVERHANG_RATIO: f32 = 0.15;
 const RUN_CACHE_BYTES: usize = 3 << 20;
 const PATH_STORE_HANDLE: aqua_graph::TextureHandle = aqua_graph::TextureHandle(0x00ff_fffd);
 
-fn touch_curves(commands: &[PaintCommand], text: &mut SlugStore, paths: &mut SlugStore<u64>) -> bool {
+fn touch_curves(
+    commands: &[PaintCommand],
+    text: &mut SlugStore,
+    paths: &mut SlugStore<u64>,
+) -> bool {
     commands.iter().all(|command| match command {
-        PaintCommand::Slug(run) if run.store == STORE_HANDLE => run.glyphs.iter().all(|glyph| text.touch_index(glyph.glyph)),
-        PaintCommand::Slug(run) if run.store == PATH_STORE_HANDLE => run.glyphs.iter().all(|glyph| paths.touch_index(glyph.glyph)),
+        PaintCommand::Slug(run) if run.store == STORE_HANDLE => {
+            run.glyphs.iter().all(|glyph| text.touch_index(glyph.glyph))
+        }
+        PaintCommand::Slug(run) if run.store == PATH_STORE_HANDLE => run
+            .glyphs
+            .iter()
+            .all(|glyph| paths.touch_index(glyph.glyph)),
         PaintCommand::Linear { leaf, .. } => touch_curves(std::slice::from_ref(leaf), text, paths),
         _ => true,
     })
@@ -1072,8 +1081,10 @@ impl Lowering {
         if let Some(stats) = &self.stats {
             record_lowering(stats, &walk.report, started.elapsed());
             let resident = self.residency.stats();
-            let report_signature =
-                resident.colors.pages + ((self.slug_store.resident_bytes() + self.path_store.resident_bytes()) / 16384) as u32 * 64;
+            let report_signature = resident.colors.pages
+                + ((self.slug_store.resident_bytes() + self.path_store.resident_bytes()) / 16384)
+                    as u32
+                    * 64;
             if self.report_pages != report_signature && crate::mem_probe::memory_report_enabled() {
                 self.report_pages = report_signature;
                 eprintln!("aqua-atlas-pages: {:?}", self.residency.page_layouts());
@@ -1091,9 +1102,10 @@ impl Lowering {
                     resident.streaming_bytes,
                 );
             }
-            stats
-                .slug_bytes
-                .store(self.slug_store.resident_bytes() + self.path_store.resident_bytes(), Ordering::Relaxed);
+            stats.slug_bytes.store(
+                self.slug_store.resident_bytes() + self.path_store.resident_bytes(),
+                Ordering::Relaxed,
+            );
             stats
                 .atlas_mask_bytes
                 .store(resident.masks.resident_bytes, Ordering::Relaxed);
@@ -1935,11 +1947,24 @@ impl Lowering {
                 mesh,
                 style,
             } => self.emit_mesh(snapped(at.rect(*bounds)), *corners, mesh, style, s, walk),
-            DisplayItem::Shape { bounds, program, target, transition, .. } => {
+            DisplayItem::Shape {
+                bounds,
+                program,
+                target,
+                transition,
+                ..
+            } => {
                 if walk.hidden(at.rect(*bounds), 0.0) {
                     return;
                 }
-                let (commands, animated) = self.shapes.paint(walk.item, *bounds, program, *target, *transition, walk.now_secs);
+                let (commands, animated) = self.shapes.paint(
+                    walk.item,
+                    *bounds,
+                    program,
+                    *target,
+                    *transition,
+                    walk.now_secs,
+                );
                 walk.report.shape_animation |= animated;
                 for command in commands {
                     if !matches!(command, DisplayItem::Shape { .. }) {
@@ -3053,7 +3078,10 @@ impl aqua_transport::Lowering for Lowering {
                 }
                 self.slug_cache.clear();
                 if let Some(stats) = &self.stats {
-                    stats.slug_bytes.store(self.slug_store.resident_bytes() + self.path_store.resident_bytes(), Ordering::Relaxed);
+                    stats.slug_bytes.store(
+                        self.slug_store.resident_bytes() + self.path_store.resident_bytes(),
+                        Ordering::Relaxed,
+                    );
                 }
                 curves + self.residency.trim_idle(0)
             }

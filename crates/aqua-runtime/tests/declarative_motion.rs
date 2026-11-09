@@ -7,7 +7,7 @@ use aqua_runtime::{RenderSide, Runtime};
 use aqua_text::{SharedFonts, SharedRuns};
 use aqua_ui::element::ui::Box as UiBox;
 use aqua_ui::motion::{Animate, Motion, Presence};
-use aqua_ui::style::{Axis, Style, px};
+use aqua_ui::style::{px, Axis, Style};
 
 mod support;
 

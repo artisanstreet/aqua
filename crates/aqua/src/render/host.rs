@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::time::{Duration, Instant as WallInstant};
 
 use aqua_core::Rect;
@@ -41,7 +41,10 @@ impl Repaint {
         transition: bool,
         repaint_ratio: f32,
     ) -> Self {
-        let shader_only = report.shader_animation && !report.pulsing && !report.shimmering && !report.shape_animation;
+        let shader_only = report.shader_animation
+            && !report.pulsing
+            && !report.shimmering
+            && !report.shape_animation;
         let still = report
             .still_micros
             .filter(|_| !report.animated())
@@ -431,7 +434,10 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
     }
 
     fn animation_interval(&self, fallback: Duration) -> Duration {
-        match (self.present_hint(), self.host.backend().capabilities().features.window_surfaces) {
+        match (
+            self.present_hint(),
+            self.host.backend().capabilities().features.window_surfaces,
+        ) {
             (PresentHint::Vsync, true) => Duration::ZERO,
             _ => fallback.max(Duration::from_nanos(4_166_667)),
         }
@@ -498,7 +504,12 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
     fn repaint(&self) -> Repaint {
         let report = self.host.lowering().last_report();
         let transition = self.host.lowering().transition_active();
-        crate::profile::note(|| format!("animation=pulse:{},shader:{},shimmer:{},transition:{}", report.pulsing, report.shader_animation, report.shimmering, transition));
+        crate::profile::note(|| {
+            format!(
+                "animation=pulse:{},shader:{},shimmer:{},transition:{}",
+                report.pulsing, report.shader_animation, report.shimmering, transition
+            )
+        });
         Repaint::from_report(report, transition, self.repaint_ratio)
     }
 }

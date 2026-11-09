@@ -3,9 +3,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::retained::RetainedPlan;
 use aqua_core::{Oklch, Size};
 use aqua_graph::{plan_paint_with, Extent, FramePlan};
-use crate::retained::RetainedPlan;
 use aqua_protocol::{
     DeviceStatus, Feedback, FrameId, FrameInputs, FrameReport, GpuBackend, GpuError, Instant,
     PresentHint, SurfaceId, SurfaceTarget,
@@ -350,7 +350,16 @@ where
         }
         let plan_span = probe::span(Phase::Plan);
         let limits = self.backend.capabilities().plan_limits();
-        let reused = self.retained.reuse(extent, self.config.clear, lowered.text_tone, limits, &lowered.commands).is_some();
+        let reused = self
+            .retained
+            .reuse(
+                extent,
+                self.config.clear,
+                lowered.text_tone,
+                limits,
+                &lowered.commands,
+            )
+            .is_some();
         match reused {
             true => self.plans_reused += 1,
             false => {
@@ -367,7 +376,10 @@ where
         self.acquire_slot(surface)?;
         drop(wait_span);
         let record_span = probe::span(Phase::Record);
-        let plan = self.retained.get().ok_or(GpuError::Unsupported("retained frame plan unavailable"))?;
+        let plan = self
+            .retained
+            .get()
+            .ok_or(GpuError::Unsupported("retained frame plan unavailable"))?;
         let report = self.backend.execute(plan, &FrameInputs::new(surface))?;
         drop(record_span);
         let present_span = probe::span(Phase::Present);

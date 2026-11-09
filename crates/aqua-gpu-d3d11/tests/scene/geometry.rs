@@ -2,7 +2,7 @@
 mod implementation;
 
 use aqua_core::{Oklch, Rect};
-use aqua_graph::{CustomPassSpec, Extent, PaintCommand, PassKind, Quad, plan_paint};
+use aqua_graph::{plan_paint, CustomPassSpec, Extent, PaintCommand, PassKind, Quad};
 use implementation::GeometryCache;
 
 fn plan() -> aqua_graph::FramePlan {

@@ -691,7 +691,11 @@ impl SceneRenderer {
         let mut stats = SceneStats {
             passes: plan.passes.len() as u32,
             instances: plan.instance_count() as u32,
-            upload_bytes: if uploaded { scratch.bytes.len() as u64 } else { 0 },
+            upload_bytes: if uploaded {
+                scratch.bytes.len() as u64
+            } else {
+                0
+            },
             ..SceneStats::default()
         };
         unsafe {
@@ -1083,9 +1087,7 @@ impl SceneRenderer {
                             context,
                             constants(extent, 1.0, [0.0; 4], [0.0; 4], source.extent, None),
                         )?;
-                        unsafe {
-                            context.PSSetShaderResources(0, Some(&[source.srv]))
-                        };
+                        unsafe { context.PSSetShaderResources(0, Some(&[source.srv])) };
                         self.instances_at(
                             context,
                             offset + start as u64 * SPRITE_STRIDE as u64,

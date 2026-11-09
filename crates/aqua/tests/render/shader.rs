@@ -175,14 +175,24 @@ fn shader_cadence_yields_to_interactive_motion_and_settles_when_removed() {
 #[test]
 fn deterministic_capture_freezes_artwork_while_frame_time_keeps_advancing() {
     let scene = scene(true);
-    let mut lowering = Lowering::new(SharedFonts::new(), SharedRuns::new()).with_frozen_shaders(Instant::from_secs_f64(1.25));
+    let mut lowering = Lowering::new(SharedFonts::new(), SharedRuns::new())
+        .with_frozen_shaders(Instant::from_secs_f64(1.25));
     let mut previous = None;
     for seconds in [2.0, 5.0, 20.0] {
-        let (commands, _, report) = lowering.commands(&scene, SIZE, 1.0, Instant::from_secs_f64(seconds));
-        let time = commands.iter().find_map(|command| match command { PaintCommand::PushCustomEffect { spec, .. } => Some(spec.params[2]), _ => None }).unwrap();
+        let (commands, _, report) =
+            lowering.commands(&scene, SIZE, 1.0, Instant::from_secs_f64(seconds));
+        let time = commands
+            .iter()
+            .find_map(|command| match command {
+                PaintCommand::PushCustomEffect { spec, .. } => Some(spec.params[2]),
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(time, 1.25);
         assert!(!report.animated());
-        if let Some(previous) = &previous { assert_eq!(&commands, previous); }
+        if let Some(previous) = &previous {
+            assert_eq!(&commands, previous);
+        }
         previous = Some(commands);
     }
 }

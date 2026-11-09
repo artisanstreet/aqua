@@ -2,7 +2,7 @@ mod raster;
 mod svg;
 
 pub use raster::{
-    RasterizedVector, VectorBudget, VectorError, curve_outline, rasterize, retained_source_bytes,
+    curve_outline, rasterize, retained_source_bytes, RasterizedVector, VectorBudget, VectorError,
 };
 
-pub use svg::{CurveOp, CurveScene, drawing_curves, svg_curves};
+pub use svg::{drawing_curves, svg_curves, CurveOp, CurveScene};

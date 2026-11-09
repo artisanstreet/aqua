@@ -1254,7 +1254,17 @@ impl Aqua {
         let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Input);
         let count_activity = !matches!(event, CoreInputEvent::Focused(_));
         if let CoreInputEvent::PointerMove(pointer) = event {
-            crate::profile::note(|| format!("pointer_unix_us={} x={} y={}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_micros(), pointer.position.x, pointer.position.y));
+            crate::profile::note(|| {
+                format!(
+                    "pointer_unix_us={} x={} y={}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_micros(),
+                    pointer.position.x,
+                    pointer.position.y
+                )
+            });
         }
         crate::profile::note(|| {
             let text = format!("{event:?}");

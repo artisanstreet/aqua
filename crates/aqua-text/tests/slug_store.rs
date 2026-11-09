@@ -1,5 +1,5 @@
 use aqua_graph::slug::coverage;
-use aqua_text::slug::{PathCommand, SlugGlyph, SlugStore, pack_glyph};
+use aqua_text::slug::{pack_glyph, PathCommand, SlugGlyph, SlugStore};
 
 fn rounded_blob() -> Vec<PathCommand> {
     vec![
@@ -61,23 +61,19 @@ fn clearing_keeps_the_gpu_texture_and_rewrites_it_in_place() {
     let mut store: SlugStore<u32> = SlugStore::with_budget(1 << 20);
     store.insert(1, &glyph);
     let first = store.uploads();
-    assert!(
-        first
-            .textures
-            .iter()
-            .any(|upload| matches!(upload.op, TextureOp::Create { .. }))
-    );
+    assert!(first
+        .textures
+        .iter()
+        .any(|upload| matches!(upload.op, TextureOp::Create { .. })));
     store.clear();
     assert!(store.is_empty());
     assert!(store.uploads().textures.is_empty());
     store.insert(2, &glyph);
     let second = store.uploads();
-    assert!(
-        second
-            .textures
-            .iter()
-            .all(|upload| matches!(upload.op, TextureOp::Write { .. }))
-    );
+    assert!(second
+        .textures
+        .iter()
+        .all(|upload| matches!(upload.op, TextureOp::Write { .. })));
     assert!(!second.textures.is_empty());
 }
 
@@ -148,12 +144,10 @@ mod fonts {
             .filter(|upload| matches!(upload.op, TextureOp::Create { .. }))
             .count();
         assert_eq!(creates, 1);
-        assert!(
-            batch
-                .textures
-                .iter()
-                .all(|upload| upload.handle == STORE_HANDLE)
-        );
+        assert!(batch
+            .textures
+            .iter()
+            .all(|upload| upload.handle == STORE_HANDLE));
         if let TextureOp::Create { extent, format } = &batch.textures[0].op {
             assert_eq!(extent.width, STORE_WIDTH);
             assert_eq!(*format, TextureFormat::Rgba32Float);
@@ -251,12 +245,10 @@ mod eviction {
             store.insert(key, &glyph);
         });
         let first = store.uploads();
-        assert!(
-            first
-                .textures
-                .iter()
-                .any(|upload| matches!(upload.op, TextureOp::Create { .. }))
-        );
+        assert!(first
+            .textures
+            .iter()
+            .any(|upload| matches!(upload.op, TextureOp::Create { .. })));
         store.uploads();
         (1..count as u32).for_each(|key| {
             store.touch(&key);
@@ -344,12 +336,10 @@ fn releasing_curve_resources_retires_the_texture_and_recreates_it_on_demand() {
     assert!(store.uploads().textures.is_empty());
     store.insert_bounded(2, &glyph);
     let recreated = store.uploads();
-    assert!(
-        recreated
-            .textures
-            .iter()
-            .any(|upload| matches!(upload.op, TextureOp::Create { .. }))
-    );
+    assert!(recreated
+        .textures
+        .iter()
+        .any(|upload| matches!(upload.op, TextureOp::Create { .. })));
     store.release_resources();
     store.insert_bounded(3, &glyph);
     let replaced = store.uploads();

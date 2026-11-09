@@ -1,5 +1,5 @@
-use aqua_core::Transform2D;
 use aqua_core::vector::Brush;
+use aqua_core::Transform2D;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CurvePaint {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use aqua_media::hash::FastMap;
 
 use aqua_graph::slug::STORE_WIDTH;
-pub use aqua_graph::slug::{PathCommand, SlugCurve, SlugGlyph, pack_glyph};
+pub use aqua_graph::slug::{pack_glyph, PathCommand, SlugCurve, SlugGlyph};
 use aqua_graph::{Extent, TextureFormat, TextureHandle};
 use aqua_protocol::{TextureOp, TextureRegion, TextureUpload, UploadBatch};
 use skrifa::instance::{LocationRef, Size};

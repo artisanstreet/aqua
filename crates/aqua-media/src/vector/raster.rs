@@ -1,6 +1,6 @@
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
 };
 
 use aqua_core::vector::{Brush, Drawing, FillRule, LineCap, LineJoin, PathCommand, VectorSource};

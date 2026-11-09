@@ -446,6 +446,8 @@ fn expensive_background_repaints_remain_bounded_with_immediate_presentation() {
     *probe.script.lock().unwrap() = vec![Repaint::Heavy; 8];
     let started = WallInstant::now();
     link.set_viewport(Size { w: 100.0, h: 101.0 }, 1.0);
-    wait_until("the bounded background frames", || probe.presents.load(Relaxed) >= base + 9);
+    wait_until("the bounded background frames", || {
+        probe.presents.load(Relaxed) >= base + 9
+    });
     assert!(started.elapsed() >= Duration::from_millis(230));
 }

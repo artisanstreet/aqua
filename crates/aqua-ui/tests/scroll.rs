@@ -3,7 +3,7 @@ use aqua_reactive::Runtime;
 use aqua_ui::binding::View;
 use aqua_ui::element::{Box, Element, Scroll};
 use aqua_ui::layout::NaiveMeasurer;
-use aqua_ui::style::{Axis, Style, px};
+use aqua_ui::style::{px, Axis, Style};
 use aqua_ui::tree::{NodeKind, UiTree};
 
 fn content(preserve: bool, height: f32) -> Element {

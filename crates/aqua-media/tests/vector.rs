@@ -4,7 +4,7 @@ use aqua_core::vector::{
     Brush, Drawing, FillRule, GradientStop, PaintedPath, PathCommand, VectorSource,
 };
 use aqua_core::{Oklch, Point, Rect, Transform2D};
-use aqua_media::vector::{VectorBudget, VectorError, rasterize};
+use aqua_media::vector::{rasterize, VectorBudget, VectorError};
 
 fn rectangle(x: f32, y: f32, width: f32, height: f32) -> Vec<PathCommand> {
     vec![

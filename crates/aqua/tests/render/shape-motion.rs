@@ -138,19 +138,15 @@ fn retained_scene_morphs_repaint_until_settled_then_removal_stops() {
         .unwrap();
     assert!((position - 50.0).abs() < 0.01);
     assert!(report.shape_animation && report.animated());
-    assert!(
-        !lower
-            .commands(&scene, size, 1.0, Instant::from_secs_f64(3.0))
-            .2
-            .animated()
-    );
+    assert!(!lower
+        .commands(&scene, size, 1.0, Instant::from_secs_f64(3.0))
+        .2
+        .animated());
     scene.remove(id);
-    assert!(
-        !lower
-            .commands(&scene, size, 1.0, Instant::from_secs_f64(4.0))
-            .2
-            .animated()
-    );
+    assert!(!lower
+        .commands(&scene, size, 1.0, Instant::from_secs_f64(4.0))
+        .2
+        .animated());
 }
 
 #[test]

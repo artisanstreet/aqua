@@ -51,7 +51,12 @@ pub(crate) struct Slab<T> {
 
 impl<T> Slab<T> {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Self { chunks: Vec::with_capacity(capacity.div_ceil(CHUNK)), slots: 0, free: Vec::new(), len: 0 }
+        Self {
+            chunks: Vec::with_capacity(capacity.div_ceil(CHUNK)),
+            slots: 0,
+            free: Vec::new(),
+            len: 0,
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -69,7 +74,10 @@ impl<T> Slab<T> {
         if index % CHUNK == 0 {
             self.chunks.push(Vec::with_capacity(CHUNK));
         }
-        self.chunks[index / CHUNK].push(Slot { version: 1, value: Some(value) });
+        self.chunks[index / CHUNK].push(Slot {
+            version: 1,
+            value: Some(value),
+        });
         self.slots += 1;
         Key::new(index, 1)
     }
@@ -92,7 +100,10 @@ impl<T> Slab<T> {
     }
 
     pub(crate) fn get_mut(&mut self, key: Key) -> Option<&mut T> {
-        let slot = self.chunks.get_mut(key.index() / CHUNK)?.get_mut(key.index() % CHUNK)?;
+        let slot = self
+            .chunks
+            .get_mut(key.index() / CHUNK)?
+            .get_mut(key.index() % CHUNK)?;
         if slot.version == key.version() {
             slot.value.as_mut()
         } else {
@@ -146,7 +157,9 @@ pub(crate) struct Secondary<T> {
 
 impl<T> Secondary<T> {
     pub(crate) fn with_capacity(_capacity: usize) -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     pub(crate) fn insert(&mut self, key: Key, value: T) -> Option<T> {

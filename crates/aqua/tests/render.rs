@@ -10,12 +10,12 @@ mod host;
 mod lowering;
 #[path = "render/mesh.rs"]
 mod mesh;
+#[path = "render/shader.rs"]
+mod shader;
 #[path = "render/shape.rs"]
 mod shape;
 #[path = "render/span.rs"]
 mod span;
-#[path = "render/shader.rs"]
-mod shader;
 mod support;
 #[path = "render/text.rs"]
 mod text;

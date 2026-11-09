@@ -171,6 +171,7 @@ impl Transition {
 
     pub fn overlay(&self, surface: Rect, progress: f32, out: &mut Vec<PaintCommand>) {
         let spec = CustomPassSpec {
+            isolate_backdrop: true,
             reference: None,
             name: NAME.into(),
             hlsl: HLSL.into(),

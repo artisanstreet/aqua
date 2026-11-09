@@ -1964,6 +1964,7 @@ impl Lowering {
                 let mut params = vec![destination.w, destination.h, time, s];
                 params.extend_from_slice(parameters);
                 let spec = aqua_graph::CustomPassSpec {
+                    isolate_backdrop: false,
                     name: program.name.to_string(),
                     hlsl: program.hlsl.to_string(),
                     entry: program.entry.to_string(),

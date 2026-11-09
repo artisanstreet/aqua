@@ -230,6 +230,7 @@ pub enum Barrier {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CustomPassSpec {
+    pub isolate_backdrop: bool,
     pub reference: Option<aqua_core::shader::ReferenceShader>,
     pub name: String,
     pub hlsl: String,

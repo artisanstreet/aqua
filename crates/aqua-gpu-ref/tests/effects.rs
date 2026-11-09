@@ -93,6 +93,7 @@ fn color_matrix_grayscale_equalizes_channels() {
 #[test]
 fn custom_passes_run_registered_kernels_and_refuse_unknown_ones() {
     let spec = |name: &str| CustomPassSpec {
+        isolate_backdrop: false,
         reference: None,
         name: name.into(),
         hlsl: String::new(),
@@ -204,4 +205,31 @@ fn large_rounded_clip_has_no_seams_and_rounds_every_corner() {
             let alpha = at(&pixels, x, y)[3];
             assert!(alpha > 0 && alpha < 255, "edge {x},{y}: {alpha}");
         });
+}
+
+#[test]
+fn isolated_custom_effects_keep_backdrop_blur_inside_their_own_frame() {
+    for (isolate_backdrop, expected) in [(false, [0, 0, 255, 255]), (true, [255, 0, 0, 255])] {
+        let mut backend = RefBackend::new();
+        let bounds = EXTENT.bounds();
+        let pixels = render(&mut backend, Oklch::TRANSPARENT, &[
+            quad(0.0, 0.0, 48.0, 32.0, "#0000ff", 1.0, 0.0, 0.0),
+            PaintCommand::PushCustomEffect {
+                bounds,
+                spec: CustomPassSpec {
+                    isolate_backdrop,
+                    reference: None,
+                    name: INVERT.into(),
+                    hlsl: String::new(),
+                    entry: "main".into(),
+                    bounds,
+                    params: vec![0.0],
+                },
+            },
+            quad(0.0, 0.0, 48.0, 32.0, "#ff0000", 1.0, 0.0, 0.0),
+            backdrop_blur(rect(8.0, 8.0, 32.0, 16.0), 3.0, 4.0),
+            PaintCommand::PopCustomEffect,
+        ]);
+        assert_eq!(at(&pixels, 24, 16), expected, "isolated: {isolate_backdrop}");
+    }
 }

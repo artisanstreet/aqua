@@ -60,6 +60,7 @@ fn shader_uniform_changes_keep_geometry_while_the_plan_still_updates() {
             PaintCommand::PushCustomEffect {
                 bounds,
                 spec: CustomPassSpec {
+                    isolate_backdrop: false,
                     reference: None,
                     name: "geometry.test".into(),
                     hlsl: String::new(),
@@ -187,6 +188,7 @@ fn shader_uniforms_advance_without_reuploading_retained_geometry() {
     };
     let mut plan = plan_paint(Extent::new(64, 64), Oklch::BLACK, &[
         PaintCommand::PushCustomEffect { bounds, spec: CustomPassSpec {
+            isolate_backdrop: false,
             reference: None,
             name: "retained.uniforms".into(),
             hlsl: "cbuffer P : register(b0) { float4 p; }; float4 main() : SV_Target { return float4(p.x, 0.0, 1.0-p.x, 1.0); }".into(),

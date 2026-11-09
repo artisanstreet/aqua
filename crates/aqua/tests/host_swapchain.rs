@@ -1,5 +1,5 @@
-#![cfg(windows)]
-
+#[cfg(windows)]
+mod native {
 use std::num::NonZeroUsize;
 use std::process::Command;
 use std::time::Duration;
@@ -568,7 +568,7 @@ fn child(out: String) {
 #[path = "../../aqua-verify/tests/support/desktop.rs"]
 mod desktop;
 
-fn main() {
+pub fn run() {
     if let Ok(out) = std::env::var("AQUA_HOST_SWAPCHAIN_OUT") {
         child(out);
         return;
@@ -592,4 +592,13 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+}
+
+fn main() {
+    #[cfg(windows)]
+    native::run();
+    #[cfg(not(windows))]
+    eprintln!("host_swapchain: skipped; requires Windows");
 }

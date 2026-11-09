@@ -1,5 +1,5 @@
-#![cfg(windows)]
-
+#[cfg(windows)]
+mod native {
 use std::process::Command;
 use std::time::Duration;
 
@@ -286,7 +286,7 @@ fn expected_quad() -> [f64; 3] {
 #[path = "../../aqua-verify/tests/support/desktop.rs"]
 mod desktop;
 
-fn main() {
+pub fn run() {
     if let Ok(name) = std::env::var("AQUA_HOST_MATERIAL") {
         let material = MATERIALS
             .iter()
@@ -344,4 +344,13 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+}
+
+fn main() {
+    #[cfg(windows)]
+    native::run();
+    #[cfg(not(windows))]
+    eprintln!("host_material: skipped; requires Windows");
 }

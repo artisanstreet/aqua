@@ -847,6 +847,7 @@ impl Lowering {
         scale: f32,
         now: Instant,
     ) -> (Vec<PaintCommand>, UploadBatch, LowerReport) {
+        self.drain_externals();
         let started = WallInstant::now();
         self.last_now = now;
         self.span_trace.clear();

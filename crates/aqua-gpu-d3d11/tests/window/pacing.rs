@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use aqua_gpu_d3d11::window::pacing::{
     interval_from_ticks, reconcile_interval, ticks_until_next_vblank, vblanks_spanned, Pacer,
-    FALLBACK_INTERVAL,
 };
 
 const FREQUENCY: u64 = 10_000_000;
@@ -20,11 +19,23 @@ fn qpc_period_converts_to_the_real_refresh_interval() {
 }
 
 #[test]
-fn nonsense_periods_fall_back_to_sixty_hertz() {
-    assert_eq!(interval_from_ticks(0, FREQUENCY), FALLBACK_INTERVAL);
-    assert_eq!(interval_from_ticks(166_833, 0), FALLBACK_INTERVAL);
-    assert_eq!(interval_from_ticks(1, FREQUENCY), FALLBACK_INTERVAL);
-    assert_eq!(interval_from_ticks(u64::MAX, 1), FALLBACK_INTERVAL);
+fn unknown_periods_do_not_invent_a_refresh_rate() {
+    assert_eq!(interval_from_ticks(0, FREQUENCY), Duration::ZERO);
+    assert_eq!(interval_from_ticks(166_833, 0), Duration::ZERO);
+    assert_eq!(interval_from_ticks(u64::MAX, 1), Duration::ZERO);
+}
+
+#[test]
+fn high_refresh_displays_keep_their_actual_interval() {
+    for hz in [144, 240, 360, 500, 1000] {
+        let period = FREQUENCY / hz;
+        let interval = interval_from_ticks(period, FREQUENCY);
+        assert_eq!(interval, Duration::from_nanos(period * 100));
+        assert_eq!(
+            reconcile_interval(Duration::ZERO, hz as u32),
+            Duration::from_secs_f64(1.0 / hz as f64)
+        );
+    }
 }
 
 #[test]

@@ -185,7 +185,10 @@ pub fn decode_animation(
             let mut decoder =
                 image::codecs::webp::WebPDecoder::new(Cursor::new(bytes)).map_err(decode_error)?;
             decoder.set_limits(limits).map_err(decode_error)?;
-            collect_frames(decoder, budget)
+            match decoder.has_animation() {
+                true => collect_frames(decoder, budget),
+                false => still(bytes, budget),
+            }
         }
         image::ImageFormat::Png => {
             let mut decoder =

@@ -4,30 +4,23 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 #[test]
-fn gpui_pulse_cadence_uses_active_state_and_invalidating_input_grace() {
+fn pulse_cadence_preserves_uncapped_and_monitor_rates_in_every_activity_state() {
     use aqua_runtime::scheduler::gpui_pulse_interval;
-    let refresh = Duration::from_micros(16_667);
-    let slow = Duration::from_micros(33_333);
-    let start = Instant::from_secs_f64(10.0);
-    assert_eq!(gpui_pulse_interval(refresh, true, None, start), refresh);
-    assert_eq!(gpui_pulse_interval(refresh, false, None, start), slow);
-    assert_eq!(
-        gpui_pulse_interval(
-            refresh,
-            false,
-            Some(start),
-            start + Duration::from_millis(999)
-        ),
-        refresh
-    );
-    assert_eq!(
-        gpui_pulse_interval(refresh, false, Some(start), start + Duration::from_secs(1)),
-        slow
-    );
-    assert_eq!(
-        gpui_pulse_interval(Duration::from_millis(40), false, None, start),
-        Duration::from_millis(40)
-    );
+    let now = Instant::from_secs_f64(10.0);
+    for interval in [
+        Duration::ZERO,
+        Duration::from_secs_f64(1.0 / 240.0),
+        Duration::from_secs_f64(1.0 / 60.0),
+    ] {
+        for active in [false, true] {
+            for last_input in [None, Some(now), Some(Instant::ZERO)] {
+                assert_eq!(
+                    gpui_pulse_interval(interval, active, last_input, now),
+                    interval
+                );
+            }
+        }
+    }
 }
 
 #[test]

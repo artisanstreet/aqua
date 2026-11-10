@@ -11,7 +11,11 @@ pub fn print_tree(tree: &impl PrintTree, root: NodeId) {
 }
 
 /// Writes a debug representation of the computed layout to the writer, starting with the passed root node.
-pub fn write_tree(mut writer: impl io::Write, tree: &impl PrintTree, root: NodeId) -> io::Result<()> {
+pub fn write_tree(
+    mut writer: impl io::Write,
+    tree: &impl PrintTree,
+    root: NodeId,
+) -> io::Result<()> {
     writeln!(writer, "TREE")?;
     write_node(&mut writer, tree, root, false, String::new())?;
 
@@ -27,7 +31,11 @@ pub fn write_tree(mut writer: impl io::Write, tree: &impl PrintTree, root: NodeI
         let display = tree.get_debug_label(node_id);
         let num_children = tree.child_count(node_id);
 
-        let fork_string = if has_sibling { "├── " } else { "└── " };
+        let fork_string = if has_sibling {
+            "├── "
+        } else {
+            "└── "
+        };
         #[cfg(feature = "content_size")]
         writeln!(
                 writer,

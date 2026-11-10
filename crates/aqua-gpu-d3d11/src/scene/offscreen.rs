@@ -67,6 +67,7 @@ pub struct OffscreenBackend {
     gpu: Gpu,
     surfaces: HashMap<SurfaceId, Surface>,
     next_surface: u32,
+    last_scene_stats: super::SceneStats,
 }
 
 fn create_surface(
@@ -250,11 +251,16 @@ impl OffscreenBackend {
             gpu,
             surfaces: HashMap::new(),
             next_surface: 0,
+            last_scene_stats: super::SceneStats::default(),
         })
     }
 
     pub fn gpu_time(&self) -> Option<std::time::Duration> {
         self.gpu.renderer.gpu_time()
+    }
+
+    pub fn last_scene_stats(&self) -> super::SceneStats {
+        self.last_scene_stats
     }
 
     pub fn transient_bytes(&self) -> u64 {
@@ -340,6 +346,7 @@ impl OffscreenBackend {
         let stats = gpu
             .renderer
             .record(&gpu.context, plan, &target, &gpu.textures, None)?;
+        self.last_scene_stats = stats;
         entry.executed = true;
         Ok(FrameReport {
             passes: stats.passes,

@@ -1,5 +1,5 @@
 #[cfg(windows)]
-mod gpu;
+pub(crate) mod gpu;
 #[cfg(windows)]
 mod hook;
 #[cfg(windows)]

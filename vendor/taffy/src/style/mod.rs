@@ -14,14 +14,14 @@ mod float;
 mod grid;
 
 pub use self::alignment::{
-    AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, AlignSelf, AlignmentSafety, JustifyContent,
-    JustifyItems, JustifySelf,
+    AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, AlignSelf, AlignmentSafety,
+    JustifyContent, JustifyItems, JustifySelf,
 };
 pub use self::available_space::AvailableSpace;
 pub use self::compact_length::CompactLength;
 pub use self::dimension::{
-    Dimension, ExpandedDimension, ExpandedLengthPercentage, ExpandedLengthPercentageAuto, LengthPercentage,
-    LengthPercentageAuto,
+    Dimension, ExpandedDimension, ExpandedLengthPercentage, ExpandedLengthPercentageAuto,
+    LengthPercentage, LengthPercentageAuto,
 };
 use crate::sys::DefaultCheapStr;
 
@@ -33,9 +33,10 @@ pub use self::flex::{FlexDirection, FlexWrap, FlexboxContainerStyle, FlexboxItem
 pub use self::float::{Clear, Float, FloatDirection};
 #[cfg(feature = "grid")]
 pub use self::grid::{
-    ExpandedMaxTrackSizingFunction, ExpandedMinTrackSizingFunction, GenericGridPlacement, GenericGridTemplateComponent,
-    GenericRepetition, GridAutoFlow, GridAutoTracks, GridContainerStyle, GridItemStyle, GridPlacement,
-    GridTemplateComponent, GridTemplateRepetition, GridTemplateTracks, MaxTrackSizingFunction, MinTrackSizingFunction,
+    ExpandedMaxTrackSizingFunction, ExpandedMinTrackSizingFunction, GenericGridPlacement,
+    GenericGridTemplateComponent, GenericRepetition, GridAutoFlow, GridAutoTracks,
+    GridContainerStyle, GridItemStyle, GridPlacement, GridTemplateComponent,
+    GridTemplateRepetition, GridTemplateTracks, MaxTrackSizingFunction, MinTrackSizingFunction,
     RepetitionCount, TrackSizingFunction,
 };
 #[cfg(feature = "grid")]
@@ -61,11 +62,27 @@ use crate::sys::String;
 /// Trait that represents a cheaply clonable string. If you're unsure what to use here
 /// consider `Arc<str>` or `string_cache::Atom`.
 pub trait CheapCloneStr:
-    AsRef<str> + for<'a> From<&'a str> + From<String> + PartialEq + Eq + Clone + Default + Debug + 'static
+    AsRef<str>
+    + for<'a> From<&'a str>
+    + From<String>
+    + PartialEq
+    + Eq
+    + Clone
+    + Default
+    + Debug
+    + 'static
 {
 }
 impl<T> CheapCloneStr for T where
-    T: AsRef<str> + for<'a> From<&'a str> + From<String> + PartialEq + Eq + Clone + Default + Debug + 'static
+    T: AsRef<str>
+        + for<'a> From<&'a str>
+        + From<String>
+        + PartialEq
+        + Eq
+        + Clone
+        + Default
+        + Debug
+        + 'static
 {
 }
 
@@ -156,7 +173,10 @@ pub trait CoreStyle {
     /// `filter` or `will-change` in a full CSS implementation) establish a containing block.
     #[inline(always)]
     fn is_containing_block(&self) -> ContainingBlockClaims {
-        ContainingBlockClaims { absolute: self.position().is_positioned(), fixed: false }
+        ContainingBlockClaims {
+            absolute: self.position().is_positioned(),
+            fixed: false,
+        }
     }
 
     // Size properies
@@ -275,11 +295,19 @@ impl Display {
     pub const DEFAULT: Display = Display::Grid;
 
     /// The default Display mode
-    #[cfg(all(feature = "block_layout", not(feature = "flexbox"), not(feature = "grid")))]
+    #[cfg(all(
+        feature = "block_layout",
+        not(feature = "flexbox"),
+        not(feature = "grid")
+    ))]
     pub const DEFAULT: Display = Display::Block;
 
     /// The default Display mode
-    #[cfg(all(not(feature = "flexbox"), not(feature = "grid"), not(feature = "block_layout")))]
+    #[cfg(all(
+        not(feature = "flexbox"),
+        not(feature = "grid"),
+        not(feature = "block_layout")
+    ))]
     pub const DEFAULT: Display = Display::None;
 }
 
@@ -404,9 +432,15 @@ pub struct ContainingBlockClaims {
 
 impl ContainingBlockClaims {
     /// Claims nothing
-    pub const NONE: Self = Self { absolute: false, fixed: false };
+    pub const NONE: Self = Self {
+        absolute: false,
+        fixed: false,
+    };
     /// Claims every out-of-flow box (the initial containing block)
-    pub const ALL: Self = Self { absolute: true, fixed: true };
+    pub const ALL: Self = Self {
+        absolute: true,
+        fixed: true,
+    };
 
     /// Whether the node is the containing block for a box with the given `position`
     #[inline(always)]
@@ -614,7 +648,9 @@ impl core::ops::BitOrAssign for Contain {
 
 #[cfg(feature = "parse")]
 impl crate::util::parse::FromCss for Contain {
-    fn from_css<'i>(input: &mut crate::util::parse::Parser<'i, '_>) -> crate::util::parse::CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        input: &mut crate::util::parse::Parser<'i, '_>,
+    ) -> crate::util::parse::CssParseResult<'i, Self> {
         /// Duplicate-detection bit for the ignored `style` keyword, which does not map to a
         /// `Contain` flag
         const STYLE_BIT: u8 = 1 << 6;
@@ -649,7 +685,9 @@ impl crate::util::parse::FromCss for Contain {
 
             // Reject duplicate keywords
             if seen & seen_bit != 0 {
-                return Err(input.new_unexpected_token_error(crate::util::parse::Token::Ident(ident)));
+                return Err(
+                    input.new_unexpected_token_error(crate::util::parse::Token::Ident(ident))
+                );
             }
             seen |= seen_bit;
             flags |= flag;
@@ -727,8 +765,14 @@ impl<S: CheapCloneStr> Default for GridStyle<S> {
             grid_template_areas: None,
             grid_template_column_names: GridTrackVec::new(),
             grid_template_row_names: GridTrackVec::new(),
-            grid_row: Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto },
-            grid_column: Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto },
+            grid_row: Line {
+                start: GridPlacement::<S>::Auto,
+                end: GridPlacement::<S>::Auto,
+            },
+            grid_column: Line {
+                start: GridPlacement::<S>::Auto,
+                end: GridPlacement::<S>::Auto,
+            },
         }
     }
 }
@@ -901,7 +945,10 @@ impl<S: CheapCloneStr> Style<S> {
         item_is_compressible_replaced: false,
         box_sizing: BoxSizing::BorderBox,
         direction: Direction::Ltr,
-        overflow: Point { x: Overflow::Visible, y: Overflow::Visible },
+        overflow: Point {
+            x: Overflow::Visible,
+            y: Overflow::Visible,
+        },
         scrollbar_width: 0.0,
         contain: Contain::NONE,
         #[cfg(feature = "float_layout")]
@@ -1055,13 +1102,25 @@ impl<S: CheapCloneStr> OofItemStyle for Style<S> {
     #[inline(always)]
     fn grid_row(&self) -> Line<GridPlacement<S>> {
         // TODO: Investigate eliminating clone
-        self.grid.as_ref().map_or(Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto }, |g| g.grid_row.clone())
+        self.grid.as_ref().map_or(
+            Line {
+                start: GridPlacement::<S>::Auto,
+                end: GridPlacement::<S>::Auto,
+            },
+            |g| g.grid_row.clone(),
+        )
     }
     #[cfg(feature = "grid")]
     #[inline(always)]
     fn grid_column(&self) -> Line<GridPlacement<S>> {
         // TODO: Investigate eliminating clone
-        self.grid.as_ref().map_or(Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto }, |g| g.grid_column.clone())
+        self.grid.as_ref().map_or(
+            Line {
+                start: GridPlacement::<S>::Auto,
+                end: GridPlacement::<S>::Auto,
+            },
+            |g| g.grid_column.clone(),
+        )
     }
 }
 
@@ -1393,7 +1452,9 @@ impl<S: CheapCloneStr> GridContainerStyle for Style<S> {
     type TemplateTrackList<'a>
         = core::iter::Map<
         core::slice::Iter<'a, GridTemplateComponent<S>>,
-        fn(&'a GridTemplateComponent<S>) -> GenericGridTemplateComponent<S, &'a GridTemplateRepetition<S>>,
+        fn(
+            &'a GridTemplateComponent<S>,
+        ) -> GenericGridTemplateComponent<S, &'a GridTemplateRepetition<S>>,
     >
     where
         Self: 'a;
@@ -1405,7 +1466,10 @@ impl<S: CheapCloneStr> GridContainerStyle for Style<S> {
 
     #[cfg(feature = "grid")]
     type TemplateLineNames<'a>
-        = core::iter::Map<core::slice::Iter<'a, GridTrackVec<S>>, fn(&GridTrackVec<S>) -> core::slice::Iter<'_, S>>
+        = core::iter::Map<
+        core::slice::Iter<'a, GridTrackVec<S>>,
+        fn(&GridTrackVec<S>) -> core::slice::Iter<'_, S>,
+    >
     where
         Self: 'a;
     #[cfg(feature = "grid")]
@@ -1416,23 +1480,45 @@ impl<S: CheapCloneStr> GridContainerStyle for Style<S> {
 
     #[inline(always)]
     fn grid_template_rows(&self) -> Option<Self::TemplateTrackList<'_>> {
-        Some(self.grid.as_deref().map_or(&[][..], |g| &g.grid_template_rows[..]).iter().map(|c| c.as_component_ref()))
+        Some(
+            self.grid
+                .as_deref()
+                .map_or(&[][..], |g| &g.grid_template_rows[..])
+                .iter()
+                .map(|c| c.as_component_ref()),
+        )
     }
     #[inline(always)]
     fn grid_template_columns(&self) -> Option<Self::TemplateTrackList<'_>> {
-        Some(self.grid.as_deref().map_or(&[][..], |g| &g.grid_template_columns[..]).iter().map(|c| c.as_component_ref()))
+        Some(
+            self.grid
+                .as_deref()
+                .map_or(&[][..], |g| &g.grid_template_columns[..])
+                .iter()
+                .map(|c| c.as_component_ref()),
+        )
     }
     #[inline(always)]
     fn grid_auto_rows(&self) -> Self::AutoTrackList<'_> {
-        self.grid.as_deref().map_or(&[][..], |g| &g.grid_auto_rows[..]).iter().copied()
+        self.grid
+            .as_deref()
+            .map_or(&[][..], |g| &g.grid_auto_rows[..])
+            .iter()
+            .copied()
     }
     #[inline(always)]
     fn grid_auto_columns(&self) -> Self::AutoTrackList<'_> {
-        self.grid.as_deref().map_or(&[][..], |g| &g.grid_auto_columns[..]).iter().copied()
+        self.grid
+            .as_deref()
+            .map_or(&[][..], |g| &g.grid_auto_columns[..])
+            .iter()
+            .copied()
     }
     #[inline(always)]
     fn grid_auto_flow(&self) -> GridAutoFlow {
-        self.grid.as_ref().map_or(GridAutoFlow::Row, |g| g.grid_auto_flow)
+        self.grid
+            .as_ref()
+            .map_or(GridAutoFlow::Row, |g| g.grid_auto_flow)
     }
     #[inline(always)]
     fn gap(&self) -> Size<LengthPercentage> {
@@ -1458,29 +1544,52 @@ impl<S: CheapCloneStr> GridContainerStyle for Style<S> {
     #[inline(always)]
     #[cfg(feature = "grid")]
     fn grid_template_areas(&self) -> Option<Self::GridTemplateAreas<'_>> {
-        self.grid.as_ref().and_then(|g| g.grid_template_areas.as_ref()).map(|template| template.areas.iter().cloned())
+        self.grid
+            .as_ref()
+            .and_then(|g| g.grid_template_areas.as_ref())
+            .map(|template| template.areas.iter().cloned())
     }
     #[inline(always)]
     #[cfg(feature = "grid")]
     fn grid_template_area_row_count(&self) -> u16 {
-        self.grid.as_ref().and_then(|g| g.grid_template_areas.as_ref()).map(|template| template.row_count).unwrap_or(0)
+        self.grid
+            .as_ref()
+            .and_then(|g| g.grid_template_areas.as_ref())
+            .map(|template| template.row_count)
+            .unwrap_or(0)
     }
     #[inline(always)]
     #[cfg(feature = "grid")]
     fn grid_template_area_column_count(&self) -> u16 {
-        self.grid.as_ref().and_then(|g| g.grid_template_areas.as_ref()).map(|template| template.column_count).unwrap_or(0)
+        self.grid
+            .as_ref()
+            .and_then(|g| g.grid_template_areas.as_ref())
+            .map(|template| template.column_count)
+            .unwrap_or(0)
     }
 
     #[inline(always)]
     #[cfg(feature = "grid")]
     fn grid_template_column_names(&self) -> Option<Self::TemplateLineNames<'_>> {
-        Some(self.grid.as_deref().map_or(&[][..], |g| &g.grid_template_column_names[..]).iter().map(|names| names.iter()))
+        Some(
+            self.grid
+                .as_deref()
+                .map_or(&[][..], |g| &g.grid_template_column_names[..])
+                .iter()
+                .map(|names| names.iter()),
+        )
     }
 
     #[inline(always)]
     #[cfg(feature = "grid")]
     fn grid_template_row_names(&self) -> Option<Self::TemplateLineNames<'_>> {
-        Some(self.grid.as_deref().map_or(&[][..], |g| &g.grid_template_row_names[..]).iter().map(|names| names.iter()))
+        Some(
+            self.grid
+                .as_deref()
+                .map_or(&[][..], |g| &g.grid_template_row_names[..])
+                .iter()
+                .map(|names| names.iter()),
+        )
     }
 }
 
@@ -1583,12 +1692,24 @@ impl<S: CheapCloneStr> GridItemStyle for Style<S> {
     #[inline(always)]
     fn grid_row(&self) -> Line<GridPlacement<S>> {
         // TODO: Investigate eliminating clone
-        self.grid.as_ref().map_or(Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto }, |g| g.grid_row.clone())
+        self.grid.as_ref().map_or(
+            Line {
+                start: GridPlacement::<S>::Auto,
+                end: GridPlacement::<S>::Auto,
+            },
+            |g| g.grid_row.clone(),
+        )
     }
     #[inline(always)]
     fn grid_column(&self) -> Line<GridPlacement<S>> {
         // TODO: Investigate eliminating clone
-        self.grid.as_ref().map_or(Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto }, |g| g.grid_column.clone())
+        self.grid.as_ref().map_or(
+            Line {
+                start: GridPlacement::<S>::Auto,
+                end: GridPlacement::<S>::Auto,
+            },
+            |g| g.grid_column.clone(),
+        )
     }
     #[inline(always)]
     fn align_self(&self) -> Option<AlignSelf> {
@@ -1706,7 +1827,10 @@ mod tests {
         assert_eq!(parse("paint"), Contain::PAINT);
         assert_eq!(parse("layout paint"), Contain::LAYOUT | Contain::PAINT);
         assert_eq!(parse("paint layout"), Contain::LAYOUT | Contain::PAINT);
-        assert_eq!(parse("layout paint style"), Contain::LAYOUT | Contain::PAINT);
+        assert_eq!(
+            parse("layout paint style"),
+            Contain::LAYOUT | Contain::PAINT
+        );
         assert_eq!(parse("Paint LAYOUT"), Contain::LAYOUT | Contain::PAINT);
         assert!("paint paint".parse::<Contain>().is_err());
 

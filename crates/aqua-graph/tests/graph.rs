@@ -200,6 +200,8 @@ fn filters_reading_and_writing_the_same_texture_are_rejected() {
 
 fn custom_spec(name: &str, param: f32) -> aqua_graph::CustomPassSpec {
     aqua_graph::CustomPassSpec {
+        isolate_backdrop: false,
+        reference: None,
         name: name.into(),
         hlsl: String::new(),
         entry: "main".into(),

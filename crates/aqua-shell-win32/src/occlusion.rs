@@ -233,6 +233,7 @@ mod native {
         crate::wake_trace::record(crate::wake_trace::Source::WinEvent { event, relevant });
         if relevant {
             DIRTY.set(true);
+            crate::looping::wake_message_wait();
         }
     }
 

@@ -26,6 +26,38 @@ Tracing is optional and bounded. It records source versions, property
 writes, invalidation, layout commits, text inspection/shaping and scene
 patches/rebuilds without creating a permanent history per update.
 
+## Native implementation update (2026-11-08)
+
+The executable now uses native Win32 and D3D11. The former wgpu/glyphon metrics
+and renderer paths later in this document are historical. Current diagnostics
+include transport `HostCounters::plans_built/plans_reused` and D3D11
+`SceneStats::upload_bytes`. Geometry reuse makes that upload counter zero for
+unchanged instances, including a shader-uniform-only update. It does not mean
+zero texture traffic or zero GPU work.
+
+Behavioral checks added for retained plan invalidation, geometry reuse, shader
+uniform changes, trim/recovery, per-window curve-store namespaces, scoped
+Editor refresh without profiling, render-only work-clock reels, interrupted
+shape transitions, raw/compiled vector eviction, and GPU vector paint
+comparisons exercise the new implementation. Gradient paints are compared with
+the former raster path across transforms, transparency, and hard stops. SVG and
+Drawing comparisons cover group opacity, tinting, fill/stroke order, and nonzero
+view boxes. Sidebar frame refresh avoids rebuilding the workspace during
+intermediate width/wordmark/footer animation frames.
+Native Windows D3D11 readback checks run against both hardware and WARP.
+These checks establish correctness and avoided operations, not frame-time or
+stability improvements by themselves.
+
+An earlier same-machine conversation measurement found approximately 850
+render frames per second and 42–46% GPU utilization with unpaced presentation.
+After default-vsync and heavy-frame pacing fixes, the reopened conversation
+sample was 2.0–2.2% GPU and approximately 0.4% CPU. This was a short Task Manager
+counter sample on one machine, not a portable benchmark. Memory before/after
+restart cannot establish a leak fix. The later retained-rendering changes need
+separate application measurements; do not attribute those earlier numbers to
+them.
+
+
 ## Runtime update (2026-11-03)
 
 `Runtime::frame_work()` exposes text nodes inspected, source bytes compared,

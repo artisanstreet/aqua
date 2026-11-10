@@ -1,0 +1,102 @@
+{
+  "design": "Three stats-off Aqua-only memory pairs in AB/BA/AB order; 600 scroll inputs per run; same helper f009029 and fixture. No GPU ledger or memory-report instrumentation.",
+  "code_commit": "4764869",
+  "control_sha256": "0dbc9448214659432d7a1836958dd36271c7498df4b252413888c8a7472154e8",
+  "candidate_sha256": "1ee6911e2b5132371037388b343d1fd1274b93abe4696d18fc3e5fdaa3389086",
+  "helper_sha256": "eb9a83752f9ea5c0cf7b9a203e8011d02a7662eefd94d525d8bfcc5d30e57b7d",
+  "runs": [
+    {
+      "arm": "control",
+      "run": 1,
+      "gpu_boot_mib": 35.4,
+      "gpu_after_scroll_mib": 48.4,
+      "private_after_scroll_mib": 112.0,
+      "p50_ms": 0.117,
+      "p99_ms": 0.382,
+      "max_ms": 1.605,
+      "preflight_cpu_percent": 5.2
+    },
+    {
+      "arm": "control",
+      "run": 2,
+      "gpu_boot_mib": 35.4,
+      "gpu_after_scroll_mib": 53.4,
+      "private_after_scroll_mib": 120.0,
+      "p50_ms": 0.117,
+      "p99_ms": 0.344,
+      "max_ms": 1.519,
+      "preflight_cpu_percent": 3.4
+    },
+    {
+      "arm": "control",
+      "run": 3,
+      "gpu_boot_mib": 35.4,
+      "gpu_after_scroll_mib": 48.7,
+      "private_after_scroll_mib": 113.0,
+      "p50_ms": 0.124,
+      "p99_ms": 0.38,
+      "max_ms": 1.573,
+      "preflight_cpu_percent": 2.7
+    },
+    {
+      "arm": "candidate",
+      "run": 1,
+      "gpu_boot_mib": 33.4,
+      "gpu_after_scroll_mib": 46.7,
+      "private_after_scroll_mib": 108.0,
+      "p50_ms": 0.12,
+      "p99_ms": 0.374,
+      "max_ms": 1.643,
+      "preflight_cpu_percent": 1.3
+    },
+    {
+      "arm": "candidate",
+      "run": 2,
+      "gpu_boot_mib": 33.4,
+      "gpu_after_scroll_mib": 48.9,
+      "private_after_scroll_mib": 113.0,
+      "p50_ms": 0.124,
+      "p99_ms": 0.365,
+      "max_ms": 1.709,
+      "preflight_cpu_percent": 2.5
+    },
+    {
+      "arm": "candidate",
+      "run": 3,
+      "gpu_boot_mib": 33.4,
+      "gpu_after_scroll_mib": 46.9,
+      "private_after_scroll_mib": 111.0,
+      "p50_ms": 0.116,
+      "p99_ms": 0.391,
+      "max_ms": 1.572,
+      "preflight_cpu_percent": 2.3
+    }
+  ],
+  "medians": {
+    "control": {
+      "gpu_boot_mib": 35.4,
+      "gpu_after_scroll_mib": 48.7,
+      "private_after_scroll_mib": 113.0,
+      "p50_ms": 0.117,
+      "p99_ms": 0.38,
+      "max_ms": 1.573
+    },
+    "candidate": {
+      "gpu_boot_mib": 33.4,
+      "gpu_after_scroll_mib": 46.9,
+      "private_after_scroll_mib": 111.0,
+      "p50_ms": 0.12,
+      "p99_ms": 0.374,
+      "max_ms": 1.643
+    }
+  },
+  "foreground_unchanged": true,
+  "retries": 0,
+  "limitations": [
+    "Post-scroll GPU ranges overlap: control 48.4\u201353.4 MiB, candidate 46.7\u201348.9 MiB. All three paired candidate values are lower; three pairs do not establish a precise expected saving.",
+    "Private memory is sampled at whole-MiB resolution and ranges overlap: control 112\u2013120 MiB, candidate 108\u2013113 MiB.",
+    "Median scroll p50 rises 0.117 to 0.120 ms and maximum 1.573 to 1.643 ms; p99 is 0.380 versus 0.374 ms. All samples are below 4 ms. No latency improvement or equivalence is established.",
+    "This is an Aqua-only phase comparison, not a replacement scoreboard. Reports lack GPUI metrics and exit FAIL by design.",
+    "The latest complete full scoreboard remains 33/41 performance rows PASS, overall FAIL; visuals PASS."
+  ]
+}

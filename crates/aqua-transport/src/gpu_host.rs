@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::retained::RetainedPlan;
 use aqua_core::{Oklch, Size};
 use aqua_graph::{plan_paint_with, Extent, FramePlan};
 use aqua_protocol::{
@@ -85,8 +86,8 @@ impl HostConfig {
         Self {
             surface: SurfaceKind::Offscreen,
             clear,
-            present: PresentHint::Vsync,
-            frame_interval: Duration::from_nanos(16_666_667),
+            present: PresentHint::Immediate,
+            frame_interval: Duration::ZERO,
         }
     }
 
@@ -123,6 +124,8 @@ pub struct HostCounters {
     pub failed: u64,
     pub losses: u32,
     pub trimmed: u64,
+    pub plans_built: u64,
+    pub plans_reused: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -157,6 +160,11 @@ pub struct GpuRenderHost<B: GpuBackend<Error = GpuError>, L: Lowering, C: Clock>
     trim_handle: TrimHandle,
     last: Option<FrameRecord>,
     last_error: Option<String>,
+    solids: Option<crate::solid::Solids>,
+    solids_rejected: Option<crate::solid::Key>,
+    retained: RetainedPlan,
+    plans_built: u64,
+    plans_reused: u64,
 }
 
 fn extent_of(size: Size, scale: f32) -> Extent {
@@ -191,6 +199,11 @@ where
             trim_handle: TrimHandle::default(),
             last: None,
             last_error: None,
+            solids: None,
+            solids_rejected: None,
+            retained: RetainedPlan::default(),
+            plans_built: 0,
+            plans_reused: 0,
         }
     }
 
@@ -212,6 +225,8 @@ where
             failed: self.failed,
             losses: self.losses,
             trimmed: self.trimmed,
+            plans_built: self.plans_built,
+            plans_reused: self.plans_reused,
         }
     }
 
@@ -288,12 +303,14 @@ where
         if self.slot_acquired {
             return Ok(());
         }
-        self.backend.wait_for_frame_slot(surface)?;
+        self.backend
+            .wait_for_frame_slot_with_hint(surface, self.config.present)?;
         self.slot_acquired = true;
         Ok(())
     }
 
     fn recover(&mut self) -> Option<Feedback> {
+        self.retained.clear();
         match self.backend.recover() {
             Ok(report) => {
                 self.lost = false;
@@ -306,6 +323,20 @@ where
             }
             Err(_) => None,
         }
+    }
+
+    pub fn retains_solid_geometry(&self, side: &RenderSide) -> bool {
+        self.lowering.retained_solids()
+            && side.viewport().is_some_and(|(size, scale)| {
+                let context = LowerContext {
+                    size,
+                    scale,
+                    now: Instant::ZERO,
+                };
+                self.solids.as_ref().is_some_and(|cached| {
+                    cached.key == crate::solid::Key::new(side.scene(), &context)
+                })
+            })
     }
 
     fn render(&mut self, side: &mut RenderSide) -> Result<(FrameReport, FrameRecord), GpuError> {
@@ -321,7 +352,32 @@ where
             scale,
             now: self.clock.now(),
         };
-        let lowered = self.lowering.lower(side.scene(), &context);
+        let mut solids = self.solids.take();
+        if !self.lowering.retained_solids() {
+            solids = None;
+        } else {
+            if solids
+                .as_mut()
+                .is_some_and(|cached| !cached.update(side.scene_mut(), &context))
+            {
+                solids = None;
+            }
+            let key = crate::solid::Key::new(side.scene(), &context);
+            if solids.is_none() && self.solids_rejected != Some(key) {
+                solids = crate::solid::Solids::compile(
+                    side.scene_mut(),
+                    &context,
+                    extent,
+                    self.config.clear,
+                    self.backend.capabilities().plan_limits(),
+                );
+                self.solids_rejected = solids.is_none().then_some(key);
+            }
+        }
+        let lowered = match solids {
+            Some(_) => crate::Lowered::default(),
+            None => self.lowering.lower(side.scene(), &context),
+        };
         drop(lower_span);
         let uploaded = !lowered.uploads.textures.is_empty();
         if uploaded {
@@ -336,21 +392,42 @@ where
             self.backend.upload(lowered.uploads.clone())?;
         }
         let plan_span = probe::span(Phase::Plan);
-        let plan = FramePlan {
-            text_tone: lowered.text_tone,
-            ..plan_paint_with(
+        if solids.is_none() {
+        let limits = self.backend.capabilities().plan_limits();
+        let reused = self
+            .retained
+            .reuse(
                 extent,
                 self.config.clear,
+                lowered.text_tone,
+                limits,
                 &lowered.commands,
-                self.backend.capabilities().plan_limits(),
-            )?
-        };
+            )
+            .is_some();
+        match reused {
+            true => self.plans_reused += 1,
+            false => {
+                let plan = FramePlan {
+                    text_tone: lowered.text_tone,
+                    ..plan_paint_with(extent, self.config.clear, &lowered.commands, limits)?
+                };
+                self.retained.store(&lowered.commands, plan, limits);
+                self.plans_built += 1;
+            }
+        }
+        } else {
+            self.retained.clear();
+        }
         drop(plan_span);
         let wait_span = probe::span(Phase::Wait);
         self.acquire_slot(surface)?;
         drop(wait_span);
         let record_span = probe::span(Phase::Record);
-        let report = self.backend.execute(&plan, &FrameInputs::new(surface))?;
+        let plan = match &solids {
+            Some(cached) => &cached.plan,
+            None => self.retained.get().ok_or(GpuError::Unsupported("retained frame plan unavailable"))?,
+        };
+        let report = self.backend.execute(plan, &FrameInputs::new(surface))?;
         drop(record_span);
         let present_span = probe::span(Phase::Present);
         let times = self.backend.present(surface, self.config.present)?;
@@ -365,7 +442,9 @@ where
         }
         self.slot_acquired = false;
         self.lowering.frame_reported(&report);
-        let trimmed = self.trim_after(&report, uploaded);
+        let command_count = u32::try_from(lowered.commands.len()).unwrap_or(u32::MAX);
+        self.lowering.reclaim(lowered.commands);
+        let trimmed = self.trim_after(&report, uploaded)?;
         let record = FrameRecord {
             frame: 0,
             extent: (extent.width, extent.height),
@@ -373,7 +452,7 @@ where
             instances: report.instances,
             barriers: report.barriers,
             transient_bytes: report.transient_bytes,
-            commands: u32::try_from(lowered.commands.len()).unwrap_or(u32::MAX),
+            commands: command_count,
             unsupported_items: lowered.unsupported,
             approximated_items: lowered.approximated,
             glyphs: lowered.glyphs,
@@ -384,7 +463,10 @@ where
                 .map(|t| u64::try_from(t.as_micros()).unwrap_or(u64::MAX)),
             present_queued_micros: u64::try_from(times.queued.as_micros()).unwrap_or(u64::MAX),
         };
-        self.lowering.reclaim(lowered.commands);
+        self.solids = solids;
+        if !self.retained.bounded() {
+            self.retained.clear();
+        }
         Ok((report, record))
     }
 
@@ -396,7 +478,7 @@ where
             .map(|due| due.saturating_duration_since(now))
     }
 
-    fn trim_after(&mut self, report: &FrameReport, uploaded: bool) -> u64 {
+    fn trim_after(&mut self, report: &FrameReport, uploaded: bool) -> Result<u64, GpuError> {
         let now = self.clock.now();
         let action = self.trim.observe(TrimInput {
             now,
@@ -411,9 +493,16 @@ where
             TrimAction::Unused(frames) => self.lowering.trim(TrimRequest::IdleFrames(frames)),
             TrimAction::Everything => self.lowering.trim(TrimRequest::Everything),
         };
+        if action != TrimAction::Keep {
+            self.retained.clear();
+            let releases = self.lowering.release_uploads();
+            if !releases.textures.is_empty() {
+                self.backend.upload(releases)?;
+            }
+        }
         let freed = u64::try_from(freed).unwrap_or(u64::MAX);
         self.trimmed += freed;
-        freed
+        Ok(freed)
     }
 
     fn publish(&self, side: &RenderSide, record: Option<FrameRecord>, error: Option<String>) {

@@ -1,4 +1,4 @@
-use aqua_core::{geometry::Rect, Oklch};
+use aqua_core::{geometry::Rect, Oklch, Srgba8};
 
 use crate::linear::Linear2;
 use crate::slug::SlugInstance;
@@ -128,6 +128,37 @@ impl QuadInstance {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SolidColor {
+    Oklch(Oklch),
+    Srgba(Srgba8),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SolidInstance {
+    pub bounds: Rect,
+    pub fill: SolidColor,
+}
+
+impl SolidInstance {
+    pub fn quad(self) -> QuadInstance {
+        QuadInstance {
+            bounds: self.bounds,
+            radius: 0.0,
+            border_width: 0.0,
+            fill: match self.fill {
+                SolidColor::Oklch(fill) => fill,
+                SolidColor::Srgba(fill) => fill.to_oklch(),
+            },
+            border_color: Oklch::TRANSPARENT,
+            clip: None,
+            gradient: None,
+            opacity: 1.0,
+            linear: Linear2::IDENTITY,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadowInstance {
     pub bounds: Rect,
     pub radius: f32,
@@ -169,6 +200,22 @@ pub struct GlyphInstance {
     pub color: Oklch,
     pub clip: Option<Rect>,
     pub opacity: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Coverage {
+    #[default]
+    Text,
+    Exact,
+}
+
+impl Coverage {
+    pub fn tone(self, text: ToneCurve) -> ToneCurve {
+        match self {
+            Self::Text => text,
+            Self::Exact => ToneCurve::EXACT,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -230,6 +277,8 @@ pub enum Barrier {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CustomPassSpec {
+    pub isolate_backdrop: bool,
+    pub reference: Option<aqua_core::shader::ReferenceShader>,
     pub name: String,
     pub hlsl: String,
     pub entry: String,
@@ -305,6 +354,13 @@ impl FilterParams {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PassKind {
+    SrgbaSolids {
+        bounds: std::sync::Arc<[Rect]>,
+        fills: Vec<Srgba8>,
+    },
+    Solids {
+        instances: Vec<SolidInstance>,
+    },
     Instanced {
         shader: ShaderId,
         instances: Vec<QuadInstance>,
@@ -314,6 +370,7 @@ pub enum PassKind {
     },
     Glyphs {
         atlas: TextureHandle,
+        coverage: Coverage,
         instances: Vec<GlyphInstance>,
     },
     Images {
@@ -347,6 +404,8 @@ pub enum PassKind {
 impl PassKind {
     pub fn draw_count(&self) -> usize {
         match self {
+            PassKind::SrgbaSolids { fills, .. } => fills.len(),
+            PassKind::Solids { instances } => instances.len(),
             PassKind::Instanced { instances, .. } => instances.len(),
             PassKind::Shadows { instances } => instances.len(),
             PassKind::Glyphs { instances, .. } => instances.len(),

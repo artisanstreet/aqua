@@ -151,8 +151,9 @@ impl MotionRuntime {
             let Some(spec) = tree.motion_spec(node) else {
                 continue;
             };
-            let opacity = spec.presence.enter_motion().is_some()
-                || spec.presence.exit_motion().is_some()
+            let opacity = (spec.presence.fades()
+                && (spec.presence.enter_motion().is_some()
+                    || spec.presence.exit_motion().is_some()))
                 || spec
                     .animate
                     .properties()
@@ -357,26 +358,29 @@ impl MotionRuntime {
                     .presence
                     .exit_motion()
                     .unwrap_or(MotionRef::Literal(aqua_style::motion::Motion::INSTANT));
-                let at_rest = state
-                    .props
-                    .get(&AnimatedProperty::Opacity)
-                    .map_or(opacity, |prop| prop.target);
-                let track = self.ensure_prop(
-                    tracks,
-                    &mut state,
-                    node,
-                    AnimatedProperty::Opacity,
-                    at_rest,
-                    exit,
-                    at,
-                );
-                if let Some(prop) = state.props.get_mut(&AnimatedProperty::Opacity) {
-                    prop.target = MotionValue::Scalar(0.0);
-                    prop.motion = exit;
-                }
+                let mut exit_tracks = Vec::new();
                 let kind = self.kind_of(exit);
-                let _ = tracks.set_target_with(track, MotionValue::Scalar(0.0), kind, at);
-                let mut exit_tracks = vec![track];
+                if spec.presence.fades() {
+                    let at_rest = state
+                        .props
+                        .get(&AnimatedProperty::Opacity)
+                        .map_or(opacity, |prop| prop.target);
+                    let track = self.ensure_prop(
+                        tracks,
+                        &mut state,
+                        node,
+                        AnimatedProperty::Opacity,
+                        at_rest,
+                        exit,
+                        at,
+                    );
+                    if let Some(prop) = state.props.get_mut(&AnimatedProperty::Opacity) {
+                        prop.target = MotionValue::Scalar(0.0);
+                        prop.motion = exit;
+                    }
+                    let _ = tracks.set_target_with(track, MotionValue::Scalar(0.0), kind, at);
+                    exit_tracks.push(track);
+                }
                 if let Some((dx, dy)) = spec.presence.slide_offset() {
                     let rest = Self::rest_translate(&state, tree, node);
                     let away = MotionValue::Pair(rest.0 + dx, rest.1 + dy);
@@ -408,14 +412,16 @@ impl MotionRuntime {
                 .or(spec.animate.motion_of(AnimatedProperty::Opacity))
                 .or(spec.presence.exit_motion())
                 .unwrap_or(MotionRef::Literal(aqua_style::motion::Motion::INSTANT));
-            self.retarget(
-                tracks,
-                &mut state,
-                AnimatedProperty::Opacity,
-                opacity,
-                motion,
-                at,
-            );
+            if spec.presence.fades() {
+                self.retarget(
+                    tracks,
+                    &mut state,
+                    AnimatedProperty::Opacity,
+                    opacity,
+                    motion,
+                    at,
+                );
+            }
             if spec.presence.slide_offset().is_some() {
                 let rest = Self::resting_translate(tree, node);
                 self.retarget(
@@ -430,23 +436,25 @@ impl MotionRuntime {
         }
         if entered && self.seeded {
             if let Some(enter) = spec.presence.enter_motion() {
-                self.ensure_prop(
-                    tracks,
-                    &mut state,
-                    node,
-                    AnimatedProperty::Opacity,
-                    MotionValue::Scalar(0.0),
-                    enter,
-                    at,
-                );
-                self.retarget(
-                    tracks,
-                    &mut state,
-                    AnimatedProperty::Opacity,
-                    opacity,
-                    enter,
-                    at,
-                );
+                if spec.presence.fades() {
+                    self.ensure_prop(
+                        tracks,
+                        &mut state,
+                        node,
+                        AnimatedProperty::Opacity,
+                        MotionValue::Scalar(0.0),
+                        enter,
+                        at,
+                    );
+                    self.retarget(
+                        tracks,
+                        &mut state,
+                        AnimatedProperty::Opacity,
+                        opacity,
+                        enter,
+                        at,
+                    );
+                }
                 if let Some((dx, dy)) = spec.presence.slide_offset() {
                     let rest = Self::resting_translate(tree, node);
                     self.ensure_prop(

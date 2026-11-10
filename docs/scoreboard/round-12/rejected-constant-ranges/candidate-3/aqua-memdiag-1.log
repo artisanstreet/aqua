@@ -1,0 +1,9 @@
+probe-launch unix_ms=1794018441492 pid=20372
+probe-startup window_ms=64 first_content_ms=598 nondominant=0.165 rich_content_ms=598
+probe-open thread=bench-large unix_ms=1794018441677 since_launch_ms=185 since_click_ms=-1
+probe-gpumem name=boot dedicated_mb=39.4
+probe-latency name=mem_scroll kind=scroll samples=600 timeouts=0 p50_ms=0.136 p90_ms=0.273 p99_ms=0.395 max_ms=1.691 mean_ms=0.149 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/2,0.1/0,0.1/0,0.2/0,0.1/0,0.1/0
+probe-gpumem name=settle dedicated_mb=48.4
+pid=20372 dpi=120 working_set_mb=125 private_mb=113
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---

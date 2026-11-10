@@ -1,0 +1,43 @@
+{
+  "description": "Frozen accepted round-12 framework plus per-surface buffer settling (619ffab), repaint after failed settle (f75e709), and native D3D11 host driver-memory default (b9e3c65). Frozen Editor includes jump-control fix 98ff2009. Original idle-trim removal and other frozen WIP remain included. Tests were validated separately on the combined checkout.",
+  "source_digest_method": "sorted relative POSIX path, NUL, file bytes, NUL; extensions .rs .toml .lock .hlsl .wgsl",
+  "aqua_source": {
+    "sha256": "ba3bd314589f3e2545ed0c451f2c5150a8f9311d431ab5d85d3d6b446b08a38a",
+    "files": 867
+  },
+  "editor_source": {
+    "sha256": "3d9b9f679b64d5871c1c337a1be71b1f9a77e29334f70b8350718072b5647e1e",
+    "files": 1056
+  },
+  "aqua_base_commit": "5f4ec00",
+  "applied_commits": [
+    "36cd19a",
+    "4cb0559",
+    "4fff52e",
+    "9077af9",
+    "670b4c1",
+    "86a25f7",
+    "619ffab",
+    "f75e709",
+    "b9e3c65"
+  ],
+  "editor_patch_sha256": "88f90289e0e2529630eed4281f231bd93a792234dcb882b8268cc676d127d667",
+  "editor_pr_base": "6606f059",
+  "previous_aqua_source": {
+    "sha256": "f27b711db146d09ef431186039180feb567ee53c14569d0e27d87cd05fe365ef",
+    "files": 867
+  },
+  "binary": "/home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-window-memory.exe",
+  "binary_sha256": "196d23a0fdafadedace2de70db92a3844e02a7de6df63e8beae5c0981ec900dc",
+  "runtime_environment": {
+    "AQUA_D3D11_PREVENT_THREADING": "unset; new native-host default enables it",
+    "stats": "off"
+  },
+  "validation": {
+    "combined_checkout": "4ef5231",
+    "windows_scheduler_tests": 14,
+    "windows_gpu_conformance_tests": 6,
+    "library_clippy": "PASS -D warnings",
+    "d3d12_host_check": "PASS"
+  }
+}

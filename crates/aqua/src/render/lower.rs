@@ -10,9 +10,9 @@ use aqua_core::image::ImagePlacement;
 use aqua_core::scene::{DisplayItem, ShadowLayer, TextRasterMode};
 use aqua_core::{GpuiBackground, GpuiHsla, Oklch, Point, Size, Transform2D};
 use aqua_graph::{
-    plan_paint_with, BackdropBlur, Extent, FramePlan, Glyph, GlyphRun, Gradient, GradientQuad,
-    GradientStop, Image, Linear2, PaintCommand, PlanError, PlanLimits, Quad, Shadow, SlugInstance,
-    SlugRun, ToneCurve,
+    plan_paint_with, BackdropBlur, Coverage, Extent, FramePlan, Glyph, GlyphRun, Gradient,
+    GradientQuad, GradientStop, Image, Linear2, PaintCommand, PlanError, PlanLimits, Quad, Shadow,
+    SlugInstance, SlugRun, ToneCurve,
 };
 use aqua_media::atlas::{AtlasConfig, ImageKey, PageId, Placement, Slot, StreamBudget};
 use aqua_media::reduce::{reduce, reduction_level};
@@ -47,6 +47,25 @@ const STILL_MARGIN_MICROS: u64 = 1_000;
 const TEXT_OVERHANG_PAD: f32 = 6.0;
 const TEXT_OVERHANG_RATIO: f32 = 0.15;
 const RUN_CACHE_BYTES: usize = 3 << 20;
+const PATH_STORE_HANDLE: aqua_graph::TextureHandle = aqua_graph::TextureHandle(0x00ff_fffd);
+
+fn touch_curves(
+    commands: &[PaintCommand],
+    text: &mut SlugStore,
+    paths: &mut SlugStore<u64>,
+) -> bool {
+    commands.iter().all(|command| match command {
+        PaintCommand::Slug(run) if run.store == STORE_HANDLE => {
+            run.glyphs.iter().all(|glyph| text.touch_index(glyph.glyph))
+        }
+        PaintCommand::Slug(run) if run.store == PATH_STORE_HANDLE => run
+            .glyphs
+            .iter()
+            .all(|glyph| paths.touch_index(glyph.glyph)),
+        PaintCommand::Linear { leaf, .. } => touch_curves(std::slice::from_ref(leaf), text, paths),
+        _ => true,
+    })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Unsupported {
@@ -64,6 +83,7 @@ pub struct LowerReport {
     pub commands: u32,
     pub glyphs: u32,
     pub curves: u32,
+    pub cached_text_runs: u32,
     pub approximated: u32,
     pub pending: u32,
     pub atlas_created: u32,
@@ -73,12 +93,19 @@ pub struct LowerReport {
     pub slug_upload_bytes: u64,
     pub culled: u32,
     pub pulsing: bool,
+    pub shader_animation: bool,
+    pub shape_animation: bool,
     pub shimmering: bool,
     pub still_micros: Option<u64>,
     pub skipped: BTreeMap<Unsupported, u32>,
 }
 
 impl LowerReport {
+    #[must_use]
+    pub fn animated(&self) -> bool {
+        self.pulsing || self.shader_animation || self.shape_animation
+    }
+
     #[must_use]
     pub fn unsupported(&self) -> u32 {
         self.skipped.values().sum()
@@ -135,14 +162,15 @@ impl PenY {
 }
 
 struct RunEntry {
-    signature: [u32; 11],
+    signature: [u32; 12],
     laid: Arc<LaidOut>,
-    epoch: u64,
+    stamp: span::Stamp,
     base: (f32, f32),
     commands: Vec<PaintCommand>,
     pens: Vec<Vec<PenY>>,
     pages: Vec<PageId>,
     glyphs: u32,
+    curves: u32,
     bytes: usize,
 }
 
@@ -154,6 +182,12 @@ struct RunCache {
 
 impl RunCache {
     fn insert(&mut self, run: u64, entry: RunEntry) {
+        if entry.bytes > RUN_CACHE_BYTES {
+            if let Some(previous) = self.entries.remove(&run) {
+                self.bytes -= previous.bytes;
+            }
+            return;
+        }
         if self.bytes + entry.bytes > RUN_CACHE_BYTES {
             self.clear();
         }
@@ -185,6 +219,8 @@ fn kind_name(item: &DisplayItem) -> &'static str {
         DisplayItem::GpuiTransformedSvg { .. } => "GpuiTransformedSvg",
         DisplayItem::GpuiPath { .. } => "GpuiPath",
         DisplayItem::GpuiMesh { .. } => "GpuiMesh",
+        DisplayItem::Shader { .. } => "Shader",
+        DisplayItem::Shape { .. } => "Shape",
         DisplayItem::GpuiShadow { .. } | DisplayItem::Shadow { .. } => "Shadow",
         DisplayItem::GpuiBackground { .. } => "GpuiBackground",
         DisplayItem::GpuiBorder { .. } => "GpuiBorder",
@@ -199,6 +235,7 @@ fn replaced(command: &PaintCommand, pens: &[PenY], dx: f32, base_y: f32) -> Pain
     match (command, pens) {
         (PaintCommand::Glyphs(run), pens) => PaintCommand::Glyphs(GlyphRun {
             atlas: run.atlas,
+            coverage: run.coverage,
             glyphs: run
                 .glyphs
                 .iter()
@@ -231,6 +268,10 @@ fn run_bytes(commands: &[PaintCommand]) -> usize {
         .map(|command| match command {
             PaintCommand::Glyphs(run) => {
                 run.glyphs.len() * (std::mem::size_of::<Glyph>() + std::mem::size_of::<PenY>())
+            }
+            PaintCommand::Slug(run) => {
+                run.glyphs.len() * std::mem::size_of::<SlugInstance>()
+                    + std::mem::size_of::<PaintCommand>()
             }
             _ => std::mem::size_of::<PaintCommand>(),
         })
@@ -438,6 +479,9 @@ pub struct Lowering {
     resolver: GlyphResolver,
     slug_cache: SlugCache,
     slug_store: SlugStore,
+    path_store: SlugStore<u64>,
+    shapes: super::shape_motion::Shapes,
+    shader_time: Option<Instant>,
     glyph_inserts: u64,
     retained: HashMap<u64, RetainedImage>,
     meshes: HashMap<u64, ImageKey>,
@@ -651,6 +695,9 @@ impl Lowering {
             resolver: GlyphResolver::new(),
             slug_cache: SlugCache::new(),
             slug_store: SlugStore::new(),
+            path_store: SlugStore::with_budget(8 << 20),
+            shapes: super::shape_motion::Shapes::default(),
+            shader_time: None,
             glyph_inserts: 0,
             retained: HashMap::new(),
             meshes: HashMap::new(),
@@ -688,6 +735,11 @@ impl Lowering {
     }
 
     #[must_use]
+    pub fn with_frozen_shaders(mut self, now: Instant) -> Self {
+        self.shader_time = Some(now);
+        self
+    }
+
     pub fn with_clear(mut self, clear: Oklch) -> Self {
         self.clear = clear;
         self
@@ -755,6 +807,8 @@ impl Lowering {
         self.resolver = GlyphResolver::new();
         self.slug_cache.clear();
         self.slug_store.reset();
+        self.path_store.reset();
+        self.shapes.clear();
         self.meshes.clear();
         self.reduced.clear();
         self.vectors.clear();
@@ -794,6 +848,7 @@ impl Lowering {
         scale: f32,
         now: Instant,
     ) -> (Vec<PaintCommand>, UploadBatch, LowerReport) {
+        self.drain_externals();
         let started = WallInstant::now();
         self.last_now = now;
         self.span_trace.clear();
@@ -805,6 +860,7 @@ impl Lowering {
         self.residency.begin_frame();
         self.shimmer.begin_frame();
         self.pulse_cycles.begin_frame();
+        self.shapes.begin_frame();
         self.text.clear();
         let extent = physical_extent(size, scale);
         let mut walk = Walk {
@@ -954,6 +1010,7 @@ impl Lowering {
             .map(|seconds| (seconds * 1.0e6).ceil() as u64 + STILL_MARGIN_MICROS);
         self.shimmer.end_frame();
         self.pulse_cycles.end_frame();
+        self.shapes.end_frame();
         self.adopt_previous(&previous);
         if self.transition.is_some() {
             self.last_commands.clone_from(&walk.out);
@@ -977,10 +1034,11 @@ impl Lowering {
                 .map(|(name, (count, spent))| format!("{name}:{count}:{}us", spent / 1000))
                 .collect();
             format!(
-                "walk_kinds=[{}] walk_items={} walk_culled={} walk_us={} loop_us={loop_us} pre_us={} spans=replayed:{replayed},recorded:{recorded},cached:{},rejects:{:?},misses:{:?}",
+                "walk_kinds=[{}] walk_items={} walk_culled={} text_cached={} walk_us={} loop_us={loop_us} pre_us={} spans=replayed:{replayed},recorded:{recorded},cached:{},rejects:{:?},misses:{:?}",
                 top.join(","),
                 walk.report.items,
                 walk.report.culled,
+                walk.report.cached_text_runs,
                 started.elapsed().as_micros(),
                 loop_started.duration_since(started).as_micros(),
                 self.spans.len(),
@@ -1006,7 +1064,12 @@ impl Lowering {
         walk.report.glyph_rasterized =
             (self.glyph_inserts - inserts_before.min(self.glyph_inserts)) as u32;
         let mut uploads = aqua_media::upload::upload_batch(updates);
-        let slug_uploads = self.slug_store.uploads();
+        let mut slug_uploads = self.slug_store.uploads();
+        let mut path_uploads = self.path_store.uploads();
+        for upload in &mut path_uploads.textures {
+            upload.handle = PATH_STORE_HANDLE;
+        }
+        slug_uploads.textures.extend(path_uploads.textures);
         for upload in &slug_uploads.textures {
             match &upload.op {
                 aqua_protocol::TextureOp::Create { .. } => walk.report.slug_created += 1,
@@ -1020,8 +1083,10 @@ impl Lowering {
         if let Some(stats) = &self.stats {
             record_lowering(stats, &walk.report, started.elapsed());
             let resident = self.residency.stats();
-            let report_signature =
-                resident.colors.pages + (self.slug_store.resident_bytes() / 16384) as u32 * 64;
+            let report_signature = resident.colors.pages
+                + ((self.slug_store.resident_bytes() + self.path_store.resident_bytes()) / 16384)
+                    as u32
+                    * 64;
             if self.report_pages != report_signature && crate::mem_probe::memory_report_enabled() {
                 self.report_pages = report_signature;
                 eprintln!("aqua-atlas-pages: {:?}", self.residency.page_layouts());
@@ -1029,8 +1094,8 @@ impl Lowering {
                 eprintln!(
                     "aqua-lowering-heap: slug_cache={} slug_store_cpu={} slug_store_gpu={} retained_vectors={} retained_images={} streaming={}",
                     self.slug_cache.heap_bytes(),
-                    self.slug_store.texel_count() * 16,
-                    self.slug_store.resident_bytes(),
+                    (self.slug_store.texel_count() + self.path_store.texel_count()) * 16,
+                    self.slug_store.resident_bytes() + self.path_store.resident_bytes(),
                     resident.retained_source_bytes,
                     self.retained
                         .values()
@@ -1039,9 +1104,10 @@ impl Lowering {
                     resident.streaming_bytes,
                 );
             }
-            stats
-                .slug_bytes
-                .store(self.slug_store.resident_bytes(), Ordering::Relaxed);
+            stats.slug_bytes.store(
+                self.slug_store.resident_bytes() + self.path_store.resident_bytes(),
+                Ordering::Relaxed,
+            );
             stats
                 .atlas_mask_bytes
                 .store(resident.masks.resident_bytes, Ordering::Relaxed);
@@ -1064,6 +1130,7 @@ impl Lowering {
             slug: self
                 .slug_store
                 .evictions()
+                .wrapping_add(self.path_store.evictions())
                 .wrapping_add(self.slug_generation << 32),
         }
     }
@@ -1251,7 +1318,7 @@ impl Lowering {
             let clean = temporary.report.pending == 0
                 && temporary.report.approximated == 0
                 && temporary.report.unsupported() == 0
-                && !temporary.report.pulsing
+                && !temporary.report.animated()
                 && temporary.transforms.len() == depth
                 && temporary.clips.len() == clips
                 && temporary.open.len() == open;
@@ -1286,6 +1353,9 @@ impl Lowering {
             self.span_misses[0] += 1;
             return None;
         };
+        if !touch_curves(&entry.commands, &mut self.slug_store, &mut self.path_store) {
+            return None;
+        }
         let (dx, dy) = (origin.0 - entry.origin.0, origin.1 - entry.origin.1);
         let whole = (dx - dx.round()).abs() < 1.0e-2 && (dy - dy.round()).abs() < 1.0e-2;
         let (dx, dy) = (dx.round(), dy.round());
@@ -1431,7 +1501,7 @@ impl Lowering {
                 unsupported,
                 glyphs: walk.report.glyphs,
                 curves: walk.report.curves,
-                pulsing: walk.report.pulsing,
+                pulsing: walk.report.animated(),
             },
             environment: Self::span_environment(walk),
             origin,
@@ -1464,7 +1534,7 @@ impl Lowering {
             && walk.report.pending == recording.marks.pending
             && walk.report.approximated == recording.marks.approximated
             && walk.report.unsupported() == recording.marks.unsupported
-            && walk.report.pulsing == recording.marks.pulsing
+            && walk.report.animated() == recording.marks.pulsing
             && self.span_stamp() == recording.stamp
             && span::cacheable(&walk.out[recording.out_start..]) == span::Taint::Clean
             && walk.out.len() - recording.out_start >= span::MIN_COMMANDS;
@@ -1482,7 +1552,7 @@ impl Lowering {
                 walk.report.pending != recording.marks.pending,
                 walk.report.approximated != recording.marks.approximated,
                 walk.report.unsupported() != recording.marks.unsupported,
-                walk.report.pulsing != recording.marks.pulsing,
+                walk.report.animated() != recording.marks.pulsing,
                 self.span_stamp() != recording.stamp,
             ));
         }
@@ -1597,6 +1667,14 @@ impl Lowering {
         let at = walk.at();
         let s = at.scale();
         match item {
+            DisplayItem::SrgbaRect { bounds, fill } => {
+                walk.emit_box(
+                    at.rect(*bounds),
+                    Radii::uniform(0.0),
+                    Some(Paint::Solid(fill.to_oklch())),
+                    None,
+                );
+            }
             DisplayItem::Rect {
                 bounds,
                 radius,
@@ -1879,6 +1957,63 @@ impl Lowering {
                 mesh,
                 style,
             } => self.emit_mesh(snapped(at.rect(*bounds)), *corners, mesh, style, s, walk),
+            DisplayItem::Shape {
+                bounds,
+                program,
+                target,
+                transition,
+                ..
+            } => {
+                if walk.hidden(at.rect(*bounds), 0.0) {
+                    return;
+                }
+                let (commands, animated) = self.shapes.paint(
+                    walk.item,
+                    *bounds,
+                    program,
+                    *target,
+                    *transition,
+                    walk.now_secs,
+                );
+                walk.report.shape_animation |= animated;
+                for command in commands {
+                    if !matches!(command, DisplayItem::Shape { .. }) {
+                        self.emit(&command, walk);
+                    }
+                }
+            }
+            DisplayItem::Shader {
+                bounds,
+                program,
+                parameters,
+                animated,
+            } => {
+                let destination = snapped(at.rect(*bounds));
+                if destination.w <= 0.0 || destination.h <= 0.0 || walk.hidden(destination, 0.0) {
+                    return;
+                }
+                let time = match animated {
+                    true => self.shader_time.map_or(walk.now_secs, Instant::as_secs_f64) as f32,
+                    false => 0.0,
+                };
+                let mut params = vec![destination.w, destination.h, time, s];
+                params.extend_from_slice(parameters);
+                let spec = aqua_graph::CustomPassSpec {
+                    isolate_backdrop: false,
+                    name: program.name.to_string(),
+                    hlsl: program.hlsl.to_string(),
+                    entry: program.entry.to_string(),
+                    bounds: destination,
+                    params,
+                    reference: program.reference,
+                };
+                walk.out.push(PaintCommand::PushCustomEffect {
+                    bounds: destination,
+                    spec,
+                });
+                walk.out.push(PaintCommand::PopCustomEffect);
+                walk.report.shader_animation |= *animated && self.shader_time.is_none();
+            }
             DisplayItem::PushGpuiQuadPulse(pulse) => {
                 let cycle = Cycle::Pulse {
                     period: f64::from(pulse.period_ms) / 1000.0,
@@ -1996,7 +2131,7 @@ impl Lowering {
         let signature = self
             .text
             .cache_signature()
-            .filter(|_| !moving && !self.outline_text && phase == 0.0)
+            .filter(|_| !moving && phase == 0.0)
             .map(|text| {
                 [
                     (base_x - base_x.floor()).to_bits(),
@@ -2010,14 +2145,17 @@ impl Lowering {
                     text[2],
                     text[3],
                     text[4],
+                    u32::from(self.outline_text),
                 ]
             });
-        let epoch = self.residency.eviction_epoch();
+        let stamp = self.span_stamp();
         if let Some(signature) = signature {
             if let Some(entry) = self.run_cache.entries.get(&run_id).filter(|entry| {
                 entry.signature == signature
-                    && entry.epoch == epoch
+                    && entry.stamp == stamp
+                    && (entry.curves == 0 || entry.base == (base_x, base_y))
                     && Arc::ptr_eq(&entry.laid, &laid)
+                    && touch_curves(&entry.commands, &mut self.slug_store, &mut self.path_store)
             }) {
                 match entry.base == (base_x, base_y) {
                     true => walk.out.extend(entry.commands.iter().cloned()),
@@ -2033,6 +2171,8 @@ impl Lowering {
                     }
                 }
                 walk.report.glyphs += entry.glyphs;
+                walk.report.curves += entry.curves;
+                walk.report.cached_text_runs += 1;
                 for page in &entry.pages {
                     self.residency.touch_page(*page);
                 }
@@ -2041,14 +2181,13 @@ impl Lowering {
         }
         let started = walk.out.len();
         let glyphs_before = walk.report.glyphs;
+        let curves_before = walk.report.curves;
         let skipped_before = walk.report.unsupported();
         let mut pages: Vec<PageId> = Vec::new();
-        let mut curved = false;
         let fonts_revision = self.fonts.revision();
         for line in &laid.lines {
             for glyph in &line.glyphs {
                 if moving || self.outline_text || glyph.font_size_px * s >= SLUG_TEXT_PX {
-                    curved = true;
                     let key = raster_key(glyph, 0);
                     let looked = match self.slug_store.resident(&key, fonts_revision) {
                         Some(found) => found,
@@ -2176,6 +2315,7 @@ impl Lowering {
         for (page, glyphs, pens) in batches {
             walk.out.push(PaintCommand::Glyphs(GlyphRun {
                 atlas: texture_handle(page),
+                coverage: Coverage::Text,
                 glyphs: glyphs.into(),
             }));
             run_pens.push(pens);
@@ -2187,11 +2327,9 @@ impl Lowering {
             }));
         }
         walk.out.extend(color_images);
-        if let Some(signature) = signature.filter(|_| {
-            !curved
-                && walk.report.unsupported() == skipped_before
-                && self.residency.eviction_epoch() == epoch
-        }) {
+        if let Some(signature) = signature
+            .filter(|_| walk.report.unsupported() == skipped_before && self.span_stamp() == stamp)
+        {
             let commands = walk.out[started..].to_vec();
             let mut color_pens = color_pens.into_iter();
             let mut run_pens = run_pens.into_iter();
@@ -2208,13 +2346,14 @@ impl Lowering {
                 RunEntry {
                     signature,
                     laid: laid.clone(),
-                    epoch,
+                    stamp,
                     base: (base_x, base_y),
                     bytes: run_bytes(&commands),
                     commands,
                     pens,
                     pages,
                     glyphs: walk.report.glyphs - glyphs_before,
+                    curves: walk.report.curves - curves_before,
                 },
             );
         }
@@ -2336,6 +2475,11 @@ impl Lowering {
         opacity: f32,
         walk: &mut Walk,
     ) {
+        if let Some((key, scene)) = self.vectors.curves(&source) {
+            if self.emit_curve_scene(key, &scene, physical, opacity, walk) {
+                return;
+            }
+        }
         let width = physical.w.round().max(1.0) as u32;
         let height = physical.h.round().max(1.0) as u32;
         match self
@@ -2362,41 +2506,174 @@ impl Lowering {
             return;
         };
         let described = described.elapsed();
-        let resident = std::time::Instant::now();
-        let slot = self.residency.vector(
-            &raster.source,
-            raster.width,
-            raster.height,
-            VectorMode::Color,
-        );
-        crate::profile::note(|| {
-            format!(
-                "path_raster={}x{} describe_us={} resident_us={} style={}",
+        if self.emit_curve_path(&raster, walk) {
+            return;
+        }
+        let tint = match path.background {
+            GpuiBackground::Solid(value) => Some(color::oklch(color::hsla(value)).with_alpha(1.0)),
+            GpuiBackground::LinearGradient { stops, .. } => {
+                let first = color::hsla(stops[0].color);
+                let second = color::hsla(stops[1].color);
+                (first[..3] == second[..3]).then(|| color::oklch(first).with_alpha(1.0))
+            }
+        };
+        let mode = match tint {
+            Some(_) => VectorMode::Mask,
+            None => VectorMode::Color,
+        };
+        for raster in self.vectors.tiles(raster) {
+            let resident = std::time::Instant::now();
+            let slot = self.residency.vector(
+                &raster.source,
                 raster.width,
                 raster.height,
-                described.as_micros(),
-                resident.elapsed().as_micros(),
-                path_style_label(path)
-            )
-        });
-        match slot {
-            Ok(Slot::Resident(placement)) => {
-                self.path_keys_now.push(Residency::vector_key(
-                    &raster.source,
+                mode,
+            );
+            crate::profile::note(|| {
+                format!(
+                    "path_raster={}x{} describe_us={} resident_us={} style={}",
                     raster.width,
                     raster.height,
-                ));
-                push_image(
-                    &mut walk.out,
-                    &placement,
-                    raster.placement,
-                    full_source(),
-                    1.0,
-                    0.0,
+                    described.as_micros(),
+                    resident.elapsed().as_micros(),
+                    path_style_label(path)
                 )
+            });
+            match slot {
+                Ok(Slot::Resident(placement)) => {
+                    self.path_keys_now.push(Residency::vector_key(
+                        &raster.source,
+                        raster.width,
+                        raster.height,
+                    ));
+                    match tint {
+                        Some(color) => walk.out.push(PaintCommand::Glyphs(GlyphRun {
+                            atlas: texture_handle(placement.page),
+                            coverage: Coverage::Exact,
+                            glyphs: vec![Glyph {
+                                bounds: raster.placement,
+                                texels: texel_rect(&placement, full_source()),
+                                color,
+                            }].into(),
+                        })),
+                        None => push_image(
+                        &mut walk.out,
+                        &placement,
+                        raster.placement,
+                        full_source(),
+                        1.0,
+                        0.0,
+                    ),
+                    }
+                }
+                Ok(Slot::Blank { .. }) => {}
+                Err(_) => walk.skip(Unsupported::PathFailed),
             }
-            Ok(Slot::Blank { .. }) => {}
-            Err(_) => walk.skip(Unsupported::PathFailed),
+        }
+    }
+
+    fn emit_curve_scene(
+        &mut self,
+        key: u64,
+        scene: &aqua_media::vector::CurveScene,
+        physical: Rect,
+        opacity: f32,
+        walk: &mut Walk,
+    ) -> bool {
+        use aqua_media::vector::CurveOp;
+        let mut stored = Vec::new();
+        for (index, op) in scene.ops.iter().enumerate() {
+            if let CurveOp::Paint(glyph) = op {
+                let key = key ^ (index as u64 + 1).wrapping_mul(0x9e3779b97f4a7c15);
+                let entry = match self.path_store.touch(&key) {
+                    Some(entry) => entry,
+                    None => self.path_store.insert_bounded(key, glyph),
+                };
+                let StoreLookup::Stored(entry) = entry else {
+                    return false;
+                };
+                stored.push(entry);
+            }
+        }
+        let bounds = scene.view_box;
+        let mut scale = [physical.w / bounds.w, physical.h / bounds.h];
+        if scene.contain {
+            scale = [scale[0].min(scale[1]); 2];
+        }
+        let origin = [
+            physical.x + (physical.w - bounds.w * scale[0]) * 0.5 - bounds.x * scale[0],
+            physical.y + (physical.h - bounds.h * scale[1]) * 0.5 - bounds.y * scale[1],
+        ];
+        let linear = Linear2::scale(scene.unit * scale[0], scene.unit * scale[1]);
+        walk.out.push(PaintCommand::PushClip(physical));
+        walk.out.push(PaintCommand::PushOpacity(opacity));
+        let mut glyphs = stored.into_iter();
+        for op in &scene.ops {
+            match op {
+                CurveOp::PushOpacity(value) => walk.out.push(PaintCommand::PushOpacity(*value)),
+                CurveOp::PopOpacity => walk.out.push(PaintCommand::PopOpacity),
+                CurveOp::Paint(_) => {
+                    let Some(entry) = glyphs.next() else {
+                        unreachable!()
+                    };
+                    walk.out.push(PaintCommand::Slug(SlugRun {
+                        store: PATH_STORE_HANDLE,
+                        glyphs: vec![SlugInstance {
+                            origin,
+                            linear,
+                            glyph: entry.index,
+                            em_bounds: entry.em_bounds,
+                            color: Oklch::WHITE,
+                            clip: None,
+                            opacity: 1.0,
+                        }]
+                        .into(),
+                    }));
+                    walk.report.curves += 1;
+                }
+            }
+        }
+        walk.out.push(PaintCommand::PopOpacity);
+        walk.out.push(PaintCommand::PopClip);
+        true
+    }
+
+    fn emit_curve_path(&mut self, raster: &super::vector::PathRaster, walk: &mut Walk) -> bool {
+        use aqua_core::vector::VectorSource;
+        let VectorSource::Drawing(drawing) = &raster.source else {
+            return false;
+        };
+        let [path] = drawing.paths.as_slice() else {
+            return false;
+        };
+        let unit = raster.width.max(raster.height) as f32;
+        let stored = match self.path_store.touch(&raster.geometry_key) {
+            Some(stored) => stored,
+            None => match aqua_media::vector::curve_outline(path, unit) {
+                Ok(Some(glyph)) => self.path_store.insert_bounded(raster.geometry_key, &glyph),
+                Ok(None) | Err(_) => return false,
+            },
+        };
+        match stored {
+            StoreLookup::Stored(stored) => {
+                walk.out.push(PaintCommand::Slug(SlugRun {
+                    store: PATH_STORE_HANDLE,
+                    glyphs: vec![SlugInstance {
+                        origin: [raster.placement.x, raster.placement.y],
+                        linear: Linear2::scale(unit, unit),
+                        glyph: stored.index,
+                        em_bounds: stored.em_bounds,
+                        color: Oklch::WHITE,
+                        clip: None,
+                        opacity: 1.0,
+                    }]
+                    .into(),
+                }));
+                walk.report.curves += 1;
+                true
+            }
+            StoreLookup::Blank => true,
+            StoreLookup::Unsupported => false,
         }
     }
 
@@ -2486,8 +2763,11 @@ impl Lowering {
             .zip(self.path_keys.iter())
             .filter(|(old, new)| old != new && !self.path_keys.contains(old))
             .for_each(|(old, _)| {
-                self.spans.clear();
+                let previous_epoch = self.residency.eviction_epoch();
                 self.residency.remove_vector(*old, VectorMode::Color);
+                self.residency.remove_vector(*old, VectorMode::Mask);
+                self.spans
+                    .retire_path(*old, previous_epoch, self.residency.eviction_epoch());
             });
     }
 
@@ -2636,6 +2916,8 @@ fn taints_span(item: &DisplayItem) -> bool {
         DisplayItem::PushGpuiTextShimmer(_)
             | DisplayItem::PushGpuiQuadPulse(_)
             | DisplayItem::External { .. }
+            | DisplayItem::Shader { .. }
+            | DisplayItem::Shape { .. }
     )
 }
 
@@ -2767,6 +3049,10 @@ fn record_lowering(stats: &RenderStats, report: &LowerReport, elapsed: std::time
 }
 
 impl aqua_transport::Lowering for Lowering {
+    fn retained_solids(&self) -> bool {
+        !self.transition_active()
+    }
+
     fn lower(&mut self, scene: &Scene, context: &LowerContext) -> Commands {
         let (commands, uploads, report) =
             self.commands(scene, context.size, context.scale, context.now);
@@ -2794,6 +3080,17 @@ impl aqua_transport::Lowering for Lowering {
         }
     }
 
+    fn release_uploads(&mut self) -> UploadBatch {
+        let mut uploads = aqua_media::upload::upload_batch(self.residency.release_updates());
+        uploads.textures.extend(self.slug_store.uploads().textures);
+        let mut paths = self.path_store.uploads();
+        for upload in &mut paths.textures {
+            upload.handle = PATH_STORE_HANDLE;
+        }
+        uploads.textures.extend(paths.textures);
+        uploads
+    }
+
     fn trim(&mut self, request: TrimRequest) -> usize {
         match request {
             TrimRequest::IdleFrames(frames) => {
@@ -2801,11 +3098,32 @@ impl aqua_transport::Lowering for Lowering {
                 self.residency.trim_idle(frames)
             }
             TrimRequest::Everything => {
+                let curves = self.slug_store.len() + self.path_store.len();
                 self.spans.clear();
+                self.run_cache.clear();
+                self.vectors.clear();
+                if self.transition.is_none() {
+                    self.last_commands.clear();
+                }
                 self.slug_generation += 1;
-                self.slug_store.clear();
+                match self.transition.is_none() {
+                    true => {
+                        self.slug_store.release_resources();
+                        self.path_store.release_resources();
+                    }
+                    false => {
+                        self.slug_store.clear();
+                        self.path_store.clear();
+                    }
+                }
                 self.slug_cache.clear();
-                self.residency.trim_idle(0)
+                if let Some(stats) = &self.stats {
+                    stats.slug_bytes.store(
+                        self.slug_store.resident_bytes() + self.path_store.resident_bytes(),
+                        Ordering::Relaxed,
+                    );
+                }
+                curves + self.residency.trim_idle(0)
             }
         }
     }

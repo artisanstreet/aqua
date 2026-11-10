@@ -1,0 +1,52 @@
+warning: Git tree '/home/sander/projects/artisanstreet/editor' is dirty
+   Compiling aqua-core v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-core)
+warning: field `0` is never read
+ --> crates/aqua-reactive/src/read_check.rs:8:12
+  |
+8 |     Render(Vec<NodeId>),
+  |     ------ ^^^^^^^^^^^
+  |     |
+  |     field in this variant
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+  |
+8 -     Render(Vec<NodeId>),
+8 +     Render(()),
+  |
+
+warning: `aqua-reactive` (lib) generated 1 warning
+warning: linker stderr: rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-barrier.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-clock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-cond.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-misc.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-mutex.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-nanosleep.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-rwlock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-sem.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-spinlock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-sched.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-thread.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'version.o' is neither ET_REL nor LLVM bitcode
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aqua-shaders` (build script) generated 1 warning
+   Compiling aqua-motion v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-motion)
+   Compiling aqua-graph v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-graph)
+   Compiling aqua-scene v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-scene)
+   Compiling aqua-protocol v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-protocol)
+   Compiling aqua-media v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-media)
+   Compiling aqua-gpu-ref v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-gpu-ref)
+   Compiling aqua-gpu-d3d11 v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-gpu-d3d11)
+   Compiling aqua-shell-win32 v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-shell-win32)
+   Compiling aqua-a11y-uia v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-a11y-uia)
+   Compiling aqua-ime-tsf v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-ime-tsf)
+   Compiling aqua-text v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-text)
+   Compiling aqua-style v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-style)
+   Compiling aqua-layout v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-layout)
+   Compiling aqua-ui v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-ui)
+   Compiling aqua-runtime v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-runtime)
+   Compiling aqua-transport v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-transport)
+   Compiling aqua v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua)
+    Finished `release` profile [optimized] target(s) in 19.60s

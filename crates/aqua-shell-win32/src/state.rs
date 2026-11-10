@@ -57,7 +57,22 @@ thread_local! {
 }
 
 pub(crate) fn with<R>(f: impl FnOnce(&mut Shell) -> R) -> R {
-    SHELL.with(|s| f(&mut s.borrow_mut()))
+    let (result, wake) = SHELL.with(|s| {
+        let mut shell = s.borrow_mut();
+        let result = f(&mut shell);
+        let wake = crate::looping::message_waiting()
+            && crate::looping::message_wait_needs_wake(
+                shell.wake_at,
+                !shell.queue.is_empty()
+                    || !shell.waitables.is_empty()
+                    || shell.windows.values().any(|window| window.redraw_pending),
+            );
+        (result, wake)
+    });
+    if wake {
+        crate::looping::wake_message_wait();
+    }
+    result
 }
 
 pub(crate) fn window<R>(hwnd: isize, f: impl FnOnce(&mut WindowState) -> R) -> Option<R> {

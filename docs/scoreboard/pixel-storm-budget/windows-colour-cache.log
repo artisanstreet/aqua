@@ -1,0 +1,42 @@
+
+running 1 test
+test pixel_storm_color_report ... storm-cpu phase=memoized_srgb_to_oklch boxes=1024000 ms=138.250 ns_per_box=135.0
+storm-cpu memo_slots=256 sample=1 misses=450114 values=1024000
+storm-cpu phase=memoized_oklch_to_gpu boxes=1024000 ms=91.555 ns_per_box=89.4
+storm-cpu gpu_memo_slots=256 sample=1 misses=466321 values=1024000
+storm-cpu phase=memoized_srgb_to_oklch boxes=1024000 ms=128.558 ns_per_box=125.5
+storm-cpu memo_slots=256 sample=2 misses=439222 values=1024000
+storm-cpu phase=memoized_oklch_to_gpu boxes=1024000 ms=88.710 ns_per_box=86.6
+storm-cpu gpu_memo_slots=256 sample=2 misses=466416 values=1024000
+storm-cpu phase=memoized_srgb_to_oklch boxes=1024000 ms=135.644 ns_per_box=132.5
+storm-cpu memo_slots=256 sample=3 misses=460114 values=1024000
+storm-cpu phase=memoized_oklch_to_gpu boxes=1024000 ms=94.368 ns_per_box=92.2
+storm-cpu gpu_memo_slots=256 sample=3 misses=446492 values=1024000
+storm-cpu phase=memoized_srgb_to_oklch boxes=1024000 ms=34.881 ns_per_box=34.1
+storm-cpu memo_slots=4096 sample=1 misses=107609 values=1024000
+storm-cpu phase=memoized_oklch_to_gpu boxes=1024000 ms=23.359 ns_per_box=22.8
+storm-cpu gpu_memo_slots=4096 sample=1 misses=107948 values=1024000
+storm-cpu phase=memoized_srgb_to_oklch boxes=1024000 ms=33.761 ns_per_box=33.0
+storm-cpu memo_slots=4096 sample=2 misses=102443 values=1024000
+storm-cpu phase=memoized_oklch_to_gpu boxes=1024000 ms=26.689 ns_per_box=26.1
+storm-cpu gpu_memo_slots=4096 sample=2 misses=115540 values=1024000
+storm-cpu phase=memoized_srgb_to_oklch boxes=1024000 ms=35.588 ns_per_box=34.8
+storm-cpu memo_slots=4096 sample=3 misses=110728 values=1024000
+storm-cpu phase=memoized_oklch_to_gpu boxes=1024000 ms=25.690 ns_per_box=25.1
+storm-cpu gpu_memo_slots=4096 sample=3 misses=110693 values=1024000
+storm-cpu phase=memoized_srgb_to_oklch boxes=1024000 ms=13.335 ns_per_box=13.0
+storm-cpu memo_slots=65536 sample=1 misses=33534 values=1024000
+storm-cpu phase=memoized_oklch_to_gpu boxes=1024000 ms=11.981 ns_per_box=11.7
+storm-cpu gpu_memo_slots=65536 sample=1 misses=32579 values=1024000
+storm-cpu phase=memoized_srgb_to_oklch boxes=1024000 ms=14.983 ns_per_box=14.6
+storm-cpu memo_slots=65536 sample=2 misses=33670 values=1024000
+storm-cpu phase=memoized_oklch_to_gpu boxes=1024000 ms=13.129 ns_per_box=12.8
+storm-cpu gpu_memo_slots=65536 sample=2 misses=34579 values=1024000
+storm-cpu phase=memoized_srgb_to_oklch boxes=1024000 ms=16.179 ns_per_box=15.8
+storm-cpu memo_slots=65536 sample=3 misses=35095 values=1024000
+storm-cpu phase=memoized_oklch_to_gpu boxes=1024000 ms=11.883 ns_per_box=11.6
+storm-cpu gpu_memo_slots=65536 sample=3 misses=32806 values=1024000
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 5.48s
+

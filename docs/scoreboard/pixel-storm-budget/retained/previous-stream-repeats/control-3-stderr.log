@@ -1,0 +1,6 @@
+aqua: clipboard backend: System
+pixel-storm colors t=0 build_ms=19.1
+pixel-storm first_frame_ms=13687.3 boxes=1024000 mode=Animated retained=true native_rgb=false grid=1280x800
+pixel-storm colors t=1 build_ms=19.1
+pixel-storm colors t=2 build_ms=19.2
+pixel-storm colors t=3 build_ms=20.9

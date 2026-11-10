@@ -2,6 +2,7 @@
 
 pub mod analysis;
 pub mod blur;
+pub mod curve_paint;
 pub mod graph;
 pub mod linear;
 pub mod paint;
@@ -18,10 +19,10 @@ pub use paint::{
     PaintCommand, Quad, Shadow, SlugList, SlugRun,
 };
 pub use plan::{
-    Barrier, Blend, ColorMatrix, CustomPassSpec, CustomShaderId, Extent, FilterParams, FramePlan,
-    GlyphInstance, Gradient, GradientStop, ImageInstance, LoadOp, Pass, PassKind, QuadInstance,
-    ResourceState, ShaderId, ShadowCast, ShadowInstance, SpecConstant, TextureFormat,
-    TextureHandle, TextureRef, TransientId, TransientTexture,
+    Barrier, Blend, ColorMatrix, Coverage, CustomPassSpec, CustomShaderId, Extent, FilterParams,
+    FramePlan, GlyphInstance, Gradient, GradientStop, ImageInstance, LoadOp, Pass, PassKind,
+    QuadInstance, ResourceState, ShaderId, ShadowCast, ShadowInstance, SolidColor, SolidInstance,
+    SpecConstant, TextureFormat, TextureHandle, TextureRef, TransientId, TransientTexture,
 };
 pub use slug::SlugInstance;
 pub use tone::ToneCurve;

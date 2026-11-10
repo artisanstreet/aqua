@@ -1,0 +1,33 @@
+    Blocking waiting for file lock on build directory
+    Checking aqua-core v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-core)
+    Checking svgtypes v0.16.1
+    Checking moxcms v0.8.1
+    Checking aqua-reactive v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-reactive)
+    Checking aqua-kernels v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-kernels)
+    Checking memmap2 v0.9.12
+    Checking tiny-skia v0.12.0
+    Checking skrifa v0.46.2
+    Checking harfrust v0.12.0
+    Checking icu_locale_core v2.4.0
+error: field `0` is never read
+ --> crates/aqua-reactive/src/read_check.rs:8:12
+  |
+8 |     Render(Vec<NodeId>),
+  |     ------ ^^^^^^^^^^^
+  |     |
+  |     field in this variant
+  |
+  = note: `-D dead-code` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+  |
+8 -     Render(Vec<NodeId>),
+8 +     Render(()),
+  |
+
+    Checking aqua-graph v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-graph)
+    Checking aqua-motion v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-motion)
+    Checking aqua-scene v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-scene)
+    Checking usvg v0.48.1
+error: could not compile `aqua-reactive` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

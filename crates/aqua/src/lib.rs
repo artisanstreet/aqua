@@ -4,6 +4,7 @@ pub use aqua_core::{
 pub mod app;
 pub mod coalesce;
 pub mod config;
+pub mod debug;
 pub mod error;
 pub mod factory;
 pub mod images;
@@ -72,7 +73,7 @@ pub mod prelude {
     pub use aqua_core::vector::*;
     pub use aqua_core::{
         CursorIcon, DisplayItem, ImeEvent, InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId,
-        Oklch, Point, PointerButton, PointerEvent, Rect, TextRun,
+        Oklch, Point, PointerButton, PointerEvent, Rect, Srgba8, TextRun,
     };
     pub use aqua_protocol::prefs::{PrefState, PreferenceSource, SystemPrefs as OsPreferences};
     pub use aqua_protocol::{

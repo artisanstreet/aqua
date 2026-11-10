@@ -1,0 +1,10 @@
+{
+  "source_commit": "1ad4d76822e984b348dc8db71513733a5f235640",
+  "exe_sha256": "44a2f22057fdfe0f5e413d47df95107dd5ae2af7636afa1c497da81de580eb72",
+  "backend": "D3D11",
+  "features": [
+    "profile-alloc"
+  ],
+  "target": "x86_64-pc-windows-gnu",
+  "purpose": "Instrumented CPU/GPU phases, allocations and upload bytes; excluded from primary timing results."
+}

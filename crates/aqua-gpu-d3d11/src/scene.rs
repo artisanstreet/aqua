@@ -2,11 +2,13 @@ mod compile;
 mod custom;
 pub(crate) mod debug;
 mod formats;
+mod geometry;
 mod hint;
 mod offscreen;
 mod persistent;
 mod pipeline;
 mod renderer;
+mod solid;
 mod timestamps;
 mod transients;
 

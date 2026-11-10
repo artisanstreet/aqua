@@ -666,7 +666,7 @@ impl Runtime {
     }
 
     pub(super) fn sync_selection_bindings(&mut self) {
-        if self.interaction.binding_version == Some(self.tree.content_version()) {
+        if self.interaction.binding_version == Some(self.tree.descriptor_version()) {
             return;
         }
         let nodes = self
@@ -691,7 +691,7 @@ impl Runtime {
                 }
             }
         }
-        self.interaction.binding_version = Some(self.tree.content_version());
+        self.interaction.binding_version = Some(self.tree.descriptor_version());
         self.paint_source_selection();
     }
 
@@ -1797,7 +1797,7 @@ impl Runtime {
     pub(super) fn selection_deadline(&self) -> Option<f64> {
         let gesture = self.interaction.gesture.as_ref()?;
         self.selection_scroll(gesture)?;
-        Some(self.clock + 1.0 / 60.0)
+        Some(self.clock)
     }
 
     pub(super) fn advance_text_selection(&mut self) -> bool {

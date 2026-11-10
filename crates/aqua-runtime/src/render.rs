@@ -31,6 +31,7 @@ struct Submitted {
 pub struct RenderSide {
     scene: Scene,
     local: HashMap<NodeId, NodeId>,
+    local_slots: Vec<Option<(u32, NodeId)>>,
     base: HashMap<NodeId, DisplayItem>,
     overrides: HashMap<NodeId, Overrides>,
     bindings: HashMap<TrackId, Vec<(Binding, f32)>>,
@@ -41,6 +42,7 @@ pub struct RenderSide {
     viewport: Option<(Size, f32)>,
     next_frame: FrameId,
     submitted: Option<Submitted>,
+    overlay: Vec<NodeId>,
 }
 
 impl Default for RenderSide {
@@ -55,6 +57,7 @@ impl RenderSide {
         Self {
             scene: Scene::new(),
             local: HashMap::new(),
+            local_slots: Vec::new(),
             base: HashMap::new(),
             overrides: HashMap::new(),
             bindings: HashMap::new(),
@@ -65,6 +68,7 @@ impl RenderSide {
             viewport: None,
             next_frame: 1,
             submitted: None,
+            overlay: Vec::new(),
         }
     }
 
@@ -87,9 +91,60 @@ impl RenderSide {
         self.viewport
     }
 
+    pub fn set_overlay(&mut self, items: Vec<DisplayItem>) {
+        let keep = items.len().min(self.overlay.len());
+        for id in self.overlay.split_off(keep) {
+            self.scene.remove(id);
+        }
+        let mut items = items.into_iter();
+        for (id, item) in self.overlay.iter().zip(items.by_ref()) {
+            self.scene.update(*id, item);
+        }
+        for item in items {
+            self.overlay.push(self.scene.insert(item));
+        }
+        if let Some(submitted) = self.submitted.as_mut() {
+            submitted.revision = self.scene.revision();
+        }
+        if self.overlay.is_empty() {
+            return;
+        }
+        let overlay: HashSet<NodeId> = self.overlay.iter().copied().collect();
+        let ids: Vec<NodeId> = self
+            .scene
+            .ordered()
+            .map(|(id, _)| id)
+            .filter(|id| !overlay.contains(id))
+            .chain(self.overlay.iter().copied())
+            .collect();
+        let on_top = self
+            .scene
+            .ordered()
+            .map(|(id, _)| id)
+            .skip(ids.len() - self.overlay.len())
+            .eq(self.overlay.iter().copied());
+        if !on_top {
+            self.scene.set_order(&ids);
+        }
+        if let Some(submitted) = self.submitted.as_mut() {
+            submitted.revision = self.scene.revision();
+        }
+    }
+
     #[must_use]
     pub fn presented(&self, node: NodeId) -> Option<&DisplayItem> {
-        self.local.get(&node).and_then(|id| self.scene.get(*id))
+        self.local_id(node).and_then(|id| self.scene.get(id))
+    }
+
+    #[inline]
+    fn local_id(&self, node: NodeId) -> Option<NodeId> {
+        let raw = node.raw();
+        self.local_slots
+            .get(raw.index as usize)
+            .and_then(|entry| *entry)
+            .filter(|&(generation, _)| generation == raw.generation)
+            .map(|(_, id)| id)
+            .or_else(|| self.local.get(&node).copied())
     }
 
     pub fn step(&mut self, input: RenderInput) -> RenderOutput {
@@ -172,6 +227,35 @@ impl RenderSide {
                 false => self.write(node, item),
             }
         }
+        for patch in diff.fills {
+            if let Some(id) = self.local_id(patch.node) {
+                if let Some(base) = self.base.get_mut(&patch.node) {
+                    if !base.set_fill(patch.fill) {
+                        continue;
+                    }
+                    self.dirty.push(patch.node);
+                } else {
+                    self.scene.update_fill(id, patch.fill);
+                }
+            }
+        }
+        for mut batch in diff.srgba_fills {
+            batch.retain_mut(|patch| {
+                let Some(id) = self.local_id(patch.node) else {
+                    return false;
+                };
+                if let Some(base) = self.base.get_mut(&patch.node) {
+                    if base.set_srgba(patch.fill) {
+                        self.dirty.push(patch.node);
+                    }
+                    false
+                } else {
+                    patch.node = id;
+                    true
+                }
+            });
+            self.scene.apply_srgba_batch(batch);
+        }
         if let Some(order) = diff.order {
             let keep: HashSet<NodeId> = order.iter().copied().collect();
             let gone: Vec<NodeId> = self
@@ -184,12 +268,18 @@ impl RenderSide {
                 if let Some(id) = self.local.remove(&node) {
                     self.scene.remove(id);
                 }
+                if let Some(slot) = self.local_slots.get_mut(node.raw().index as usize) {
+                    if slot.is_some_and(|(generation, _)| generation == node.raw().generation) {
+                        *slot = None;
+                    }
+                }
                 self.base.remove(&node);
                 self.overrides.remove(&node);
             }
             let ids: Vec<NodeId> = order
                 .iter()
                 .filter_map(|node| self.local.get(node).copied())
+                .chain(self.overlay.iter().copied())
                 .collect();
             self.scene.set_order(&ids);
         }
@@ -203,6 +293,12 @@ impl RenderSide {
             None => {
                 let id = self.scene.insert(item);
                 self.local.insert(node, id);
+                let raw = node.raw();
+                let index = raw.index as usize;
+                if self.local_slots.len() <= index {
+                    self.local_slots.resize(index + 1, None);
+                }
+                self.local_slots[index] = Some((raw.generation, id));
             }
         }
     }

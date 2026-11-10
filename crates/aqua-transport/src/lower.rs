@@ -27,6 +27,10 @@ pub enum TrimRequest {
 }
 
 pub trait Lowering: 'static {
+    fn retained_solids(&self) -> bool {
+        false
+    }
+
     fn lower(&mut self, scene: &Scene, context: &LowerContext) -> Lowered;
 
     fn sync(&mut self) {}
@@ -37,6 +41,10 @@ pub trait Lowering: 'static {
 
     fn reclaim(&mut self, _commands: Vec<PaintCommand>) {}
 
+    fn release_uploads(&mut self) -> UploadBatch {
+        UploadBatch::default()
+    }
+
     fn trim(&mut self, _request: TrimRequest) -> usize {
         0
     }
@@ -46,6 +54,10 @@ pub trait Lowering: 'static {
 pub struct GeometryLowering;
 
 impl Lowering for GeometryLowering {
+    fn retained_solids(&self) -> bool {
+        true
+    }
+
     fn lower(&mut self, scene: &Scene, context: &LowerContext) -> Lowered {
         lower_items(scene.ordered().map(|(_, item)| item), context.scale)
     }
@@ -119,6 +131,9 @@ impl State {
 
     fn item(&mut self, item: &DisplayItem) {
         match item {
+            DisplayItem::SrgbaRect { bounds, fill } => {
+                self.quad(*bounds, 0.0, 0.0, fill.to_oklch(), Oklch::TRANSPARENT)
+            }
             DisplayItem::Rect {
                 bounds,
                 radius,

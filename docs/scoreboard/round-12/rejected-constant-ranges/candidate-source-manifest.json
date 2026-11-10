@@ -1,0 +1,54 @@
+{
+  "description": "Frozen combined layout/window-memory framework and Editor plus D3D11 constant range uploads 73a979f. No ledger instrumentation. Runtime control is immutable editor-layout-ownership.exe.",
+  "source_digest_method": "sorted relative POSIX path, NUL, file bytes, NUL; extensions .rs .toml .lock .hlsl .wgsl",
+  "aqua_source": {
+    "sha256": "ad28e62f873acd44e7d9ad94b7530c86a1a831f309ff7421ae175e8c1376f566",
+    "files": 868
+  },
+  "editor_source": {
+    "sha256": "3d9b9f679b64d5871c1c337a1be71b1f9a77e29334f70b8350718072b5647e1e",
+    "files": 1056
+  },
+  "aqua_base_commit": "5f4ec00",
+  "applied_commits": [
+    "36cd19a",
+    "4cb0559",
+    "4fff52e",
+    "9077af9",
+    "670b4c1",
+    "86a25f7",
+    "619ffab",
+    "f75e709",
+    "b9e3c65",
+    "6314c9c",
+    "73a979f"
+  ],
+  "editor_patch_sha256": "88f90289e0e2529630eed4281f231bd93a792234dcb882b8268cc676d127d667",
+  "editor_pr_base": "6606f059",
+  "previous_aqua_source": {
+    "sha256": "fefe9850da0aaa2ec4ffe641f547fbc59fc8d3f1a32e73f69083e181042e1443",
+    "files": 867
+  },
+  "binary": "/home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-constant-ranges.exe",
+  "binary_sha256": "a2f901353ff98a7add425b861840d00772dccba771142df528ddc83b97f0b8b2",
+  "runtime_environment": {
+    "AQUA_D3D11_PREVENT_THREADING": "unset; new native-host default enables it",
+    "stats": "off",
+    "AQUA_LEDGER": "unset"
+  },
+  "validation": {
+    "combined_checkout": "4ef5231",
+    "windows_scheduler_tests": 14,
+    "windows_gpu_conformance_tests": 6,
+    "library_clippy": "PASS -D warnings",
+    "d3d12_host_check": "PASS",
+    "windows_text_tests": 211,
+    "windows_text_suites": 33,
+    "windows_text_ignored": 3,
+    "layout_library_and_tests_clippy": "PASS -D warnings",
+    "constant_upload_unit_tests": 6,
+    "constant_upload_conformance_tests": 7,
+    "constant_upload_debug_layer_tests": 3,
+    "constant_upload_debug_layer_errors": 0
+  }
+}

@@ -137,8 +137,8 @@ pub struct Summary {
     phase_max: [u64; Phase::ALL.len()],
     phase_sum: [u64; Phase::ALL.len()],
     over_4: u32,
-    over_8: u32,
-    over_16: u32,
+    over_8_ms: u32,
+    over_16_ms: u32,
     allocs: u64,
 }
 
@@ -151,8 +151,8 @@ impl Summary {
             phase_max: [0; Phase::ALL.len()],
             phase_sum: [0; Phase::ALL.len()],
             over_4: 0,
-            over_8: 0,
-            over_16: 0,
+            over_8_ms: 0,
+            over_16_ms: 0,
             allocs: 0,
         }
     }
@@ -166,8 +166,8 @@ impl Summary {
             self.phase_sum[index] += frame.nanos[index];
         }
         self.over_4 += u32::from(work > 4_000_000);
-        self.over_8 += u32::from(work > 8_333_000);
-        self.over_16 += u32::from(work > 16_667_000);
+        self.over_8_ms += u32::from(work > 8_000_000);
+        self.over_16_ms += u32::from(work > 16_000_000);
         self.allocs += frame.total_heap().allocs;
         (self.started.elapsed().as_secs_f64() >= SUMMARY_SECONDS).then(|| self.flush())
     }
@@ -184,15 +184,15 @@ impl Summary {
         let mut line = String::with_capacity(256);
         let _ = write!(
             line,
-            "aqua-profile role={} frames={count} work_p50_ms={:.3} p90_ms={:.3} p99_ms={:.3} max_ms={:.3} over4={} over8.3={} over16.7={} allocs_per_frame={:.1} phase_max_ms={{",
+            "aqua-profile role={} frames={count} work_p50_ms={:.3} p90_ms={:.3} p99_ms={:.3} max_ms={:.3} over4={} over8={} over16={} allocs_per_frame={:.1} phase_max_ms={{",
             self.role.name(),
             millis(at(0.5)),
             millis(at(0.9)),
             millis(at(0.99)),
             millis(self.samples.last().copied().unwrap_or(0)),
             self.over_4,
-            self.over_8,
-            self.over_16,
+            self.over_8_ms,
+            self.over_16_ms,
             self.allocs as f64 / count.max(1) as f64,
         );
         let mut first = true;
@@ -225,8 +225,8 @@ impl Summary {
         self.samples.clear();
         self.phase_max = [0; Phase::ALL.len()];
         self.over_4 = 0;
-        self.over_8 = 0;
-        self.over_16 = 0;
+        self.over_8_ms = 0;
+        self.over_16_ms = 0;
         self.allocs = 0;
         self.started = Instant::now();
         line

@@ -1,0 +1,58 @@
+{
+  "heap_counters": "aqua-profile-start heap_counters=true spike_ms=0.0",
+  "selection": "Last 100 recorded frames for each role; instrumented, excluded from primary timing.",
+  "app": {
+    "frames": 100,
+    "work_ms_median": 27.82,
+    "wall_ms_median": 22.064999999999998,
+    "allocs_median": 6.0,
+    "alloc_bytes_median": 1800.0,
+    "reallocs_median": 0.0,
+    "frees_median": 4.0,
+    "phase_medians_ms": {
+      "input": 0.01,
+      "reactive": 5.77,
+      "build": 8.88,
+      "layout": 13.07,
+      "submit": 0.0
+    },
+    "scene_items_patched_range": [
+      1024000,
+      1024000
+    ],
+    "scene_reused_range": [
+      1,
+      1
+    ]
+  },
+  "render": {
+    "frames": 100,
+    "work_ms_median": 14.53,
+    "wall_ms_median": 17.935000000000002,
+    "allocs_median": 3.0,
+    "alloc_bytes_median": 4194470.0,
+    "reallocs_median": 18.0,
+    "frees_median": 4.0,
+    "gpu_ms_median": 1.0165,
+    "phase_medians_ms": {
+      "input": 11.504999999999999,
+      "lower": 1.3849999999999998,
+      "plan": 0.0,
+      "record": 1.5,
+      "present": 0.1,
+      "wait": 3.36
+    },
+    "upload_bytes_range": [
+      4096000,
+      4096000
+    ],
+    "passes_range": [
+      1,
+      1
+    ],
+    "instances_range": [
+      1024000,
+      1024000
+    ]
+  }
+}

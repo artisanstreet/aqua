@@ -1,0 +1,4 @@
+probe-launch unix_ms=1794052587028 pid=7804
+probe-startup window_ms=10947 first_content_ms=13557 nondominant=0.999 rich_content_ms=13557
+pid=7804 dpi=120 working_set_mb=2857 private_mb=2969
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=6176 foreground_after_pid=6176

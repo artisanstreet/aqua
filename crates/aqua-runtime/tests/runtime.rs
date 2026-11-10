@@ -446,3 +446,5 @@ mod controls;
 
 #[path = "runtime/incremental.rs"]
 mod incremental;
+#[path = "runtime/paint.rs"]
+mod paint;

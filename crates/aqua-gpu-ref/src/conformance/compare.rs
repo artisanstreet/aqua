@@ -85,6 +85,14 @@ fn footprints(plan: &FramePlan) -> Vec<Footprint> {
     plan.passes
         .iter()
         .flat_map(|pass| match &pass.kind {
+            PassKind::SrgbaSolids { bounds, .. } => bounds
+                .iter()
+                .map(|bounds| hard(*bounds, 0.0, 0.0, None))
+                .collect(),
+            PassKind::Solids { instances } => instances
+                .iter()
+                .map(|instance| hard(instance.bounds, 0.0, 0.0, None))
+                .collect(),
             PassKind::Instanced { instances, .. } => instances
                 .iter()
                 .map(|q| Footprint {

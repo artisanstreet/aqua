@@ -1,0 +1,6 @@
+{
+  "before_hwnd": 131864,
+  "after_hwnd": 131864,
+  "unchanged": true,
+  "test_windows": "all visible=false; no focus/activation calls"
+}

@@ -24,6 +24,7 @@ pub mod live;
 pub mod motion;
 pub mod overlay;
 pub mod overlay_host;
+pub mod paint;
 pub mod popup;
 pub mod program;
 pub mod region;

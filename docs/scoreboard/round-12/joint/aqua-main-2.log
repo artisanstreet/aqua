@@ -1,0 +1,34 @@
+probe-launch unix_ms=1794005334840 pid=4660
+probe-startup window_ms=65 first_content_ms=648 nondominant=0.165 rich_content_ms=648
+probe-open thread=bench-large unix_ms=1794005334997 since_launch_ms=157 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=1.9
+probe-cpu name=boot unix_ms=1794005350633 cpu_ms=562 user_ms=281 private_mb=120.4 working_set_mb=125.8 peak_working_set_mb=129.7 threads=32 handles=1319
+probe-gpumem name=boot dedicated_mb=47.9
+probe-cpu name=idle0 unix_ms=1794005353659 cpu_ms=562 user_ms=281 private_mb=120.4 working_set_mb=125.8 peak_working_set_mb=129.7 threads=32 handles=1319
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=0.03 max=1 top_threads=21684=0(),8016=0(),2080=0(WindhawkMainLoopThreadAttachExempt),16052=0() attempt=1
+probe-ctxseries name=idle start_unix_ms=1794005353734 per_second=0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-thread name=idle_threads tid=2624 thread='' started_ms=138 module=combase.dll start_rva=0x62cd421e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=21684 thread='' started_ms=138 module=ntdll.dll start_rva=0x62e544990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=2 total=29
+probe-cpu name=idle1 unix_ms=1794005399212 cpu_ms=562 user_ms=281 private_mb=120.3 working_set_mb=125.8 peak_working_set_mb=129.7 threads=29 handles=1315
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.066 p90_ms=0.11 p99_ms=0.248 max_ms=1.251 mean_ms=0.081 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=scroll0 unix_ms=1794005404917 cpu_ms=562 user_ms=281 private_mb=120.3 working_set_mb=125.8 peak_working_set_mb=129.7 threads=29 handles=1315
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.128 p90_ms=0.26 p99_ms=0.364 max_ms=0.397 mean_ms=0.14 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/0,0.1/0,0.1/0,0.1/0,0.1/0,0.1/0
+probe-cpu name=scroll1 unix_ms=1794005421217 cpu_ms=875 user_ms=578 private_mb=130.3 working_set_mb=129.4 peak_working_set_mb=129.7 threads=29 handles=1315
+probe-changed name=pre pixels=266600 total=2135250 nondominant=0.204
+probe-cpu name=settle unix_ms=1794005425447 cpu_ms=875 user_ms=578 private_mb=130.3 working_set_mb=129.4 peak_working_set_mb=129.7 threads=29 handles=1315
+probe-gpumem name=settle dedicated_mb=54.9
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=264.896 p90_ms=272.648 p99_ms=276.917 max_ms=276.917 mean_ms=265.036 over4_ms=40 over8_ms=40 over16_ms=40 over50_ms=40 grab_p50_ms=264.7
+probe-latency name=resize_setpos kind=resize samples=120 timeouts=0 p50_ms=1.36 p90_ms=1.78 p99_ms=2.057 max_ms=2.298 mean_ms=1.388 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=1.528 p90_ms=1.946 p99_ms=2.256 max_ms=2.463 mean_ms=1.561 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 
+probe-cpu name=rs0 unix_ms=1794005457166 cpu_ms=1219 user_ms=891 private_mb=131.7 working_set_mb=130.4 peak_working_set_mb=130.4 threads=31 handles=1332
+probe-wakes name=after_resize seconds=30 context_switches_per_sec_avg=0 max=0 top_threads=2080=0(WindhawkMainLoopThreadAttachExempt),21036=0(),8016=0(),24780=0() attempt=1
+probe-ctxseries name=after_resize start_unix_ms=1794005457170 per_second=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-cpu name=rs1 unix_ms=1794005487474 cpu_ms=1219 user_ms=891 private_mb=131.5 working_set_mb=130.3 peak_working_set_mb=130.4 threads=26 handles=1323
+probe-thread name=after_resize_threads tid=13620 thread='' started_ms=5056 module=ntdll.dll start_rva=0x62e544990 ctx_per_s=0.7 cpu_ms_per_s=0
+probe-threads-done name=after_resize_threads seconds=15 active=1 total=26
+probe-load name=end_load seconds=3 system_cpu_pct=1.3
+pid=4660 dpi=120 working_set_mb=130 private_mb=132
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---

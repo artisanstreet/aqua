@@ -1,0 +1,21 @@
+{
+  "code_commit": "eeab77b",
+  "base_commit": "1faf00b",
+  "change": "Comparison key fixture defaults to selected main fixture port +11, preserving explicit KEY_LATENCY_PORT overrides. Default main 47950 still yields key 47961; selected main 48950 now yields key 48961.",
+  "reason": "An omitted separate key-port override sent the full comparison to occupied port 47961. Native fixture serve reproduced os error 10048. Port 48961 binds successfully. The incomplete full attempt is retained separately and is not a new scoreboard.",
+  "validation": {
+    "bash_syntax": "PASS bash -n tools/compare-editors.sh",
+    "real_key_phase": "PASS; main fixture port 48950, no KEY_LATENCY_PORT override, ready file confirms 127.0.0.1:48961",
+    "etw_evaluated_posts": 145,
+    "etw_matched": 145,
+    "foreground_unchanged": true,
+    "retries": 0,
+    "binary_sha256": "1ee6911e2b5132371037388b343d1fd1274b93abe4696d18fc3e5fdaa3389086"
+  },
+  "limits": [
+    "This validates fixture routing and successful ETW collection; it claims no latency improvement.",
+    "The separate informational PrintWindow typing probe records 32 samples and 28 timeouts; it is not used to prove key-to-display latency.",
+    "Phase-only report intentionally lacks GPUI and other workload metrics and exits FAIL; this is not a full scoreboard.",
+    "The full three-run comparison must be rerun after the incomplete port-collision attempt."
+  ]
+}

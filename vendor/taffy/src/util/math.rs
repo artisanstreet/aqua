@@ -196,9 +196,15 @@ impl MaybeMath<Option<f32>, AvailableSpace> for AvailableSpace {
 
     fn maybe_clamp(self, min: Option<f32>, max: Option<f32>) -> AvailableSpace {
         match (self, min, max) {
-            (AvailableSpace::Definite(val), Some(min), Some(max)) => AvailableSpace::Definite(val.min(max).max(min)),
-            (AvailableSpace::Definite(val), None, Some(max)) => AvailableSpace::Definite(val.min(max)),
-            (AvailableSpace::Definite(val), Some(min), None) => AvailableSpace::Definite(val.max(min)),
+            (AvailableSpace::Definite(val), Some(min), Some(max)) => {
+                AvailableSpace::Definite(val.min(max).max(min))
+            }
+            (AvailableSpace::Definite(val), None, Some(max)) => {
+                AvailableSpace::Definite(val.min(max))
+            }
+            (AvailableSpace::Definite(val), Some(min), None) => {
+                AvailableSpace::Definite(val.max(min))
+            }
             (AvailableSpace::Definite(val), None, None) => AvailableSpace::Definite(val),
             (AvailableSpace::MinContent, _, _) => AvailableSpace::MinContent,
             (AvailableSpace::MaxContent, _, _) => AvailableSpace::MaxContent,
@@ -225,11 +231,17 @@ impl MaybeMath<Option<f32>, AvailableSpace> for AvailableSpace {
 
 impl<In, Out, T: MaybeMath<In, Out>> MaybeMath<Size<In>, Size<Out>> for Size<T> {
     fn maybe_min(self, rhs: Size<In>) -> Size<Out> {
-        Size { width: self.width.maybe_min(rhs.width), height: self.height.maybe_min(rhs.height) }
+        Size {
+            width: self.width.maybe_min(rhs.width),
+            height: self.height.maybe_min(rhs.height),
+        }
     }
 
     fn maybe_max(self, rhs: Size<In>) -> Size<Out> {
-        Size { width: self.width.maybe_max(rhs.width), height: self.height.maybe_max(rhs.height) }
+        Size {
+            width: self.width.maybe_max(rhs.width),
+            height: self.height.maybe_max(rhs.height),
+        }
     }
 
     fn maybe_clamp(self, min: Size<In>, max: Size<In>) -> Size<Out> {
@@ -240,11 +252,17 @@ impl<In, Out, T: MaybeMath<In, Out>> MaybeMath<Size<In>, Size<Out>> for Size<T> 
     }
 
     fn maybe_add(self, rhs: Size<In>) -> Size<Out> {
-        Size { width: self.width.maybe_add(rhs.width), height: self.height.maybe_add(rhs.height) }
+        Size {
+            width: self.width.maybe_add(rhs.width),
+            height: self.height.maybe_add(rhs.height),
+        }
     }
 
     fn maybe_sub(self, rhs: Size<In>) -> Size<Out> {
-        Size { width: self.width.maybe_sub(rhs.width), height: self.height.maybe_sub(rhs.height) }
+        Size {
+            width: self.width.maybe_sub(rhs.width),
+            height: self.height.maybe_sub(rhs.height),
+        }
     }
 }
 

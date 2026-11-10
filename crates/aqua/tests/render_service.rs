@@ -1,5 +1,5 @@
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant as WallInstant};
 
@@ -25,6 +25,11 @@ struct Probe {
     visibility: Mutex<Vec<bool>>,
     startup_left: AtomicU32,
     startup_done: AtomicU32,
+    maintenance_at: Mutex<Option<WallInstant>>,
+    maintenance_done: AtomicU32,
+    maintenance_changes: AtomicBool,
+
+    native_pacing: AtomicBool,
 }
 
 struct Fake {
@@ -33,6 +38,13 @@ struct Fake {
 }
 
 impl FrameTarget for Fake {
+    fn animation_interval(&self, fallback: Duration) -> Duration {
+        match self.probe.native_pacing.load(Relaxed) {
+            true => Duration::ZERO,
+            false => fallback,
+        }
+    }
+
     fn wait_frame(&mut self) {
         self.probe.frame_waits.fetch_add(1, Relaxed);
     }
@@ -65,6 +77,20 @@ impl FrameTarget for Fake {
     fn startup_step(&mut self) {
         self.probe.startup_left.fetch_sub(1, Relaxed);
         self.probe.startup_done.fetch_add(1, Relaxed);
+    }
+
+    fn maintenance_in(&self) -> Option<Duration> {
+        self.probe
+            .maintenance_at
+            .lock()
+            .unwrap()
+            .map(|at| at.saturating_duration_since(WallInstant::now()))
+    }
+
+    fn maintenance(&mut self) -> bool {
+        *self.probe.maintenance_at.lock().unwrap() = None;
+        self.probe.maintenance_done.fetch_add(1, Relaxed);
+        self.probe.maintenance_changes.load(Relaxed)
     }
 
     fn invalidate(&mut self) {
@@ -163,6 +189,43 @@ fn presented_events(link: &mut RenderLink) -> usize {
 
 fn stats_of(link: &RenderLink) -> &Arc<RenderStats> {
     link.stats()
+}
+
+#[test]
+fn scheduled_maintenance_repaints_once_without_trimming() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    let invalidations = probe.invalidations.load(Relaxed);
+    probe.maintenance_changes.store(true, Relaxed);
+    *probe.maintenance_at.lock().unwrap() = Some(WallInstant::now() + Duration::from_millis(20));
+    link.push_scene(&mut scene_with("#336699"));
+    wait_until("the maintenance repaint", || {
+        probe.presents.load(Relaxed) >= base + 2 && probe.maintenance_done.load(Relaxed) == 1
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(probe.presents.load(Relaxed), base + 2);
+    assert_eq!(probe.maintenance_done.load(Relaxed), 1);
+    assert_eq!(stats_of(&link).trims.load(Relaxed), 0);
+    assert!(probe.invalidations.load(Relaxed) > invalidations);
+}
+
+#[test]
+fn unchanged_maintenance_returns_to_sleep_without_repainting() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    *probe.maintenance_at.lock().unwrap() = Some(WallInstant::now() + Duration::from_millis(20));
+    link.push_scene(&mut scene_with("#336699"));
+    wait_until("the maintenance check", || {
+        probe.maintenance_done.load(Relaxed) == 1
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(probe.presents.load(Relaxed), base + 1);
+    assert_eq!(probe.maintenance_done.load(Relaxed), 1);
+    assert_eq!(stats_of(&link).trims.load(Relaxed), 0);
 }
 
 #[test]
@@ -287,7 +350,7 @@ fn continuous_animation_keeps_presenting_until_it_stops() {
 }
 
 #[test]
-fn an_animating_scene_repaints_at_a_capped_rate_without_waking_the_app_or_the_damage_baseline() {
+fn an_animating_scene_uses_the_display_interval_without_waking_the_app_or_the_damage_baseline() {
     let service = RenderService::new().unwrap();
     let probe = Arc::new(Probe::default());
     let mut link = settled_link(&service, &probe);
@@ -302,7 +365,7 @@ fn an_animating_scene_repaints_at_a_capped_rate_without_waking_the_app_or_the_da
     std::thread::sleep(Duration::from_millis(300));
     let presents = probe.presents.load(Relaxed) - base;
     assert!(
-        (10..=25).contains(&presents),
+        (35..=95).contains(&presents),
         "{presents} animation presents in 300 ms"
     );
     assert_eq!(
@@ -410,4 +473,108 @@ fn startup_steps_run_one_per_idle_turn_without_presenting() {
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(probe.startup_done.load(Relaxed), 6);
     assert_eq!(probe.presents.load(Relaxed), presents);
+}
+
+#[test]
+fn a_scene_arriving_during_the_frame_slot_wait_is_presented_immediately() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc::{channel, Receiver, Sender};
+
+    struct ControlledTarget {
+        pause: Arc<AtomicBool>,
+        waiting: Sender<()>,
+        resume: Receiver<()>,
+        shown: Sender<Option<Oklch>>,
+    }
+
+    impl FrameTarget for ControlledTarget {
+        fn wait_frame(&mut self) {
+            if self.pause.swap(false, Relaxed) {
+                self.waiting.send(()).unwrap();
+                self.resume.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+        }
+
+        fn present(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback> {
+            let fill = side.scene().ordered().find_map(|(_, item)| match item {
+                DisplayItem::Rect { fill, .. } => Some(*fill),
+                _ => None,
+            });
+            self.shown.send(fill).unwrap();
+            vec![Feedback::Presented(frame)]
+        }
+    }
+
+    let service = RenderService::new().unwrap();
+    let pause = Arc::new(AtomicBool::new(false));
+    let target_pause = pause.clone();
+    let (waiting, waited) = channel();
+    let (resume, resumed) = channel();
+    let (shown, displayed) = channel();
+    let factory: InitFactory = Box::new(move |_| {
+        Box::new(move || {
+            Ok(Box::new(ControlledTarget {
+                pause: target_pause,
+                waiting,
+                resume: resumed,
+                shown,
+            }) as Box<dyn FrameTarget>)
+        })
+    });
+    let mut link = RenderLink::spawn(
+        &service,
+        factory,
+        Arc::new(|_| {}),
+        clock(),
+        INTERVAL,
+        Arc::new(|| {}),
+    );
+    link.set_viewport(Size::new(100.0, 100.0), 1.0);
+    displayed.recv_timeout(Duration::from_secs(5)).unwrap();
+    pause.store(true, Relaxed);
+    link.push_scene(&mut scene_with("#ff0000"));
+    waited.recv_timeout(Duration::from_secs(5)).unwrap();
+    link.push_scene(&mut scene_with("#00ff00"));
+    resume.send(()).unwrap();
+    assert_eq!(
+        displayed.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Some(Oklch::from_hex("#00ff00").unwrap())
+    );
+    wait_until("both scenes to be acknowledged", || {
+        link.stats().scenes_presented.load(Relaxed) == 2
+    });
+    assert_eq!(link.stats().scenes_applied.load(Relaxed), 2);
+    link.shutdown();
+}
+
+#[test]
+fn hardware_paced_animation_does_not_sleep_between_available_slots() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    probe.native_pacing.store(true, Relaxed);
+    *probe.script.lock().unwrap() = vec![Repaint::Animating; 40];
+    let started = WallInstant::now();
+    link.set_viewport(Size { w: 100.0, h: 101.0 }, 1.0);
+    wait_until("the hardware-paced frames", || {
+        probe.presents.load(Relaxed) >= base + 41
+    });
+    assert!(started.elapsed() < INTERVAL * 30);
+}
+
+#[test]
+fn expensive_background_repaints_remain_bounded_with_immediate_presentation() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    probe.native_pacing.store(true, Relaxed);
+    *probe.script.lock().unwrap() = vec![Repaint::Heavy; 8];
+    let started = WallInstant::now();
+    link.set_viewport(Size { w: 100.0, h: 101.0 }, 1.0);
+    wait_until("the bounded background frames", || {
+        probe.presents.load(Relaxed) >= base + 9
+    });
+    assert!(started.elapsed() >= Duration::from_millis(230));
 }

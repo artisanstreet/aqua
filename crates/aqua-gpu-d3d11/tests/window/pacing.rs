@@ -1,14 +1,45 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aqua_gpu_d3d11::window::pacing::{
     interval_from_ticks, reconcile_interval, ticks_until_next_vblank, vblanks_spanned, Pacer,
-    FALLBACK_INTERVAL,
+    VblankGuard,
 };
 
 const FREQUENCY: u64 = 10_000_000;
 
 fn ms(value: f64) -> Duration {
     Duration::from_secs_f64(value / 1000.0)
+}
+
+#[test]
+fn sparse_fast_vblank_waits_do_not_disable_the_clock() {
+    let mut guard = VblankGuard::default();
+    let epoch = Instant::now();
+    for index in 0..150 {
+        let started = epoch + ms(index as f64 * 110.0);
+        assert!(guard.observe(started, started + ms(0.01), ms(6.06)));
+    }
+}
+
+#[test]
+fn three_rapid_nonblocking_vblank_waits_disable_the_clock() {
+    let mut guard = VblankGuard::default();
+    let epoch = Instant::now();
+    assert!(guard.observe(epoch, epoch + ms(0.01), ms(6.06)));
+    assert!(guard.observe(epoch + ms(0.5), epoch + ms(0.51), ms(6.06)));
+    assert!(!guard.observe(epoch + ms(1.0), epoch + ms(1.01), ms(6.06)));
+}
+
+#[test]
+fn a_blocking_vblank_wait_resets_the_fast_wait_streak() {
+    let mut guard = VblankGuard::default();
+    let epoch = Instant::now();
+    assert!(guard.observe(epoch, epoch + ms(0.01), ms(6.06)));
+    assert!(guard.observe(epoch + ms(0.5), epoch + ms(0.51), ms(6.06)));
+    assert!(guard.observe(epoch + ms(1.0), epoch + ms(4.0), ms(6.06)));
+    assert!(guard.observe(epoch + ms(4.1), epoch + ms(4.11), ms(6.06)));
+    assert!(guard.observe(epoch + ms(4.2), epoch + ms(4.21), ms(6.06)));
+    assert!(!guard.observe(epoch + ms(4.3), epoch + ms(4.31), ms(6.06)));
 }
 
 #[test]
@@ -20,11 +51,23 @@ fn qpc_period_converts_to_the_real_refresh_interval() {
 }
 
 #[test]
-fn nonsense_periods_fall_back_to_sixty_hertz() {
-    assert_eq!(interval_from_ticks(0, FREQUENCY), FALLBACK_INTERVAL);
-    assert_eq!(interval_from_ticks(166_833, 0), FALLBACK_INTERVAL);
-    assert_eq!(interval_from_ticks(1, FREQUENCY), FALLBACK_INTERVAL);
-    assert_eq!(interval_from_ticks(u64::MAX, 1), FALLBACK_INTERVAL);
+fn unknown_periods_do_not_invent_a_refresh_rate() {
+    assert_eq!(interval_from_ticks(0, FREQUENCY), Duration::ZERO);
+    assert_eq!(interval_from_ticks(166_833, 0), Duration::ZERO);
+    assert_eq!(interval_from_ticks(u64::MAX, 1), Duration::ZERO);
+}
+
+#[test]
+fn high_refresh_displays_keep_their_actual_interval() {
+    for hz in [144, 240, 360, 500, 1000] {
+        let period = FREQUENCY / hz;
+        let interval = interval_from_ticks(period, FREQUENCY);
+        assert_eq!(interval, Duration::from_nanos(period * 100));
+        assert_eq!(
+            reconcile_interval(Duration::ZERO, hz as u32),
+            Duration::from_secs_f64(1.0 / hz as f64)
+        );
+    }
 }
 
 #[test]

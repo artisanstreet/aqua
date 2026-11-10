@@ -200,6 +200,8 @@ impl DamageTracker {
         match new_item {
             DisplayItem::GpuiPath { .. }
             | DisplayItem::GpuiMesh { .. }
+            | DisplayItem::Shader { .. }
+            | DisplayItem::Shape { .. }
             | DisplayItem::GpuiSvg { .. }
             | DisplayItem::GpuiTransformedSvg { .. }
             | DisplayItem::GpuiShadow { .. }
@@ -209,6 +211,7 @@ impl DamageTracker {
             | DisplayItem::Shadow { .. }
             | DisplayItem::Image { .. }
             | DisplayItem::Vector { .. }
+            | DisplayItem::SrgbaRect { .. }
             | DisplayItem::Rect { .. }
             | DisplayItem::External { .. } => {
                 // Footprints are effect-inclusive by caller invariant; the

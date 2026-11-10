@@ -1,5 +1,4 @@
 pub mod affine;
-pub mod cadence;
 pub mod color;
 pub mod cull;
 pub mod damage;
@@ -13,7 +12,10 @@ pub mod pressure;
 pub mod runs;
 pub mod service;
 pub mod shape;
+pub mod shape_motion;
 pub mod span;
 pub mod text;
 pub mod transition;
 pub mod vector;
+
+mod wake;

@@ -278,33 +278,52 @@ impl Slot {
         };
         let wake_at = self.wake_deadline(now);
         let idle_at = self.idle_trim_deadline(now);
+        let maintenance_at = match &self.stage {
+            Stage::Running(target) => target.maintenance_in().map(|after| now + after),
+            _ => None,
+        };
         let idle_due = idle_at.is_some_and(|at| at <= now);
         if idle_due {
             self.stats.trim.store(true, Ordering::Release);
         }
         let trim = trim || idle_due;
         let due = |at: Option<WallInstant>| at.is_some_and(|at| at <= now);
+        let maintenance = due(maintenance_at) && self.inbox.is_empty() && !arrived;
         let urgent = !self.inbox.is_empty()
             || arrived
             || trim
             || visibility
+            || maintenance
             || due(repaint_at)
             || due(wake_at);
         if !urgent && self.startup_step() {
             return Status::Ran;
         }
         if !urgent {
-            let earliest = [repaint_at, wake_at, idle_at].into_iter().flatten().min();
+            let earliest = [repaint_at, wake_at, idle_at, maintenance_at]
+                .into_iter()
+                .flatten()
+                .min();
             return Status::Waiting(earliest);
         }
         if let Some(not_before) = self.not_before.filter(|at| *at > now) {
             return Status::Waiting(Some(not_before));
         }
+        let maintained = match (&mut self.stage, maintenance) {
+            (Stage::Running(target), true) => {
+                let changed = target.maintenance();
+                if changed {
+                    target.invalidate();
+                }
+                changed
+            }
+            _ => false,
+        };
         self.cause = super::runs::RunCause {
             arrived,
             forced: false,
             trim,
-            repaint: due(repaint_at),
+            repaint: due(repaint_at) || maintained,
             wake_due: due(wake_at),
             inbox: !self.inbox.is_empty(),
             feedback: false,
@@ -312,7 +331,7 @@ impl Slot {
             framed: false,
             presented: false,
         };
-        self.run(now, arrived, trim, due(repaint_at));
+        self.run(now, arrived, trim, due(repaint_at) || maintained);
         Status::Ran
     }
 

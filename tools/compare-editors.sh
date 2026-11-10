@@ -209,6 +209,7 @@ drive() {
 
 drive_keys() {
   local which=$1 exe=$2 prefix=$3
+  KEY_LATENCY_PORT=${KEY_LATENCY_PORT:-$((FIXTURE_PORT + 11))} \
   KEY_LATENCY_PROFILE=$PROFILE KEY_LATENCY_OUT=$OUT KEY_LATENCY_PREFIX=$prefix KEY_LATENCY_EXE=$exe \
     KEY_LATENCY_LOCKED=1 "$HERE/key-latency.sh" "$which" keys
 }

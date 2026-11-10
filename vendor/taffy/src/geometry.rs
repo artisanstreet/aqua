@@ -41,7 +41,10 @@ impl<T> Size<T> {
     /// Swap the width and height components
     #[inline(always)]
     pub fn transpose(self) -> Size<T> {
-        Size { width: self.height, height: self.width }
+        Size {
+            width: self.height,
+            height: self.width,
+        }
     }
 }
 
@@ -149,7 +152,12 @@ impl<T> Rect<T> {
     /// Swap the horizontal and vertical sides (`left <-> top`, `right <-> bottom`)
     #[inline(always)]
     pub fn transpose(self) -> Rect<T> {
-        Rect { left: self.top, right: self.bottom, top: self.left, bottom: self.right }
+        Rect {
+            left: self.top,
+            right: self.bottom,
+            top: self.left,
+            bottom: self.right,
+        }
     }
 
     /// Applies the function `f` to all four sides of the rect
@@ -180,17 +188,28 @@ impl<T> Rect<T> {
     where
         F: Fn(T) -> R,
     {
-        Rect { left: f(self.left), right: f(self.right), top: f(self.top), bottom: f(self.bottom) }
+        Rect {
+            left: f(self.left),
+            right: f(self.right),
+            top: f(self.top),
+            bottom: f(self.bottom),
+        }
     }
 
     /// Returns a `Line<T>` representing the left and right properties of the Rect
     pub fn horizontal_components(self) -> Line<T> {
-        Line { start: self.left, end: self.right }
+        Line {
+            start: self.left,
+            end: self.right,
+        }
     }
 
     /// Returns a `Line<T>` containing the top and bottom properties of the Rect
     pub fn vertical_components(self) -> Line<T> {
-        Line { start: self.top, end: self.bottom }
+        Line {
+            start: self.top,
+            end: self.bottom,
+        }
     }
 }
 
@@ -224,7 +243,10 @@ where
     #[inline(always)]
     #[allow(dead_code)] // Fixes spurious clippy warning: this function is used!
     pub fn sum_axes(&self) -> Size<U> {
-        Size { width: self.horizontal_axis_sum(), height: self.vertical_axis_sum() }
+        Size {
+            width: self.horizontal_axis_sum(),
+            height: self.vertical_axis_sum(),
+        }
     }
 
     /// The sum of the two fields of the [`Rect`] representing the main axis.
@@ -303,17 +325,32 @@ where
 
 impl Rect<Option<f32>> {
     /// A [`Rect`] with `None` as all parameters
-    pub const NONE: Rect<Option<f32>> = Self { left: None, right: None, top: None, bottom: None };
+    pub const NONE: Rect<Option<f32>> = Self {
+        left: None,
+        right: None,
+        top: None,
+        bottom: None,
+    };
 }
 
 impl Rect<f32> {
     /// Creates a new Rect with `0.0` as all parameters
-    pub const ZERO: Rect<f32> = Self { left: 0.0, right: 0.0, top: 0.0, bottom: 0.0 };
+    pub const ZERO: Rect<f32> = Self {
+        left: 0.0,
+        right: 0.0,
+        top: 0.0,
+        bottom: 0.0,
+    };
 
     /// Creates a new Rect
     #[must_use]
     pub const fn new(start: f32, end: f32, top: f32, bottom: f32) -> Self {
-        Self { left: start, right: end, top, bottom }
+        Self {
+            left: start,
+            right: end,
+            top,
+            bottom,
+        }
     }
 
     /// Returns the smallest rectangle that contains both `self` and `other`, where the fields
@@ -349,15 +386,24 @@ impl<T> Line<T> {
     where
         F: Fn(T) -> R,
     {
-        Line { start: f(self.start), end: f(self.end) }
+        Line {
+            start: f(self.start),
+            end: f(self.end),
+        }
     }
 }
 
 impl Line<bool> {
     /// A `Line<bool>` with both start and end set to `true`
-    pub const TRUE: Self = Line { start: true, end: true };
+    pub const TRUE: Self = Line {
+        start: true,
+        end: true,
+    };
     /// A `Line<bool>` with both start and end set to `false`
-    pub const FALSE: Self = Line { start: false, end: false };
+    pub const FALSE: Self = Line {
+        start: false,
+        end: false,
+    };
 }
 
 impl<T: Add + Copy> Line<T> {
@@ -382,7 +428,10 @@ impl<U, T: Add<U>> Add<Size<U>> for Size<T> {
     type Output = Size<<T as Add<U>>::Output>;
 
     fn add(self, rhs: Size<U>) -> Self::Output {
-        Size { width: self.width + rhs.width, height: self.height + rhs.height }
+        Size {
+            width: self.width + rhs.width,
+            height: self.height + rhs.height,
+        }
     }
 }
 
@@ -391,7 +440,10 @@ impl<U, T: Sub<U>> Sub<Size<U>> for Size<T> {
     type Output = Size<<T as Sub<U>>::Output>;
 
     fn sub(self, rhs: Size<U>) -> Self::Output {
-        Size { width: self.width - rhs.width, height: self.height - rhs.height }
+        Size {
+            width: self.width - rhs.width,
+            height: self.height - rhs.height,
+        }
     }
 }
 
@@ -406,7 +458,10 @@ impl<T> Size<T> {
     where
         F: Fn(T) -> R,
     {
-        Size { width: f(self.width), height: f(self.height) }
+        Size {
+            width: f(self.width),
+            height: f(self.height),
+        }
     }
 
     /// Applies the function `f` to the width
@@ -414,7 +469,10 @@ impl<T> Size<T> {
     where
         F: Fn(T) -> T,
     {
-        Size { width: f(self.width), height: self.height }
+        Size {
+            width: f(self.width),
+            height: self.height,
+        }
     }
 
     /// Applies the function `f` to the height
@@ -422,7 +480,10 @@ impl<T> Size<T> {
     where
         F: Fn(T) -> T,
     {
-        Size { width: self.width, height: f(self.height) }
+        Size {
+            width: self.width,
+            height: f(self.height),
+        }
     }
 
     /// Applies the function `f` to both the width and height
@@ -431,7 +492,10 @@ impl<T> Size<T> {
     where
         Func: Fn(T, Other) -> Ret,
     {
-        Size { width: f(self.width, other.width), height: f(self.height, other.height) }
+        Size {
+            width: f(self.width, other.width),
+            height: f(self.height, other.height),
+        }
     }
 
     /// Sets the extent of the main layout axis
@@ -572,18 +636,27 @@ impl<T> Size<T> {
 
 impl Size<f32> {
     /// A [`Size`] with zero width and height
-    pub const ZERO: Size<f32> = Self { width: 0.0, height: 0.0 };
+    pub const ZERO: Size<f32> = Self {
+        width: 0.0,
+        height: 0.0,
+    };
 
     /// Applies f32_max to each component separately
     #[inline(always)]
     pub fn f32_max(self, rhs: Size<f32>) -> Size<f32> {
-        Size { width: f32_max(self.width, rhs.width), height: f32_max(self.height, rhs.height) }
+        Size {
+            width: f32_max(self.width, rhs.width),
+            height: f32_max(self.height, rhs.height),
+        }
     }
 
     /// Applies f32_min to each component separately
     #[inline(always)]
     pub fn f32_min(self, rhs: Size<f32>) -> Size<f32> {
-        Size { width: f32_min(self.width, rhs.width), height: f32_min(self.height, rhs.height) }
+        Size {
+            width: f32_min(self.width, rhs.width),
+            height: f32_min(self.height, rhs.height),
+        }
     }
 
     /// Return true if both width and height are greater than 0 else false
@@ -595,12 +668,18 @@ impl Size<f32> {
 
 impl Size<Option<f32>> {
     /// A [`Size`] with `None` width and height
-    pub const NONE: Size<Option<f32>> = Self { width: None, height: None };
+    pub const NONE: Size<Option<f32>> = Self {
+        width: None,
+        height: None,
+    };
 
     /// A [`Size<Option<f32>>`] with `Some(width)` and `Some(height)` as parameters
     #[must_use]
     pub const fn new(width: f32, height: f32) -> Self {
-        Size { width: Some(width), height: Some(height) }
+        Size {
+            width: Some(width),
+            height: Some(height),
+        }
     }
 
     /// Creates a new [`Size<Option<f32>>`] with either the width or height set based on the provided `direction`
@@ -623,8 +702,14 @@ impl Size<Option<f32>> {
     pub fn maybe_apply_aspect_ratio(self, aspect_ratio: Option<f32>) -> Size<Option<f32>> {
         match aspect_ratio {
             Some(ratio) => match (self.width, self.height) {
-                (Some(width), None) => Size { width: Some(width), height: Some(width / ratio) },
-                (None, Some(height)) => Size { width: Some(height * ratio), height: Some(height) },
+                (Some(width), None) => Size {
+                    width: Some(width),
+                    height: Some(width / ratio),
+                },
+                (None, Some(height)) => Size {
+                    width: Some(height * ratio),
+                    height: Some(height),
+                },
                 _ => self,
             },
             None => self,
@@ -635,12 +720,18 @@ impl Size<Option<f32>> {
 impl<T> Size<Option<T>> {
     /// Performs Option::unwrap_or on each component separately
     pub fn unwrap_or(self, alt: Size<T>) -> Size<T> {
-        Size { width: self.width.unwrap_or(alt.width), height: self.height.unwrap_or(alt.height) }
+        Size {
+            width: self.width.unwrap_or(alt.width),
+            height: self.height.unwrap_or(alt.height),
+        }
     }
 
     /// Performs Option::or on each component separately
     pub fn or(self, alt: Size<Option<T>>) -> Size<Option<T>> {
-        Size { width: self.width.or(alt.width), height: self.height.or(alt.height) }
+        Size {
+            width: self.width.or(alt.width),
+            height: self.height.or(alt.height),
+        }
     }
 
     /// Return true if both components are Some, else false.
@@ -654,13 +745,19 @@ impl Size<Dimension> {
     /// Generates a [`Size<Dimension>`] using length values
     #[must_use]
     pub const fn from_lengths(width: f32, height: f32) -> Self {
-        Size { width: Dimension(CompactLength::length(width)), height: Dimension(CompactLength::length(height)) }
+        Size {
+            width: Dimension(CompactLength::length(width)),
+            height: Dimension(CompactLength::length(height)),
+        }
     }
 
     /// Generates a [`Size<Dimension>`] using percentage values
     #[must_use]
     pub const fn from_percent(width: f32, height: f32) -> Self {
-        Size { width: Dimension(CompactLength::percent(width)), height: Dimension(CompactLength::percent(height)) }
+        Size {
+            width: Dimension(CompactLength::percent(width)),
+            height: Dimension(CompactLength::percent(height)),
+        }
     }
 }
 
@@ -691,7 +788,10 @@ impl<U, T: Add<U>> Add<Point<U>> for Point<T> {
     type Output = Point<<T as Add<U>>::Output>;
 
     fn add(self, rhs: Point<U>) -> Self::Output {
-        Point { x: self.x + rhs.x, y: self.y + rhs.y }
+        Point {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+        }
     }
 }
 
@@ -703,7 +803,10 @@ impl<T> Point<T> {
     where
         F: Fn(T) -> R,
     {
-        Point { x: f(self.x), y: f(self.y) }
+        Point {
+            x: f(self.x),
+            y: f(self.y),
+        }
     }
 
     /// Gets the extent of the specified layout axis
@@ -718,7 +821,10 @@ impl<T> Point<T> {
 
     /// Swap x and y components
     pub fn transpose(self) -> Point<T> {
-        Point { x: self.y, y: self.x }
+        Point {
+            x: self.y,
+            y: self.x,
+        }
     }
 
     /// Sets the extent of the specified layout axis
@@ -758,7 +864,10 @@ impl<T> Point<T> {
 
 impl<T> From<Point<T>> for Size<T> {
     fn from(value: Point<T>) -> Self {
-        Size { width: value.x, height: value.y }
+        Size {
+            width: value.x,
+            height: value.y,
+        }
     }
 }
 

@@ -1,0 +1,99 @@
+{
+  "design": "Three pairs, ordering control/candidate, candidate/control, control/candidate. Same frozen Editor, same frozen Aqua baseline plus only commit 619ffab for the candidate; stats off; same fixture; no foreground changes or retries. Diagnostic phase, not a GPUI scoreboard.",
+  "runs": [
+    {
+      "run": "control-1",
+      "boot_gpu_mib": 47.9,
+      "scroll_gpu_mib": 54.9,
+      "scroll_private_mib": 129.0,
+      "first_content_ms": 593,
+      "scroll_p50_ms": 0.139,
+      "scroll_p99_ms": 0.391,
+      "scroll_max_ms": 1.874,
+      "quiet_system_cpu_pct": 12.7
+    },
+    {
+      "run": "candidate-1",
+      "boot_gpu_mib": 35.4,
+      "scroll_gpu_mib": 50.9,
+      "scroll_private_mib": 128.0,
+      "first_content_ms": 644,
+      "scroll_p50_ms": 0.143,
+      "scroll_p99_ms": 0.391,
+      "scroll_max_ms": 1.774,
+      "quiet_system_cpu_pct": 2.0
+    },
+    {
+      "run": "candidate-2",
+      "boot_gpu_mib": 35.4,
+      "scroll_gpu_mib": 46.4,
+      "scroll_private_mib": 122.0,
+      "first_content_ms": 519,
+      "scroll_p50_ms": 0.14,
+      "scroll_p99_ms": 0.407,
+      "scroll_max_ms": 1.693,
+      "quiet_system_cpu_pct": 1.1
+    },
+    {
+      "run": "control-2",
+      "boot_gpu_mib": 45.9,
+      "scroll_gpu_mib": 55.4,
+      "scroll_private_mib": 133.0,
+      "first_content_ms": 600,
+      "scroll_p50_ms": 0.145,
+      "scroll_p99_ms": 0.4,
+      "scroll_max_ms": 3.786,
+      "quiet_system_cpu_pct": 0.9
+    },
+    {
+      "run": "control-3",
+      "boot_gpu_mib": 47.9,
+      "scroll_gpu_mib": 52.7,
+      "scroll_private_mib": 128.0,
+      "first_content_ms": 421,
+      "scroll_p50_ms": 0.144,
+      "scroll_p99_ms": 0.378,
+      "scroll_max_ms": 1.596,
+      "quiet_system_cpu_pct": 2.6
+    },
+    {
+      "run": "candidate-3",
+      "boot_gpu_mib": 37.4,
+      "scroll_gpu_mib": 53.2,
+      "scroll_private_mib": 131.0,
+      "first_content_ms": 626,
+      "scroll_p50_ms": 0.144,
+      "scroll_p99_ms": 0.364,
+      "scroll_max_ms": 1.57,
+      "quiet_system_cpu_pct": 2.0
+    }
+  ],
+  "medians": {
+    "control": {
+      "boot_gpu_mib": 47.9,
+      "scroll_gpu_mib": 54.9,
+      "scroll_private_mib": 129.0,
+      "first_content_ms": 593,
+      "scroll_p50_ms": 0.144,
+      "scroll_p99_ms": 0.391,
+      "scroll_max_ms": 1.874,
+      "quiet_system_cpu_pct": 2.6
+    },
+    "candidate": {
+      "boot_gpu_mib": 35.4,
+      "scroll_gpu_mib": 50.9,
+      "scroll_private_mib": 128.0,
+      "first_content_ms": 626,
+      "scroll_p50_ms": 0.143,
+      "scroll_p99_ms": 0.391,
+      "scroll_max_ms": 1.693,
+      "quiet_system_cpu_pct": 2.0
+    }
+  },
+  "boot_gpu_change_pct": -26.1,
+  "scroll_gpu_change_pct": -7.3,
+  "private_result": "No established improvement: 128 versus 129 MiB medians with overlapping 122\u2013131 and 128\u2013133 ranges.",
+  "candidate_binary_sha256": "3eb8ab003c0b9da91d49e6ae06d0150e0f9cea0f89a8d9d02de7979c2b2d3c67",
+  "control_binary_sha256": "ba9a14654a9e5476bb68267892c020b5f95204645b6390b49ae6aab8af91bd4a",
+  "limit": "No full joint scoreboard rerun; no claim that the historical 31/41 performance verdict has changed. Binary predates error-only follow-up f75e709."
+}

@@ -28,7 +28,9 @@
 
 use core::ops::Range;
 
-use crate::{debug::debug_log, sys::Vec, AvailableSpace, Clear, Direction, FloatDirection, Point, Size};
+use crate::{
+    debug::debug_log, sys::Vec, AvailableSpace, Clear, Direction, FloatDirection, Point, Size,
+};
 
 /// Tolerance used when checking whether a box fits in a horizontal space, to absorb `f32`
 /// rounding errors (e.g. percentage widths and margins that sum to exactly 100% may otherwise
@@ -114,7 +116,13 @@ impl Segment {
         bfc_width: f32,
         cb_insets: [f32; 2],
     ) -> bool {
-        float_fits_horizontally(floated_box.width, direction, bfc_width, self.insets, cb_insets)
+        float_fits_horizontally(
+            floated_box.width,
+            direction,
+            bfc_width,
+            self.insets,
+            cb_insets,
+        )
     }
 }
 
@@ -141,10 +149,10 @@ fn float_fits_horizontally(
     let lead = direction as usize;
     let trail = 1 - lead;
     let x_inset = float_insets[lead].max(cb_insets[lead]);
-    let fits_opposite_floats =
-        float_insets[trail] == 0.0 || x_inset + width <= bfc_width - float_insets[trail] + FIT_TOLERANCE;
-    let fits_containing_block =
-        float_insets[lead] == 0.0 || x_inset + width <= bfc_width - cb_insets[trail] + FIT_TOLERANCE;
+    let fits_opposite_floats = float_insets[trail] == 0.0
+        || x_inset + width <= bfc_width - float_insets[trail] + FIT_TOLERANCE;
+    let fits_containing_block = float_insets[lead] == 0.0
+        || x_inset + width <= bfc_width - cb_insets[trail] + FIT_TOLERANCE;
     fits_opposite_floats && fits_containing_block
 }
 
@@ -167,7 +175,12 @@ struct FloatFitter {
 impl FloatFitter {
     /// Create a new `FloatFitter`
     fn new(bfc_width: f32, slot_height: f32, cb_insets: [f32; 2]) -> Self {
-        Self { bfc_width, slot_height: slot_height as f64, float_insets: [0.0, 0.0], cb_insets }
+        Self {
+            bfc_width,
+            slot_height: slot_height as f64,
+            float_insets: [0.0, 0.0],
+            cb_insets,
+        }
     }
 
     // Horizontal fitting
@@ -190,7 +203,13 @@ impl FloatFitter {
     ///
     /// See [`float_fits_horizontally`] for the details of the fit rules.
     fn fits_horiontally(&self, width: f32, direction: FloatDirection) -> bool {
-        float_fits_horizontally(width, direction, self.bfc_width, self.float_insets, self.cb_insets)
+        float_fits_horizontally(
+            width,
+            direction,
+            self.bfc_width,
+            self.float_insets,
+            self.cb_insets,
+        )
     }
 
     // Vertical fitting
@@ -288,8 +307,11 @@ impl FloatContext {
     /// vertical start and end at exact segment boundaries
     fn subdivide_segment(&mut self, idx: usize, divide_at_y: f32) {
         let old_segment = &mut self.segments[idx];
-        let new_segment =
-            Segment { insets: old_segment.insets, has_float: old_segment.has_float, y: divide_at_y..old_segment.y.end };
+        let new_segment = Segment {
+            insets: old_segment.insets,
+            has_float: old_segment.has_float,
+            y: divide_at_y..old_segment.y.end,
+        };
         if !old_segment.y.contains(&divide_at_y) || old_segment.y.start == divide_at_y {
             debug_log!("old_segment", dbg:&mut *old_segment);
             debug_log!("divide_at_y", dbg:divide_at_y);
@@ -297,13 +319,15 @@ impl FloatContext {
         }
         old_segment.y.end = divide_at_y;
 
-        self.segments.splice((idx + 1)..(idx + 1), core::iter::once(new_segment));
+        self.segments
+            .splice((idx + 1)..(idx + 1), core::iter::once(new_segment));
     }
 
     /// Update the last placed float start and end values
     fn update_last_placed_float(&mut self, direction: FloatDirection, placement: Range<usize>) {
         let slot = direction as usize;
-        self.last_placed_floats[slot].start = self.last_placed_floats[slot].start.max(placement.start);
+        self.last_placed_floats[slot].start =
+            self.last_placed_floats[slot].start.max(placement.start);
         self.last_placed_floats[slot].end = self.last_placed_floats[slot].end.max(placement.end);
     }
 
@@ -318,8 +342,13 @@ impl FloatContext {
     ) -> Point<f32> {
         self.has_floats = true;
 
-        let placed_floated_box =
-            self.place_floated_box_inner(floated_box, min_y, containing_block_insets, direction, clear);
+        let placed_floated_box = self.place_floated_box_inner(
+            floated_box,
+            min_y,
+            containing_block_insets,
+            direction,
+            clear,
+        );
 
         let slot = direction as usize;
         let bottom = placed_floated_box.y + placed_floated_box.height;
@@ -336,7 +365,10 @@ impl FloatContext {
             }
             FloatDirection::Right => {
                 self.right_floats.push(placed_floated_box);
-                Point { x: self.available_width - x_inset - floated_box.width, y }
+                Point {
+                    x: self.available_width - x_inset - floated_box.width,
+                    y,
+                }
             }
         }
     }
@@ -365,7 +397,9 @@ impl FloatContext {
         //      "The outer top of a floating box may not be higher than the outer top of any block
         //      or floated box generated by an element earlier in the source document")
         //    - Respects "clear"
-        let float_start = self.last_placed_floats[0].start.max(self.last_placed_floats[1].start);
+        let float_start = self.last_placed_floats[0]
+            .start
+            .max(self.last_placed_floats[1].start);
         let hwm = match clear {
             Clear::Left => {
                 let left_end = self.last_placed_floats[0].end;
@@ -385,10 +419,12 @@ impl FloatContext {
 
         // Ensure that float is placed in a segment at or below "min_y"
         // (ensuring that it is placed at or below min_y within it's segment happens below)
-        let start_idx = self
-            .segments
-            .get(hwm..)
-            .and_then(|segments| segments.iter().position(|segment| segment.y.end > min_y).map(|idx| idx + hwm));
+        let start_idx = self.segments.get(hwm..).and_then(|segments| {
+            segments
+                .iter()
+                .position(|segment| segment.y.end > min_y)
+                .map(|idx| idx + hwm)
+        });
 
         let mut start_idx = start_idx.unwrap_or(self.segments.len());
         let mut start_y = min_y;
@@ -409,7 +445,12 @@ impl FloatContext {
 
             // Candidate start segment doesn't have (horizontal) space for the float:
             // => retry with the next segment
-            if !start_segment.fits_float_width(floated_box, direction, self.available_width, containing_block_insets) {
+            if !start_segment.fits_float_width(
+                floated_box,
+                direction,
+                self.available_width,
+                containing_block_insets,
+            ) {
                 start_idx += 1;
                 end_idx = end_idx.max(start_idx);
                 continue;
@@ -417,7 +458,11 @@ impl FloatContext {
 
             start_y = start_y.max(start_segment.y.start);
             let available_height = start_segment.y.end - start_y;
-            let mut fitter = FloatFitter::new(self.available_width, available_height, containing_block_insets);
+            let mut fitter = FloatFitter::new(
+                self.available_width,
+                available_height,
+                containing_block_insets,
+            );
             fitter.union_insets(start_segment.insets);
 
             // Pinning the start segment, loop over segments starting with the start segment
@@ -485,9 +530,17 @@ impl FloatContext {
             // it. The first float itself may be above the top of the block formatting context
             // (`y < 0`): its containing block (CSS2 float rule 4) may be pulled up by a negative
             // margin.
-            let last_y_end = self.segments.last().map(|seg| seg.y.end).unwrap_or(f32::NEG_INFINITY);
+            let last_y_end = self
+                .segments
+                .last()
+                .map(|seg| seg.y.end)
+                .unwrap_or(f32::NEG_INFINITY);
             if start_y > last_y_end {
-                self.segments.push(Segment { y: last_y_end..start_y, insets: [0.0, 0.0], has_float: [false; 2] });
+                self.segments.push(Segment {
+                    y: last_y_end..start_y,
+                    insets: [0.0, 0.0],
+                    has_float: [false; 2],
+                });
             }
 
             let start_y = last_y_end.max(start_y);
@@ -496,7 +549,11 @@ impl FloatContext {
             insets[slot] += floated_box.width;
             let mut has_float = [false; 2];
             has_float[slot] = true;
-            self.segments.push(Segment { y: start_y..(start_y + floated_box.height), insets, has_float });
+            self.segments.push(Segment {
+                y: start_y..(start_y + floated_box.height),
+                insets,
+                has_float,
+            });
 
             // Update last_placed_float
             let start_idx = self.segments.len() - 1;
@@ -533,7 +590,11 @@ impl FloatContext {
                 let end_y = start_y + floated_box.height;
                 if end_y > last_y_end {
                     let insets = containing_block_insets;
-                    self.segments.push(Segment { y: last_y_end..end_y, insets, has_float: [false; 2] });
+                    self.segments.push(Segment {
+                        y: last_y_end..end_y,
+                        insets,
+                        has_float: [false; 2],
+                    });
                 }
                 self.segments.len() - 1
             }
@@ -570,7 +631,12 @@ impl FloatContext {
         // Update last_placed_float
         self.update_last_placed_float(direction, start_idx..(end_idx + 1));
 
-        PlacedFloatedBox { width: floated_box.width, height: floated_box.height, y: start_y, x_inset: placed_inset }
+        PlacedFloatedBox {
+            width: floated_box.width,
+            height: floated_box.height,
+            y: start_y,
+            x_inset: placed_inset,
+        }
     }
 
     /// Get the end segment of the last float on side(s) specified by the clear parameter (if any)
@@ -613,7 +679,9 @@ impl FloatContext {
                 segment_id: None,
                 x: containing_block_insets[0],
                 y: min_y,
-                width: self.available_width - containing_block_insets[0] - containing_block_insets[1],
+                width: self.available_width
+                    - containing_block_insets[0]
+                    - containing_block_insets[1],
                 height: f32::INFINITY,
             };
         }
@@ -626,10 +694,12 @@ impl FloatContext {
         let at_least = after.map(|idx| idx + 1).unwrap_or(0);
         let hwm = at_least.max(self.cleared_segment(clear).map(|idx| idx + 1).unwrap_or(0));
 
-        let start_idx = self
-            .segments
-            .get(hwm..)
-            .and_then(|segments| segments.iter().position(|segment| segment.y.end > min_y).map(|idx| idx + hwm));
+        let start_idx = self.segments.get(hwm..).and_then(|segments| {
+            segments
+                .iter()
+                .position(|segment| segment.y.end > min_y)
+                .map(|idx| idx + hwm)
+        });
         let start_idx = start_idx.unwrap_or(self.segments.len());
         let segment = self.segments.get(start_idx);
         match segment {
@@ -648,7 +718,9 @@ impl FloatContext {
                 segment_id: None,
                 x: containing_block_insets[0],
                 y: min_y,
-                width: self.available_width - containing_block_insets[0] - containing_block_insets[1],
+                width: self.available_width
+                    - containing_block_insets[0]
+                    - containing_block_insets[1],
                 height: f32::INFINITY,
             },
         }
@@ -683,7 +755,10 @@ impl FloatContext {
         clear: Clear,
         after: Option<usize>,
     ) -> BfcSlot {
-        let margin_insets = [containing_block_insets[0] + margins[0], containing_block_insets[1] + margins[1]];
+        let margin_insets = [
+            containing_block_insets[0] + margins[0],
+            containing_block_insets[1] + margins[1],
+        ];
         let no_float_width = self.available_width - margin_insets[0] - margin_insets[1];
         let no_float_slot = BfcSlot {
             segment_id: None,
@@ -705,10 +780,12 @@ impl FloatContext {
         let at_least = after.map(|idx| idx + 1).unwrap_or(0);
         let hwm = at_least.max(self.cleared_segment(clear).map(|idx| idx + 1).unwrap_or(0));
 
-        let start_idx = self
-            .segments
-            .get(hwm..)
-            .and_then(|segments| segments.iter().position(|segment| segment.y.end > min_y).map(|idx| idx + hwm));
+        let start_idx = self.segments.get(hwm..).and_then(|segments| {
+            segments
+                .iter()
+                .position(|segment| segment.y.end > min_y)
+                .map(|idx| idx + hwm)
+        });
         let start_idx = start_idx.unwrap_or(self.segments.len());
         match self.segments.get(start_idx) {
             Some(segment) => {
@@ -721,8 +798,11 @@ impl FloatContext {
                 let has_trail_float = segment.has_float[trail];
                 let mut fit_insets = [0.0; 2];
                 let mut stretch_insets = [0.0; 2];
-                fit_insets[lead] =
-                    if has_lead_float { segment.insets[lead].max(margin_insets[lead]) } else { margin_insets[lead] };
+                fit_insets[lead] = if has_lead_float {
+                    segment.insets[lead].max(margin_insets[lead])
+                } else {
+                    margin_insets[lead]
+                };
                 stretch_insets[lead] = fit_insets[lead];
                 fit_insets[trail] = if has_trail_float {
                     segment.insets[trail].max(containing_block_insets[trail])
@@ -746,7 +826,12 @@ impl FloatContext {
             }
             // Below all floats
             None => BfcSlot {
-                y: self.segments.last().map(|segment| segment.y.end).unwrap_or(min_y).max(min_y),
+                y: self
+                    .segments
+                    .last()
+                    .map(|segment| segment.y.end)
+                    .unwrap_or(min_y)
+                    .max(min_y),
                 ..no_float_slot
             },
         }
@@ -768,7 +853,12 @@ pub struct FloatIntrinsicWidthCalculator {
 impl FloatIntrinsicWidthCalculator {
     /// Create a new `FloatIntrinsicWidthCalculator`
     pub fn new(available_width: AvailableSpace) -> Self {
-        Self { available_width, side_sums: [0.0; 2], contribution: 0.0, widest: 0.0 }
+        Self {
+            available_width,
+            side_sums: [0.0; 2],
+            contribution: 0.0,
+            widest: 0.0,
+        }
     }
 
     /// Add a float to the computation
@@ -800,7 +890,9 @@ impl FloatIntrinsicWidthCalculator {
             // Fit-content sizing: clamp the max-content contribution between the available
             // width and the min-content contribution (floats narrow by wrapping onto new
             // bands, but never below the widest single float).
-            AvailableSpace::Definite(available_width) => self.contribution.min(available_width).max(self.widest),
+            AvailableSpace::Definite(available_width) => {
+                self.contribution.min(available_width).max(self.widest)
+            }
             _ => self.contribution,
         }
     }

@@ -28,7 +28,6 @@ use crate::coalesce::{merge, Coalescible, Held, Merge};
 use crate::inbox::AquaUserEvent;
 use crate::runtime::{Application, Aqua, ExternalFileDrag};
 
-const FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
 const FILE_DROP_IDLE: Duration = Duration::from_millis(30);
 
 struct Host<A: Application> {
@@ -204,7 +203,10 @@ impl<A: Application + 'static> Host<A> {
             clear,
         );
         super::startup_mark("factory_built");
-        self.aqua.attach_render(id, factory, FRAME_INTERVAL);
+        let interval = gpu::refresh_of(id.raw() as isize)
+            .map(Duration::from_nanos)
+            .unwrap_or(Duration::ZERO);
+        self.aqua.attach_render(id, factory, interval);
         super::startup_mark("render_attached");
         self.aqua.dispatch_start(&mut self.app, id);
         super::startup_mark("app_started");

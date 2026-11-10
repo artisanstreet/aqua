@@ -222,7 +222,9 @@ fn check_kind(plan: &FramePlan, index: usize) -> Result<(), PlanError> {
                 .then_some(())
                 .ok_or(non_finite)
         }
-        PassKind::Glyphs { atlas, instances } => {
+        PassKind::Glyphs {
+            atlas, instances, ..
+        } => {
             if pass.reads.as_slice() != [TextureRef::Persistent(*atlas)] || !single_target {
                 return Err(bad_bindings);
             }

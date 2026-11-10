@@ -176,6 +176,7 @@ fn slug_run(glyphs: Vec<SlugInstance>) -> PaintCommand {
 fn atlas_run(glyphs: &[(Rect, Rect, &str, f32)]) -> PaintCommand {
     PaintCommand::Glyphs(GlyphRun {
         atlas: ATLAS,
+        coverage: aqua_graph::Coverage::Text,
         glyphs: glyphs
             .iter()
             .map(|(bounds, texels, color, alpha)| Glyph {

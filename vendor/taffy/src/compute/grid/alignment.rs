@@ -1,12 +1,13 @@
 //! Alignment of tracks and final positioning of items
 use super::types::GridTrack;
 use crate::compute::common::alignment::{
-    apply_alignment_fallback, child_first_baseline, compute_alignment_offset, resolve_self_alignment_safety,
+    apply_alignment_fallback, child_first_baseline, compute_alignment_offset,
+    resolve_self_alignment_safety,
 };
 use crate::geometry::{InBothAbsAxis, Line, Point, Rect, Size};
 use crate::style::{
-    AlignContent, AlignItems, AlignItemsKeyword, AlignSelf, AvailableSpace, CoreStyle, GridItemStyle, Overflow,
-    Position,
+    AlignContent, AlignItems, AlignItemsKeyword, AlignSelf, AvailableSpace, CoreStyle,
+    GridItemStyle, Overflow, Position,
 };
 use crate::tree::{Layout, LayoutPartialTreeExt, NodeId, OofCandidates, SizingMode};
 use crate::util::sys::f32_max;
@@ -33,20 +34,36 @@ pub(super) fn align_tracks(
     let origin = padding.start + border.start;
 
     // Count the number of non-collapsed tracks (not counting gutters)
-    let num_tracks = tracks.iter().skip(1).step_by(2).filter(|track| !track.is_collapsed).count();
+    let num_tracks = tracks
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .filter(|track| !track.is_collapsed)
+        .count();
 
     // Grid layout treats gaps as full tracks rather than applying them at alignment so we
     // simply pass zero here. Grid layout is never reversed.
     let gap = 0.0;
     let layout_is_reversed = false;
     let track_alignment = apply_alignment_fallback(free_space, num_tracks, track_alignment_style);
-    let track_alignment = if axis_is_reversed { track_alignment.reversed() } else { track_alignment };
+    let track_alignment = if axis_is_reversed {
+        track_alignment.reversed()
+    } else {
+        track_alignment
+    };
 
     // If every track is collapsed then no track receives the alignment offset below, but the
     // grid's lines should still be aligned within the container (e.g. at the inline-start edge
     // for RTL), so apply the offset to the origin instead.
     let empty_grid_offset = if num_tracks == 0 {
-        compute_alignment_offset(free_space, num_tracks, gap, track_alignment, layout_is_reversed, true)
+        compute_alignment_offset(
+            free_space,
+            num_tracks,
+            gap,
+            track_alignment,
+            layout_is_reversed,
+            true,
+        )
     } else {
         0.0
     };
@@ -64,7 +81,14 @@ pub(super) fn align_tracks(
         let is_first = is_non_collapsed_track && !seen_non_collapsed_track;
 
         let offset = if is_non_collapsed_track {
-            compute_alignment_offset(free_space, num_tracks, gap, track_alignment, layout_is_reversed, is_first)
+            compute_alignment_offset(
+                free_space,
+                num_tracks,
+                gap,
+                track_alignment,
+                layout_is_reversed,
+                is_first,
+            )
         } else {
             0.0
         };
@@ -76,9 +100,16 @@ pub(super) fn align_tracks(
         }
     };
     if axis_is_reversed {
-        tracks.iter_mut().rev().enumerate().for_each(|(i, track)| position_track(i, track));
+        tracks
+            .iter_mut()
+            .rev()
+            .enumerate()
+            .for_each(|(i, track)| position_track(i, track));
     } else {
-        tracks.iter_mut().enumerate().for_each(|(i, track)| position_track(i, track));
+        tracks
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, track)| position_track(i, track));
     }
 }
 
@@ -100,7 +131,10 @@ pub(super) fn align_and_position_item(
     #[cfg(feature = "content_size")] container_is_scroll_container: bool,
     bubbled_candidates: &mut OofCandidates,
 ) -> (Rect<f32>, f32, f32, Option<f32>) {
-    let grid_area_size = Size { width: grid_area.right - grid_area.left, height: grid_area.bottom - grid_area.top };
+    let grid_area_size = Size {
+        width: grid_area.right - grid_area.left,
+        height: grid_area.bottom - grid_area.top,
+    };
 
     let style = tree.get_grid_child_style(node);
 
@@ -115,36 +149,43 @@ pub(super) fn align_and_position_item(
     // The horizontal axis is the inline axis (Taffy only supports horizontal-tb); the vertical
     // (block) axis resolves them to plain start/end.
     let item_direction = style.direction();
-    let justify_self = style.justify_self().unwrap_or(container_alignment_styles.horizontal).resolve_self_relative(
-        item_direction,
-        direction,
-        true,
-    );
-    let align_self = style.align_self().unwrap_or(container_alignment_styles.vertical).resolve_self_relative(
-        item_direction,
-        direction,
-        false,
-    );
+    let justify_self = style
+        .justify_self()
+        .unwrap_or(container_alignment_styles.horizontal)
+        .resolve_self_relative(item_direction, direction, true);
+    let align_self = style
+        .align_self()
+        .unwrap_or(container_alignment_styles.vertical)
+        .resolve_self_relative(item_direction, direction, false);
 
     let position = style.position();
-    let inset_horizontal = style
-        .inset()
-        .horizontal_components()
-        .map(|size| size.resolve_to_option(containing_block_size.width, |val, basis| tree.calc(val, basis)));
-    let inset_vertical = style
-        .inset()
-        .vertical_components()
-        .map(|size| size.resolve_to_option(containing_block_size.height, |val, basis| tree.calc(val, basis)));
-    let padding = style
-        .padding()
-        .map(|p| p.resolve_or_zero(Some(containing_block_size.width), |val, basis| tree.calc(val, basis)));
-    let border = style
-        .border()
-        .map(|p| p.resolve_or_zero(Some(containing_block_size.width), |val, basis| tree.calc(val, basis)));
+    let inset_horizontal = style.inset().horizontal_components().map(|size| {
+        size.resolve_to_option(containing_block_size.width, |val, basis| {
+            tree.calc(val, basis)
+        })
+    });
+    let inset_vertical = style.inset().vertical_components().map(|size| {
+        size.resolve_to_option(containing_block_size.height, |val, basis| {
+            tree.calc(val, basis)
+        })
+    });
+    let padding = style.padding().map(|p| {
+        p.resolve_or_zero(Some(containing_block_size.width), |val, basis| {
+            tree.calc(val, basis)
+        })
+    });
+    let border = style.border().map(|p| {
+        p.resolve_or_zero(Some(containing_block_size.width), |val, basis| {
+            tree.calc(val, basis)
+        })
+    });
     let padding_border_size = (padding + border).sum_axes();
 
-    let box_sizing_adjustment =
-        if style.box_sizing() == BoxSizing::ContentBox { padding_border_size } else { Size::ZERO };
+    let box_sizing_adjustment = if style.box_sizing() == BoxSizing::ContentBox {
+        padding_border_size
+    } else {
+        Size::ZERO
+    };
 
     let size_style = style.size();
     let inherent_size = size_style
@@ -172,7 +213,10 @@ pub(super) fn align_and_position_item(
     let alignment_styles = InBothAbsAxis {
         horizontal: match justify_self.keyword {
             AlignItemsKeyword::Normal => {
-                if inherent_size.width.is_some() || size_style.width.is_sizing_keyword() || is_replaced {
+                if inherent_size.width.is_some()
+                    || size_style.width.is_sizing_keyword()
+                    || is_replaced
+                {
                     AlignSelf::START
                 } else {
                     AlignSelf::STRETCH
@@ -198,15 +242,26 @@ pub(super) fn align_and_position_item(
 
     // Note: This is not a bug. It is part of the CSS spec that both horizontal and vertical margins
     // resolve against the WIDTH of the grid area.
-    let margin = style
-        .margin()
-        .map(|margin| margin.resolve_to_option(containing_block_size.width, |val, basis| tree.calc(val, basis)));
+    let margin = style.margin().map(|margin| {
+        margin.resolve_to_option(containing_block_size.width, |val, basis| {
+            tree.calc(val, basis)
+        })
+    });
 
     drop(style);
 
     let grid_area_minus_item_margins_size = Size {
-        width: grid_area_size.width.maybe_sub(margin.left).maybe_sub(margin.right).max(0.0),
-        height: (grid_area_size.height.maybe_sub(margin.top).maybe_sub(margin.bottom) - baseline_shim).max(0.0),
+        width: grid_area_size
+            .width
+            .maybe_sub(margin.left)
+            .maybe_sub(margin.right)
+            .max(0.0),
+        height: (grid_area_size
+            .height
+            .maybe_sub(margin.top)
+            .maybe_sub(margin.bottom)
+            - baseline_shim)
+            .max(0.0),
     };
 
     // A size that is a sizing keyword (min-content, max-content, fit-content,
@@ -239,7 +294,10 @@ pub(super) fn align_and_position_item(
                 node,
                 Size::NONE,
                 containing_block_size.map(Option::Some),
-                Size { width: *available_width, height: *available_height },
+                Size {
+                    width: *available_width,
+                    height: *available_height,
+                },
                 SizingMode::InherentSize,
                 Line::FALSE,
             )
@@ -254,27 +312,34 @@ pub(super) fn align_and_position_item(
         // positioned element being set
         if position.is_out_of_flow() {
             if let (Some(left), Some(right)) = (inset_horizontal.start, inset_horizontal.end) {
-                return Some(f32_max(grid_area_minus_item_margins_size.width - left - right, 0.0));
+                return Some(f32_max(
+                    grid_area_minus_item_margins_size.width - left - right,
+                    0.0,
+                ));
             }
         }
 
         if let Some(Some(resolution)) = keyword_width {
             return Some(match resolution {
                 SizingKeywordResolution::Exact(width) => width,
-                SizingKeywordResolution::Measure(available_width) => keyword_measured_size.width.unwrap_or_else(|| {
-                    tree.measure_child_size(
-                        node,
-                        Size::NONE,
-                        containing_block_size.map(Option::Some),
-                        Size {
-                            width: available_width,
-                            height: AvailableSpace::Definite(grid_area_minus_item_margins_size.height),
-                        },
-                        SizingMode::InherentSize,
-                        AbsoluteAxis::Horizontal,
-                        Line::FALSE,
-                    )
-                }),
+                SizingKeywordResolution::Measure(available_width) => {
+                    keyword_measured_size.width.unwrap_or_else(|| {
+                        tree.measure_child_size(
+                            node,
+                            Size::NONE,
+                            containing_block_size.map(Option::Some),
+                            Size {
+                                width: available_width,
+                                height: AvailableSpace::Definite(
+                                    grid_area_minus_item_margins_size.height,
+                                ),
+                            },
+                            SizingMode::InherentSize,
+                            AbsoluteAxis::Horizontal,
+                            Line::FALSE,
+                        )
+                    })
+                }
             });
         }
 
@@ -294,12 +359,19 @@ pub(super) fn align_and_position_item(
     });
 
     // Reapply aspect ratio after stretch and absolute position width adjustments
-    let Size { width, height } = Size { width, height: inherent_size.height }.maybe_apply_aspect_ratio(aspect_ratio);
+    let Size { width, height } = Size {
+        width,
+        height: inherent_size.height,
+    }
+    .maybe_apply_aspect_ratio(aspect_ratio);
 
     let height = height.or_else(|| {
         if position.is_out_of_flow() {
             if let (Some(top), Some(bottom)) = (inset_vertical.start, inset_vertical.end) {
-                return Some(f32_max(grid_area_minus_item_margins_size.height - top - bottom, 0.0));
+                return Some(f32_max(
+                    grid_area_minus_item_margins_size.height - top - bottom,
+                    0.0,
+                ));
             }
         }
 
@@ -310,12 +382,17 @@ pub(super) fn align_and_position_item(
                     keyword_measured_size.height.unwrap_or_else(|| {
                         tree.measure_child_size(
                             node,
-                            Size { width, height: None },
+                            Size {
+                                width,
+                                height: None,
+                            },
                             containing_block_size.map(Option::Some),
                             Size {
-                                width: width
-                                    .map(AvailableSpace::Definite)
-                                    .unwrap_or(AvailableSpace::Definite(grid_area_minus_item_margins_size.width)),
+                                width: width.map(AvailableSpace::Definite).unwrap_or(
+                                    AvailableSpace::Definite(
+                                        grid_area_minus_item_margins_size.width,
+                                    ),
+                                ),
                                 height: available_height,
                             },
                             SizingMode::InherentSize,
@@ -372,10 +449,15 @@ pub(super) fn align_and_position_item(
     );
 
     // Resolve final size
-    let Size { width, height } = size.unwrap_or(layout_output.size).maybe_clamp(min_size, max_size);
+    let Size { width, height } = size
+        .unwrap_or(layout_output.size)
+        .maybe_clamp(min_size, max_size);
 
     let (x, x_margin) = align_item_within_area(
-        Line { start: grid_area.left, end: grid_area.right },
+        Line {
+            start: grid_area.left,
+            end: grid_area.right,
+        },
         alignment_styles.horizontal,
         width,
         position,
@@ -385,7 +467,10 @@ pub(super) fn align_and_position_item(
         direction,
     );
     let (y_without_relative_offset, y_margin) = align_item_within_area(
-        Line { start: grid_area.top, end: grid_area.bottom },
+        Line {
+            start: grid_area.top,
+            end: grid_area.bottom,
+        },
         alignment_styles.vertical,
         height,
         position,
@@ -400,11 +485,24 @@ pub(super) fn align_and_position_item(
     let y = y_without_relative_offset + relative_offset(position, inset_vertical, Direction::Ltr);
 
     let scrollbar_size = Size {
-        width: if overflow.y == Overflow::Scroll { scrollbar_width } else { 0.0 },
-        height: if overflow.x == Overflow::Scroll { scrollbar_width } else { 0.0 },
+        width: if overflow.y == Overflow::Scroll {
+            scrollbar_width
+        } else {
+            0.0
+        },
+        height: if overflow.x == Overflow::Scroll {
+            scrollbar_width
+        } else {
+            0.0
+        },
     };
 
-    let resolved_margin = Rect { left: x_margin.start, right: x_margin.end, top: y_margin.start, bottom: y_margin.end };
+    let resolved_margin = Rect {
+        left: x_margin.start,
+        right: x_margin.end,
+        top: y_margin.start,
+        bottom: y_margin.end,
+    };
 
     // Bubble out-of-flow candidates from the item's subtree, translating anchors from
     // item-relative to container-relative coordinates
@@ -434,9 +532,15 @@ pub(super) fn align_and_position_item(
         // Contributions to the container's scrollable overflow rect are measured from the
         // container's padding-box origin (mirrored for RTL), matching the scrollable overflow region.
         let contribution_location = if direction.is_rtl() {
-            Point { x: container_border_box_width - (x + width) - container_border.right, y: y - container_border.top }
+            Point {
+                x: container_border_box_width - (x + width) - container_border.right,
+                y: y - container_border.top,
+            }
         } else {
-            Point { x: x - container_border.left, y: y - container_border.top }
+            Point {
+                x: x - container_border.left,
+                y: y - container_border.top,
+            }
         };
         compute_scrollable_overflow_contribution(
             contribution_location,
@@ -467,13 +571,20 @@ pub(super) fn align_item_within_area(
     direction: Direction,
 ) -> (f32, Line<f32>) {
     // Calculate grid area dimension in the axis
-    let non_auto_margin = Line { start: margin.start.unwrap_or(0.0) + baseline_shim, end: margin.end.unwrap_or(0.0) };
+    let non_auto_margin = Line {
+        start: margin.start.unwrap_or(0.0) + baseline_shim,
+        end: margin.end.unwrap_or(0.0),
+    };
     let grid_area_size = f32_max(grid_area.end - grid_area.start, 0.0);
     let free_space = f32_max(grid_area_size - resolved_size - non_auto_margin.sum(), 0.0);
 
     // Expand auto margins to fill available space
     let auto_margin_count = margin.start.is_none() as u8 + margin.end.is_none() as u8;
-    let auto_margin_size = if auto_margin_count > 0 { free_space / auto_margin_count as f32 } else { 0.0 };
+    let auto_margin_size = if auto_margin_count > 0 {
+        free_space / auto_margin_count as f32
+    } else {
+        0.0
+    };
     let resolved_margin = Line {
         start: margin.start.unwrap_or(auto_margin_size) + baseline_shim,
         end: margin.end.unwrap_or(auto_margin_size),
@@ -507,7 +618,9 @@ pub(super) fn align_item_within_area(
         }
         // Normal is resolved, and SelfStart/SelfEnd are resolved to Start/End against
         // the item's own direction, in `align_and_position_item`.
-        AlignItemsKeyword::Normal | AlignItemsKeyword::SelfStart | AlignItemsKeyword::SelfEnd => unreachable!(),
+        AlignItemsKeyword::Normal | AlignItemsKeyword::SelfStart | AlignItemsKeyword::SelfEnd => {
+            unreachable!()
+        }
     };
 
     let offset_within_area = if position.is_out_of_flow() {

@@ -195,3 +195,174 @@ fn arcs_cubic_ribbons_stroke_dashes_and_radial_fills_rasterize_geometry() {
     assert_eq!(alpha(9, 56), 0);
     assert!(alpha(32, 10) > 200);
 }
+
+#[test]
+fn curve_strokes_preserve_dash_caps_joins_and_affine_placement() {
+    use aqua_core::vector::{LineCap, LineJoin, Stroke};
+    use aqua_media::vector::curve_outline;
+    for cap in [LineCap::Butt, LineCap::Round, LineCap::Square] {
+        for join in [LineJoin::Miter, LineJoin::Round, LineJoin::Bevel] {
+            let mut stroke = Stroke::new(Brush::Solid(Oklch::WHITE), 5.0);
+            stroke.cap = cap;
+            stroke.join = join;
+            stroke.dash = vec![9.0, 5.0];
+            stroke.dash_offset = 2.0;
+            let mut path = PaintedPath::stroke(
+                vec![
+                    PathCommand::Move(Point::new(5.0, 12.0)),
+                    PathCommand::Cubic {
+                        first: Point::new(15.0, 2.0),
+                        second: Point::new(20.0, 45.0),
+                        to: Point::new(32.0, 35.0),
+                    },
+                    PathCommand::Line(Point::new(48.0, 10.0)),
+                ],
+                stroke,
+            );
+            path.transform = Transform2D {
+                a: 0.9,
+                b: 0.1,
+                c: 0.15,
+                d: 1.1,
+                tx: 2.0,
+                ty: 3.0,
+            };
+            let curve = curve_outline(&path, 64.0).unwrap().unwrap();
+            let source = VectorSource::Drawing(Arc::new(Drawing {
+                view_box: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 64.0,
+                    h: 64.0,
+                },
+                paths: vec![path],
+            }));
+            let raster = rasterize(&source, 64, 64, VectorBudget::default()).unwrap();
+            let mut differences = 0;
+            for y in 0..64 {
+                for x in 0..64 {
+                    let alpha = raster.pixels[(y * 64 + x) * 4 + 3];
+                    let covered =
+                        curve.coverage((x as f32 + 0.5) / 64.0, (y as f32 + 0.5) / 64.0, 64.0);
+                    differences += usize::from((alpha > 127) != (covered > 0.5));
+                }
+            }
+            assert!(
+                differences <= 12,
+                "{cap:?} {join:?}: {differences} silhouette differences"
+            );
+        }
+    }
+}
+
+#[test]
+fn curve_paints_match_raster_gradients_through_transforms_and_alpha() {
+    use aqua_graph::slug::pack_glyph;
+    use aqua_media::vector::curve_outline;
+    let stops = Arc::from([
+        GradientStop {
+            position: 0.1,
+            color: Oklch::from_srgb8(245, 50, 30, 0.3),
+        },
+        GradientStop {
+            position: 0.4,
+            color: Oklch::from_srgb8(20, 220, 80, 0.7),
+        },
+        GradientStop {
+            position: 0.4,
+            color: Oklch::from_srgb8(240, 240, 250, 0.9),
+        },
+        GradientStop {
+            position: 0.85,
+            color: Oklch::from_srgb8(30, 100, 240, 1.0),
+        },
+    ]);
+    for brush in [
+        Brush::Solid(Oklch::from_srgb8(100, 190, 240, 0.65)),
+        Brush::Linear {
+            start: Point::new(0.0, 0.0),
+            end: Point::new(64.0, 40.0),
+            stops: Arc::clone(&stops),
+        },
+        Brush::Radial {
+            center: Point::new(32.0, 32.0),
+            focal: Point::new(24.0, 27.0),
+            radius: 28.0,
+            stops: Arc::clone(&stops),
+        },
+    ] {
+        let mut path = PaintedPath::fill(rectangle(2.0, 2.0, 55.0, 45.0), brush);
+        path.transform = Transform2D {
+            a: 0.9,
+            b: 0.1,
+            c: 0.12,
+            d: 1.1,
+            tx: 1.0,
+            ty: 1.0,
+        };
+        let curve = curve_outline(&path, 64.0).unwrap().unwrap();
+        let packed = pack_glyph(&curve, 0);
+        let paint = packed[3][1] as u32;
+        assert!(paint > 0);
+        let source = VectorSource::Drawing(Arc::new(Drawing {
+            view_box: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 64.0,
+                h: 64.0,
+            },
+            paths: vec![path],
+        }));
+        let raster = rasterize(&source, 64, 64, VectorBudget::default()).unwrap();
+        for y in 0..64 {
+            for x in 0..64 {
+                let em = [(x as f32 + 0.5) / 64.0, (y as f32 + 0.5) / 64.0];
+                if curve.coverage(em[0], em[1], 64.0) < 0.999 {
+                    continue;
+                }
+                let sampled = aqua_graph::curve_paint::sample(|i| packed[i as usize], paint, em);
+                for channel in 0..4 {
+                    let expected = raster.pixels[(y * 64 + x) * 4 + channel] as f32;
+                    assert!(
+                        (sampled[channel] * 255.0 - expected).abs() <= 3.0,
+                        "pixel {x},{y} channel {channel}: {} vs {expected}",
+                        sampled[channel] * 255.0
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn even_odd_curves_preserve_nested_holes_and_islands() {
+    use aqua_graph::slug::{coverage, pack_glyph};
+    use aqua_media::vector::curve_outline;
+    let mut commands = rectangle(2.0, 2.0, 60.0, 60.0);
+    commands.extend(rectangle(12.0, 12.0, 40.0, 40.0));
+    commands.extend(rectangle(24.0, 24.0, 16.0, 16.0));
+    let mut path = PaintedPath::fill(commands, Brush::Solid(Oklch::WHITE));
+    path.fill_rule = FillRule::EvenOdd;
+    let curve = curve_outline(&path, 64.0).unwrap().unwrap();
+    let packed = pack_glyph(&curve, 0);
+    for (point, expected) in [
+        ([5.0, 5.0], 1.0),
+        ([16.0, 16.0], 0.0),
+        ([32.0, 32.0], 1.0),
+        ([63.0, 32.0], 0.0),
+    ] {
+        assert_eq!(
+            curve.coverage(point[0] / 64.0, point[1] / 64.0, 64.0),
+            expected
+        );
+        assert_eq!(
+            coverage(
+                |i| packed[i as usize],
+                0,
+                [point[0] / 64.0, point[1] / 64.0],
+                64.0
+            ),
+            expected
+        );
+    }
+}

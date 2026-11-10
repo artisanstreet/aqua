@@ -1,0 +1,15 @@
+
+running 1 test
+legacy sampling comparison Comparison { interior_pixels: 6528, edge_pixels: 384, soft_pixels: 0, interior_max: 14, soft_max: 0, edge_max: 26, failing_samples: 324, failures: [Failure { x: 5, y: 8, channel: 3, expected: 26, actual: 0, edge: true }, Failure { x: 5, y: 9, channel: 3, expected: 26, actual: 0, edge: true }, Failure { x: 5, y: 10, channel: 3, expected: 26, actual: 0, edge: true }, Failure { x: 8, y: 10, channel: 0, expected: 30, actual: 23, edge: false }, Failure { x: 8, y: 10, channel: 1, expected: 30, actual: 23, edge: false }, Failure { x: 8, y: 10, channel: 2, expected: 30, actual: 23, edge: false }, Failure { x: 8, y: 10, channel: 3, expected: 60, actual: 46, edge: false }, Failure { x: 11, y: 10, channel: 0, expected: 42, actual: 36, edge: false }, Failure { x: 11, y: 10, channel: 1, expected: 42, actual: 36, edge: false }, Failure { x: 11, y: 10, channel: 2, expected: 42, actual: 36, edge: false }, Failure { x: 11, y: 10, channel: 3, expected: 83, actual: 72, edge: false }, Failure { x: 14, y: 10, channel: 0, expected: 51, actual: 46, edge: false }, Failure { x: 14, y: 10, channel: 1, expected: 51, actual: 46, edge: false }, Failure { x: 14, y: 10, channel: 2, expected: 51, actual: 46, edge: false }, Failure { x: 14, y: 10, channel: 3, expected: 101, actual: 92, edge: false }, Failure { x: 17, y: 10, channel: 3, expected: 118, actual: 110, edge: false }] }
+
+thread 'legacy_scaled_mask_matches_reference' (9520) panicked at crates/aqua-gpu-d3d11/tests/conformance.rs:117:5:
+assertion failed: comparison.passed()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test legacy_scaled_mask_matches_reference ... FAILED
+
+failures:
+
+failures:
+    legacy_scaled_mask_matches_reference
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.12s

@@ -96,3 +96,17 @@ fn gif_and_webp_decoding_preserve_pixels_delays_and_enforce_retention_limits() {
     let decoded = aqua_media::decode::decode_bytes(&encoded).unwrap();
     assert_eq!(decoded.pixel_at(0, 0), Some([17, 33, 65, 128]));
 }
+
+#[test]
+fn still_webp_decodes_as_a_single_frame() {
+    let mut encoded = Vec::new();
+    image::codecs::webp::WebPEncoder::new_lossless(&mut encoded)
+        .encode(&[17, 33, 65, 255], 1, 1, image::ExtendedColorType::Rgba8)
+        .unwrap();
+    let animation = decode_animation(&encoded, AnimationBudget::default()).unwrap();
+    assert_eq!(animation.frames().len(), 1);
+    assert_eq!(
+        animation.frames()[0].image.pixel_at(0, 0),
+        Some([17, 33, 65, 255])
+    );
+}

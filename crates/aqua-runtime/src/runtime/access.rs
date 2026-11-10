@@ -2,6 +2,20 @@ use super::*;
 use aqua_protocol::{A11yText, A11yTextRun};
 use unicode_segmentation::UnicodeSegmentation;
 
+#[derive(PartialEq)]
+pub(super) struct AccessRunKey {
+    revision: u64,
+    source: String,
+    origin: Point,
+    transform: aqua_core::Transform2D,
+    scale: f32,
+}
+
+pub(super) struct AccessRuns {
+    key: AccessRunKey,
+    runs: Vec<A11yTextRun>,
+}
+
 impl Runtime {
     pub(super) fn text_accessibility(&self, node: NodeId) -> Option<A11yText> {
         let NodeKind::Text(text) = &self.tree.get(node)?.kind else {
@@ -12,7 +26,8 @@ impl Runtime {
         }
         let entry = self.text_runs.get(&node)?;
         let registry = self.runs.lock();
-        let layout = registry.resolve(entry.run)?.layout;
+        let handle = registry.resolve(entry.run)?;
+        let layout = handle.layout;
         let source = match text.is_placeholder() {
             true => String::new(),
             false => text.display_text(),
@@ -20,6 +35,35 @@ impl Runtime {
         let padding = self.tree.get(node)?.style.padding;
         let transform = self.tree.visual_transform(node)?;
         let origin = Point::new(padding.left - entry.scroll_x, padding.top);
+        let selection = match &text.backing {
+            TextBacking::Editable(editor) if !editor.is_composing() => {
+                let selection = editor.selection();
+                Some((selection.anchor, selection.caret))
+            }
+            TextBacking::Static(_) => text
+                .selection
+                .map(|selection| (selection.anchor, selection.caret)),
+            _ => None,
+        };
+        let key = AccessRunKey {
+            revision: handle.revision,
+            source: source.clone(),
+            origin,
+            transform,
+            scale: self.scale,
+        };
+        if let Some(cached) = entry
+            .access_runs
+            .borrow()
+            .as_ref()
+            .filter(|cached| cached.key == key)
+        {
+            return Some(A11yText {
+                runs: cached.runs.clone(),
+                selection,
+                selection_enabled: text.is_editable() || text.selectable,
+            });
+        }
         let world_rect = |left: f32, top: f32, right: f32, bottom: f32| {
             let start = transform.apply(Point::new(
                 origin.x + left / self.scale,
@@ -129,16 +173,10 @@ impl Runtime {
                 };
             }
         }
-        let selection = match &text.backing {
-            TextBacking::Editable(editor) if !editor.is_composing() => {
-                let selection = editor.selection();
-                Some((selection.anchor, selection.caret))
-            }
-            TextBacking::Static(_) => text
-                .selection
-                .map(|selection| (selection.anchor, selection.caret)),
-            _ => None,
-        };
+        *entry.access_runs.borrow_mut() = Some(AccessRuns {
+            key,
+            runs: runs.clone(),
+        });
         Some(A11yText {
             runs,
             selection,

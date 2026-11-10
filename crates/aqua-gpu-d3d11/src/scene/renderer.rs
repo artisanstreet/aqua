@@ -138,10 +138,14 @@ struct Scratch {
     bytes: Vec<u8>,
     uploads: Vec<Upload>,
     colors: ColorMemo,
+    geometry: super::geometry::GeometryCache,
 }
 
 impl Scratch {
-    fn pack(&mut self, plan: &FramePlan) {
+    fn pack(&mut self, plan: &FramePlan) -> bool {
+        if self.geometry.prepare(plan) {
+            return false;
+        }
         self.bytes.clear();
         self.uploads.clear();
         let bytes = &mut self.bytes;
@@ -186,6 +190,7 @@ impl Scratch {
             };
             self.uploads.push(upload);
         }
+        true
     }
 }
 
@@ -311,6 +316,7 @@ pub struct SceneRenderer {
     scratch: Scratch,
     mirror: Option<SurfaceMirror>,
     shrink_instances: bool,
+    instances_valid: bool,
 }
 
 impl SceneRenderer {
@@ -361,6 +367,7 @@ impl SceneRenderer {
             scratch: Scratch::default(),
             mirror: None,
             shrink_instances: false,
+            instances_valid: false,
         };
         stages.mark("      renderer_buffers");
         Ok(renderer)
@@ -447,6 +454,8 @@ impl SceneRenderer {
     pub fn trim(&mut self, trim: &Trim) -> u64 {
         if trim.shrink_upload_ring {
             self.shrink_instances = true;
+            self.scratch = Scratch::default();
+            self.instances_valid = false;
             self.mirror = None;
         }
         match trim.free_transients {
@@ -459,7 +468,7 @@ impl SceneRenderer {
         self.transients.ensure(&self.device, plan, precision)
     }
 
-    fn prepare_instances(&mut self, needed: u64) -> Result<(), Error> {
+    fn prepare_instances(&mut self, needed: u64) -> Result<bool, Error> {
         let shrink = std::mem::take(&mut self.shrink_instances);
         let wanted = needed.next_power_of_two().max(INITIAL_INSTANCE_BYTES);
         if self.instances.capacity < needed || (shrink && wanted != self.instances.capacity) {
@@ -469,8 +478,10 @@ impl SceneRenderer {
                 D3D11_BIND_VERTEX_BUFFER,
                 "instance_buffer",
             )?;
+            self.instances_valid = false;
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 
     fn write_constants(
@@ -660,11 +671,14 @@ impl SceneRenderer {
         repaint: Option<RECT>,
         scratch: &mut Scratch,
     ) -> Result<SceneStats, Error> {
-        scratch.pack(plan);
+        let repacked = scratch.pack(plan);
         self.prepare_instances((scratch.bytes.len() as u64).max(16))?;
-        if !scratch.bytes.is_empty() {
+        let uploaded = repacked || !self.instances_valid;
+        if uploaded && !scratch.bytes.is_empty() {
+            self.instances_valid = false;
             write_buffer(context, &self.instances.buffer, &scratch.bytes, 0)?;
         }
+        self.instances_valid = true;
         let precision = match target.format == DXGI_FORMAT_B8G8R8A8_UNORM {
             true => Precision::EightBit,
             false => Precision::Planned,
@@ -677,7 +691,11 @@ impl SceneRenderer {
         let mut stats = SceneStats {
             passes: plan.passes.len() as u32,
             instances: plan.instance_count() as u32,
-            upload_bytes: scratch.bytes.len() as u64,
+            upload_bytes: if uploaded {
+                scratch.bytes.len() as u64
+            } else {
+                0
+            },
             ..SceneStats::default()
         };
         unsafe {
@@ -1027,6 +1045,10 @@ impl SceneRenderer {
                 }
                 (PassKind::Glyphs { .. }, Upload::Sprites { offset, count })
                 | (PassKind::Slug { .. }, Upload::Sprites { offset, count }) => {
+                    let tone = match &pass.kind {
+                        PassKind::Glyphs { coverage, .. } => coverage.tone(tone),
+                        _ => tone,
+                    };
                     let kind = match pass.kind {
                         PassKind::Glyphs { .. } => Kind::Glyph,
                         _ => Kind::Slug,
@@ -1049,10 +1071,6 @@ impl SceneRenderer {
                     stats.draws += 1;
                 }
                 (PassKind::Images { instances }, Upload::Sprites { offset, .. }) => {
-                    self.write_constants(
-                        context,
-                        constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent, None),
-                    )?;
                     let mut start = 0usize;
                     while start < instances.len() {
                         let first = &instances[start];
@@ -1068,15 +1086,12 @@ impl SceneRenderer {
                         };
                         let program = self.pipelines.get(kind)?;
                         self.use_program(context, &program);
-                        let position = pass
-                            .reads
-                            .iter()
-                            .position(|read| *read == first.source)
-                            .unwrap_or(0)
-                            .min(MAX_INPUTS - 1);
-                        unsafe {
-                            context.PSSetShaderResources(0, Some(&views[position..position + 1]))
-                        };
+                        let source = self.bind(first.source, target, target.extent, textures)?;
+                        self.write_constants(
+                            context,
+                            constants(extent, 1.0, [0.0; 4], [0.0; 4], source.extent, None),
+                        )?;
+                        unsafe { context.PSSetShaderResources(0, Some(&[source.srv])) };
                         self.instances_at(
                             context,
                             offset + start as u64 * SPRITE_STRIDE as u64,

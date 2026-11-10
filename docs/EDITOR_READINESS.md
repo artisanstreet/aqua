@@ -1,5 +1,14 @@
 # Beginning the Artisan Editor port
 
+Status note (2026-11-08): the qualification results below belong to their dated
+implementation. Several listed `aqua-render` and `aqua-platform` paths were
+replaced by the native graph/transport/D3D11/Win32 crates. They are historical
+references, not commands that can be rerun against the present tree. Current
+architecture and remaining limitations are recorded in `../ARCHITECTURE.md`.
+A passing historical qualification does not prove the current dirty worktree
+passed every former gate.
+
+
 Status, 2026-11-03: **ready to begin porting the entire Windows Editor app**. The target is
 starting the Windows port of the entire Editor through public Aqua APIs. It covers
 the shell and every Editor section, including rich blocks and native services.

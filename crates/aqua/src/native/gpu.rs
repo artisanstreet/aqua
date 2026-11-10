@@ -5,6 +5,7 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Once};
 use std::time::Duration;
+use std::time::Instant as WallInstant;
 
 use aqua_core::{Oklch, Rect};
 #[cfg(not(feature = "d3d12"))]
@@ -120,9 +121,22 @@ fn stage_nth(label: &str, counter: &std::sync::atomic::AtomicU32, limit: u32) {
     }
 }
 
+fn window_options() -> WindowOptions {
+    let options = WindowOptions::from_env();
+    #[cfg(not(feature = "d3d12"))]
+    let options = match std::env::var_os("AQUA_D3D11_PREVENT_THREADING") {
+        None => WindowOptions {
+            device: options.device.with_prevent_internal_threading(true),
+            ..options
+        },
+        Some(_) => options,
+    };
+    options
+}
+
 pub fn prewarm() {
     startup_mark("prewarm_start");
-    WindowBackend::begin_early(WindowOptions::from_env(), persist::load_pipeline_cache);
+    WindowBackend::begin_early(window_options(), persist::load_pipeline_cache);
 }
 
 fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
@@ -139,7 +153,7 @@ fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
         Some(backend) => backend,
         None => {
             let cache = persist::load_pipeline_cache();
-            WindowBackend::with_pipeline_cache(WindowOptions::from_env(), cache.as_deref())
+            WindowBackend::with_pipeline_cache(window_options(), cache.as_deref())
                 .map_err(|e| e.to_string())?
         }
     };
@@ -301,16 +315,6 @@ impl WindowHandle {
         });
     }
 
-    fn set_half_rate(&self, surface: SurfaceId, half_rate: bool) {
-        #[cfg(not(feature = "d3d12"))]
-        self.hub
-            .backend
-            .borrow_mut()
-            .set_half_rate(surface, half_rate);
-        #[cfg(feature = "d3d12")]
-        let _ = (surface, half_rate);
-    }
-
     fn set_hidden(&self, hidden: bool) -> bool {
         let all_hidden = {
             let mut set = self.hub.hidden.borrow_mut();
@@ -367,6 +371,24 @@ impl WindowHandle {
     fn settle_surfaces(&mut self) {
         if let Err(error) = self.hub.backend.borrow_mut().settle_surfaces() {
             eprintln!("aqua: swapchain settle failed: {error}");
+        }
+    }
+
+    fn settle_surface(&mut self, surface: SurfaceId) -> bool {
+        #[cfg(not(feature = "d3d12"))]
+        {
+            match self.hub.backend.borrow_mut().settle_surface(surface) {
+                Ok(changed) => changed,
+                Err(error) => {
+                    eprintln!("aqua: swapchain settle failed: {error}");
+                    true
+                }
+            }
+        }
+        #[cfg(feature = "d3d12")]
+        {
+            let _ = surface;
+            false
         }
     }
 
@@ -509,6 +531,17 @@ impl GpuBackend for WindowHandle {
         self.hub.backend.borrow_mut().wait_for_frame_slot(surface)
     }
 
+    fn wait_for_frame_slot_with_hint(
+        &mut self,
+        surface: SurfaceId,
+        hint: PresentHint,
+    ) -> Result<(), GpuError> {
+        self.hub
+            .backend
+            .borrow_mut()
+            .wait_for_frame_slot_with_hint(surface, hint)
+    }
+
     fn present_with_damage(
         &mut self,
         surface: SurfaceId,
@@ -533,6 +566,8 @@ struct WindowTarget {
     composition: Option<CompositionSink>,
     delivered: Option<u32>,
     announced: bool,
+    viewport: Option<(aqua_core::Size, f32)>,
+    settle_at: Option<WallInstant>,
 }
 
 impl WindowTarget {
@@ -571,6 +606,16 @@ impl FrameTarget for WindowTarget {
             startup_mark("frame_present_begin");
         }
         let feedback = self.frames.present(side, frame);
+        if !cfg!(feature = "d3d12")
+            && self.composition.is_none()
+            && self.viewport != side.viewport()
+            && feedback
+                .iter()
+                .any(|item| matches!(item, Feedback::Presented(_)))
+        {
+            self.viewport = side.viewport();
+            self.settle_at = Some(WallInstant::now() + Duration::from_millis(500));
+        }
         if crate::mem_probe::memory_report_enabled() {
             static PRESENTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let count = PRESENTS.fetch_add(1, Ordering::Relaxed) + 1;
@@ -602,6 +647,20 @@ impl FrameTarget for WindowTarget {
 
     fn startup_step(&mut self) {
         self.frames.backend().startup_step();
+    }
+
+    fn maintenance_in(&self) -> Option<Duration> {
+        self.settle_at
+            .map(|at| at.saturating_duration_since(WallInstant::now()))
+    }
+
+    fn maintenance(&mut self) -> bool {
+        self.settle_at = None;
+        self.frames.backend_mut().settle_surface(self.surface)
+    }
+
+    fn animation_interval(&self, fallback: Duration) -> Duration {
+        self.frames.animation_interval(fallback)
     }
 
     fn idle_trim_in(&mut self) -> Option<std::time::Duration> {
@@ -657,12 +716,17 @@ pub fn factory(
                 })),
             }
             .map_err(|e| e.to_string())?;
+            if crate::debug::panel() {
+                crate::debug::watch(stats.clone(), hwnd);
+                crate::debug::window::open(fonts.clone(), runs.clone());
+            }
             let lowering = Lowering::new(fonts.clone(), runs.clone())
                 .with_clear(clear)
                 .with_recovery(signal);
             let mut saver = PipelineCacheSaver::default();
             let shared_stats = stats.clone();
             let frames = GpuFrames::new(handle, surface, extent, lowering, externals, stats)
+                .with_hint(PresentHint::Vsync)
                 .with_damage(damage, runs)
                 .with_repaint_probe(|backend: &WindowHandle, surface, damage: &[Rect]| {
                     backend.repaint_bounds(surface, damage)
@@ -670,9 +734,6 @@ pub fn factory(
                 .with_idle_release(|backend: &mut WindowHandle| backend.release_idle())
                 .with_pressure(|backend: &mut WindowHandle| backend.service_budget())
                 .with_visibility(|backend: &mut WindowHandle, hidden| backend.set_hidden(hidden))
-                .with_half_rate(|backend: &mut WindowHandle, surface, half| {
-                    backend.set_half_rate(surface, half)
-                })
                 .with_maintenance(move |backend: &mut WindowHandle| {
                     backend.settle_surfaces();
                     saver.save(backend.pipeline_cache());
@@ -686,9 +747,19 @@ pub fn factory(
                 composition: transparent.then_some(composition),
                 delivered: None,
                 announced: false,
+                viewport: None,
+                settle_at: None,
             };
             target.deliver_composition();
             Ok(Box::new(target) as Box<dyn FrameTarget>)
         })
     })
+}
+
+#[must_use]
+pub(crate) fn refresh_of(hwnd: isize) -> Option<u64> {
+    let interval = gpu::window::timing::monitor_interval(gpu::window::timing::monitor_of(hwnd));
+    u64::try_from(interval.as_nanos())
+        .ok()
+        .filter(|nanos| *nanos > 0)
 }

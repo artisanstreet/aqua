@@ -312,7 +312,7 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
         };
         let transitioning =
             self.host.lowering().transition_active() || self.host.retains_solid_geometry(side);
-        let plan = match side.viewport() {
+        let mut plan = match side.viewport() {
             _ if transitioning => Plan::Full,
             Some((size, scale)) => stage.planner.plan(
                 side.scene(),
@@ -323,6 +323,17 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
             ),
             None => Plan::Full,
         };
+        let region = match (&plan, &self.probe) {
+            (Plan::Regions(rects), Some(probe)) => probe(self.host.backend(), self.surface, rects),
+            _ => None,
+        };
+        let expanded = region.map(|region| stage.planner.repaint_bounds(region));
+        if expanded != region {
+            if let Some(expanded) = expanded {
+                plan = Plan::Regions(vec![expanded]);
+            }
+        }
+        let region = expanded;
         let stats = &self.stats;
         match &plan {
             Plan::Full => {
@@ -336,10 +347,6 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
                     .fetch_add(pixels as u64, Ordering::Relaxed);
             }
         }
-        let region = match (&plan, &self.probe) {
-            (Plan::Regions(rects), Some(probe)) => probe(self.host.backend(), self.surface, rects),
-            _ => None,
-        };
         self.repaint_ratio = match (&plan, region, side.viewport()) {
             (Plan::Regions(_), Some(region), Some((size, scale))) => {
                 let frame = (size.w * scale) * (size.h * scale);

@@ -30,3 +30,6 @@ mod support;
 #[cfg(windows)]
 #[path = "../hal/window.rs"]
 mod test_window;
+
+#[cfg(windows)]
+mod backdrop;

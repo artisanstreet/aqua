@@ -80,12 +80,23 @@ fn traits_of(scene: &Scene, ink: &FastMap<u64, Rect>) -> SceneTraits {
     let mut worlds: Vec<Transform2D> = Vec::new();
     let mut pulses = 0usize;
     let mut maps: Vec<Option<Rect>> = Vec::new();
+    let mut clips: Vec<Option<Rect>> = Vec::new();
     for (_, item) in scene.ordered() {
         let world = worlds.last().copied().unwrap_or(Transform2D::IDENTITY);
         match item {
             DisplayItem::PushTransform(local) => worlds.push(local.then(world)),
             DisplayItem::PopTransform => {
                 worlds.pop();
+            }
+            DisplayItem::PushClip { bounds, radius } => {
+                clips.push((*radius > 0.0).then(|| transformed(*bounds, world)));
+            }
+            DisplayItem::PushRoundedClip { bounds, .. } => {
+                clips.push(Some(transformed(*bounds, world)));
+            }
+            DisplayItem::PushGpuiContentMask { .. } => clips.push(None),
+            DisplayItem::PopClip => {
+                clips.pop();
             }
             DisplayItem::PushGpuiQuadPulse(_) => pulses += 1,
             DisplayItem::PopGpuiQuadPulse => pulses = pulses.saturating_sub(1),
@@ -119,9 +130,16 @@ fn traits_of(scene: &Scene, ink: &FastMap<u64, Rect>) -> SceneTraits {
             }
             DisplayItem::BackdropBlur { bounds, radius }
             | DisplayItem::BackdropBlurRounded { bounds, radius, .. }
-            | DisplayItem::PushContentBlur { bounds, radius } => traits
-                .blurs
-                .push(blur_zone(transformed(*bounds, world), *radius)),
+            | DisplayItem::PushContentBlur { bounds, radius } => {
+                traits
+                    .blurs
+                    .push(blur_zone(transformed(*bounds, world), *radius));
+                for clip in clips.iter().flatten() {
+                    if !traits.blurs.contains(clip) {
+                        traits.blurs.push(*clip);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -222,6 +240,42 @@ impl DamagePlanner {
         plan
     }
 
+    pub fn repaint_bounds(&self, region: Rect) -> Rect {
+        let Some(viewport) = self.staged_viewport.or(self.viewport) else {
+            return region;
+        };
+        let Some((_, traits)) = &self.traits else {
+            return region;
+        };
+        let scale = viewport.scale;
+        let frame = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: viewport.width * scale,
+            h: viewport.height * scale,
+        };
+        let zones: Vec<Rect> = traits
+            .blurs
+            .iter()
+            .map(|zone| {
+                Rect::from_edges(
+                    (zone.x * scale).floor(),
+                    (zone.y * scale).floor(),
+                    (zone.right() * scale).ceil(),
+                    (zone.bottom() * scale).ceil(),
+                )
+                .intersect(frame)
+            })
+            .collect();
+        let mut damage = vec![region];
+        absorb_blur_zones(&mut damage, &zones);
+        damage
+            .into_iter()
+            .reduce(Rect::union)
+            .unwrap_or(region)
+            .intersect(frame)
+    }
+
     fn note_changes(&mut self, scene: &Scene) {
         let mut changed: Vec<String> = Vec::new();
         let mut count = 0usize;
@@ -270,7 +324,13 @@ fn absorb_blur_zones(damage: &mut Vec<Rect>, zones: &[Rect]) -> bool {
     loop {
         let mut grew = false;
         for (zone, taken) in zones.iter().zip(absorbed.iter_mut()) {
-            if !*taken && damage.iter().any(|rect| overlaps(*rect, *zone)) {
+            if !*taken
+                && damage
+                    .iter()
+                    .copied()
+                    .reduce(Rect::union)
+                    .is_some_and(|rect| overlaps(rect, *zone))
+            {
                 damage.push(*zone);
                 *taken = true;
                 grew = true;

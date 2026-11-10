@@ -1,0 +1,83 @@
+build slot 1
+warning: Git tree '/home/sander/projects/artisanstreet/editor' is dirty
+    Checking stable_deref_trait v1.2.1
+    Checking simd-adler32 v0.3.10
+    Checking adler2 v2.0.1
+    Checking cfg-if v1.0.5
+    Checking arrayvec v0.7.8
+    Checking bytemuck v1.25.2
+    Checking zerofrom v0.1.8
+    Checking crc32fast v1.5.3
+    Checking smallvec v1.16.4
+    Checking miniz_oxide v0.9.1
+    Checking yoke v0.8.4
+    Checking bitflags v2.13.2
+    Checking float-cmp v0.9.0
+    Checking writeable v0.6.4
+    Checking strict-num v0.1.1
+    Checking font-types v0.12.7
+    Checking polycool v0.4.0
+    Checking zerovec v0.11.9
+    Checking fdeflate v0.3.7
+    Checking miniz_oxide v0.8.9
+    Checking log v0.4.34
+    Checking flate2 v1.1.10
+    Checking once_cell v1.21.4
+    Checking arrayref v0.3.9
+    Checking kurbo v0.13.1
+    Checking tiny-skia-path v0.12.0
+    Checking aqua-core v0.1.0 (/home/sander/projects/artisanstreet/aqua-layout-ownership/crates/aqua-core)
+    Checking litemap v0.8.3
+    Checking png v0.18.1
+    Checking siphasher v1.0.4
+    Checking weezl v0.1.12
+    Checking quick-error v2.0.1
+    Checking byteorder-lite v0.1.0
+    Checking memchr v2.8.3
+    Checking color_quant v1.1.0
+    Checking tinystr v0.8.5
+    Checking zune-core v0.5.3
+    Checking image-webp v0.2.4
+    Checking gif v0.14.2
+    Checking icu_locale_core v2.4.0
+    Checking zune-jpeg v0.5.15
+    Checking svgtypes v0.16.1
+    Checking roxmltree v0.21.2
+    Checking potential_utf v0.1.6
+    Checking num-traits v0.2.19
+    Checking simplecss v0.2.2
+    Checking zerotrie v0.2.5
+    Checking pico-args v0.5.0
+    Checking utf_types v1.0.0
+    Checking data-url v0.3.2
+    Checking pxfm v0.1.30
+    Checking imagesize v0.15.0
+    Checking utf8_iter v1.1.0
+    Checking icu_provider v2.4.0
+    Checking icu_locale_fallback_data v2.4.0
+    Checking tiny-skia v0.12.0
+    Checking aqua-graph v0.1.0 (/home/sander/projects/artisanstreet/aqua-layout-ownership/crates/aqua-graph)
+    Checking aqua-motion v0.1.0 (/home/sander/projects/artisanstreet/aqua-layout-ownership/crates/aqua-motion)
+    Checking usvg v0.48.1
+    Checking read-fonts v0.43.3
+    Checking rgb v0.8.53
+    Checking icu_locale_fallback v2.4.0
+    Checking aqua-protocol v0.1.0 (/home/sander/projects/artisanstreet/aqua-layout-ownership/crates/aqua-protocol)
+    Checking icu_collections v2.4.0
+    Checking icu_segmenter_data v2.4.0
+    Checking read-fonts v0.41.0
+    Checking resvg v0.48.1
+    Checking memmap2 v0.9.12
+    Checking icu_segmenter v2.4.0
+    Checking unicode-script v0.5.8
+    Checking unicode-bidi v0.3.18
+    Checking unicode-segmentation v1.13.3
+    Checking zeno v0.3.3
+    Checking moxcms v0.8.1
+    Checking image v0.25.10
+    Checking skrifa v0.46.2
+    Checking harfrust v0.12.0
+    Checking aqua-media v0.1.0 (/home/sander/projects/artisanstreet/aqua-layout-ownership/crates/aqua-media)
+    Checking aqua-fonts-system v0.1.0 (/home/sander/projects/artisanstreet/aqua-layout-ownership/crates/aqua-fonts-system)
+    Checking aqua-text v0.1.0 (/home/sander/projects/artisanstreet/aqua-layout-ownership/crates/aqua-text)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.50s

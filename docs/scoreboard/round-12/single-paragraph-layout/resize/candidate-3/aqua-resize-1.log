@@ -1,0 +1,14 @@
+probe-launch unix_ms=1794016502286 pid=2320
+probe-startup window_ms=63 first_content_ms=603 nondominant=0.165 rich_content_ms=603
+probe-open thread=bench-large unix_ms=1794016502471 since_launch_ms=185 since_click_ms=-1
+probe-cpu name=rs0 unix_ms=1794016516761 cpu_ms=234 user_ms=94 private_mb=109.8 working_set_mb=122.9 peak_working_set_mb=127.7 threads=30 handles=1050
+probe-latency name=resize_setpos kind=resize samples=120 timeouts=0 p50_ms=1.309 p90_ms=1.892 p99_ms=2.312 max_ms=2.345 mean_ms=1.347 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=1.484 p90_ms=2.13 p99_ms=2.501 max_ms=8.129 mean_ms=1.572 over4_ms=1 over8_ms=0 over16_ms=0 over50_ms=0
+probe-cpu name=rs1 unix_ms=1794016519867 cpu_ms=609 user_ms=422 private_mb=114.1 working_set_mb=124.7 peak_working_set_mb=127.7 threads=32 handles=1052
+probe-cpu name=rs2 unix_ms=1794016520878 cpu_ms=625 user_ms=438 private_mb=114.1 working_set_mb=124.7 peak_working_set_mb=127.7 threads=32 handles=1052
+probe-latency name=resize2_setpos kind=resize samples=120 timeouts=0 p50_ms=1.356 p90_ms=1.823 p99_ms=2.43 max_ms=2.549 mean_ms=1.389 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0
+probe-latency name=resize2 kind=resize samples=120 timeouts=0 p50_ms=1.554 p90_ms=2.034 p99_ms=2.68 max_ms=2.731 mean_ms=1.554 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0
+probe-cpu name=rs3 unix_ms=1794016523915 cpu_ms=828 user_ms=641 private_mb=114.5 working_set_mb=124.9 peak_working_set_mb=127.7 threads=32 handles=1053
+pid=2320 dpi=120 working_set_mb=125 private_mb=115
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---

@@ -26,7 +26,12 @@ impl<T> FrontBackVecBuilder<T> {
     /// Create a new `FrontBackVecBuilder` that will contain exactly `capacity` items
     #[inline(always)]
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Self { vec: Vec::with_capacity(capacity), capacity, front_len: 0, back_len: 0 }
+        Self {
+            vec: Vec::with_capacity(capacity),
+            capacity,
+            front_len: 0,
+            back_len: 0,
+        }
     }
 
     /// Add an item after the items that have already been pushed to the front.
@@ -55,7 +60,12 @@ impl<T> FrontBackVecBuilder<T> {
     /// Panics if the total number of items that have been pushed is not exactly `capacity`.
     #[inline(always)]
     pub(crate) fn into_vec(self) -> (Vec<T>, usize) {
-        let Self { mut vec, capacity, front_len, back_len } = self;
+        let Self {
+            mut vec,
+            capacity,
+            front_len,
+            back_len,
+        } = self;
         assert_eq!(
             front_len + back_len,
             capacity,

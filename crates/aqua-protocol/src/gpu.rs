@@ -252,6 +252,14 @@ pub trait GpuBackend {
         Ok(())
     }
 
+    fn wait_for_frame_slot_with_hint(
+        &mut self,
+        surface: SurfaceId,
+        _hint: PresentHint,
+    ) -> Result<(), Self::Error> {
+        self.wait_for_frame_slot(surface)
+    }
+
     fn present_with_damage(
         &mut self,
         surface: SurfaceId,

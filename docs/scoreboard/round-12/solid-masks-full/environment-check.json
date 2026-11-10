@@ -1,0 +1,8 @@
+{
+  "method": "Windows PowerShell reads Process environment inherited through WSL interop; no mutation",
+  "AQUA_D3D11_PREVENT_THREADING": null,
+  "AQUA_LEDGER": null,
+  "AQUA_MEMORY_REPORT": null,
+  "native_driver_option": "enabled by native host default when override absent",
+  "recorded_utc": "2026-11-07T03:32:06.978145+00:00"
+}

@@ -1,0 +1,6 @@
+
+running 1 test
+test lowering::large_solid_paths_use_one_channel_and_reuse_their_resident_mask ... path mask_bytes=252504 rgba_bytes=1010016
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 80 filtered out; finished in 0.23s

@@ -107,6 +107,24 @@ impl SpanCache {
         }
     }
 
+    pub fn retire_path(
+        &mut self,
+        path: aqua_media::residency::VectorKey,
+        previous_epoch: u64,
+        epoch: u64,
+    ) {
+        self.entries.retain(|_, entry| {
+            if entry.paths.contains(&path) {
+                self.bytes -= entry.bytes;
+                return false;
+            }
+            if entry.stamp.epoch == previous_epoch {
+                entry.stamp.epoch = epoch;
+            }
+            true
+        });
+    }
+
     pub fn clear(&mut self) {
         self.entries.clear();
         self.bytes = 0;
@@ -254,6 +272,7 @@ pub fn replay(
             }
             PaintCommand::Glyphs(run) => Some(PaintCommand::Glyphs(GlyphRun {
                 atlas: run.atlas,
+                coverage: run.coverage,
                 glyphs: run
                     .glyphs
                     .iter()

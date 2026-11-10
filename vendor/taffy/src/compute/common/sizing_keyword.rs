@@ -34,19 +34,26 @@ pub(crate) fn resolve_sizing_keyword(
     #[cfg(not(feature = "calc"))]
     let _ = &calc_resolver;
     match style.tag() {
-        CompactLength::MIN_CONTENT_TAG => Some(SizingKeywordResolution::Measure(AvailableSpace::MinContent)),
-        CompactLength::MAX_CONTENT_TAG => Some(SizingKeywordResolution::Measure(AvailableSpace::MaxContent)),
-        CompactLength::FIT_CONTENT_PX_TAG => {
-            Some(SizingKeywordResolution::Measure(AvailableSpace::Definite(style.value())))
+        CompactLength::MIN_CONTENT_TAG => {
+            Some(SizingKeywordResolution::Measure(AvailableSpace::MinContent))
         }
-        CompactLength::FIT_CONTENT_PERCENT_TAG => percent_resolution_basis
-            .map(|basis| SizingKeywordResolution::Measure(AvailableSpace::Definite(basis * style.value()))),
-        CompactLength::FIT_CONTENT_KEYWORD_TAG => {
-            stretch_size.map(|size| SizingKeywordResolution::Measure(AvailableSpace::Definite(size)))
+        CompactLength::MAX_CONTENT_TAG => {
+            Some(SizingKeywordResolution::Measure(AvailableSpace::MaxContent))
         }
+        CompactLength::FIT_CONTENT_PX_TAG => Some(SizingKeywordResolution::Measure(
+            AvailableSpace::Definite(style.value()),
+        )),
+        CompactLength::FIT_CONTENT_PERCENT_TAG => percent_resolution_basis.map(|basis| {
+            SizingKeywordResolution::Measure(AvailableSpace::Definite(basis * style.value()))
+        }),
+        CompactLength::FIT_CONTENT_KEYWORD_TAG => stretch_size
+            .map(|size| SizingKeywordResolution::Measure(AvailableSpace::Definite(size))),
         #[cfg(feature = "calc")]
         _ if style.is_fit_content_calc() => percent_resolution_basis.map(|basis| {
-            SizingKeywordResolution::Measure(AvailableSpace::Definite(calc_resolver(style.calc_value(), basis)))
+            SizingKeywordResolution::Measure(AvailableSpace::Definite(calc_resolver(
+                style.calc_value(),
+                basis,
+            )))
         }),
         CompactLength::STRETCH_TAG => stretch_size.map(SizingKeywordResolution::Exact),
         _ => None,
@@ -92,16 +99,22 @@ pub(crate) fn resolve_absolute_sizing_keywords(
     };
 
     let keyword_width = if known_dimensions.width.is_none() {
-        resolve_sizing_keyword(size_style.width, Some(stretch_size.width), Some(area_size.width), |val, basis| {
-            tree.calc(val, basis)
-        })
+        resolve_sizing_keyword(
+            size_style.width,
+            Some(stretch_size.width),
+            Some(area_size.width),
+            |val, basis| tree.calc(val, basis),
+        )
     } else {
         None
     };
     let keyword_height = if known_dimensions.height.is_none() {
-        resolve_sizing_keyword(size_style.height, Some(stretch_size.height), Some(area_size.height), |val, basis| {
-            tree.calc(val, basis)
-        })
+        resolve_sizing_keyword(
+            size_style.height,
+            Some(stretch_size.height),
+            Some(area_size.height),
+            |val, basis| tree.calc(val, basis),
+        )
     } else {
         None
     };
@@ -116,7 +129,10 @@ pub(crate) fn resolve_absolute_sizing_keywords(
                 node,
                 Size::NONE,
                 area_size.map(Some),
-                Size { width: available_width, height: available_height },
+                Size {
+                    width: available_width,
+                    height: available_height,
+                },
                 sizing_mode,
                 Line::FALSE,
             );
@@ -130,7 +146,10 @@ pub(crate) fn resolve_absolute_sizing_keywords(
                         node,
                         *known_dimensions,
                         area_size.map(Some),
-                        Size { width: available_width, height: AvailableSpace::Definite(stretch_size.height) },
+                        Size {
+                            width: available_width,
+                            height: AvailableSpace::Definite(stretch_size.height),
+                        },
                         sizing_mode,
                         AbsoluteAxis::Horizontal,
                         Line::FALSE,

@@ -132,10 +132,19 @@ impl AccessSink for UiaSink {
     }
 
     fn apply(&mut self, update: &AccessTreeUpdate) {
+        let started = std::time::Instant::now();
+        let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Build);
         if let Some(inspector) = &self.inspector {
             super::inspector::publish_tree(inspector, update);
         }
         self.adapter.apply(update);
+        crate::profile::note(|| {
+            format!(
+                "access_apply={}us nodes={}",
+                started.elapsed().as_micros(),
+                update.nodes.len()
+            )
+        });
     }
 
     fn drain_actions(&mut self) -> Vec<A11yActionRequest> {

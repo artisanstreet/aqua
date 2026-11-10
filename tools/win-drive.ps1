@@ -206,12 +206,18 @@ using System; using System.Runtime.InteropServices; using System.Text;
 public static class TD {
   [DllImport("kernel32.dll")] public static extern IntPtr OpenThread(uint a, bool i, uint id);
   [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+  [DllImport("kernel32.dll")] public static extern IntPtr LocalFree(IntPtr memory);
   [DllImport("kernel32.dll")] public static extern int GetThreadDescription(IntPtr h, out IntPtr d);
   [DllImport("ntdll.dll")] public static extern int NtQueryInformationThread(IntPtr h, int cls, out IntPtr info, int len, IntPtr ret);
   public static long Start(uint id) { IntPtr h = OpenThread(0x0040, false, id); if (h == IntPtr.Zero) return 0; IntPtr a; int r = NtQueryInformationThread(h, 9, out a, IntPtr.Size, IntPtr.Zero); CloseHandle(h); return r == 0 ? a.ToInt64() : 0; }
-  public static string Name(uint id) { IntPtr h = OpenThread(0x0040, false, id); if (h == IntPtr.Zero) return ""; IntPtr d; string r = ""; if (GetThreadDescription(h, out d) >= 0 && d != IntPtr.Zero) r = Marshal.PtrToStringUni(d); CloseHandle(h); return r; }
+  public static string Name(uint id) { IntPtr h = OpenThread(0x0040, false, id); if (h == IntPtr.Zero) return ""; IntPtr d; string r = ""; if (GetThreadDescription(h, out d) >= 0 && d != IntPtr.Zero) { r = Marshal.PtrToStringUni(d); LocalFree(d); } CloseHandle(h); return r; }
 }
 "@ }
+}
+function Get-ThreadAttribution($threadId, $modules) {
+  $address = [TD]::Start([uint32]$threadId)
+  $module = ($modules | Where-Object { $address -ge $_.BaseAddress.ToInt64() -and $address -lt ($_.BaseAddress.ToInt64() + $_.ModuleMemorySize) } | Select-Object -First 1).ModuleName
+  @{ thread = [TD]::Name([uint32]$threadId); module = $module; start_address = $address }
 }
 function Get-ThreadCounters($targetPid) {
   if (-not ("TS" -as [type])) { Add-Type -TypeDefinition @"
@@ -242,7 +248,8 @@ public static class TS {
               long user = Marshal.ReadInt64((IntPtr)(t + 8));
               int tid = (int)Marshal.ReadInt64((IntPtr)(t + 48));
               long cs = (uint)Marshal.ReadInt32((IntPtr)(t + 64));
-              result[tid] = new long[] { cs, kernel + user };
+              long created = Marshal.ReadInt64((IntPtr)(t + 16));
+              result[tid] = new long[] { cs, kernel + user, created };
             }
             return result;
           }
@@ -418,6 +425,17 @@ function Probe-Latency($name, $kind, $count, $gap, $scroll, $x, $y, $delta) {
       }
       "wakes" {
         $secs = [int]$a[1]
+        $traceThreads = $env:AQUA_WAKE_ATTRIBUTION -eq "1"
+        $attribution = @{}
+        if ($traceThreads) {
+          Ensure-TD
+          $proc.Refresh()
+          $modules = @($proc.Modules)
+          $initial = Get-ThreadCounters $procId
+          foreach ($id in $initial.Keys) {
+            if ($id -ge 0) { $attribution["$id/$($initial[$id][2])"] = Get-ThreadAttribution $id $modules }
+          }
+        }
         $prev = Get-ThreadCounters $procId
         $windowStart = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         $perSec = @(); $faultsHard = @(); $faultsAll = @()
@@ -431,6 +449,16 @@ function Probe-Latency($name, $kind, $count, $gap, $scroll, $x, $y, $delta) {
             $before = if ($prev.ContainsKey($id)) { $prev[$id][0] } else { 0 }
             $d = [math]::Max(0.0, [double]($cur[$id][0] - $before))
             $sum += $d; $perThread[$id] = [double]$perThread[$id] + $d
+            if ($traceThreads -and $d -gt 0) {
+              $identity = "$id/$($cur[$id][2])"
+              if (-not $attribution.ContainsKey($identity)) {
+                $proc.Refresh()
+                $modules = @($proc.Modules)
+                $attribution[$identity] = Get-ThreadAttribution $id $modules
+              }
+              $entry = $attribution[$identity]
+              "probe-wake-thread name=$($a[0]) second=$($i + 1) tid=$id created_100ns=$($cur[$id][2]) ctx_delta=$d thread='$($entry.thread)' module=$($entry.module) start_address=0x$([Convert]::ToString([int64]$entry.start_address,16))"
+            }
           }
           $perSec += $sum
           $faultsHard += [int]($cur[-1][0] - $prev[-1][0]); $faultsAll += [int]($cur[-1][1] - $prev[-1][1])

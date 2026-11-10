@@ -46,7 +46,9 @@ pub(crate) trait FromCss: Sized {
 pub(crate) fn parse_css_str_entirely<T: FromCss>(input: &str) -> Result<T, ParseError> {
     let mut parser_input = ParserInput::new(input);
     let mut parser = Parser::new(&mut parser_input);
-    parser.parse_entirely(|parser| T::from_css(parser)).map_err(|err| ParseError(err.to_string()))
+    parser
+        .parse_entirely(|parser| T::from_css(parser))
+        .map_err(|err| ParseError(err.to_string()))
 }
 
 /// Automatically implement `FromStr` for a type that already implemented `FromCss`

@@ -1,0 +1,4 @@
+thread_attribution tid=22556 module=powershell.exe
+thread_attribution tid=5568 module=ntdll.dll
+thread_attribution tid=22104 module=ntdll.dll
+PowerShell parse, live module lookup and creation timestamps PASS; native description buffers freed

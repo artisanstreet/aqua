@@ -41,6 +41,7 @@
 //! integration surface for `aqua-ui` and the `aqua` facade — lives in
 //! `docs/REACTIVITY.md` at the workspace root.
 
+pub mod collection;
 mod graph;
 pub mod read_check;
 mod resource;
@@ -53,3 +54,13 @@ pub use resource::{
 };
 pub use runtime::{FlushReport, GraphError, GraphStats, Retention, Runtime, Scope};
 pub use signals::{DepTuple, EffectHandle, ReadSignal, WriteSignal};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BindingCause {
+    pub source: NodeId,
+    pub version: u64,
+}
+
+pub trait BindingSink<T>: 'static {
+    fn write(&mut self, value: &T, cause: BindingCause);
+}

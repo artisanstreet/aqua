@@ -25,8 +25,7 @@ use crate::collection_runtime::{
     CollectionRowRegistration, CollectionRowSources, CollectionSource, CollectionState,
 };
 use crate::element::{
-    lower_root_in, lower_specs, lower_specs_in, splice_top_level, Element, ElementBinding,
-    LowerError, TypoChain,
+    lower_root_in, lower_specs_in, splice_top_level, Element, ElementBinding, LowerError, TypoChain,
 };
 use crate::layout::TextMeasurer;
 use crate::style::{Axis, LayoutStyle, Length, Paint};
@@ -80,15 +79,6 @@ impl From<LowerError> for MountError {
     }
 }
 
-/// Scope-owned view over one [`UiTree`]. One view per tree root: `traverse`
-/// (used for binding bookkeeping) covers the whole tree.
-///
-/// Every bound node gets a **child scope** owning exactly that node's
-/// effects. Removing a subtree disposes its scopes (no leaked
-/// subscriptions); reusing a node id with different sources disposes the
-/// stale scope and re-attaches (no duplicates, no clobbering). Always finish
-/// with [`View::dispose`]: dropping the view does not dispose scopes
-/// (reactive ownership is explicit).
 pub struct View {
     scope: Scope,
     sink: CommandSink,
@@ -97,6 +87,7 @@ pub struct View {
     content: Vec<Element>,
     collections: HashMap<RawId, CollectionMount>,
     layout_viewport: Option<Size>,
+    inherited: TypoChain,
 }
 
 struct BoundState {
@@ -538,8 +529,6 @@ impl View {
         true
     }
 
-    /// Create a view driven by `scope`, pushing updates into `sink`
-    /// (usually `tree.command_sink()`).
     pub fn new(scope: Scope, sink: CommandSink) -> Self {
         scope.set_invalidation_counter(sink.invalidation_counter());
         Self {
@@ -550,6 +539,7 @@ impl View {
             content: Vec::new(),
             collections: HashMap::new(),
             layout_viewport: None,
+            inherited: TypoChain::default(),
         }
     }
 
@@ -559,6 +549,17 @@ impl View {
         root: NodeId,
         element: Element,
     ) -> Result<(), MountError> {
+        self.bind_existing_in(tree, root, element, &TypoChain::default())
+    }
+
+    pub(crate) fn bind_existing_in(
+        &mut self,
+        tree: &mut UiTree,
+        root: NodeId,
+        element: Element,
+        inherited: &TypoChain,
+    ) -> Result<(), MountError> {
+        self.inherited = inherited.clone();
         if tree.get(root).is_none() {
             return Err(MountError::EmptyRoot);
         }
@@ -578,13 +579,17 @@ impl View {
             tree,
             root,
             &mut content[0],
-            &TypoChain::default(),
+            &self.inherited,
         )?;
         self.content = content;
         Ok(())
     }
 
-    /// Mounted root, if any.
+    #[must_use]
+    pub fn has_collections(&self) -> bool {
+        !self.collections.is_empty()
+    }
+
     #[must_use]
     pub fn root(&self) -> Option<NodeId> {
         self.root
@@ -602,29 +607,15 @@ impl View {
         &self.sink
     }
 
-    /// Set the whole content: first call mounts (single root required),
-    /// later calls refresh the root in place (single element) or keyed-sync
-    /// the root's children. Returns the node ids paired with the top-level
-    /// elements.
-    ///
-    /// Top-level fragments splice structurally before anything else, so
-    /// node↔element pairing is always positional. Reused node ids keep
-    /// their effects while the sources are identical; changed sources
-    /// dispose the stale child scope and re-attach without losing the node,
-    /// focus, or caret.
     pub fn set_content(
         &mut self,
         tree: &mut UiTree,
         elements: Vec<Element>,
     ) -> Result<Vec<NodeId>, MountError> {
-        // Normalize first: splice top-level fragments (keyed multi-child
-        // fragments error here, loudly, instead of vanishing a key).
         self.content = splice_top_level(elements)?;
-        let specs = lower_all(&self.content)?;
+        let specs = lower_all(&self.content, &self.inherited)?;
         aqua_core::checkpoint::reach();
-        // `synced` tracks whether the tree already reflects the lowered
-        // specs, so a refreshed root spec is never synced as a child of
-        // itself.
+
         let mut synced = false;
         match self.root {
             None => {
@@ -638,7 +629,6 @@ impl View {
                 self.root = Some(tree.mount_spec(into_single(specs)));
             }
             Some(r) if tree.get(r).is_none() => {
-                // Root was removed out-of-band: remount from scratch.
                 self.dispose_bound();
                 if specs.len() != 1 {
                     self.root = None;
@@ -651,48 +641,40 @@ impl View {
                 self.root = Some(tree.mount_spec(into_single(specs)));
             }
             Some(r) => {
-                // A single root refreshes in place — props AND children,
-                // inside `refresh_mounted`. Anything else syncs the specs
-                // as the root's children. Never both: the refreshed root
-                // spec must not be synced as a child of itself.
                 if self.content.len() == 1 {
                     let same_key = tree.get(r).is_some_and(|record| record.key == specs[0].key);
-                    let refreshed = same_key
-                        && self.content[0].refresh_mounted(tree, r, &TypoChain::default())?;
+                    let refreshed =
+                        same_key && self.content[0].refresh_mounted(tree, r, &self.inherited)?;
                     aqua_core::checkpoint::reach();
                     match refreshed {
-                        true => synced = true, // children already synced inside
+                        true => synced = true,
                         false => {
-                            // Kind changed: replace the whole root.
                             self.dispose_bound();
                             tree.remove(r);
-                            let specs = lower_all(&self.content)?;
+                            let specs = lower_all(&self.content, &self.inherited)?;
                             let fresh = tree.mount_spec(into_single(specs));
                             self.root = Some(fresh);
-                            synced = true; // mounted whole subtree; skip sync
+                            synced = true;
                         }
                     }
                 }
                 if !synced {
                     let r = self.root.unwrap();
-                    let specs = lower_all(&self.content)?;
+                    let specs = lower_all(&self.content, &self.inherited)?;
                     tree.sync_children(r, specs);
                 }
             }
         }
         aqua_core::checkpoint::reach();
         let root = self.root.unwrap();
-        // Pair nodes with elements positionally (fragments already spliced).
-        // Collection elements pair their container node with the window
-        // driver (`bind_collection` registers the mount; realization and row
-        // binding happen in `compute_layout`). Managed children are never
-        // asserted against element children here.
+
         let Self {
             scope,
             sink,
             bound,
             content,
             collections,
+            inherited,
             ..
         } = self;
         if content.len() == 1 {
@@ -704,38 +686,21 @@ impl View {
                 tree,
                 root,
                 &mut content[0],
-                &TypoChain::default(),
+                inherited,
             )?;
         } else {
             let kids = tree.content_children(root);
             debug_assert_eq!(kids.len(), content.len());
             for (kid, el) in kids.iter().zip(content.iter_mut()) {
-                bind_new(
-                    scope,
-                    sink,
-                    bound,
-                    collections,
-                    tree,
-                    *kid,
-                    el,
-                    &TypoChain::default(),
-                )?;
+                bind_new(scope, sink, bound, collections, tree, *kid, el, inherited)?;
             }
         }
-        // Prune bookkeeping AND scopes for removed subtrees (plus dead
-        // collection mounts): without this, effects outlive their rows and
-        // leak until the whole view disposes.
+
         aqua_core::checkpoint::reach();
         self.prune_dead(tree);
         Ok(self.paired_ids(tree, root))
     }
 
-    /// Refresh one mounted subtree in place from a freshly built element,
-    /// leaving every other node, scope, and collection mount untouched.
-    /// Returns `Ok(false)` when the subtree cannot be refreshed in place
-    /// (node gone, key or kind changed, unreachable through retained
-    /// content such as collection rows): callers fall back to
-    /// [`View::set_content`].
     pub fn refresh_subtree(
         &mut self,
         tree: &mut UiTree,
@@ -772,7 +737,7 @@ impl View {
             collections,
             ..
         } = self;
-        let mut inherited = TypoChain::default();
+        let mut inherited = self.inherited.clone();
         let mut current = &mut content[0];
         for pair in path.windows(2) {
             let kids = tree.content_children(pair[0]);
@@ -821,15 +786,11 @@ impl View {
         self.collections.clear();
     }
 
-    /// Dispose binding scopes (and drop collection mounts) for subtrees no
-    /// longer in the tree. Runs after every structural sync so unmounted
-    /// rows never leak subscriptions.
     fn prune_dead(&mut self, tree: &UiTree) {
-        let live: HashSet<RawId> = tree.traverse().into_iter().map(|n| n.raw()).collect();
         let dead: Vec<RawId> = self
             .bound
             .keys()
-            .filter(|k| !live.contains(k))
+            .filter(|key| tree.get(NodeId::from_raw(**key)).is_none())
             .copied()
             .collect();
         for k in dead {
@@ -840,7 +801,7 @@ impl View {
         let dead_mounts: Vec<RawId> = self
             .collections
             .keys()
-            .filter(|k| !live.contains(k))
+            .filter(|key| tree.get(NodeId::from_raw(**key)).is_none())
             .copied()
             .collect();
         for k in dead_mounts {
@@ -903,6 +864,7 @@ impl View {
         measurer: &dyn TextMeasurer,
         register: &mut dyn FnMut(CollectionRowRegistration) -> Result<(), String>,
     ) -> Result<(), String> {
+        tree.layout_regions(viewport, measurer)?;
         let viewport_unchanged = self.layout_viewport == Some(viewport);
         self.layout_viewport = Some(viewport);
         if self.collections.values().any(|mount| {
@@ -1930,11 +1892,10 @@ fn subtree_ids(tree: &UiTree, node: NodeId) -> Vec<RawId> {
     out
 }
 
-/// Lower every top-level element, splicing fragments.
-fn lower_all(content: &[Element]) -> Result<Vec<NodeSpec>, MountError> {
+fn lower_all(content: &[Element], inherited: &TypoChain) -> Result<Vec<NodeSpec>, MountError> {
     let mut specs = Vec::new();
     for el in content {
-        specs.extend(lower_specs(el)?);
+        specs.extend(lower_specs_in(el, inherited)?);
     }
     Ok(specs)
 }
@@ -1944,17 +1905,6 @@ fn into_single(mut specs: Vec<NodeSpec>) -> NodeSpec {
     specs.pop().unwrap()
 }
 
-/// Bind `el` (and its subtree) to `id`, applying each binding once per
-/// source identity. Fresh ids bind under a new child scope; reused ids keep
-/// their effects while the sources are identical, otherwise the stale child
-/// scope is disposed (old sources stop) and bindings re-attach — the node
-/// id, focus, and caret survive. Non-effect bindings (actions, focus,
-/// painters) re-apply idempotently every pass.
-///
-/// Collection elements route to the window driver instead: their children
-/// are realized (not lowered from stored parts), so the normal child-count
-/// assert is skipped for them and no bindings are taken here. Row/header
-/// descriptors are bound by the driver from retained fresh builds.
 #[allow(clippy::too_many_arguments)]
 fn bind_new(
     scope: &Scope,
@@ -1966,8 +1916,6 @@ fn bind_new(
     el: &mut Element,
     inherited: &TypoChain,
 ) -> Result<(), MountError> {
-    // Effective chain at this position, exactly as normative lowering
-    // composes it (parent chain plus this element's explicit overrides).
     let local_typography = el.typo_chain();
     let own = inherited.child(&local_typography);
     if el.is_collection() {
@@ -1983,6 +1931,7 @@ fn bind_new(
         return bind_collection(collections, tree, id, el, &own);
     }
     let bindings = std::mem::take(el.bindings_mut());
+    let owns_children = bindings.iter().any(|binding| matches!(binding, ElementBinding::Install(installation) if installation.owns_children()));
     let actions: Vec<_> = bindings
         .iter()
         .filter_map(|binding| match binding {
@@ -1997,7 +1946,9 @@ fn bind_new(
     let has_interaction_signal = bindings.iter().any(|binding| {
         matches!(
             binding,
-            ElementBinding::InteractionBool { .. } | ElementBinding::InteractionValue(_)
+            ElementBinding::Install(_)
+                | ElementBinding::InteractionBool { .. }
+                | ElementBinding::InteractionValue(_)
         )
     });
     let same = !has_interaction_signal
@@ -2006,19 +1957,14 @@ fn bind_new(
             .map(|s| s.effects == keys)
             .unwrap_or(false);
     if same {
-        // Sources unchanged: effects already live; re-apply only the
-        // idempotent non-effect bindings (fresh callbacks from the new
-        // element tree). Effect handles are dropped, not re-subscribed.
         let plain: Vec<ElementBinding> = bindings.into_iter().filter(|b| !is_effect(b)).collect();
-        apply_bindings(tree, scope, sink, id, plain);
+        apply_bindings(tree, scope, sink, id, plain, (&own, &local_typography));
     } else {
-        // Fresh id, or sources changed: dispose any stale child scope (old
-        // sources stop), then (re)bind everything under a fresh scope.
         if let Some(state) = bound.remove(&id.raw()) {
             state.scope.dispose();
         }
         let child = scope.child();
-        apply_bindings(tree, &child, sink, id, bindings);
+        apply_bindings(tree, &child, sink, id, bindings, (&own, &local_typography));
         bound.insert(
             id.raw(),
             BoundState {
@@ -2027,19 +1973,6 @@ fn bind_new(
             },
         );
     }
-    sink.interaction(
-        crate::tree::interaction::InteractionCommand::TypographyColor {
-            node: id,
-            own: local_typography.explicit_color(),
-            own_gpui: local_typography.explicit_gpui_color(),
-            own_source: local_typography.explicit_gpui_source_color(),
-        },
-    );
-    // Explicit author semantics (`Element::role` /
-    // `Element::collection_semantics`): overlay the provided fields onto
-    // the mounted node, preserving everything else. Nodes without explicit
-    // overrides keep whatever they have — including inferred control roles
-    // (a missing override never resets to `Group`).
     if el.role_opt().is_some() || el.collection_semantics_opt().is_some() {
         if let Some(rec) = tree.get(id) {
             let mut sem = rec.semantics.clone();
@@ -2051,6 +1984,10 @@ fn bind_new(
             }
             tree.set_semantics(id, sem);
         }
+    }
+    if owns_children {
+        crate::controls::initialize_node(tree, id);
+        return Ok(());
     }
     let kids = tree.content_children(id);
     let mut flat = el.flat_children_mut();
@@ -2177,23 +2114,22 @@ fn bind_collection(
     }
 }
 
-/// Whether a binding creates a reactive effect (vs. idempotent registration).
 fn is_effect(binding: &ElementBinding) -> bool {
     matches!(
         binding,
-        ElementBinding::SubscribeText(_)
+        ElementBinding::Install(_)
+            | ElementBinding::SubscribeText(_)
             | ElementBinding::SubscribeEdit { .. }
             | ElementBinding::InteractionBool { .. }
             | ElementBinding::InteractionValue(_)
     )
 }
 
-/// Reactive source identities subscribed by effect bindings, in order.
-/// Compared across syncs to decide whether a reused node's effects stay.
 fn effect_keys(bindings: &[ElementBinding]) -> Vec<aqua_reactive::NodeId> {
     let mut keys = Vec::new();
     for binding in bindings {
         match binding {
+            ElementBinding::Install(binding) => keys.extend(binding.dependencies()),
             ElementBinding::SubscribeText(source) => keys.push(source.node_id()),
             ElementBinding::SubscribeEdit { read, write } => {
                 keys.push(read.node_id());
@@ -2233,14 +2169,15 @@ fn effect_keys(bindings: &[ElementBinding]) -> Vec<aqua_reactive::NodeId> {
     keys
 }
 
-/// Apply one element's taken bindings to its mounted node.
 fn apply_bindings(
     tree: &mut UiTree,
     scope: &Scope,
     sink: &CommandSink,
     id: NodeId,
     bindings: Vec<ElementBinding>,
+    typography: (&TypoChain, &TypoChain),
 ) {
+    let (typography, local_typography) = typography;
     tree.clear_input_bindings(id);
     tree.clear_canvas_prepaint(id);
     tree.clear_canvas_observer(id);
@@ -2255,8 +2192,17 @@ fn apply_bindings(
         .iter()
         .any(|binding| matches!(binding, ElementBinding::InteractionStyle { .. }));
     tree.queue_interaction_binding(id, styled);
+    sink.interaction(
+        crate::tree::interaction::InteractionCommand::TypographyColor {
+            node: id,
+            own: local_typography.explicit_color(),
+            own_gpui: local_typography.explicit_gpui_color(),
+            own_source: local_typography.explicit_gpui_source_color(),
+        },
+    );
     for binding in bindings {
         match binding {
+            ElementBinding::Install(binding) => binding.mount(tree, id, scope, typography),
             ElementBinding::Popup { options, content } => {
                 let sink = sink.clone();
                 tree.set_bound_action_callback(
@@ -2425,16 +2371,16 @@ fn apply_bindings(
                 tree.bind_shortcut_bound(id, shortcut);
             }
             ElementBinding::SubscribeText(source) => {
-                let s = sink.clone();
-                scope.subscribe(&source, move |text: String| {
-                    s.push(UiCommand::SetText { node: id, text });
-                });
+                crate::program::bind_property(
+                    scope,
+                    sink.clone(),
+                    id,
+                    &source,
+                    crate::program::Text,
+                );
             }
             ElementBinding::SubscribeEdit { read, write } => {
-                let s = sink.clone();
-                scope.subscribe(&read, move |text: String| {
-                    s.push(UiCommand::SetText { node: id, text });
-                });
+                crate::program::bind_property(scope, sink.clone(), id, &read, crate::program::Text);
                 tree.set_bound_action_callback(
                     id,
                     ActionKind::TextChanged,

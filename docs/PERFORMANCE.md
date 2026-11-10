@@ -1,5 +1,31 @@
 # Aqua performance: what we measure, what we refuse to claim
 
+## Persistent update contract (2026-11-10)
+
+Property bindings carry source identities and versions into typed node
+commands. The runtime emits dirty scene fragments and patches existing scene
+items directly. Owned structural regions can replace their scene spans
+without emitting unrelated subtrees. Text inspection and shaping follow
+changed fragments. Selection descriptors and viewport-cap text use indexes;
+collection region layout uses a dirty worklist.
+
+`crates/aqua-runtime/tests/runtime/incremental.rs` compares incremental results with
+full layout/scene reconstruction and checks sparse update work with thousands
+of unrelated nodes. It also exercises conditional disposal, semantics-only
+updates, indexed queries and a 20,000-record virtual conversation. These are
+operation-count and behavior contracts, not elapsed-time comparisons.
+
+Explicit fixed-size layout boundaries limit internal recomputation. General
+content-sized layout retains genuine ancestor/sibling dependencies. Scene
+order vectors and collection key/height snapshots still require linear work
+when their topology changes. Legacy arbitrary prepaint callbacks require
+full scene emission; global viewport, scale and font invalidation can also
+require full work. No constant-cost claim applies to those operations.
+
+Tracing is optional and bounded. It records source versions, property
+writes, invalidation, layout commits, text inspection/shaping and scene
+patches/rebuilds without creating a permanent history per update.
+
 ## Runtime update (2026-11-03)
 
 `Runtime::frame_work()` exposes text nodes inspected, source bytes compared,
@@ -8,7 +34,7 @@ scene reuse. The 1,001-text transcript suite in
 `crates/aqua-runtime/tests/frame-work.rs` checks that unchanged frames inspect
 zero text nodes, compare zero source bytes, shape zero runs and emit zero base
 scene operations. Moving a selection reuses the base scene. Streaming a source
-reshapes its changed run while content frames still traverse mounted nodes.
+reshapes its changed run and patches its retained scene fragment.
 
 Font loads invalidate metrics and runs. Scene insertion/removal/reordering
 preserves surviving node identities. Source-backed selection copies unmounted
@@ -103,10 +129,10 @@ suites print `SKIP … (no adapter)` and pass; that is reported as
 
 ## 5. Honesty boundary (binding)
 
-- The prepare numbers above EXCLUDE `UiApp`: `build_frame` currently runs
-  `sync_text_runs` (hash + allocate display text for ALL live texts) and
-  `emit_keyed` (full-tree walk, linear reconcile) on EVERY frame. Initial
-  host linear traversals are a known optimization gap, not a fast path.
+- The prepare numbers above EXCLUDE `UiApp` and describe the historical
+  renderer path. The persistent-update contract above supersedes the former
+  all-text/all-scene traversal on every content frame. Those old timings do
+  not measure the current sparse-update path.
 - DO NOT claim: end-to-end constant-cost frames, cache-perfect updates,
   or Chrome parity. No matched-workload comparison exists.
 - Still legit: idle windows are demand-driven (scheduler `next_wakeup`

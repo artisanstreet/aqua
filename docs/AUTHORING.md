@@ -19,6 +19,69 @@ let ui = Aqua::Box()
     .build();
 ```
 
+## Persistent programs
+
+`Context::program` is the primary application entry point. Its builder runs
+once. Literal properties stay static; signals bind directly to mounted
+properties. Ordinary Rust functions construct reusable components without a
+render lifecycle.
+
+```rust
+fn counter(cx: &aqua::Context) -> aqua::Program {
+    cx.program(|scope| {
+        let (count, set_count) = scope.signal(0u64);
+        let label = scope.derive((count.clone(),), |(count,)| count.to_string());
+        Aqua::Button()
+            .on_activate(move || set_count.set(count.get() + 1))
+            .child(Aqua::Text(label).build())
+            .build()
+    })
+}
+```
+
+`element.bind(aqua::property::TextColor, color)` binds a typed property.
+Targets include `Text`, `Appearance`, `Layout`, `Opacity`, `TextColor`,
+`Background`, `Label` and `Scroll`. Bindings retain their source identity and version;
+they use the graph's boundary scheduler and enqueue typed property writes.
+An accessible label update does not invalidate paint or layout.
+
+`Aqua::When(condition, yes, no)` owns a structural region. Each branch
+factory receives its owner scope and runs on entry. Leaving the branch
+disposes its signals, resources and bindings. Equal condition writes preserve
+the mounted branch.
+
+`Collection<K, T>` owns stable records and an indexed order. `insert`,
+`update`, `update_field`, `remove` and `move_before` retain their meaning as
+deltas. `count_where` and `query` maintain aggregates and sorted membership
+from those deltas. `Query::configure` explicitly scans the data when filter
+or sort rules change and returns the inspected record count.
+
+`Aqua::LiveList(collection, row)` and `LiveList::query(query, row)` virtualize
+by default. A row factory receives its owner scope, stable key and observable
+record. Only resident rows allocate record signals and bindings; eviction
+disposes them. Record updates do not reconstruct collection snapshots or
+rerun row factories. Structural updates currently rebuild the engine's key
+snapshot and height index while retaining surviving row nodes and scopes.
+Use `.mount_all()` when every row must be mounted.
+
+`element.layout_boundary(Size::new(width, height))` declares fixed external
+dimensions, including fixed minimum and maximum sizes and no flex growth or
+shrink. Internal layout updates compute that subtree against its committed
+size. Content-sized containers retain ordinary ancestor and sibling
+propagation. Changing the boundary's own layout, viewport, scale or fonts can
+require wider layout work.
+
+Enable `runtime.tree().update_log().set_enabled(true)` to collect bounded
+property and work traces. `drain()` returns source versions and target
+properties; `drain_work()` returns invalidation, layout, shaping and scene
+operations with causal sources. Tracing is disabled by default.
+
+Run `cargo run -p aqua --example conversation -- --headless` for the
+headless lifecycle, or omit `--headless` on Windows for the native window.
+The `conversation` example combines 20,000 records, an unread aggregate,
+query filtering, virtual rows and targeted token appends. `Context::view`
+remains as a deprecated compatibility path for subtree reconstruction.
+
 ## Factory inventory
 
 | Factory | Builder input |
@@ -36,7 +99,9 @@ let ui = Aqua::Box()
 | `Aqua::Fragment()` | structural group, no node |
 | `Aqua::Dynamic(source)` | explicit `ReadSignal` text |
 | `Aqua::Media(image)` | visual asset layer |
-| `Aqua::List::<T>()` | virtualized-capable row list |
+| `Aqua::When(condition, yes, no)` | owned conditional region |
+| `Aqua::LiveList(collection, row)` | persistent virtualized record list |
+| `Aqua::List::<T>()` | snapshot row list |
 | `Aqua::Table::<T>()` | virtualized-capable table |
 | `Aqua::Column::<T>(id)` | column builder → `Column<T>` |
 | `Aqua::App()` | root application builder |
@@ -62,10 +127,9 @@ let ui = Aqua::Box()
     .build();
 ```
 
-These expressions run when the builder runs. To update mounted structure,
-return the builder from `Context::view` with explicit signal dependencies;
-use stable row keys to preserve identity across updates. Passing an
-iterator alone does not create a reactive subscription.
+These expressions run when the builder runs. Use `When` for changing branches
+and `LiveList` for changing collections. Passing an iterator alone does not
+create a reactive subscription.
 
 ## Collections: `List`, `Table`, `Column`, `fr`
 
@@ -119,7 +183,7 @@ Rules (frozen contract [`COLLECTION_IMPLEMENTATION_CONTRACT.md`](COLLECTION_IMPL
   go through explicit `Context::view` dependencies; targeted prop updates
   flow through bindings.
 
-## Explicit reactivity, no hidden subscriptions
+## Compatibility: explicit reconstructing views
 
 ```rust
 fn app(cx: &aqua::Context) -> impl aqua::IntoView {

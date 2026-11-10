@@ -8,8 +8,8 @@ example=${1:-todo}
 profile=${2:-release}
 
 case "$example" in
-    todo|showcase|collections) ;;
-    *) printf 'Usage: %s [todo|showcase|collections] [release|dev]\n' "$0" >&2; exit 2 ;;
+    todo|showcase|collections|conversation) ;;
+    *) printf 'Usage: %s [todo|showcase|collections|conversation] [release|dev]\n' "$0" >&2; exit 2 ;;
 esac
 case "$profile" in
     release) profile_directory=release ;;

@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 mod access;
+mod incremental;
 mod interaction;
 mod keyed_focus;
 mod machine;
@@ -244,6 +245,7 @@ pub struct FrameWork {
     pub tree_scene_reused: bool,
     pub tree_nodes_visited: usize,
     pub layouts: usize,
+    pub region_layouts: usize,
     pub layout_nodes_measured: usize,
     pub layout_nodes_committed: usize,
     pub layout_nodes_visited: usize,
@@ -276,6 +278,7 @@ impl FrameWorkWindow {
         total.scene_items_reconciled += work.scene_items_reconciled;
         total.tree_nodes_visited += work.tree_nodes_visited;
         total.layouts += work.layouts;
+        total.region_layouts += work.region_layouts;
         total.layout_nodes_measured += work.layout_nodes_measured;
         total.layout_nodes_committed += work.layout_nodes_committed;
         total.layout_nodes_visited += work.layout_nodes_visited;
@@ -335,6 +338,10 @@ pub struct Runtime {
     disposed: bool,
     clock: Seconds,
     cached_scene: Vec<(SceneKey, DisplayItem)>,
+    fragment_slots: HashMap<NodeId, Vec<usize>>,
+    scene_structure: Option<u64>,
+    fragment_spans: HashMap<NodeId, std::ops::Range<usize>>,
+    patched_topology: bool,
     cached_text_nodes: HashSet<NodeId>,
     viewport_caps: Option<(u64, Vec<ViewportCap>)>,
     native_paint_revisions: HashMap<NodeId, u64>,
@@ -477,6 +484,10 @@ impl Runtime {
             disposed: false,
             clock: 0.0,
             cached_scene: Vec::new(),
+            fragment_slots: HashMap::new(),
+            scene_structure: None,
+            fragment_spans: HashMap::new(),
+            patched_topology: false,
             cached_text_nodes: HashSet::new(),
             viewport_caps: None,
             native_paint_revisions: HashMap::new(),
@@ -523,6 +534,7 @@ impl Runtime {
             return;
         }
         self.disposed = true;
+        self.tree.dispose_regions();
         self.interaction = TextInteraction::default();
         for (_, popup) in self.bound_popups.drain() {
             popup.view.dispose();
@@ -901,11 +913,11 @@ impl Runtime {
     }
 
     pub fn layout(&mut self) -> Result<(), String> {
-        let epoch = self.tree.structure_epoch();
+        let before = self.tree.layout_work();
+        let (cap_revision, cap_nodes) = self.tree.viewport_cap_nodes();
+        let epoch = self.tree.structure_epoch().wrapping_add(cap_revision);
         if self.viewport_caps.as_ref().map(|(cached, _)| *cached) != Some(epoch) {
-            let scan: Vec<_> = self
-                .tree
-                .traverse()
+            let scan: Vec<_> = cap_nodes
                 .into_iter()
                 .filter_map(|node| {
                     let record = self.tree.get(node)?;
@@ -966,12 +978,6 @@ impl Runtime {
         } else {
             self.tree.compute_layout(viewport, &measurer)?
         }
-        let stats = self.tree.last_stats();
-        if !stats.layout_skipped {
-            self.frame_work.layouts += 1;
-            self.frame_work.layout_nodes_measured += stats.nodes_measured;
-            self.frame_work.layout_nodes_committed += stats.nodes_traversed;
-        }
         for popup in self.bound_popups.values_mut() {
             let interaction = &mut self.interaction;
             popup.view.compute_layout_with_row_registration(
@@ -981,6 +987,11 @@ impl Runtime {
                 &mut |sources| interaction.register_collection_sources(sources),
             )?;
         }
+        let after = self.tree.layout_work();
+        self.frame_work.layouts += after.passes - before.passes;
+        self.frame_work.layout_nodes_measured += after.measured - before.measured;
+        self.frame_work.layout_nodes_committed += after.committed - before.committed;
+        self.frame_work.region_layouts += after.regions - before.regions;
         Ok(())
     }
 
@@ -1272,6 +1283,7 @@ impl Runtime {
             return Err(RuntimeError::Disposed);
         }
         self.frame_work = FrameWork::default();
+        self.patched_topology = false;
         {
             let _span = probe::span(Phase::Reactive);
             self.runtime.flush();
@@ -1315,7 +1327,8 @@ impl Runtime {
         self.sync_selection_bindings();
         self.tree.run_observers();
         let content_changed = self.cached_version != Some(version);
-        if content_changed {
+        let patched = content_changed && self.patch_dirty_scene(version);
+        if content_changed && !patched {
             let _span = probe::span(Phase::Text);
             self.sync_text_runs();
         }
@@ -1330,9 +1343,12 @@ impl Runtime {
         let before_scroll = focused_scroll(self);
         self.update_text_scroll();
         let changed = content_changed || before_scroll != focused_scroll(self);
-        if changed {
+        let rebuilt = changed && !patched;
+        if rebuilt {
             let _span = probe::span(Phase::Build);
             self.cached_scene = self.emit_keyed();
+            self.index_fragments();
+            self.scene_structure = Some(self.tree.structure_epoch());
             self.scroll_revision = self.tree.scroll_revision();
             aqua_core::checkpoint::reach();
             self.cached_text_nodes = self
@@ -1360,7 +1376,7 @@ impl Runtime {
             self.frame_work.tree_scene_ops_emitted = self.cached_scene.len();
             self.cached_version = Some(version);
         } else {
-            self.frame_work.tree_scene_reused = true;
+            self.frame_work.tree_scene_reused = !patched;
             self.patch_scroll_offsets();
         }
         aqua_core::checkpoint::reach();
@@ -1378,7 +1394,7 @@ impl Runtime {
             })
             .collect();
         let dynamic_order: Vec<_> = dynamic.iter().map(|(key, _)| *key).collect();
-        if !changed && self.dynamic_order == dynamic_order {
+        if !rebuilt && !self.patched_topology && self.dynamic_order == dynamic_order {
             self.frame_work.scene_items_reconciled += dynamic.len();
             for (key, item) in dynamic {
                 if let Some(id) = self.scene_map.get(&key).copied() {
@@ -1406,6 +1422,7 @@ impl Runtime {
         aqua_core::checkpoint::reach();
         let now = self.clock;
         self.host.advance_motion(now);
+        self.tree.finish_update_traces();
         self.tree.run_deferred_canvas_actions();
         Ok([
             self.host.motion_deadline(now),
@@ -1561,6 +1578,8 @@ impl Runtime {
             };
             live.insert(id.raw());
             self.frame_work.text_nodes_checked += 1;
+            self.tree
+                .trace_work(id, aqua_ui::program::WorkStage::TextInspected);
             let width = self.text_rect(id).map(|r| r.w).unwrap_or(0.0);
 
             let multiline = t.multiline();
@@ -1634,6 +1653,8 @@ impl Runtime {
                 continue;
             }
             self.frame_work.text_runs_shaped += 1;
+            self.tree
+                .trace_work(id, aqua_ui::program::WorkStage::TextShaped);
             let build = || {
                 let mut layout = TextLayout::new();
                 layout.set_gpui_line_height(
@@ -1764,10 +1785,22 @@ impl Runtime {
     }
 
     fn emit_tree_keyed(&mut self) -> Vec<(SceneKey, DisplayItem)> {
+        let items = self.tree.emit_scene();
+        for (node, _) in &items {
+            self.tree
+                .trace_work(*node, aqua_ui::program::WorkStage::SceneRebuilt);
+        }
+        self.motion_keys.clear();
+        self.key_tree_items(items)
+    }
+
+    fn key_tree_items(
+        &mut self,
+        items: Vec<(NodeId, DisplayItem)>,
+    ) -> Vec<(SceneKey, DisplayItem)> {
         let mut out = Vec::new();
         let mut per_node: HashMap<NodeId, u32> = HashMap::new();
-        self.motion_keys.clear();
-        for (node, item) in self.tree.emit_scene() {
+        for (node, item) in items {
             let op = per_node.entry(node).or_insert(0);
             let offset_slot = matches!(item, DisplayItem::PushTransform(_))
                 && self.tree.scroll_translate_op(node) == Some(*op);

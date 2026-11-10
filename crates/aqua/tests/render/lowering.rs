@@ -618,7 +618,7 @@ fn alpha_gradient_path_masks_match_rgba_fills_and_dashed_strokes() {
 }
 
 #[test]
-fn constant_color_paths_use_one_channel_and_reuse_their_resident_mask() {
+fn constant_color_paths_reuse_curve_geometry_without_raster_uploads() {
     let color = GpuiHsla {
         h: 0.2,
         s: 0.6,
@@ -666,15 +666,13 @@ fn constant_color_paths_use_one_channel_and_reuse_their_resident_mask() {
         let mut mask_lowering = Lowering::new(SharedFonts::new(), SharedRuns::new());
         let mask_scene = scene(path.clone());
         let mask = lowered(&mut mask_lowering, &mask_scene);
-        let mask_stats = mask_lowering.residency().stats();
         assert!(mask.commands.iter().any(|command| matches!(command,
-            aqua_graph::PaintCommand::Glyphs(run) if run.coverage == aqua_graph::Coverage::Exact
+            aqua_graph::PaintCommand::Slug(_)
         )));
-        assert!(lowered(&mut mask_lowering, &mask_scene)
-            .uploads
-            .textures
-            .is_empty());
-        assert_eq!(mask_lowering.residency().stats().rasterizations, 1);
+        let repeated = lowered(&mut mask_lowering, &mask_scene);
+        assert_eq!(repeated.commands, mask.commands);
+        assert!(repeated.uploads.textures.is_empty());
+        assert_eq!(mask_lowering.residency().stats().rasterizations, 0);
         let mut colored = path;
         colored.background = GpuiBackground::LinearGradient {
             angle: 0.0,
@@ -693,23 +691,14 @@ fn constant_color_paths_use_one_channel_and_reuse_their_resident_mask() {
         let mut color_lowering = Lowering::new(SharedFonts::new(), SharedRuns::new());
         let color_scene = scene(colored);
         let color_frame = lowered(&mut color_lowering, &color_scene);
-        let color_stats = color_lowering.residency().stats();
         assert!(color_frame
             .commands
             .iter()
-            .any(|command| matches!(command, aqua_graph::PaintCommand::Image(_))));
-        assert!(mask_stats.masks.resident_bytes > 0);
-        assert_eq!(
-            mask_stats.masks.resident_bytes * 4,
-            color_stats.colors.resident_bytes
-        );
-        eprintln!(
-            "path mask_bytes={} rgba_bytes={}",
-            mask_stats.masks.resident_bytes, color_stats.colors.resident_bytes
-        );
+            .any(|command| matches!(command, aqua_graph::PaintCommand::Slug(_))));
+        assert_eq!(color_lowering.residency().stats().rasterizations, 0);
         lowered(&mut mask_lowering, &color_scene);
         assert_eq!(mask_lowering.residency().stats().masks.entries, 0);
-        assert_eq!(mask_lowering.residency().stats().colors.entries, 1);
+        assert_eq!(mask_lowering.residency().stats().colors.entries, 0);
     }
 }
 

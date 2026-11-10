@@ -1,0 +1,54 @@
+{
+  "change_commit": "0240deb",
+  "base_commit": "1faf00b",
+  "design": "Solid GPUI paths select existing R8 vector-mask residency and carry Coverage::Exact through GlyphRun, planner batching, CPU reference and D3D11/D3D12 renderers. The existing glyph shader receives ToneCurve::EXACT; shader code and GPU instance layout do not change.",
+  "texture_workload": {
+    "path_geometry": [
+      1000,
+      250
+    ],
+    "actual_padded_extent": [
+      1002,
+      252
+    ],
+    "mask_resident_bytes": 252504,
+    "rgba_resident_bytes": 1010016,
+    "reduction_percent": 75.0,
+    "comparison": "Equivalent constant-color RGBA gradient. The repeated mask scene has no new uploads or rasterizations; switching to gradient removes the old mask entry."
+  },
+  "validation": {
+    "graph_tests": 13,
+    "oracle_tests": 3,
+    "render_tests": 81,
+    "d3d11_conformance_tests": 6,
+    "d3d12_conformance_tests": 4,
+    "new_pixel_test": "Translucent fill and dashed stroke, fractional placement, solid R8 mask versus same-color RGBA gradient; maximum error <=2 byte levels on reference, WARP and Radeon.",
+    "new_coverage_case": "Text/Exact/Text masks, 1:1 texel-to-device-pixel scale, <=1 byte error across tested backends.",
+    "clippy": "PASS Windows --lib --tests -D warnings across aqua, graph, media, gpu-ref, d3d11, d3d12."
+  },
+  "known_limitation": {
+    "description": "Initial 1.5x scaled mixed-mask conformance case fails on Radeon and integrated D3D11, while WARP passes. A plain text-only case on unchanged 1faf00b reproduces the same first failure and error maxima. The shape-mask feature uses one-to-one device-space rasters; the final case covers that scale without changing tolerance.",
+    "baseline_failed_samples": 324,
+    "baseline_interior_max": 14,
+    "baseline_edge_max": 26,
+    "status": "Unfixed pre-existing glyph sampling discrepancy; reproduction and initial traces preserved in known-scaling-limitation/.",
+    "initial_case_bounds_size": [
+      24,
+      24
+    ],
+    "atlas_region_size": [
+      16,
+      16
+    ],
+    "final_case_bounds_size": [
+      16,
+      16
+    ]
+  },
+  "api_change": "GlyphRun and low-level Glyphs pass constructors now specify Coverage; existing text callers select Text.",
+  "limits": [
+    "The 75% result is the resident texture allocation for this workload, not total Editor private or GPU memory.",
+    "Release Editor memory, latency and full visual comparison are pending.",
+    "The latest complete scoreboard remains 33/41 performance rows PASS, overall FAIL, on the earlier window-memory executable."
+  ]
+}

@@ -8,9 +8,9 @@ use crate::blur::{blur_chain, BlurRequest};
 use crate::graph::{PlanLimits, RenderGraph};
 use crate::linear::Linear2;
 use crate::plan::{
-    Blend, ColorMatrix, CustomPassSpec, Extent, FilterParams, FramePlan, GlyphInstance, Gradient,
-    ImageInstance, LoadOp, Pass, PassKind, QuadInstance, ShaderId, ShadowCast, ShadowInstance,
-    TextureFormat, TextureHandle, TextureRef,
+    Blend, ColorMatrix, Coverage, CustomPassSpec, Extent, FilterParams, FramePlan, GlyphInstance,
+    Gradient, ImageInstance, LoadOp, Pass, PassKind, QuadInstance, ShaderId, ShadowCast,
+    ShadowInstance, TextureFormat, TextureHandle, TextureRef,
 };
 use crate::slug::SlugInstance;
 use crate::validate::PlanError;
@@ -91,6 +91,7 @@ impl PartialEq<Vec<Glyph>> for GlyphList {
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlyphRun {
     pub atlas: TextureHandle,
+    pub coverage: Coverage,
     pub glyphs: GlyphList,
 }
 
@@ -986,7 +987,7 @@ impl Emitter {
                     cast: shadow.cast,
                 },
             ),
-            Leaf::Glyphs(run) => self.graph.draw_glyphs(
+            Leaf::Glyphs(run) => self.graph.draw_coverage(
                 target,
                 run.atlas,
                 run.glyphs.iter().map(|glyph| GlyphInstance {
@@ -996,6 +997,7 @@ impl Emitter {
                     clip,
                     opacity,
                 }),
+                run.coverage,
             ),
             Leaf::Slug(run) => self.graph.draw_slug(
                 target,

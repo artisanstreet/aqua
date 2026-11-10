@@ -121,7 +121,11 @@ pub fn glyph_passes(
         .map(|(page, instances)| {
             let atlas = texture_handle(page);
             Pass::new(
-                PassKind::Glyphs { atlas, instances },
+                PassKind::Glyphs {
+                    atlas,
+                    coverage: aqua_graph::Coverage::Text,
+                    instances,
+                },
                 vec![TextureRef::Persistent(atlas)],
                 vec![target],
             )

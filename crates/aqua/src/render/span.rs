@@ -272,6 +272,7 @@ pub fn replay(
             }
             PaintCommand::Glyphs(run) => Some(PaintCommand::Glyphs(GlyphRun {
                 atlas: run.atlas,
+                coverage: run.coverage,
                 glyphs: run
                     .glyphs
                     .iter()

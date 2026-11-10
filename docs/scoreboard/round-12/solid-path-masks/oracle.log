@@ -1,0 +1,7 @@
+
+running 3 tests
+test exact_mask_alpha_ignores_the_text_contrast_curve ... ok
+test group_opacity_composites_isolated_layer_not_each_child ... ok
+test reference_matches_itself_on_every_case ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.69s

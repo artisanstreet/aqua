@@ -140,6 +140,7 @@ fn glyph_passes_bind_the_atlas_and_survive_validation() {
     graph.push(Pass::new(
         PassKind::Glyphs {
             atlas,
+            coverage: aqua_graph::Coverage::Text,
             instances: vec![GlyphInstance {
                 bounds: Rect {
                     x: 1.0,
@@ -301,6 +302,7 @@ fn glyph_at(x: f32) -> Pass {
     Pass::new(
         PassKind::Glyphs {
             atlas,
+            coverage: aqua_graph::Coverage::Text,
             instances: vec![GlyphInstance {
                 bounds: rect,
                 texels: rect,
@@ -312,6 +314,40 @@ fn glyph_at(x: f32) -> Pass {
         vec![TextureRef::Persistent(atlas)],
         vec![TextureRef::Surface],
     )
+}
+
+#[test]
+fn overlapping_text_and_exact_coverage_keep_their_draw_order() {
+    let mut graph = graph();
+    for coverage in [
+        aqua_graph::Coverage::Text,
+        aqua_graph::Coverage::Exact,
+        aqua_graph::Coverage::Text,
+    ] {
+        let mut pass = glyph_at(0.0);
+        match &mut pass.kind {
+            PassKind::Glyphs { coverage: mode, .. } => *mode = coverage,
+            _ => unreachable!(),
+        }
+        graph.push(pass);
+    }
+    let plan = graph.plan(PlanLimits::default()).unwrap();
+    let modes: Vec<_> = plan
+        .passes
+        .iter()
+        .filter_map(|pass| match pass.kind {
+            PassKind::Glyphs { coverage, .. } => Some(coverage),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        modes,
+        [
+            aqua_graph::Coverage::Text,
+            aqua_graph::Coverage::Exact,
+            aqua_graph::Coverage::Text
+        ]
+    );
 }
 
 fn kinds(plan: &aqua_graph::FramePlan) -> Vec<&'static str> {

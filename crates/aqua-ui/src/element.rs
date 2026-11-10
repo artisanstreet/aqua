@@ -387,10 +387,8 @@ impl TextSource for ReadSignal<String> {
     }
 }
 
-/// Mount-time binding attached to a mounted node. Applied once per node id by
-/// [`crate::binding::View`]; effects reference the [`NodeId`], never rebuilt
-/// subtrees.
 pub enum ElementBinding {
+    Install(std::rc::Rc<dyn crate::program::MountBinding>),
     Popup {
         options: crate::popup::PopupOptions,
         content: std::rc::Rc<dyn Fn() -> Element>,
@@ -426,26 +424,23 @@ pub enum ElementBinding {
     },
     Cursor(aqua_core::CursorIcon),
     Shortcut(Shortcut),
-    /// Subscribe a text source: effect pushes `UiCommand::SetText`.
+
     SubscribeText(ReadSignal<String>),
-    /// Two-way editable binding: effect pushes `SetText`; `TextChanged`
-    /// actions write back through the write handle (`try_set`, never panics).
+
     SubscribeEdit {
-        /// Read side (effect input).
         read: ReadSignal<String>,
-        /// Write side (event handler target).
+
         write: WriteSignal<String>,
     },
-    /// Register an action callback (activation, custom events).
+
     OnAction {
-        /// Which action to listen for.
         kind: ActionKind,
-        /// Data-only callback (cannot reenter the tree by signature).
+
         callback: ActionCallback,
     },
-    /// Make the node focusable (keyboard activation path).
+
     Focusable,
-    /// Register a canvas painter callback.
+
     Painter(CanvasPaintCallback),
     ContextPainter(crate::tree::ContextCanvasPaintCallback),
     ScrollStablePainter(CanvasPaintCallback),
@@ -2167,6 +2162,27 @@ pub struct Element {
 }
 
 impl Element {
+    pub fn layout_boundary(self, size: aqua_core::Size) -> Self {
+        self.install(crate::program::LayoutBoundary(size))
+    }
+
+    pub fn bind<T: Clone + 'static, P: crate::program::Property<T>>(
+        mut self,
+        property: P,
+        source: ReadSignal<T>,
+    ) -> Self {
+        self.bindings.push(ElementBinding::Install(std::rc::Rc::new(
+            crate::program::Binding::new(source, property),
+        )));
+        self
+    }
+
+    pub(crate) fn install(mut self, binding: impl crate::program::MountBinding + 'static) -> Self {
+        self.bindings
+            .push(ElementBinding::Install(std::rc::Rc::new(binding)));
+        self
+    }
+
     /// Attach a stable reconciliation key (macro `key(expr)` generates this).
     pub fn with_key(mut self, key: impl Into<Key>) -> Self {
         self.key = Some(key.into());
@@ -3109,10 +3125,6 @@ impl ElementKind {
     }
 }
 
-/// Splice top-level fragments into a flat element list (structural
-/// flattening — never an artificial node). A keyed fragment collapses onto
-/// its single child; any other keyed fragment is an error (the key would
-/// silently vanish). After this, node↔element pairing is always positional.
 pub(crate) fn splice_top_level(elements: Vec<Element>) -> Result<Vec<Element>, LowerError> {
     let mut out = Vec::new();
     for el in elements {
@@ -3120,41 +3132,26 @@ pub(crate) fn splice_top_level(elements: Vec<Element>) -> Result<Vec<Element>, L
     }
     Ok(out)
 }
-/// missing dynamic source cannot be represented — all fail here, loudly.
-/// Per-corner radii have a scalar-only scene seam (the emitter renders
-/// `corners.top_left`): uniform values round-trip exactly, but truly
-/// non-uniform values cannot be represented — so a `corners(...)` style with
-/// unequal radii reaching lowering is an explicit error, never a silent
-/// fallback to the uniform radius.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LowerError {
+    InvalidBinding(&'static str),
     InvalidTransform,
     InvalidContentBlur,
     InvalidTextColorMap,
     InvalidTextOpacity,
     InvalidMediaSource,
     InvalidFocusRing,
-    /// A keyed fragment flattened to other than exactly one child.
-    KeyedFragment {
-        /// Flattened child count.
-        children: usize,
-    },
-    /// `Dynamic` built without `.value(source)`.
+    KeyedFragment { children: usize },
     DynamicWithoutSource,
-    /// Per-corner radii with unequal values cannot be rendered; use uniform
-    /// `radius` (or an all-equal `corners` value).
     NonUniformCorners,
-    /// A collection element carrying explicit Element children. Collection
-    /// containers are window-managed (rows come from the source snapshot);
-    /// attaching children would silently drop them, so it fails loudly.
     CollectionChildren,
-    /// Collection descriptor or snapshot validation failed.
     Collection(CollectionError),
 }
 
 impl std::fmt::Display for LowerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            LowerError::InvalidBinding(message) => f.write_str(message),
             LowerError::InvalidTransform => write!(
                 f,
                 "subtree transform requires finite components and a nonzero determinant"
@@ -3320,15 +3317,6 @@ fn lower_collection(
     Ok(vec![root])
 }
 
-/// Convert one non-fragment element to its [`NodeSpec`]. Composite builders
-/// lower to honest retained kinds (checkbox/tab/slider structure as real
-/// boxes + texts; interaction that the tree cannot represent is a binding
-/// or a documented gap, never a fake field).
-///
-/// `inherited` is the typography chain from the element's ancestors: text
-/// nodes resolve their own explicit overrides over it. Box-lowered kinds
-/// carry their builder paint in the legacy [`BoxContent`] slot; every other
-/// kind carries it in [`NodeSpec::paint`] — no wrapper nodes either way.
 fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError> {
     let paint = el.resolved_paint();
     check_paint(&paint)?;
@@ -3464,10 +3452,16 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
             unreachable!("fragments are spliced by lower_specs, never lowered directly")
         }
     };
-    // Every node carries its resolved paint: boxes through the legacy
-    // `BoxContent` slot (kept identical here), every other kind through
-    // `NodeSpec::paint` for the tree's generic emission.
+
+    for binding in &el.bindings {
+        if let ElementBinding::Install(installation) = binding {
+            installation
+                .validate(&spec.kind)
+                .map_err(LowerError::InvalidBinding)?;
+        }
+    }
     spec.paint = paint;
+    spec.collection_managed = el.bindings.iter().any(|binding| matches!(binding, ElementBinding::Install(installation) if installation.owns_children()));
     spec.key = el.key.clone().map(hash_key);
     Ok(spec)
 }

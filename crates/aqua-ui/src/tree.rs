@@ -848,6 +848,11 @@ pub type ActionCallback = Box<dyn Fn(ActionEvent)>;
 /// dropped (never panics, never resurrects).
 #[derive(Debug)]
 pub enum UiCommand {
+    RefreshRegion {
+        node: NodeId,
+        cause: aqua_reactive::BindingCause,
+    },
+    Property(crate::program::PropertyUpdate),
     Fills(crate::paint::FillUpdate),
     Interaction(Box<interaction::InteractionCommand>),
     EditText {
@@ -1219,6 +1224,22 @@ pub struct UiTree {
     motion_groups: HashMap<NodeId, MotionGroups>,
     hoist_guards: Vec<(taffy::NodeId, taffy::NodeId)>,
     motion_declared: bool,
+    paint_changes: HashSet<NodeId>,
+    paint_coverage: crate::incremental::PaintCoverage,
+    own_paint_changes: HashSet<NodeId>,
+    update_log: crate::program::UpdateLog,
+    regions: crate::region::Regions,
+    region_errors: Vec<String>,
+    laying_regions: bool,
+    region_layouts: HashSet<NodeId>,
+    pending_region_layouts: HashSet<NodeId>,
+    region_viewport: Option<Size>,
+    text_index: crate::incremental::TextIndex,
+    layout_boundaries: HashSet<NodeId>,
+    pending_boundaries: HashSet<NodeId>,
+    full_layout: bool,
+    layout_work: crate::incremental::LayoutWork,
+    emission_contexts: RefCell<Vec<Option<crate::incremental::CachedEmissionContext>>>,
     pub(crate) control_router: crate::controls::ControlRouter,
     pub(crate) input: crate::input::InputRouter,
     nodes: Arena<NodeRecord>,
@@ -1268,6 +1289,7 @@ pub struct UiTree {
     /// Bumped by every paint- or layout-affecting mutation. Hosts gate
     /// scene re-emission on this (no per-frame whole-tree walks).
     content_version: u64,
+    semantics_version: u64,
     scroll_patches: u64,
     scroll_state: RefCell<HashMap<RawId, ScrollSlot>>,
     scroll_active: RefCell<Vec<RawId>>,
@@ -1334,7 +1356,6 @@ impl UiTree {
         self.gpui_layout_scale
     }
 
-    /// Create an empty tree.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -1353,6 +1374,22 @@ impl UiTree {
             motion_groups: HashMap::new(),
             hoist_guards: Vec::new(),
             motion_declared: false,
+            paint_changes: HashSet::new(),
+            paint_coverage: crate::incremental::PaintCoverage::Sparse,
+            own_paint_changes: HashSet::new(),
+            update_log: crate::program::UpdateLog::default(),
+            regions: HashMap::new(),
+            region_errors: Vec::new(),
+            laying_regions: false,
+            region_layouts: HashSet::new(),
+            pending_region_layouts: HashSet::new(),
+            region_viewport: None,
+            text_index: crate::incremental::TextIndex::default(),
+            layout_boundaries: HashSet::new(),
+            pending_boundaries: HashSet::new(),
+            full_layout: true,
+            layout_work: crate::incremental::LayoutWork::default(),
+            emission_contexts: RefCell::new(Vec::new()),
             control_router: crate::controls::ControlRouter::default(),
             input: crate::input::InputRouter::default(),
             nodes: Arena::new(),
@@ -1383,6 +1420,7 @@ impl UiTree {
             layout_version: 0,
             committed_layout: 0,
             content_version: 0,
+            semantics_version: 0,
             scroll_patches: 0,
             scroll_state: RefCell::new(HashMap::new()),
             scroll_active: RefCell::new(Vec::new()),
@@ -1426,6 +1464,7 @@ impl UiTree {
             return false;
         }
         self.gpui_layout_scale = scale;
+        self.full_layout = true;
         self.layout_styles_dirty = true;
         if scale.is_some() {
             self.taffy.disable_rounding();
@@ -1445,6 +1484,7 @@ impl UiTree {
     }
 
     pub fn invalidate_layout_cache(&mut self) {
+        self.full_layout = true;
         for &node in self.tmap.values() {
             let _ = self.taffy.mark_dirty(node);
         }
@@ -1468,6 +1508,7 @@ impl UiTree {
 
     pub fn invalidation_epoch(&self) -> u64 {
         self.content_version
+            .wrapping_add(self.semantics_version)
             .wrapping_add(self.sink.invalidation_counter.get())
     }
 
@@ -1496,8 +1537,30 @@ impl UiTree {
         self.invalidate_fill_changes();
     }
 
-    /// Bump content only (paint-affecting mutation) and stamp the node.
+    fn note_paint_change(&mut self, id: NodeId) {
+        if self.paint_coverage == crate::incremental::PaintCoverage::Full {
+            return;
+        }
+        self.own_paint_changes.remove(&id);
+        self.paint_changes.insert(id);
+        if self.paint_changes.len() > 1
+            && self.paint_changes.len().saturating_mul(4) >= self.nodes.len()
+        {
+            self.paint_coverage = crate::incremental::PaintCoverage::Full;
+            self.paint_changes.clear();
+            self.own_paint_changes.clear();
+        }
+    }
+
     fn touch_paint(&mut self, id: NodeId) {
+        self.note_paint_change(id);
+        if self
+            .get(id)
+            .is_some_and(|record| matches!(record.kind, NodeKind::Text(_)))
+        {
+            self.text_index.candidates.insert(id);
+        }
+        self.trace_work(id, crate::program::WorkStage::PaintInvalidated);
         self.content_version += 1;
         self.invalidate_fill_changes();
         let rev = self.content_version;
@@ -1598,10 +1661,29 @@ impl UiTree {
             return None;
         }
         self.touch_paint(id);
+        self.text_index.candidates.insert(id);
         self.nodes.get_mut(id.raw()).map(|record| {
             record.plain_bindings = false;
             record
         })
+    }
+
+    pub(crate) fn reset_binding_metadata(&mut self, id: NodeId) {
+        let changed = self.get(id).is_some_and(|record| {
+            record.description.is_some()
+                || record.debug_selector.is_some()
+                || record.hit_test_excluded
+                || record.keyboard_release_activation
+        });
+        if changed {
+            self.touch_paint(id);
+            if let Some(record) = self.nodes.get_mut(id.raw()) {
+                record.description = None;
+                record.debug_selector = None;
+                record.hit_test_excluded = false;
+                record.keyboard_release_activation = false;
+            }
+        }
     }
 
     /// Currently focused node.
@@ -1643,6 +1725,7 @@ impl UiTree {
         self.queue_interaction_focus(previous, id);
         for (node, focused) in [(previous, false), (id, true)] {
             if let Some(node) = node {
+                self.invalidate_region_layout(node);
                 if self
                     .get(node)
                     .is_some_and(|record| record.paint().focus_ring.is_some())
@@ -1661,18 +1744,15 @@ impl UiTree {
         true
     }
 
-    /// Assign accessibility metadata (role, label, disabled, ...). Bumps
-    /// the content version so hosts re-emit the accessibility tree.
-    /// Interactive nodes MUST get their real role: leaving `Group` on a
-    /// button is a contract violation.
     pub fn set_semantics(&mut self, id: NodeId, semantics: NodeSemantics) -> bool {
-        if !self.nodes.contains(id.raw()) {
+        let Some(record) = self.nodes.get_mut(id.raw()) else {
+            return false;
+        };
+        if record.semantics == semantics {
             return false;
         }
-        if let Some(rec) = self.nodes.get_mut(id.raw()) {
-            rec.semantics = semantics;
-        }
-        self.touch_paint(id);
+        record.semantics = semantics;
+        self.semantics_version = self.semantics_version.wrapping_add(1);
         true
     }
 
@@ -1997,6 +2077,24 @@ impl UiTree {
             count += queue.len();
             for cmd in queue {
                 match cmd {
+                    UiCommand::RefreshRegion { node, cause } => {
+                        let _cause = self.update_log.enter(cause);
+                        if let Some(mut region) = self.regions.remove(&node) {
+                            if let Err(error) = region.update(self) {
+                                self.region_errors.push(error);
+                            }
+                            if self.get(node).is_some() {
+                                if region.needs_layout() {
+                                    self.region_layouts.insert(node);
+                                    self.pending_region_layouts.insert(node);
+                                } else {
+                                    self.region_layouts.remove(&node);
+                                }
+                                self.regions.insert(node, region);
+                            }
+                        }
+                    }
+                    UiCommand::Property(update) => crate::program::apply(self, update),
                     UiCommand::Fills(update) => update.apply(self),
                     UiCommand::Interaction(command) => self.apply_interaction_command(*command),
                     UiCommand::EditText {
@@ -2664,7 +2762,6 @@ impl UiTree {
         self.sync_children(id, spec.children);
     }
 
-    /// Build a descriptor subtree detached (no parent yet); caller attaches.
     fn build_detached(&mut self, spec: NodeSpec) -> NodeId {
         let control = spec.control;
         let key = spec.key;
@@ -2702,8 +2799,6 @@ impl UiTree {
             .expect("taffy leaf insertion is infallible");
         let paint_slot = (!matches!(&kind, NodeKind::Box(_)) && paint != Paint::default())
             .then(|| Box::new(paint));
-        // Canvas painters referenced by id stay registered across rebuilds;
-        // only node records are fresh.
         let id = NodeId::from_raw(self.nodes.insert(NodeRecord {
             plain_bindings: false,
             style_identity: None,
@@ -2726,6 +2821,12 @@ impl UiTree {
             semantics: NodeSemantics::default(),
         }));
         self.tmap.insert(id.raw(), tnode);
+        if self
+            .get(id)
+            .is_some_and(|record| matches!(record.kind, NodeKind::Text(_)))
+        {
+            self.text_index.candidates.insert(id);
+        }
         for child in children {
             let cid = self.build_detached(child);
             self.attach(id, cid);
@@ -2892,9 +2993,6 @@ impl UiTree {
         self.mark_layout_dirty(parent);
     }
 
-    /// Remove a node and its subtree. Focus falls back to the parent.
-    /// Canvas painters and action callbacks referenced only by removed nodes
-    /// are dropped.
     pub fn remove(&mut self, id: NodeId) -> bool {
         let Some(rec) = self.nodes.get(id.raw()) else {
             return false;
@@ -2916,17 +3014,16 @@ impl UiTree {
             if let Some(prec) = self.nodes.get_mut(p.raw()) {
                 prec.children.retain(|c| *c != id);
             }
-            // Ancestor geometry may depend on this child: propagate.
+
             self.mark_layout_dirty(p);
         } else if self.root == Some(id) {
             self.structure_changed();
             self.root = None;
             self.bump_layout();
         }
-        // Drop the taffy subtree and all UI records depth-first.
+
         let mut stack = vec![id];
         while let Some(n) = stack.pop() {
-            // Focus inside a removed row must never retain a dead descendant.
             if self.focused == Some(n) {
                 self.focused = focus_fallback;
             }
@@ -2944,6 +3041,28 @@ impl UiTree {
             self.remove_interaction(n);
             self.control_router.remove_node(n);
             self.cancel_input_node(n);
+            self.text_index.candidates.remove(&n);
+            if self.text_index.viewport.remove(&n) {
+                self.text_index.revision = self.text_index.revision.wrapping_add(1);
+            }
+            if self.text_index.selection.remove(&n) {
+                self.text_index.selection_changes.insert(n);
+            }
+            self.region_layouts.remove(&n);
+            self.pending_region_layouts.remove(&n);
+            self.update_log.forget(n);
+            self.layout_boundaries.remove(&n);
+            self.pending_boundaries.remove(&n);
+            self.regions.remove(&n);
+            self.paint_changes.remove(&n);
+            self.own_paint_changes.remove(&n);
+            if let Some(slot) = self
+                .emission_contexts
+                .borrow_mut()
+                .get_mut(n.raw().index as usize)
+            {
+                *slot = None;
+            }
             self.rects.remove(&n.raw());
             self.content.remove(&n.raw());
             self.actions.retain(|(raw, _), _| *raw != n.raw());
@@ -2952,7 +3071,7 @@ impl UiTree {
             self.bound_actions.retain(|(raw, _)| *raw != n.raw());
             let _ = self.nodes.remove(n.raw());
         }
-        // A removed node can never fire: drop arms targeting dead nodes.
+
         self.press_captures
             .retain(|_, n| self.nodes.contains(n.raw()));
         if previous_focus != self.focused {
@@ -2989,8 +3108,6 @@ impl UiTree {
         })
     }
 
-    /// Update appearance without invalidating layout or replacing node identity.
-    /// Returns false for a dead node or an unchanged paint value.
     pub fn set_paint(&mut self, id: NodeId, paint: Paint) -> bool {
         self.motion_declared |= paint.motion.is_some();
         let Some(rec) = self.nodes.get_mut(id.raw()) else {
@@ -3003,6 +3120,15 @@ impl UiTree {
         if *current == paint {
             return false;
         }
+        let own_only = self.paint_coverage == crate::incremental::PaintCoverage::Sparse && {
+            let mut normalized = current.as_ref().clone();
+            normalized.opacity = paint.opacity;
+            normalized.fill = paint.fill;
+            current.opacity.is_some() == paint.opacity.is_some()
+                && current.fill.is_some() == paint.fill.is_some()
+                && normalized == paint
+                && (!self.paint_changes.contains(&id) || self.own_paint_changes.contains(&id))
+        };
         let border = |paint: &Paint| {
             paint.gpui_border.map(|border| border.widths).or_else(|| {
                 paint.border.map(|border| {
@@ -3023,6 +3149,9 @@ impl UiTree {
             self.mark_layout_dirty(id);
         }
         self.touch_paint(id);
+        if own_only && self.paint_coverage == crate::incremental::PaintCoverage::Sparse {
+            self.own_paint_changes.insert(id);
+        }
         true
     }
 
@@ -3309,26 +3438,65 @@ impl UiTree {
         clip
     }
 
-    /// Mark a node (and its ancestors) layout-dirty. Bumps the layout and
-    /// content versions, so the next `compute_layout` re-runs Taffy.
     pub fn mark_layout_dirty(&mut self, mut id: NodeId) {
+        self.note_paint_change(id);
         self.bump_layout();
         loop {
+            if self.region_layouts.contains(&id) {
+                self.pending_region_layouts.insert(id);
+            }
+            self.trace_work(id, crate::program::WorkStage::LayoutInvalidated);
             let Some(rec) = self.nodes.get_mut(id.raw()) else {
                 return;
             };
             rec.dirty_layout = true;
-            if let Some(&t) = self.tmap.get(&id.raw()) {
-                let _ = self.taffy.mark_dirty(t);
+            if let Some(&node) = self.tmap.get(&id.raw()) {
+                let _ = self.taffy.mark_dirty(node);
+            }
+            if self.layout_boundaries.contains(&id) && self.rects.contains_key(&id.raw()) {
+                self.pending_boundaries.insert(id);
+                return;
             }
             match rec.parent {
-                Some(p) => id = p,
-                None => return,
+                Some(parent) => id = parent,
+                None => {
+                    if self.root == Some(id) || self.portal_roots.contains(&id) {
+                        self.full_layout = true;
+                    }
+                    return;
+                }
             }
         }
     }
 
-    /// Replace a node's style, invalidating layout.
+    pub fn set_layout_boundary(&mut self, id: NodeId, size: Size) -> bool {
+        if !size.w.is_finite() || !size.h.is_finite() || size.w < 0.0 || size.h < 0.0 {
+            return false;
+        }
+        let Some(record) = self.get(id) else {
+            return false;
+        };
+        let mut style = record.style.clone();
+        style.width = crate::style::Length::Px(size.w);
+        style.min_width = style.width;
+        style.max_width = style.width;
+        style.height = crate::style::Length::Px(size.h);
+        style.min_height = style.height;
+        style.max_height = style.height;
+        style.flex_grow = 0.0;
+        style.flex_shrink = 0.0;
+        self.set_style(id, style);
+        self.layout_boundaries.insert(id);
+        if let Some(mut paint) = self.paint(id) {
+            if paint.opacity.is_none() {
+                paint.opacity = Some(1.0);
+                self.set_paint(id, paint);
+            }
+        }
+        self.full_layout = true;
+        true
+    }
+
     pub fn set_style(&mut self, id: NodeId, style: LayoutStyle) -> bool {
         let Some(&t) = self.tmap.get(&id.raw()) else {
             return false;
@@ -3339,6 +3507,9 @@ impl UiTree {
             .is_some_and(|rec| rec.style == style)
         {
             return true;
+        }
+        if self.layout_boundaries.contains(&id) {
+            self.full_layout = true;
         }
         self.taffy
             .set_style(t, crate::style::to_taffy(&style))
@@ -3597,7 +3768,6 @@ impl UiTree {
         }
     }
 
-    /// Scroll to an offset, clamped to content. Unknown/non-scroll nodes fail.
     pub fn scroll_to(&mut self, id: NodeId, offset: Point) -> bool {
         let max = self.scroll_max(id);
         let clamped = Point::new(offset.x.clamp(0.0, max.x), offset.y.clamp(0.0, max.y));
@@ -3616,6 +3786,7 @@ impl UiTree {
             None => false,
         };
         if applied {
+            self.invalidate_region_layout(id);
             match self.scroll_stays_in_window(id, clamped) {
                 true => {
                     self.scroll_patches += 1;
@@ -3759,10 +3930,11 @@ impl UiTree {
         dirty: &HashSet<RawId>,
         scale: Option<f32>,
         device_scale: f32,
+        origin: Point,
     ) -> (usize, usize) {
         let mut committed = 0usize;
         let mut visited = 0usize;
-        let mut stack = vec![(root, 0.0f32, 0.0f32)];
+        let mut stack = vec![(root, origin.x, origin.y)];
         while let Some((id, ox, oy)) = stack.pop() {
             visited += 1;
             let Some(&t) = self.tmap.get(&id.raw()) else {
@@ -3785,11 +3957,15 @@ impl UiTree {
                 ),
             };
             let moved = self.rects.insert(id.raw(), rect) != Some(rect);
+            if moved {
+                self.note_paint_change(id);
+            }
             let was_dirty = dirty.contains(&id.raw());
             if !moved && !was_dirty {
                 continue;
             }
             committed += 1;
+            self.trace_work(id, crate::program::WorkStage::LayoutCommitted);
             let Some(rec) = self.nodes.get_mut(id.raw()) else {
                 continue;
             };
@@ -3821,12 +3997,6 @@ impl UiTree {
         (committed, visited)
     }
 
-    /// Compute layout for `viewport` logical size, draining queued binding
-    /// commands first. Skips Taffy entirely when the viewport and layout
-    /// version are unchanged (paint-only updates cost no layout work).
-    /// `measurer` supplies text metrics; production uses
-    /// [`ShapedMeasurer`](crate::layout::ShapedMeasurer) over the shared
-    /// fonts, tests use [`NaiveMeasurer`].
     pub fn compute_layout(
         &mut self,
         viewport: Size,
@@ -3838,7 +4008,6 @@ impl UiTree {
             && self.layout_version == self.committed_layout
             && self.root.is_some()
         {
-            // Paint-only (or no-op) frame: committed rects stay valid.
             self.last_stats = FrameStats {
                 layout_skipped: true,
                 commands_drained: drained,
@@ -3856,6 +4025,14 @@ impl UiTree {
         let Some(&troot) = self.tmap.get(&root.raw()) else {
             return Err("root has no taffy node".into());
         };
+        if !self.full_layout
+            && !self.layout_styles_dirty
+            && self.last_viewport == Some(viewport)
+            && !self.pending_boundaries.is_empty()
+        {
+            self.compute_boundary_layouts(viewport, measurer)?;
+            return Ok(());
+        }
         let visited_before = self.layout_visited.get();
         let drained = self.sink.len();
         self.drain_commands();
@@ -3902,17 +4079,89 @@ impl UiTree {
             .map_err(|e| format!("taffy layout failed: {e:?}"))?;
         self.release_hoist_guards();
         let nodes_measured = measured.get();
-        let (committed, commit_visited) = self.commit_layout(root, &dirty, scale, device_scale);
+        let (committed, commit_visited) =
+            self.commit_layout(root, &dirty, scale, device_scale, Point::ZERO);
         self.layout_visited
             .set(self.layout_visited.get() + commit_visited);
         self.committed_layout = self.layout_version;
         self.last_viewport = Some(viewport);
+        self.pending_boundaries.clear();
+        self.full_layout = false;
+        self.layout_work.passes += 1;
+        self.layout_work.measured += nodes_measured;
+        self.layout_work.committed += committed;
         self.last_stats = FrameStats {
             layout_skipped: false,
             commands_drained: drained,
             nodes_measured,
             nodes_traversed: committed,
             nodes_visited: self.layout_visited.get() - visited_before,
+            scene_ops: self.last_stats.scene_ops,
+            content_version: self.content_version,
+        };
+        Ok(())
+    }
+
+    fn compute_boundary_layouts(
+        &mut self,
+        viewport: Size,
+        measurer: &dyn TextMeasurer,
+    ) -> Result<(), String> {
+        let mut roots: Vec<_> = self.pending_boundaries.iter().copied().collect();
+        roots.sort_unstable_by_key(|node| (node.raw().index, node.raw().generation));
+        let mut measured = 0;
+        let mut committed = 0;
+        let before = self.layout_visited.get();
+        let scale = self.gpui_layout_scale;
+        let device_scale = scale.unwrap_or(1.0);
+        let epoch = measurer.memo_epoch();
+        let roots_count = roots.len();
+        for root in roots {
+            let node = self.tmap[&root.raw()];
+            let rect = self.rects[&root.raw()];
+            let position = self
+                .taffy
+                .layout(node)
+                .map_err(|error| error.to_string())?
+                .location;
+            let origin = Point::new(
+                rect.x * device_scale - position.x,
+                rect.y * device_scale - position.y,
+            );
+            let dirty = self.collect_dirty_layout(root);
+            self.sync_layout_styles(&dirty)?;
+            self.taffy
+                .compute_contained_layout_with_measure(node, |input: LayoutInput, _, ctx, style| {
+                    measured += 1;
+                    taffy::compute_leaf_layout(
+                        input,
+                        style,
+                        |_, _| 0.0,
+                        |known, available| match scale {
+                            Some(scale) => {
+                                measure_leaf_gpui(known, available, ctx, measurer, scale, epoch)
+                            }
+                            None => measure_leaf(known, available, ctx, measurer, epoch),
+                        },
+                    )
+                })
+                .map_err(|error| error.to_string())?;
+            let (count, visited) = self.commit_layout(root, &dirty, scale, device_scale, origin);
+            committed += count;
+            self.layout_visited.set(self.layout_visited.get() + visited);
+        }
+        self.layout_work.passes += roots_count;
+        self.layout_work.measured += measured;
+        self.layout_work.committed += committed;
+        self.pending_boundaries.clear();
+        self.committed_layout = self.layout_version;
+        self.last_viewport = Some(viewport);
+        self.last_stats = FrameStats {
+            layout_skipped: false,
+            commands_drained: 0,
+            nodes_measured: measured,
+            nodes_traversed: committed,
+            nodes_visited: self.layout_visited.get() - before,
             scene_ops: self.last_stats.scene_ops,
             content_version: self.content_version,
         };
@@ -3940,6 +4189,9 @@ impl UiTree {
     }
 
     pub fn emit_scene(&mut self) -> Vec<(NodeId, DisplayItem)> {
+        self.emission_contexts
+            .borrow_mut()
+            .resize(self.nodes.capacity_slots(), None);
         for node in self.traverse() {
             if let Some(callback) = self.prepaints.get(&node.raw()) {
                 callback(self, node);
@@ -3955,6 +4207,7 @@ impl UiTree {
                 None,
                 None,
                 Transform2D::IDENTITY,
+                true,
                 &mut out,
             );
         }
@@ -3965,6 +4218,7 @@ impl UiTree {
                 None,
                 None,
                 Transform2D::IDENTITY,
+                true,
                 &mut out,
             );
         }
@@ -3973,9 +4227,269 @@ impl UiTree {
             .retain(|_, slot| slot.generation == generation);
         self.last_stats.scene_ops = out.len();
         self.last_stats.content_version = self.content_version;
+        self.paint_changes.clear();
+        self.own_paint_changes.clear();
+        self.paint_coverage = crate::incremental::PaintCoverage::Sparse;
         out
     }
 
+    pub fn dispose_regions(&mut self) {
+        self.regions.clear();
+        self.region_layouts.clear();
+        self.pending_region_layouts.clear();
+    }
+
+    pub fn layout_work(&self) -> crate::incremental::LayoutWork {
+        self.layout_work
+    }
+
+    pub fn install_region(
+        &mut self,
+        node: NodeId,
+        mut region: Box<dyn crate::region::MountedRegion>,
+    ) {
+        if self.regions.remove(&node).is_some() {
+            for child in self.content_children(node) {
+                self.remove(child);
+            }
+        }
+        if let Err(error) = region.update(self) {
+            self.region_errors.push(error);
+        }
+        if region.needs_layout() {
+            self.region_layouts.insert(node);
+            self.pending_region_layouts.insert(node);
+        }
+        self.regions.insert(node, region);
+    }
+
+    fn invalidate_region_layout(&mut self, node: NodeId) {
+        let mut cursor = Some(node);
+        while let Some(id) = cursor {
+            if self.region_layouts.contains(&id) {
+                self.pending_region_layouts.insert(id);
+            }
+            cursor = self.get(id).and_then(|record| record.parent);
+        }
+    }
+
+    pub fn layout_regions(
+        &mut self,
+        viewport: Size,
+        measurer: &dyn TextMeasurer,
+    ) -> Result<(), String> {
+        if self.laying_regions {
+            return Ok(());
+        }
+        self.drain_commands();
+        if let Some(error) = self.region_errors.pop() {
+            return Err(error);
+        }
+        if self.region_viewport != Some(viewport) {
+            self.pending_region_layouts
+                .extend(self.region_layouts.iter().copied());
+            self.region_viewport = Some(viewport);
+        }
+        self.laying_regions = true;
+        let mut processed = HashSet::new();
+        let result = (|| {
+            loop {
+                let mut nodes: Vec<_> = std::mem::take(&mut self.pending_region_layouts)
+                    .into_iter()
+                    .filter(|node| !processed.contains(node))
+                    .collect();
+                if nodes.is_empty() {
+                    break;
+                }
+                nodes.sort_unstable_by_key(|node| (node.raw().index, node.raw().generation));
+                for node in nodes {
+                    processed.insert(node);
+                    if let Some(mut region) = self.regions.remove(&node) {
+                        self.layout_work.regions += 1;
+                        let result = region.layout(self, viewport, measurer);
+                        if self.get(node).is_some() {
+                            self.regions.insert(node, region);
+                        }
+                        result?;
+                    }
+                }
+            }
+            Ok(())
+        })();
+        self.laying_regions = false;
+        result
+    }
+
+    fn refresh_text_index(&mut self) {
+        for node in std::mem::take(&mut self.text_index.candidates) {
+            let (viewport, selection) = match self.get(node).map(|record| &record.kind) {
+                Some(NodeKind::Text(text)) => (
+                    text.viewport_scroll_max.is_some(),
+                    text.selection_source.is_some(),
+                ),
+                _ => (false, false),
+            };
+            if viewport || self.text_index.viewport.contains(&node) {
+                self.text_index.revision = self.text_index.revision.wrapping_add(1);
+            }
+            match viewport {
+                true => {
+                    self.text_index.viewport.insert(node);
+                }
+                false => {
+                    self.text_index.viewport.remove(&node);
+                }
+            }
+            if selection || self.text_index.selection.contains(&node) {
+                self.text_index.selection_changes.insert(node);
+            }
+            match selection {
+                true => {
+                    self.text_index.selection.insert(node);
+                }
+                false => {
+                    self.text_index.selection.remove(&node);
+                }
+            }
+        }
+    }
+
+    pub fn viewport_cap_nodes(&mut self) -> (u64, Vec<NodeId>) {
+        self.refresh_text_index();
+        (
+            self.text_index.revision,
+            self.text_index.viewport.iter().copied().collect(),
+        )
+    }
+
+    pub fn selection_binding_nodes(&mut self, reset: bool) -> Vec<NodeId> {
+        self.refresh_text_index();
+        let mut nodes = std::mem::take(&mut self.text_index.selection_changes);
+        if reset {
+            nodes.extend(self.text_index.selection.iter().copied());
+        }
+        nodes.into_iter().collect()
+    }
+
+    pub fn trace_work(&self, node: NodeId, stage: crate::program::WorkStage) {
+        if !self.update_log.enabled() {
+            return;
+        }
+        let mut sources = Vec::new();
+        let mut cursor = Some(node);
+        while let Some(id) = cursor {
+            for cause in self.update_log.causes(id) {
+                if !sources.contains(&cause) {
+                    sources.push(cause);
+                }
+            }
+            cursor = self.get(id).and_then(|record| record.parent);
+        }
+        self.update_log.work(node, stage, sources);
+    }
+
+    pub fn finish_update_traces(&self) {
+        self.update_log.finish();
+    }
+
+    pub fn update_log(&self) -> crate::program::UpdateLog {
+        self.update_log.clone()
+    }
+
+    pub fn set_bound_text_color(&mut self, node: NodeId, color: Oklch) -> bool {
+        if !self
+            .get(node)
+            .is_some_and(|record| matches!(record.kind, NodeKind::Text(_)))
+        {
+            return false;
+        }
+        let before = self.content_version;
+        self.apply_bound_color(node, color);
+        self.content_version != before
+    }
+
+    pub fn pending_paint_nodes(&self) -> Vec<NodeId> {
+        match self.paint_coverage {
+            crate::incremental::PaintCoverage::Sparse => {
+                self.paint_changes.iter().copied().collect()
+            }
+            crate::incremental::PaintCoverage::Full => self.traverse(),
+        }
+    }
+
+    pub fn emit_dirty_fragments(&mut self) -> Option<crate::incremental::SceneFragments> {
+        if self.paint_coverage == crate::incremental::PaintCoverage::Full
+            || !self.prepaints.is_empty()
+            || self.paint_changes.is_empty()
+        {
+            return None;
+        }
+        let dirty = &self.paint_changes;
+        let mut roots = Vec::new();
+        for node in dirty.iter().copied() {
+            let mut parent = self.get(node)?.parent;
+            let mut covered = false;
+            while let Some(id) = parent {
+                if dirty.contains(&id) && !self.own_paint_changes.contains(&id) {
+                    covered = true;
+                    break;
+                }
+                parent = self.get(id)?.parent;
+            }
+            if !covered {
+                roots.push(node);
+            }
+        }
+        roots.sort_unstable_by_key(|node| (node.raw().index, node.raw().generation));
+        let mut out = Vec::new();
+        let mut nodes = Vec::new();
+        let mut replacements = Vec::new();
+        for node in roots {
+            let context = self
+                .emission_contexts
+                .borrow()
+                .get(node.raw().index as usize)
+                .copied()
+                .flatten()
+                .filter(|entry| entry.node == node && entry.epoch == self.emit_generation.get())?
+                .context;
+            let include_children = !self.own_paint_changes.contains(&node);
+            let mut stack = vec![node];
+            while let Some(id) = stack.pop() {
+                nodes.push(id);
+                if let Some(slot) = self
+                    .emission_contexts
+                    .borrow_mut()
+                    .get_mut(id.raw().index as usize)
+                {
+                    *slot = None;
+                }
+                if include_children {
+                    stack.extend(self.get(id)?.children.iter().copied());
+                }
+            }
+            let start = out.len();
+            self.emit_node(
+                node,
+                context.scrolled,
+                context.clip,
+                context.cull,
+                context.transform,
+                include_children,
+                &mut out,
+            );
+            replacements.push((node, start..out.len()));
+        }
+        self.paint_changes.clear();
+        self.own_paint_changes.clear();
+        Some(crate::incremental::SceneFragments {
+            nodes,
+            roots: replacements,
+            items: out,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn emit_node(
         &self,
         id: NodeId,
@@ -3983,11 +4497,29 @@ impl UiTree {
         clip: Option<Rect>,
         cull: Option<Rect>,
         inherited_transform: Transform2D,
+        include_children: bool,
         out: &mut Vec<(NodeId, DisplayItem)>,
     ) {
         let Some(rec) = self.nodes.get(id.raw()) else {
             return;
         };
+        {
+            let mut contexts = self.emission_contexts.borrow_mut();
+            let index = id.raw().index as usize;
+            if index >= contexts.len() {
+                contexts.resize(index + 1, None);
+            }
+            contexts[index] = Some(crate::incremental::CachedEmissionContext {
+                node: id,
+                epoch: self.emit_generation.get(),
+                context: crate::incremental::EmissionContext {
+                    scrolled,
+                    clip,
+                    cull,
+                    transform: inherited_transform,
+                },
+            });
+        }
         self.visited.set(self.visited.get() + 1);
         let Some(rect) = self.rects.get(&id.raw()).copied() else {
             return;
@@ -4491,7 +5023,11 @@ impl UiTree {
         if scroll_offset.is_some() {
             self.scroll_active.borrow_mut().push(id.raw());
         }
-        for &child in &rec.children {
+        let children = match include_children {
+            true => rec.children.as_slice(),
+            false => &[],
+        };
+        for &child in children {
             if !self.is_portal(child) {
                 self.emit_node(
                     child,
@@ -4499,6 +5035,7 @@ impl UiTree {
                     child_clip,
                     child_cull,
                     child_world,
+                    true,
                     out,
                 );
             }

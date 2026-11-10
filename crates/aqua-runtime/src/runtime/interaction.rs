@@ -669,11 +669,14 @@ impl Runtime {
         if self.interaction.binding_version == Some(self.tree.descriptor_version()) {
             return;
         }
-        for node in std::mem::take(&mut self.interaction.descriptor_bindings) {
-            self.interaction.source_slices.remove(&node);
-            self.interaction.source_scopes.remove(&node);
-        }
-        for node in self.tree.traverse() {
+        let nodes = self
+            .tree
+            .selection_binding_nodes(self.interaction.binding_version.is_none());
+        for node in nodes {
+            if self.interaction.descriptor_bindings.remove(&node) {
+                self.interaction.source_slices.remove(&node);
+                self.interaction.source_scopes.remove(&node);
+            }
             let binding = self.tree.get(node).and_then(|record| match &record.kind {
                 NodeKind::Text(text) => text.selection_source.clone(),
                 _ => None,

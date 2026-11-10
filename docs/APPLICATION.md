@@ -8,12 +8,13 @@ the Config worker (`crates/aqua/src/config.rs`). Normative contract:
 ## Canonical entry point (builder-first)
 
 ```rust
-use aqua::{Aqua, Context, IntoView, Material, Theme, Titlebar, px};
+use aqua::{Aqua, Context, Program, Material, Theme, Titlebar, px};
 
-fn todo_app(cx: &Context) -> impl IntoView {
-    let glass = cx.material().is_glass();
-    let (deps, render) = todo_view(cx.scope(), Vec::new(), glass);
-    cx.view(deps, render)
+fn todo_app(cx: &Context) -> Program {
+    cx.program(|scope| {
+        let (title, _) = scope.signal(String::from("Tasks"));
+        Aqua::Box().child(Aqua::Text(title).build()).build()
+    })
 }
 
 fn main() -> Result<(), aqua::Error> {
@@ -55,10 +56,11 @@ OS buttons; real native-button behavior is covered by the parent's
   lifecycle (mount → flush/layout/scene → dispose). Invalid config returns
   `Err(Error::Config(..))` without invoking the factory.
 - `Context::scope() -> &Scope` owns setup signals; `material()` returns the
-  startup `ResolvedMaterial` (`is_glass()` picks glass vs solid styling —
-  no manual capability/prefs polling in `main`); `view(deps, render)`
-  builds the explicit-dependency `ReactiveView`. `IntoView` is sealed over
-  `Element` (static) and `ReactiveView<D, F>` only.
+  startup `ResolvedMaterial` (`is_glass()` picks glass vs solid styling).
+  `program(build)` installs persistent structure and bindings from a builder
+  that runs once. `IntoView` is sealed over `Program`, `Element` and the
+  compatibility `ReactiveView<D, F>`. `view(deps, render)` is deprecated;
+  use property bindings, owned `When` regions and `LiveList` for updates.
 - Failures are typed `aqua::Error::{Config, Mount, Init, Runtime}`. CLI
   helpers that return `String` map via `Error::Init` explicitly (there is
   no `From<String>`).

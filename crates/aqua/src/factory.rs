@@ -68,6 +68,26 @@ impl MotionKit {
 
 #[allow(non_snake_case)]
 impl Aqua {
+    pub fn When(
+        source: ReadSignal<bool>,
+        yes: impl Fn(&aqua_reactive::Scope) -> aqua_ui::element::Element + 'static,
+        no: impl Fn(&aqua_reactive::Scope) -> aqua_ui::element::Element + 'static,
+    ) -> aqua_ui::element::Element {
+        aqua_ui::region::when(source, yes, no)
+    }
+
+    pub fn LiveList<K, T>(
+        collection: aqua_reactive::collection::Collection<K, T>,
+        row: impl Fn(&aqua_reactive::Scope, K, ReadSignal<std::rc::Rc<T>>) -> aqua_ui::element::Element
+            + 'static,
+    ) -> aqua_ui::live::LiveList<K, T>
+    where
+        K: Ord + Clone + Into<aqua_ui::element::Key> + 'static,
+        T: 'static,
+    {
+        aqua_ui::live::LiveList::new(collection, row)
+    }
+
     /// Container builder (`Box::new()`).
     pub fn Box() -> builders::Box {
         builders::Box::new()

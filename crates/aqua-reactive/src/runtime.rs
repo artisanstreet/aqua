@@ -742,6 +742,10 @@ impl Scope {
         self.graph.scope_live(self.id)
     }
 
+    pub fn shares_runtime<T>(&self, source: &ReadSignal<T>) -> bool {
+        source.same_graph(&self.graph)
+    }
+
     pub fn set_invalidation_counter(&self, counter: Rc<std::cell::Cell<u64>>) {
         self.graph
             .ensure_scope(self.id, "Scope::set_invalidation_counter");
@@ -1059,6 +1063,72 @@ impl Scope {
             }
             drop(inner);
             graph.maybe_flush_or_wake(1);
+        }
+        EffectHandle { graph, node, slot }
+    }
+
+    pub fn bind<T: Clone + 'static, S: crate::BindingSink<T>>(
+        &self,
+        source: &ReadSignal<T>,
+        sink: S,
+    ) -> EffectHandle {
+        self.bind_sink(source, sink, None)
+    }
+
+    pub fn bind_at_version<T: Clone + 'static, S: crate::BindingSink<T>>(
+        &self,
+        source: &ReadSignal<T>,
+        sink: S,
+        delivered: u64,
+    ) -> EffectHandle {
+        self.bind_sink(source, sink, Some(delivered))
+    }
+
+    fn bind_sink<T, S>(
+        &self,
+        source: &ReadSignal<T>,
+        mut sink: S,
+        delivered: Option<u64>,
+    ) -> EffectHandle
+    where
+        T: Clone + 'static,
+        S: crate::BindingSink<T>,
+    {
+        self.graph.ensure_scope(self.id, "Scope::bind");
+        self.ensure_inputs(&(source.clone(),), "Scope::bind");
+        let needs_initial = delivered != source.try_version();
+        let source = source.clone();
+        let dependency = source.node_id();
+        let mut last = delivered;
+        let thunk = Thunk::Effect(Box::new(move || {
+            let Some(version) = source.try_version() else {
+                return false;
+            };
+            if last == Some(version) {
+                return false;
+            }
+            sink.write(
+                &source.cell.borrow().value,
+                crate::BindingCause {
+                    source: dependency,
+                    version,
+                },
+            );
+            last = Some(version);
+            true
+        }));
+        let (node, slot) = self.alloc_member(NodeKind::Effect { queued: false }, None);
+        self.link(dependency, node, "Scope::bind");
+        let graph = self.graph.clone();
+        if let Some((inner, thunks, _, _)) = graph.upgrade_all() {
+            thunks.borrow_mut().insert(node, thunk);
+            if needs_initial {
+                let mut guard = inner.borrow_mut();
+                guard.set_queued(slot, true);
+                guard.queue.push_back(node);
+                drop(guard);
+                graph.maybe_flush_or_wake(1);
+            }
         }
         EffectHandle { graph, node, slot }
     }

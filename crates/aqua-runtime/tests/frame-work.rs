@@ -76,11 +76,11 @@ fn streaming_a_message_shapes_only_its_changed_source() {
         runtime.tree_mut().set_text(nodes[999], message.clone());
         runtime.build_frame().unwrap();
         let work = runtime.frame_work();
-        assert_eq!(work.text_nodes_checked, 1001);
+        assert_eq!(work.text_nodes_checked, 1);
         assert_eq!(work.text_source_bytes, message.len());
         assert_eq!(work.text_runs_shaped, 1);
         assert!(!work.tree_scene_reused);
-        assert!(work.tree_scene_ops_emitted >= 1001);
+        assert_eq!(work.tree_scene_ops_emitted, 1);
     }
 }
 

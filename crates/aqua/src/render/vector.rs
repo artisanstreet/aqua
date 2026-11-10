@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -184,6 +185,13 @@ impl Hasher for Fnv {
     }
 }
 
+impl std::fmt::Write for Fnv {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        self.write(value.as_bytes());
+        Ok(())
+    }
+}
+
 fn hash_float(state: &mut Fnv, value: f32) {
     value.to_bits().hash(state);
 }
@@ -262,14 +270,16 @@ fn map_command(command: &PathCommand, map: &impl Fn(Point) -> Point, scale: f32)
     }
 }
 
-fn extent_points(command: &PathCommand) -> Vec<Point> {
+fn extent_points(command: &PathCommand) -> impl Iterator<Item = Point> {
     match command {
-        PathCommand::Move(to) | PathCommand::Line(to) => vec![*to],
-        PathCommand::Quadratic { control, to } => vec![*control, *to],
-        PathCommand::Cubic { first, second, to } => vec![*first, *second, *to],
-        PathCommand::Arc { to, .. } => vec![*to],
-        PathCommand::Close => Vec::new(),
+        PathCommand::Move(to) | PathCommand::Line(to) => [Some(*to), None, None],
+        PathCommand::Quadratic { control, to } => [Some(*control), Some(*to), None],
+        PathCommand::Cubic { first, second, to } => [Some(*first), Some(*second), Some(*to)],
+        PathCommand::Arc { to, .. } => [Some(*to), None, None],
+        PathCommand::Close => [None, None, None],
     }
+    .into_iter()
+    .flatten()
 }
 
 fn arc_reach(commands: &[PathCommand], scale: f32) -> f32 {
@@ -538,14 +548,13 @@ impl VectorCache {
             GpuiPathStyle::Stroke { width, .. } => width * scale,
             GpuiPathStyle::Fill { .. } => 0.0,
         };
-        let points: Vec<Point> = path
+        let mut points = path
             .commands_local
             .iter()
             .flat_map(extent_points)
-            .map(to_device)
-            .collect();
-        let first = *points.first()?;
-        let (min, max) = points.iter().fold(
+            .map(to_device);
+        let first = points.next()?;
+        let (min, max) = points.fold(
             ((first.x, first.y), (first.x, first.y)),
             |((lx, ly), (hx, hy)), point| {
                 (
@@ -577,7 +586,8 @@ impl VectorCache {
                     let mapped = map_command(command, &relative, scale);
                     hash_command(&mut state, &mapped);
                 });
-                format!("{:?}{:?}", path.style, path.background).hash(&mut state);
+                let _ = write!(state, "{:?}{:?}", path.style, path.background);
+                state.write_u8(0xff);
                 hash_float(&mut state, width);
                 hash_float(&mut state, height);
                 hash_float(&mut state, scale);

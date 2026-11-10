@@ -1,0 +1,61 @@
+{
+  "description": "Frozen combined solid-mask framework and Editor plus cached path allocation b62ffdf (PR16). No GPU ledger, rejected presentation or constant-buffer experiments.",
+  "source_digest_method": "Python pathlib.Path component ordering via sorted(paths); per path: relative POSIX path UTF-8, NUL, raw file bytes, NUL; extensions .rs .toml .lock .hlsl .wgsl; exclude .git and target",
+  "aqua_source": {
+    "sha256": "941a08641ff04f5b1bdeadead4a088689ebe23d8c2023e8945f6b22f788fba52",
+    "files": 867
+  },
+  "editor_source": {
+    "sha256": "3d9b9f679b64d5871c1c337a1be71b1f9a77e29334f70b8350718072b5647e1e",
+    "files": 1056
+  },
+  "aqua_base_commit": "5f4ec00",
+  "applied_commits": [
+    "36cd19a",
+    "4cb0559",
+    "4fff52e",
+    "9077af9",
+    "670b4c1",
+    "86a25f7",
+    "619ffab",
+    "f75e709",
+    "b9e3c65",
+    "6314c9c",
+    "0240deb",
+    "b62ffdf"
+  ],
+  "editor_patch_sha256": "88f90289e0e2529630eed4281f231bd93a792234dcb882b8268cc676d127d667",
+  "editor_pr_base": "6606f059",
+  "previous_aqua_source": {
+    "sha256": "ae6b3361793c513a7aa0c1c746997164228eed09315d6c7225c49d336e945241",
+    "files": 867
+  },
+  "binary": "/home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-vector-cache.exe",
+  "binary_sha256": "6c23ac9afea77a47f7fb68db099f5e4f8e08ed96d5df644af9e802ba80019973",
+  "runtime_environment": {
+    "AQUA_D3D11_PREVENT_THREADING": "unset; new native-host default enables it",
+    "stats": "off",
+    "AQUA_LEDGER": "unset",
+    "AQUA_MEMORY_REPORT": "unset"
+  },
+  "validation": {
+    "combined_checkout": "4ef5231",
+    "windows_scheduler_tests": 14,
+    "windows_gpu_conformance_tests": 6,
+    "library_clippy": "PASS -D warnings",
+    "d3d12_host_check": "PASS",
+    "windows_text_tests": 211,
+    "windows_text_suites": 33,
+    "windows_text_ignored": 3,
+    "layout_library_and_tests_clippy": "PASS -D warnings",
+    "solid_path_mask_render_tests": 81,
+    "solid_path_mask_graph_tests": 13,
+    "solid_path_mask_oracle_tests": 3,
+    "solid_path_mask_d3d11_conformance_tests": 6,
+    "solid_path_mask_d3d12_conformance_tests": 4,
+    "solid_path_mask_clippy": "PASS Windows --lib --tests -D warnings",
+    "path_cache_windows_render_tests": 80,
+    "path_cache_windows_perf_scene_tests": 3,
+    "path_cache_clippy": "PASS --lib --test render --test perf_scene -D warnings"
+  }
+}

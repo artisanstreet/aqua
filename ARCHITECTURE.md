@@ -1525,6 +1525,12 @@ Not met: scroll p50 stays 0.12 to 0.14 ms against GPUI 0.06 to 0.08 ms. The prob
 
 Not done: retained plan and record replay for unchanged glyph runs (per-glyph instance materialisation in `draw_glyphs`, about 0.2 ms plan and 0.3 ms record per frame, needs a run-relative instance format across `aqua-graph` and the D3D11 backend) and app frame coalescing for input frames (119 app frames against 83 render frames).
 
+### 14.VA Round 12 cached path allocation (2026-11-07, proposal)
+
+Every VectorCache path lookup allocated a Vec for each command's control points, collected all transformed points into another Vec, and formatted its style/background into a String before hashing. Bounds now fold over stack-backed point iterators. Debug formatting streams directly into the existing FNV hasher, retaining the string-hash terminator. Drawing construction on a miss is unchanged.
+
+The new allocation guard warms a 10,000-cubic-segment path, then checks that another lookup reuses its drawing and placement with less than 2 KiB requested allocation. It fails on unchanged 1faf00b at 764,512 bytes across 10,020 allocations and passes on b62ffdf with zero bytes and zero allocations. A mixed line/quadratic/cubic/arc test checks scaled control-point bounds, padding and arc reach. All 80 Windows render tests and three performance-scene tests pass, with one existing benchmark ignored. Windows library/targeted-test clippy passes with warnings denied, and changed-file rustfmt passes. Workspace cargo fmt still reports preexisting vendored Taffy differences; those files are unchanged. Raw evidence is under `docs/scoreboard/round-12/path-cache-allocation/`. This establishes a focused allocation reduction, not a release Editor timing or retained-memory gain.
+
 
 ### 14.MK Round 12 solid path coverage masks (2026-11-07, proposal)
 

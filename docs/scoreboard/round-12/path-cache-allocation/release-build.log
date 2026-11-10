@@ -1,0 +1,51 @@
+build slot 1
+warning: Git tree '/home/sander/projects/artisanstreet/editor' is dirty
+warning: linker stderr: rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-barrier.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-clock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-cond.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-misc.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-mutex.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-nanosleep.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-rwlock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-sem.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-spinlock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-sched.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-thread.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'version.o' is neither ET_REL nor LLVM bitcode
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: field `0` is never read
+ --> /home/sander/projects/artisanstreet/aqua-optimization/target/measurements/current/aqua/crates/aqua-reactive/src/read_check.rs:8:12
+  |
+8 |     Render(Vec<NodeId>),
+  |     ------ ^^^^^^^^^^^
+  |     |
+  |     field in this variant
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+  |
+8 -     Render(Vec<NodeId>),
+8 +     Render(()),
+  |
+
+warning: `aqua-shaders` (build script) generated 1 warning
+warning: `aqua-reactive` (lib) generated 1 warning
+warning: `editor-aqua` (build script) generated 1 warning (1 duplicate)
+   Compiling editor-aqua v0.0.0 (/home/sander/projects/artisanstreet/aqua-optimization/target/measurements/current/editor/crates/editor-aqua)
+   Compiling aqua v0.1.0 (/home/sander/projects/artisanstreet/aqua-optimization/target/measurements/current/aqua/crates/aqua)
+warning: field `3` is never read
+    --> crates/editor-aqua/src/shell/application.rs:1194:5
+     |
+1190 | pub(crate) struct Tm(
+     |                   -- field in this struct
+...
+1194 |     crate::shell::rebuild_stats::Span,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider removing this field
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `editor-aqua` (lib) generated 1 warning
+    Finished `release` profile [optimized] target(s) in 3m 51s

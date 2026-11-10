@@ -1,0 +1,22 @@
+build slot 1
+warning: Git tree '/home/sander/projects/artisanstreet/editor' is dirty
+Diff in /home/sander/projects/artisanstreet/aqua-vector-cache/vendor/taffy/src/compute/block.rs:1:
+ //! Computes the CSS block layout algorithm in the case that the block container being laid out contains only block-level boxes
+ use crate::geometry::{Line, Point, Rect, Size};
+ use crate::style::{
+-    AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, AlignSelf, AlignmentSafety, AvailableSpace,
+-    CoreStyle, LengthPercentageAuto, Overflow, Position,
++    AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, AlignSelf, AlignmentSafety,
++    AvailableSpace, CoreStyle, LengthPercentageAuto, Overflow, Position,
+ };
+ use crate::style_helpers::TaffyMaxContent;
+ use crate::tree::{
+Diff in /home/sander/projects/artisanstreet/aqua-vector-cache/vendor/taffy/src/compute/block.rs:9:
+-    AxisStaticPosition, LayoutPartialTree, LayoutPartialTreeExt, NodeId, OofCandidate, OofCandidates,
+-    OofPositioningArea,
++    AxisStaticPosition, LayoutPartialTree, LayoutPartialTreeExt, NodeId, OofCandidate,
++    OofCandidates, OofPositioningArea,
+ };
+-use crate::tree::{Baselines, CollapsibleMarginSet, Layout, LayoutInput, LayoutOutput, RunMode, SizingMode};
++use crate::tree::{
++    Baselines, CollapsibleMarginSet, Layout, LayoutInput, LayoutOutput, RunMode, SizingMode,

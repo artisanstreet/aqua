@@ -42,6 +42,7 @@ pub struct RenderSide {
     viewport: Option<(Size, f32)>,
     next_frame: FrameId,
     submitted: Option<Submitted>,
+    overlay: Vec<NodeId>,
 }
 
 impl Default for RenderSide {
@@ -67,6 +68,7 @@ impl RenderSide {
             viewport: None,
             next_frame: 1,
             submitted: None,
+            overlay: Vec::new(),
         }
     }
 
@@ -87,6 +89,46 @@ impl RenderSide {
     #[must_use]
     pub fn viewport(&self) -> Option<(Size, f32)> {
         self.viewport
+    }
+
+    pub fn set_overlay(&mut self, items: Vec<DisplayItem>) {
+        let keep = items.len().min(self.overlay.len());
+        for id in self.overlay.split_off(keep) {
+            self.scene.remove(id);
+        }
+        let mut items = items.into_iter();
+        for (id, item) in self.overlay.iter().zip(items.by_ref()) {
+            self.scene.update(*id, item);
+        }
+        for item in items {
+            self.overlay.push(self.scene.insert(item));
+        }
+        if let Some(submitted) = self.submitted.as_mut() {
+            submitted.revision = self.scene.revision();
+        }
+        if self.overlay.is_empty() {
+            return;
+        }
+        let overlay: HashSet<NodeId> = self.overlay.iter().copied().collect();
+        let ids: Vec<NodeId> = self
+            .scene
+            .ordered()
+            .map(|(id, _)| id)
+            .filter(|id| !overlay.contains(id))
+            .chain(self.overlay.iter().copied())
+            .collect();
+        let on_top = self
+            .scene
+            .ordered()
+            .map(|(id, _)| id)
+            .skip(ids.len() - self.overlay.len())
+            .eq(self.overlay.iter().copied());
+        if !on_top {
+            self.scene.set_order(&ids);
+        }
+        if let Some(submitted) = self.submitted.as_mut() {
+            submitted.revision = self.scene.revision();
+        }
     }
 
     #[must_use]
@@ -237,6 +279,7 @@ impl RenderSide {
             let ids: Vec<NodeId> = order
                 .iter()
                 .filter_map(|node| self.local.get(node).copied())
+                .chain(self.overlay.iter().copied())
                 .collect();
             self.scene.set_order(&ids);
         }

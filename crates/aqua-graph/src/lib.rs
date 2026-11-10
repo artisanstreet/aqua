@@ -2,6 +2,7 @@
 
 pub mod analysis;
 pub mod blur;
+pub mod curve_paint;
 pub mod graph;
 pub mod linear;
 pub mod paint;

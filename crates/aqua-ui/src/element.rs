@@ -1155,6 +1155,7 @@ pub struct Scroll {
     paint: Paint,
     typo: TypoChain,
     offset: Point,
+    preserve_offset: bool,
     children: Vec<Element>,
 }
 
@@ -1166,6 +1167,7 @@ impl Scroll {
             paint: Paint::default(),
             typo: TypoChain::default(),
             offset: Point::ZERO,
+            preserve_offset: false,
             children: Vec::new(),
         }
     }
@@ -1180,6 +1182,11 @@ impl Scroll {
     /// Scroll offset as a [`Point`].
     pub fn offset(mut self, offset: Point) -> Self {
         self.offset = offset;
+        self
+    }
+
+    pub fn preserve_offset(mut self, preserve: bool) -> Self {
+        self.preserve_offset = preserve;
         self
     }
 
@@ -2891,7 +2898,9 @@ impl Element {
                 }
             }
             ElementKind::Scroll(s) => {
-                tree.scroll_to(id, s.offset);
+                if !s.preserve_offset {
+                    tree.scroll_to(id, s.offset);
+                }
             }
             ElementKind::Canvas(_) => {}
             ElementKind::Viewport3D(v) => {
@@ -3374,10 +3383,14 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
             }),
             m.style.clone(),
         ),
-        ElementKind::Scroll(s) => NodeSpec::new(
-            NodeKind::Scroll(ScrollContent { offset: s.offset }),
-            s.style.clone(),
-        ),
+        ElementKind::Scroll(s) => {
+            let mut spec = NodeSpec::new(
+                NodeKind::Scroll(ScrollContent { offset: s.offset }),
+                s.style.clone(),
+            );
+            spec.preserve_scroll_offset = s.preserve_offset;
+            spec
+        }
         ElementKind::Canvas(c) => {
             let style = c.style.clone();
             NodeSpec::new(NodeKind::Canvas(CanvasContent { painter: None }), style)

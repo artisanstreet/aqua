@@ -13,24 +13,92 @@ use aqua_core::{GpuiBackground, Oklch, Point, Transform2D};
 use super::color;
 
 const CACHE_LIMIT: usize = 256;
+const TILE_CACHE_BYTES: u64 = 8 << 20;
+const DRAWING_CACHE_BYTES: u64 = 16 << 20;
+const SVG_CACHE_BYTES: u64 = 8 << 20;
+const TILE_CACHE_ENTRIES: usize = 32;
 const ROTATION_STEPS_PER_TURN: f32 = 120.0;
 const SOURCE_FALLBACK_EDGE: f32 = 24.0;
 const PATH_PADDING: f32 = 1.0;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PathRaster {
     pub source: VectorSource,
     pub placement: Rect,
     pub width: u32,
     pub height: u32,
+    pub geometry_key: u64,
+}
+
+impl PathRaster {
+    pub fn tiles(self) -> Vec<Self> {
+        if self.width <= 2048 && self.height <= 2048 {
+            return vec![self];
+        }
+        let VectorSource::Drawing(drawing) = &self.source else {
+            return vec![self];
+        };
+        let mut tiles = Vec::new();
+        for top in (0..self.height).step_by(1024) {
+            for left in (0..self.width).step_by(1024) {
+                let width = (self.width - left).min(1024);
+                let height = (self.height - top).min(1024);
+                tiles.push(Self {
+                    source: VectorSource::Drawing(Arc::new(Drawing {
+                        view_box: Rect {
+                            x: drawing.view_box.x + left as f32,
+                            y: drawing.view_box.y + top as f32,
+                            w: width as f32,
+                            h: height as f32,
+                        },
+                        paths: drawing.paths.clone(),
+                    })),
+                    placement: Rect {
+                        x: self.placement.x + left as f32,
+                        y: self.placement.y + top as f32,
+                        w: width as f32,
+                        h: height as f32,
+                    },
+                    width,
+                    height,
+                    geometry_key: self.geometry_key,
+                });
+            }
+        }
+        tiles
+    }
 }
 
 type SvgKey = (Arc<str>, Option<[u8; 4]>, i32);
 
+#[derive(Debug)]
+struct TileEntry {
+    source: Arc<Drawing>,
+    rasters: Vec<PathRaster>,
+    accessed: u64,
+    bytes: u64,
+}
+
+#[derive(Debug)]
+struct CurveEntry {
+    _source: VectorSource,
+    scene: Option<Arc<aqua_media::vector::CurveScene>>,
+    key: u64,
+    accessed: u64,
+    bytes: usize,
+}
+
 #[derive(Debug, Default)]
 pub struct VectorCache {
     svgs: HashMap<SvgKey, VectorSource>,
-    drawings: HashMap<u64, Arc<Drawing>>,
+    drawings: HashMap<u64, (Arc<Drawing>, u64, u64)>,
+    drawing_bytes: u64,
+    svg_bytes: u64,
+    access: u64,
+    tiles: HashMap<(usize, u32, u32), TileEntry>,
+    tile_bytes: u64,
+    curves: HashMap<usize, CurveEntry>,
+    curve_bytes: usize,
 }
 
 #[must_use]
@@ -259,18 +327,196 @@ fn brush(background: GpuiBackground, bounds: Rect) -> Brush {
 }
 
 impl VectorCache {
+    pub fn tiles(&mut self, raster: PathRaster) -> Vec<PathRaster> {
+        if raster.width <= 2048 && raster.height <= 2048 {
+            return vec![raster];
+        }
+        let VectorSource::Drawing(drawing) = &raster.source else {
+            return vec![raster];
+        };
+        let key = (Arc::as_ptr(drawing) as usize, raster.width, raster.height);
+        let origin = raster.placement;
+        self.access = self.access.wrapping_add(1);
+        if !self.tiles.contains_key(&key) {
+            let source = Arc::clone(drawing);
+            let rasters = raster.tiles();
+            let bytes = aqua_media::vector::retained_source_bytes(&VectorSource::Drawing(
+                Arc::clone(&source),
+            ))
+            .saturating_add(
+                rasters
+                    .iter()
+                    .map(|tile| aqua_media::vector::retained_source_bytes(&tile.source))
+                    .sum::<u64>(),
+            );
+            if bytes > TILE_CACHE_BYTES {
+                return rasters;
+            }
+            while self.tiles.len() >= TILE_CACHE_ENTRIES
+                || self.tile_bytes + bytes > TILE_CACHE_BYTES
+            {
+                let oldest = self
+                    .tiles
+                    .iter()
+                    .min_by_key(|(_, entry)| entry.accessed)
+                    .map(|(key, _)| *key);
+                let Some(oldest) = oldest else { break };
+                if let Some(entry) = self.tiles.remove(&oldest) {
+                    self.tile_bytes -= entry.bytes;
+                }
+            }
+            self.tiles.insert(
+                key,
+                TileEntry {
+                    source,
+                    rasters,
+                    accessed: self.access,
+                    bytes,
+                },
+            );
+            self.tile_bytes += bytes;
+        }
+        let entry = self
+            .tiles
+            .get_mut(&key)
+            .expect("the tile cache entry was inserted");
+        entry.accessed = self.access;
+        let tiles = &entry.rasters;
+        let dx = origin.x - tiles[0].placement.x;
+        let dy = origin.y - tiles[0].placement.y;
+        tiles
+            .iter()
+            .cloned()
+            .map(|mut tile| {
+                tile.placement = tile.placement.translate(dx, dy);
+                tile
+            })
+            .collect()
+    }
+
     pub fn clear(&mut self) {
         self.svgs.clear();
         self.drawings.clear();
+        self.drawing_bytes = 0;
+        self.svg_bytes = 0;
+        self.tiles.clear();
+        self.tile_bytes = 0;
+        self.curves.clear();
+        self.curve_bytes = 0;
+    }
+
+    pub fn source_cache_bytes(&self) -> u64 {
+        self.drawing_bytes + self.svg_bytes
+    }
+
+    fn remove_drawing(&mut self, key: u64) {
+        if let Some((drawing, _, bytes)) = self.drawings.remove(&key) {
+            self.drawing_bytes -= bytes;
+            let identity = Arc::as_ptr(&drawing) as usize;
+            self.tiles.retain(|_, entry| {
+                let keep = Arc::as_ptr(&entry.source) as usize != identity;
+                if !keep {
+                    self.tile_bytes -= entry.bytes;
+                }
+                keep
+            });
+        }
+    }
+
+    pub fn tile_cache_bytes(&self) -> u64 {
+        self.tile_bytes
+    }
+
+    pub fn curve_cache_bytes(&self) -> usize {
+        self.curve_bytes
+    }
+
+    pub fn curves(
+        &mut self,
+        source: &VectorSource,
+    ) -> Option<(u64, Arc<aqua_media::vector::CurveScene>)> {
+        let identity = match source {
+            VectorSource::Svg(svg) => Arc::as_ptr(svg) as usize,
+            VectorSource::Drawing(drawing) => Arc::as_ptr(drawing) as usize,
+        };
+        self.access = self.access.wrapping_add(1);
+        if let Some(entry) = self.curves.get_mut(&identity) {
+            entry.accessed = self.access;
+            return entry
+                .scene
+                .as_ref()
+                .map(|scene| (entry.key, Arc::clone(scene)));
+        }
+        let budget = aqua_media::vector::VectorBudget::default();
+        let built = match source {
+            VectorSource::Svg(svg) => aqua_media::vector::svg_curves(svg, budget),
+            VectorSource::Drawing(drawing) => aqua_media::vector::drawing_curves(drawing, budget),
+        }
+        .ok()
+        .flatten()
+        .map(Arc::new);
+        let mut state = Fnv(0x91e10da5c79e7b1d);
+        match source {
+            VectorSource::Svg(svg) => {
+                svg.source.hash(&mut state);
+                svg.tint.map(Oklch::to_srgb8).hash(&mut state);
+            }
+            VectorSource::Drawing(drawing) => {
+                for value in [
+                    drawing.view_box.x,
+                    drawing.view_box.y,
+                    drawing.view_box.w,
+                    drawing.view_box.h,
+                ] {
+                    hash_float(&mut state, value);
+                }
+                for path in &drawing.paths {
+                    path.commands
+                        .iter()
+                        .for_each(|command| hash_command(&mut state, command));
+                    format!(
+                        "{:?}{:?}{:?}{:?}",
+                        path.fill, path.stroke, path.fill_rule, path.transform
+                    )
+                    .hash(&mut state);
+                }
+            }
+        }
+        let key = state.finish();
+        let bytes = aqua_media::vector::retained_source_bytes(source) as usize
+            + built.as_ref().map_or(0, |scene| scene.heap_bytes())
+            + size_of::<CurveEntry>();
+        if bytes <= TILE_CACHE_BYTES as usize {
+            while self.curves.len() >= 64 || self.curve_bytes + bytes > TILE_CACHE_BYTES as usize {
+                let oldest = self
+                    .curves
+                    .iter()
+                    .min_by_key(|(_, entry)| entry.accessed)
+                    .map(|(id, _)| *id);
+                let Some(entry) = oldest.and_then(|id| self.curves.remove(&id)) else {
+                    break;
+                };
+                self.curve_bytes -= entry.bytes;
+            }
+            self.curve_bytes += bytes;
+            self.curves.insert(
+                identity,
+                CurveEntry {
+                    _source: source.clone(),
+                    scene: built.clone(),
+                    key,
+                    accessed: self.access,
+                    bytes,
+                },
+            );
+        }
+        built.map(|scene| (key, scene))
     }
 
     pub fn svg(&mut self, source: &Arc<str>, tint: Option<Oklch>, steps: i32) -> VectorSource {
         let key = (source.clone(), tint.map(Oklch::to_srgb8), steps);
         if let Some(found) = self.svgs.get(&key) {
             return found.clone();
-        }
-        if self.svgs.len() >= CACHE_LIMIT {
-            self.svgs.clear();
         }
         let text: Arc<str> = match steps {
             0 => source.clone(),
@@ -280,7 +526,15 @@ impl VectorCache {
             Some(tint) => VectorSource::tinted_svg(text, tint),
             None => VectorSource::svg(text),
         };
-        self.svgs.insert(key, made.clone());
+        let bytes = source.len() as u64 + aqua_media::vector::retained_source_bytes(&made);
+        if bytes <= SVG_CACHE_BYTES {
+            if self.svgs.len() >= CACHE_LIMIT || self.svg_bytes + bytes > SVG_CACHE_BYTES {
+                self.svgs.clear();
+                self.svg_bytes = 0;
+            }
+            self.svg_bytes += bytes;
+            self.svgs.insert(key, made.clone());
+        }
         made
     }
 
@@ -338,12 +592,13 @@ impl VectorCache {
                 hash_float(&mut state, height);
                 hash_float(&mut state, scale);
                 let key = state.finish();
-                let drawing = match self.drawings.get(&key) {
-                    Some(found) => found.clone(),
+                self.access = self.access.wrapping_add(1);
+                let drawing = match self.drawings.get_mut(&key) {
+                    Some((found, accessed, _)) => {
+                        *accessed = self.access;
+                        found.clone()
+                    }
                     None => {
-                        if self.drawings.len() >= CACHE_LIMIT {
-                            self.drawings.clear();
-                        }
                         let commands = path
                             .commands_local
                             .iter()
@@ -380,7 +635,27 @@ impl VectorCache {
                             },
                             paths: vec![painted],
                         });
-                        self.drawings.insert(key, made.clone());
+                        let bytes = aqua_media::vector::retained_source_bytes(
+                            &VectorSource::Drawing(Arc::clone(&made)),
+                        );
+                        if bytes <= DRAWING_CACHE_BYTES {
+                            while self.drawings.len() >= CACHE_LIMIT
+                                || self.drawing_bytes + bytes > DRAWING_CACHE_BYTES
+                            {
+                                let oldest = self
+                                    .drawings
+                                    .iter()
+                                    .min_by_key(|(_, (_, accessed, _))| *accessed)
+                                    .map(|(id, _)| *id);
+                                let Some(oldest) = oldest else {
+                                    break;
+                                };
+                                self.remove_drawing(oldest);
+                            }
+                            self.drawing_bytes += bytes;
+                            self.drawings
+                                .insert(key, (made.clone(), self.access, bytes));
+                        }
                         made
                     }
                 };
@@ -394,6 +669,7 @@ impl VectorCache {
                     },
                     width: width as u32,
                     height: height as u32,
+                    geometry_key: key,
                 })
             }
         }

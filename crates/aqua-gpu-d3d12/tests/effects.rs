@@ -27,6 +27,8 @@ fn parameter_probe(params: Vec<f32>, hlsl: &str) -> Vec<PaintCommand> {
         PaintCommand::PushCustomEffect {
             bounds: STANDARD.bounds(),
             spec: CustomPassSpec {
+                isolate_backdrop: false,
+                reference: None,
                 name: "probe".into(),
                 hlsl: hlsl.into(),
                 entry: "entry".into(),

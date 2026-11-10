@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant as WallInstant};
 
@@ -12,49 +12,16 @@ use aqua_runtime::RenderSide;
 use aqua_transport::{Notify, Receiver, RecvError, Sender};
 
 use super::host::{epoch_ns, Clock, FrameTarget, RenderStats, Repaint, TargetInit};
+use super::wake::Signal;
 
 const DRAIN_LIMIT: usize = 4096;
 const MAX_PENDING_POLLS: u32 = 60;
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(3);
-const ANIMATION_PERIOD: Duration = Duration::from_millis(15);
-const HEAVY_ANIMATION_PERIOD: Duration = Duration::from_millis(33);
 
 fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-#[derive(Default)]
-struct Signal {
-    raised: Mutex<bool>,
-    condvar: Condvar,
-}
-
-impl Signal {
-    fn notify(&self) {
-        *locked(&self.raised) = true;
-        self.condvar.notify_one();
-    }
-
-    fn wait(&self, timeout: Option<Duration>) {
-        let mut raised = locked(&self.raised);
-        if !*raised {
-            raised = match timeout {
-                Some(timeout) => {
-                    self.condvar
-                        .wait_timeout(raised, timeout)
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .0
-                }
-                None => self
-                    .condvar
-                    .wait(raised)
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
-            };
-        }
-        *raised = false;
-    }
 }
 
 pub struct NewSlot {
@@ -423,6 +390,7 @@ impl Slot {
             };
             self.settle_pending(started);
             if self.presented_last {
+                crate::debug::presented(self.id);
                 self.stats.presented_ns.store(epoch_ns(), Ordering::Relaxed);
                 self.stats.scenes_presented.store(
                     self.stats.scenes_applied.load(Ordering::Relaxed),
@@ -442,7 +410,6 @@ impl Slot {
         }
         if trim {
             self.stats.trim.store(false, Ordering::Release);
-            crate::mem_probe::return_memory_to_os();
             if crate::mem_probe::memory_report_enabled() {
                 eprintln!(
                     "aqua-trim: window {} trim pass {:.2} ms",
@@ -479,9 +446,9 @@ impl Slot {
     }
 
     fn settle_pending(&mut self, now: WallInstant) {
-        let repaint = match &self.stage {
-            Stage::Running(target) => target.repaint(),
-            _ => Repaint::Settled,
+        let (repaint, interval) = match &self.stage {
+            Stage::Running(target) => (target.repaint(), target.animation_interval(self.interval)),
+            _ => (Repaint::Settled, self.interval),
         };
         self.pending = match repaint {
             Repaint::Settled => {
@@ -495,11 +462,11 @@ impl Slot {
             }
             Repaint::Animating => {
                 self.quiet = true;
-                Pending::At(now + ANIMATION_PERIOD)
+                Pending::At(now + interval)
             }
             Repaint::Heavy => {
                 self.quiet = true;
-                Pending::At(now + HEAVY_ANIMATION_PERIOD)
+                Pending::At(now + interval.max(Duration::from_nanos(33_333_333)))
             }
             Repaint::Still(rest) => {
                 self.quiet = true;

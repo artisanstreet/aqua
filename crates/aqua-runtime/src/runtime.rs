@@ -163,6 +163,7 @@ struct TextEntry {
     masked: bool,
     overflow: Option<aqua_text::overflow::OverflowMode>,
     scroll_x: f32,
+    access_runs: RefCell<Option<access::AccessRuns>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1719,6 +1720,7 @@ impl Runtime {
                             masked,
                             overflow,
                             scroll_x: 0.0,
+                            access_runs: RefCell::new(None),
                         },
                     );
                     r
@@ -2175,6 +2177,7 @@ impl Runtime {
                 masked,
                 overflow,
                 scroll_x: 0.0,
+                access_runs: RefCell::new(None),
             },
         );
         (run, r)

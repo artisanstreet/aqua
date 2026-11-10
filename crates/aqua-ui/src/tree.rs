@@ -757,6 +757,7 @@ pub struct NodeSpec {
     /// the realized window with a first-paint guess). Set by collection
     /// lowering for container/header/body nodes; plain nodes leave it false.
     pub collection_managed: bool,
+    pub preserve_scroll_offset: bool,
     /// Children in paint order.
     pub children: Vec<NodeSpec>,
 }
@@ -770,6 +771,7 @@ impl NodeSpec {
             paint: Paint::default(),
             key: None,
             collection_managed: false,
+            preserve_scroll_offset: false,
             control: None,
             children: Vec::new(),
         }
@@ -2618,7 +2620,7 @@ impl UiTree {
                 self.touch_paint(id);
             }
             NodeKind::Scroll(s) => {
-                if !managed {
+                if !managed && !spec.preserve_scroll_offset {
                     if let Some(rec) = self.nodes.get_mut(id.raw()) {
                         if let NodeKind::Scroll(ref mut cur) = rec.kind {
                             cur.offset = s.offset;
@@ -2858,6 +2860,7 @@ impl UiTree {
             paint: Paint::default(),
             key: None,
             collection_managed: false,
+            preserve_scroll_offset: false,
             control: None,
             children: Vec::new(),
         });
@@ -3804,10 +3807,12 @@ impl UiTree {
                         }
                     }
                 }
-                self.content.insert(
-                    id.raw(),
-                    Size::new(extent.w / device_scale, extent.h / device_scale),
-                );
+                let extent = Size::new(extent.w / device_scale, extent.h / device_scale);
+                self.content.insert(id.raw(), extent);
+                if let NodeKind::Scroll(scroll) = &mut rec.kind {
+                    scroll.offset.x = scroll.offset.x.clamp(0.0, (extent.w - rect.w).max(0.0));
+                    scroll.offset.y = scroll.offset.y.clamp(0.0, (extent.h - rect.h).max(0.0));
+                }
             }
             for c in children.into_iter().rev() {
                 stack.push((c, x, y));

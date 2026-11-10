@@ -432,7 +432,7 @@ mod demo {
                 self.main.window.request_redraw();
             }
             let selftest_wake = self.selftest_tick(at);
-            let pulse_wake = animating.then_some(at + Duration::from_millis(16));
+            let pulse_wake = animating.then_some(at);
             let stats_wake = self
                 .stats
                 .then_some(self.last_report + Duration::from_secs(1));

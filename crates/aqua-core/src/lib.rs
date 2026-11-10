@@ -17,6 +17,8 @@ pub mod id;
 pub mod image;
 pub mod scene;
 pub mod semantic;
+pub mod shader;
+pub mod shape;
 pub mod vector;
 
 pub use arena::Arena;

@@ -10,17 +10,11 @@ pub const MIN_FRAME_INTERVAL: Duration = Duration::from_micros(1);
 
 pub fn gpui_pulse_interval(
     refresh_interval: Duration,
-    active: bool,
-    last_invalidating_input: Option<Instant>,
-    now: Instant,
+    _active: bool,
+    _last_invalidating_input: Option<Instant>,
+    _now: Instant,
 ) -> Duration {
-    let recent = last_invalidating_input
-        .is_some_and(|last| now.saturating_duration_since(last) < Duration::from_secs(1));
-    if active || recent {
-        refresh_interval
-    } else {
-        refresh_interval.max(Duration::from_micros(33_333))
-    }
+    refresh_interval
 }
 
 struct Pending {

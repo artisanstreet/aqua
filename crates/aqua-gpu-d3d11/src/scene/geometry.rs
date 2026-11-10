@@ -1,64 +1,96 @@
-use std::sync::Arc;
+use aqua_graph::{
+    FramePlan, GlyphInstance, ImageInstance, PassKind, QuadInstance, ShadowInstance, SlugInstance,
+};
 
-use aqua_core::Rect;
-use aqua_graph::{FramePlan, PassKind};
-use windows::Win32::Graphics::Direct3D11::*;
+const BYTE_LIMIT: usize = 4 << 20;
 
-use super::Error;
-use crate::ledger::{record, Kind, Token};
-
-pub(super) struct Geometry {
-    pub bounds: Arc<[Rect]>,
-    pub buffer: ID3D11Buffer,
-    _token: Token,
+enum Geometry {
+    Empty,
+    Quads(Vec<QuadInstance>),
+    Shadows(Vec<ShadowInstance>),
+    Glyphs(Vec<GlyphInstance>),
+    Images(Vec<ImageInstance>),
+    Curves(Vec<SlugInstance>),
 }
 
-pub(super) fn retain(
-    device: &ID3D11Device,
-    geometries: &mut Vec<Geometry>,
-    plan: &FramePlan,
-) -> Result<u64, Error> {
-    geometries.retain(|geometry| plan.passes.iter().any(|pass| {
-        matches!(&pass.kind, PassKind::SrgbaSolids { bounds, .. } if Arc::ptr_eq(bounds, &geometry.bounds))
-    }));
-    let mut uploaded = 0;
-    for pass in &plan.passes {
-        let PassKind::SrgbaSolids { bounds, .. } = &pass.kind else {
-            continue;
-        };
-        if bounds.is_empty()
-            || geometries
-                .iter()
-                .any(|geometry| Arc::ptr_eq(bounds, &geometry.bounds))
-        {
-            continue;
+impl Geometry {
+    fn matches(&self, kind: &PassKind) -> bool {
+        match (self, kind) {
+            (Self::Quads(before), PassKind::Instanced { instances, .. }) => before == instances,
+            (Self::Shadows(before), PassKind::Shadows { instances }) => before == instances,
+            (Self::Glyphs(before), PassKind::Glyphs { instances, .. }) => before == instances,
+            (Self::Images(before), PassKind::Images { instances }) => before == instances,
+            (Self::Curves(before), PassKind::Slug { instances, .. }) => before == instances,
+            (
+                Self::Empty,
+                PassKind::Fullscreen { .. }
+                | PassKind::Filter { .. }
+                | PassKind::Compute { .. }
+                | PassKind::Copy { .. }
+                | PassKind::Custom(_),
+            ) => true,
+            _ => false,
         }
-        let packed = bounds
-            .iter()
-            .map(|rect| [rect.x, rect.y, rect.w, rect.h])
-            .collect::<Vec<_>>();
-        let size = u32::try_from(packed.len() * 16)
-            .map_err(|_| Error::Unsupported("solid geometry capacity"))?;
-        let description = D3D11_BUFFER_DESC {
-            ByteWidth: size,
-            Usage: D3D11_USAGE_IMMUTABLE,
-            BindFlags: D3D11_BIND_VERTEX_BUFFER.0 as u32,
-            ..Default::default()
-        };
-        let data = D3D11_SUBRESOURCE_DATA {
-            pSysMem: packed.as_ptr().cast(),
-            ..Default::default()
-        };
-        let mut buffer = None;
-        unsafe {
-            device.CreateBuffer(&description, Some(&data), Some(&mut buffer))?;
-        }
-        geometries.push(Geometry {
-            bounds: Arc::clone(bounds),
-            buffer: buffer.ok_or(Error::NoAdapter)?,
-            _token: record("solid_bounds", Kind::VertexBuffer, u64::from(size)),
-        });
-        uploaded += u64::from(size);
     }
-    Ok(uploaded)
+
+    fn snapshot(kind: &PassKind) -> Self {
+        match kind {
+            PassKind::Instanced { instances, .. } => Self::Quads(instances.clone()),
+            PassKind::Shadows { instances } => Self::Shadows(instances.clone()),
+            PassKind::Glyphs { instances, .. } => Self::Glyphs(instances.clone()),
+            PassKind::Images { instances } => Self::Images(instances.clone()),
+            PassKind::Slug { instances, .. } => Self::Curves(instances.clone()),
+            _ => Self::Empty,
+        }
+    }
+}
+
+fn bytes(kind: &PassKind) -> usize {
+    match kind {
+        PassKind::Instanced { instances, .. } => instances.len() * size_of::<QuadInstance>(),
+        PassKind::Shadows { instances } => instances.len() * size_of::<ShadowInstance>(),
+        PassKind::Glyphs { instances, .. } => instances.len() * size_of::<GlyphInstance>(),
+        PassKind::Images { instances } => instances.len() * size_of::<ImageInstance>(),
+        PassKind::Slug { instances, .. } => instances.len() * size_of::<SlugInstance>(),
+        _ => 0,
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct GeometryCache {
+    passes: Vec<Geometry>,
+    valid: bool,
+}
+
+impl GeometryCache {
+    pub fn prepare(&mut self, plan: &FramePlan) -> bool {
+        if self.valid
+            && self.passes.len() == plan.passes.len()
+            && self
+                .passes
+                .iter()
+                .zip(&plan.passes)
+                .all(|(before, after)| before.matches(&after.kind))
+        {
+            return true;
+        }
+        let retained = plan
+            .passes
+            .iter()
+            .map(|pass| bytes(&pass.kind))
+            .sum::<usize>()
+            .saturating_add(plan.passes.len() * size_of::<Geometry>());
+        self.passes.clear();
+        self.valid = retained <= BYTE_LIMIT;
+        if self.valid {
+            self.passes.extend(
+                plan.passes
+                    .iter()
+                    .map(|pass| Geometry::snapshot(&pass.kind)),
+            );
+        } else {
+            self.passes.shrink_to_fit();
+        }
+        false
+    }
 }

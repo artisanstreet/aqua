@@ -211,3 +211,19 @@ fn outline_text_mode_draws_every_glyph_from_curves_and_platform_default_uses_the
         assert_eq!(painter.report.curves, 0, "{label}");
     }
 }
+
+#[test]
+fn a_queued_snapshot_is_observed_before_lowering_the_changed_frame() {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let mut lowering = aqua::render::lower::Lowering::new(SharedFonts::new(), SharedRuns::new())
+        .with_externals(receiver);
+    let (previous, _, _) = lowering.commands(&solid("#ff0000"), SIZE, 1.0, at(1.0));
+    lowering.retain_frame(previous);
+    sender.send(aqua::render::link::ExternalUpdate::Transition(settings(Sweep::Eased, 0.0))).unwrap();
+
+    let (commands, _, report) = lowering.commands(&solid("#0000ff"), SIZE, 1.0, at(2.0));
+
+    assert!(report.shimmering);
+    assert!(commands.iter().any(|command| matches!(command, aqua_graph::PaintCommand::PushCustomEffect { .. })));
+    assert!(lowering.transition_active());
+}

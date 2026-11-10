@@ -250,6 +250,224 @@ fn shader(brush: &Brush) -> Result<Shader<'static>, VectorError> {
     }
 }
 
+fn path_outline(path: &aqua_core::vector::PaintedPath) -> Result<tiny_skia::Path, VectorError> {
+    let mut builder = PathBuilder::new();
+    let mut current = None;
+    let mut start = None;
+    for command in &path.commands {
+        match command {
+            PathCommand::Move(value) => {
+                let value = point(*value)?;
+                builder.move_to(value.x, value.y);
+                current = Some(value);
+                start = current;
+            }
+            PathCommand::Line(value) => {
+                let value = point(*value)?;
+                builder.line_to(value.x, value.y);
+                current = Some(value);
+            }
+            PathCommand::Quadratic { control, to } => {
+                let control = point(*control)?;
+                let to = point(*to)?;
+                builder.quad_to(control.x, control.y, to.x, to.y);
+                current = Some(to);
+            }
+            PathCommand::Cubic { first, second, to } => {
+                let first = point(*first)?;
+                let second = point(*second)?;
+                let to = point(*to)?;
+                builder.cubic_to(first.x, first.y, second.x, second.y, to.x, to.y);
+                current = Some(to);
+            }
+            PathCommand::Arc {
+                radii,
+                rotation_radians,
+                large,
+                sweep,
+                to,
+            } => {
+                let from = current.ok_or(VectorError::InvalidGeometry)?;
+                let radii = point(*radii)?;
+                let to = point(*to)?;
+                if radii.x < 0.0 || radii.y < 0.0 || !rotation_radians.is_finite() {
+                    return Err(VectorError::InvalidGeometry);
+                }
+                let arc = kurbo::SvgArc {
+                    from: kurbo::Point::new(f64::from(from.x), f64::from(from.y)),
+                    to: kurbo::Point::new(f64::from(to.x), f64::from(to.y)),
+                    radii: kurbo::Vec2::new(f64::from(radii.x), f64::from(radii.y)),
+                    x_rotation: f64::from(*rotation_radians),
+                    large_arc: *large,
+                    sweep: *sweep,
+                };
+                match kurbo::Arc::from_svg_arc(&arc) {
+                    Some(arc) => arc.to_cubic_beziers(0.01, |first, second, end| {
+                        builder.cubic_to(
+                            first.x as f32,
+                            first.y as f32,
+                            second.x as f32,
+                            second.y as f32,
+                            end.x as f32,
+                            end.y as f32,
+                        )
+                    }),
+                    None => builder.line_to(to.x, to.y),
+                }
+                current = Some(to);
+            }
+            PathCommand::Close => {
+                builder.close();
+                current = start;
+            }
+        }
+    }
+    builder.finish().ok_or(VectorError::InvalidGeometry)
+}
+
+fn stroke_style(stroke: &aqua_core::vector::Stroke) -> Result<tiny_skia::Stroke, VectorError> {
+    if !stroke.width.is_finite()
+        || stroke.width <= 0.0
+        || !stroke.dash_offset.is_finite()
+        || stroke
+            .dash
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        return Err(VectorError::InvalidStroke);
+    }
+    let dash = match stroke.dash.is_empty() {
+        true => None,
+        false => Some(
+            tiny_skia::StrokeDash::new(stroke.dash.clone(), stroke.dash_offset)
+                .ok_or(VectorError::InvalidStroke)?,
+        ),
+    };
+    let style = tiny_skia::Stroke {
+        width: stroke.width,
+        line_cap: match stroke.cap {
+            LineCap::Butt => tiny_skia::LineCap::Butt,
+            LineCap::Round => tiny_skia::LineCap::Round,
+            LineCap::Square => tiny_skia::LineCap::Square,
+        },
+        line_join: match stroke.join {
+            LineJoin::Miter => tiny_skia::LineJoin::Miter,
+            LineJoin::Round => tiny_skia::LineJoin::Round,
+            LineJoin::Bevel => tiny_skia::LineJoin::Bevel,
+        },
+        dash,
+        ..Default::default()
+    };
+    Ok(style)
+}
+
+pub(super) fn outline_commands(outline: &tiny_skia::Path) -> Vec<aqua_graph::slug::PathCommand> {
+    use aqua_graph::slug::PathCommand as CurveCommand;
+    use tiny_skia::PathSegment;
+    outline
+        .segments()
+        .map(|segment| match segment {
+            PathSegment::MoveTo(p) => CurveCommand::Move([p.x, p.y]),
+            PathSegment::LineTo(p) => CurveCommand::Line([p.x, p.y]),
+            PathSegment::QuadTo(control, p) => {
+                CurveCommand::Quad([control.x, control.y], [p.x, p.y])
+            }
+            PathSegment::CubicTo(a, b, p) => {
+                CurveCommand::Cubic([a.x, a.y], [b.x, b.y], [p.x, p.y])
+            }
+            PathSegment::Close => CurveCommand::Close,
+        })
+        .collect()
+}
+
+pub fn curve_outline(
+    path: &aqua_core::vector::PaintedPath,
+    unit: f32,
+) -> Result<Option<aqua_graph::slug::SlugGlyph>, VectorError> {
+    use aqua_graph::slug::SlugGlyph;
+    if !unit.is_finite()
+        || unit <= 0.0
+        || path.commands.len() > VectorBudget::default().max_commands
+    {
+        return Err(VectorError::InvalidGeometry);
+    }
+    if path.fill.is_some() && path.stroke.is_some() {
+        return Ok(None);
+    }
+    let mut outline = path_outline(path)?;
+    if let Some(stroke) = &path.stroke {
+        let style = stroke_style(stroke)?;
+        if let Some(dash) = &style.dash {
+            outline = outline.dash(dash, 1.0).ok_or(VectorError::InvalidStroke)?;
+        }
+        outline = outline
+            .stroke(&style, 1.0)
+            .ok_or(VectorError::InvalidStroke)?;
+    }
+    let matrix = path.transform;
+    let transform = Transform::from_scale(1.0 / unit, 1.0 / unit).pre_concat(Transform::from_row(
+        matrix.a, matrix.b, matrix.c, matrix.d, matrix.tx, matrix.ty,
+    ));
+    let outline = outline
+        .transform(transform)
+        .ok_or(VectorError::InvalidGeometry)?;
+    let commands = outline_commands(&outline);
+    let Some(brush) = path
+        .fill
+        .as_ref()
+        .or_else(|| path.stroke.as_ref().map(|stroke| &stroke.brush))
+    else {
+        return Ok(None);
+    };
+    let prepared = shader(brush)?;
+    let brush = match (prepared, brush) {
+        (Shader::SolidColor(_), Brush::Linear { stops, .. } | Brush::Radial { stops, .. }) => {
+            Brush::Solid(stops.last().ok_or(VectorError::InvalidGradient)?.color)
+        }
+        _ => brush.clone(),
+    };
+    let stops = match &brush {
+        Brush::Solid(_) => 1,
+        Brush::Linear { stops, .. } | Brush::Radial { stops, .. } => stops.len(),
+    };
+    if stops > 256 {
+        return Ok(None);
+    }
+    if let Brush::Radial {
+        center,
+        focal,
+        radius,
+        ..
+    } = &brush
+    {
+        if (focal.x - center.x).hypot(focal.y - center.y) >= *radius {
+            return Ok(None);
+        }
+    }
+    let Some(inverse) = transform.invert() else {
+        return Ok(None);
+    };
+    let mut glyph = SlugGlyph::from_path(&commands);
+    if let Some(glyph) = &mut glyph {
+        glyph.fill_rule = match path.fill.is_some() {
+            true => path.fill_rule,
+            false => FillRule::NonZero,
+        };
+        glyph.paint = Some(aqua_graph::curve_paint::CurvePaint {
+            brush: brush.clone(),
+            from_em: aqua_core::Transform2D {
+                a: inverse.sx,
+                b: inverse.ky,
+                c: inverse.kx,
+                d: inverse.sy,
+                tx: inverse.tx,
+                ty: inverse.ty,
+            },
+        });
+    }
+    Ok(glyph)
+}
+
 fn render_drawing(
     drawing: &Drawing,
     pixmap: &mut Pixmap,
@@ -276,80 +494,7 @@ fn render_drawing(
     )
     .pre_translate(-bounds.x, -bounds.y);
     for path in &drawing.paths {
-        let mut builder = PathBuilder::new();
-        let mut current = None;
-        let mut start = None;
-        for command in &path.commands {
-            match command {
-                PathCommand::Move(value) => {
-                    let value = point(*value)?;
-                    builder.move_to(value.x, value.y);
-                    current = Some(value);
-                    start = current;
-                }
-                PathCommand::Line(value) => {
-                    let value = point(*value)?;
-                    builder.line_to(value.x, value.y);
-                    current = Some(value);
-                }
-                PathCommand::Quadratic { control, to } => {
-                    let control = point(*control)?;
-                    let to = point(*to)?;
-                    builder.quad_to(control.x, control.y, to.x, to.y);
-                    current = Some(to);
-                }
-                PathCommand::Cubic { first, second, to } => {
-                    let first = point(*first)?;
-                    let second = point(*second)?;
-                    let to = point(*to)?;
-                    builder.cubic_to(first.x, first.y, second.x, second.y, to.x, to.y);
-                    current = Some(to);
-                }
-                PathCommand::Arc {
-                    radii,
-                    rotation_radians,
-                    large,
-                    sweep,
-                    to,
-                } => {
-                    let from = current.ok_or(VectorError::InvalidGeometry)?;
-                    let radii = point(*radii)?;
-                    let to = point(*to)?;
-                    if radii.x < 0.0 || radii.y < 0.0 || !rotation_radians.is_finite() {
-                        return Err(VectorError::InvalidGeometry);
-                    }
-                    let arc = kurbo::SvgArc {
-                        from: kurbo::Point::new(f64::from(from.x), f64::from(from.y)),
-                        to: kurbo::Point::new(f64::from(to.x), f64::from(to.y)),
-                        radii: kurbo::Vec2::new(f64::from(radii.x), f64::from(radii.y)),
-                        x_rotation: f64::from(*rotation_radians),
-                        large_arc: *large,
-                        sweep: *sweep,
-                    };
-                    match kurbo::Arc::from_svg_arc(&arc) {
-                        Some(arc) => arc.to_cubic_beziers(0.01, |first, second, end| {
-                            builder.cubic_to(
-                                first.x as f32,
-                                first.y as f32,
-                                second.x as f32,
-                                second.y as f32,
-                                end.x as f32,
-                                end.y as f32,
-                            )
-                        }),
-                        None => builder.line_to(to.x, to.y),
-                    }
-                    current = Some(to);
-                }
-                PathCommand::Close => {
-                    builder.close();
-                    current = start;
-                }
-            }
-        }
-        let Some(outline) = builder.finish() else {
-            return Err(VectorError::InvalidGeometry);
-        };
+        let outline = path_outline(path)?;
         let matrix = path.transform;
         if ![matrix.a, matrix.b, matrix.c, matrix.d, matrix.tx, matrix.ty]
             .iter()
@@ -376,38 +521,7 @@ fn render_drawing(
             pixmap.fill_path(&outline, &paint, rule, transform, None);
         }
         if let Some(stroke) = &path.stroke {
-            if !stroke.width.is_finite()
-                || stroke.width <= 0.0
-                || !stroke.dash_offset.is_finite()
-                || stroke
-                    .dash
-                    .iter()
-                    .any(|value| !value.is_finite() || *value <= 0.0)
-            {
-                return Err(VectorError::InvalidStroke);
-            }
-            let dash = match stroke.dash.is_empty() {
-                true => None,
-                false => Some(
-                    tiny_skia::StrokeDash::new(stroke.dash.clone(), stroke.dash_offset)
-                        .ok_or(VectorError::InvalidStroke)?,
-                ),
-            };
-            let style = tiny_skia::Stroke {
-                width: stroke.width,
-                line_cap: match stroke.cap {
-                    LineCap::Butt => tiny_skia::LineCap::Butt,
-                    LineCap::Round => tiny_skia::LineCap::Round,
-                    LineCap::Square => tiny_skia::LineCap::Square,
-                },
-                line_join: match stroke.join {
-                    LineJoin::Miter => tiny_skia::LineJoin::Miter,
-                    LineJoin::Round => tiny_skia::LineJoin::Round,
-                    LineJoin::Bevel => tiny_skia::LineJoin::Bevel,
-                },
-                dash,
-                ..Default::default()
-            };
+            let style = stroke_style(stroke)?;
             let paint = Paint {
                 shader: shader(&stroke.brush)?,
                 anti_alias: true,

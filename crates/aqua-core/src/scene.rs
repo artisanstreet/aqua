@@ -229,6 +229,19 @@ pub enum DisplayItem {
         bounds: Rect,
         fill: Srgba8,
     },
+    Shader {
+        bounds: Rect,
+        program: std::sync::Arc<crate::shader::FragmentShader>,
+        parameters: std::sync::Arc<[f32]>,
+        animated: bool,
+    },
+    Shape {
+        bounds: Rect,
+        damage: Rect,
+        program: std::sync::Arc<crate::shape::ShapeProgram>,
+        target: Rect,
+        transition: crate::shape::ShapeTransition,
+    },
     PushGpuiQuadPulse(GpuiQuadPulse),
     PopGpuiQuadPulse,
     GpuiSvg {
@@ -473,6 +486,8 @@ impl DisplayItem {
             DisplayItem::GpuiSvg { .. } | DisplayItem::GpuiTransformedSvg { .. } => None,
             DisplayItem::GpuiBorder { bounds, .. }
             | DisplayItem::GpuiMesh { bounds, .. }
+            | DisplayItem::Shader { bounds, .. }
+            | DisplayItem::Shape { bounds, .. }
             | DisplayItem::GpuiBackground { bounds, .. }
             | DisplayItem::Quad { bounds, .. }
             | DisplayItem::PushRoundedClip { bounds, .. }

@@ -4,6 +4,7 @@ pub use aqua_core::{
 pub mod app;
 pub mod coalesce;
 pub mod config;
+pub mod debug;
 pub mod error;
 pub mod factory;
 pub mod images;

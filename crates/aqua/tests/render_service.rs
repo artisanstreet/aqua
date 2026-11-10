@@ -28,6 +28,8 @@ struct Probe {
     maintenance_at: Mutex<Option<WallInstant>>,
     maintenance_done: AtomicU32,
     maintenance_changes: AtomicBool,
+
+    native_pacing: AtomicBool,
 }
 
 struct Fake {
@@ -36,6 +38,13 @@ struct Fake {
 }
 
 impl FrameTarget for Fake {
+    fn animation_interval(&self, fallback: Duration) -> Duration {
+        match self.probe.native_pacing.load(Relaxed) {
+            true => Duration::ZERO,
+            false => fallback,
+        }
+    }
+
     fn wait_frame(&mut self) {
         self.probe.frame_waits.fetch_add(1, Relaxed);
     }
@@ -183,6 +192,43 @@ fn stats_of(link: &RenderLink) -> &Arc<RenderStats> {
 }
 
 #[test]
+fn scheduled_maintenance_repaints_once_without_trimming() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    let invalidations = probe.invalidations.load(Relaxed);
+    probe.maintenance_changes.store(true, Relaxed);
+    *probe.maintenance_at.lock().unwrap() = Some(WallInstant::now() + Duration::from_millis(20));
+    link.push_scene(&mut scene_with("#336699"));
+    wait_until("the maintenance repaint", || {
+        probe.presents.load(Relaxed) >= base + 2 && probe.maintenance_done.load(Relaxed) == 1
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(probe.presents.load(Relaxed), base + 2);
+    assert_eq!(probe.maintenance_done.load(Relaxed), 1);
+    assert_eq!(stats_of(&link).trims.load(Relaxed), 0);
+    assert!(probe.invalidations.load(Relaxed) > invalidations);
+}
+
+#[test]
+fn unchanged_maintenance_returns_to_sleep_without_repainting() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    *probe.maintenance_at.lock().unwrap() = Some(WallInstant::now() + Duration::from_millis(20));
+    link.push_scene(&mut scene_with("#336699"));
+    wait_until("the maintenance check", || {
+        probe.maintenance_done.load(Relaxed) == 1
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(probe.presents.load(Relaxed), base + 1);
+    assert_eq!(probe.maintenance_done.load(Relaxed), 1);
+    assert_eq!(stats_of(&link).trims.load(Relaxed), 0);
+}
+
+#[test]
 fn completion_and_unchanged_commands_do_not_consume_another_frame_slot() {
     let service = RenderService::new().unwrap();
     let probe = Arc::new(Probe::default());
@@ -232,43 +278,6 @@ fn a_scene_that_never_reaches_the_screen_is_still_answered() {
             .any(|event| matches!(event, RenderEvent::Presented(_)))
     });
     assert!(!events.contains(&RenderEvent::Skipped));
-}
-
-#[test]
-fn scheduled_maintenance_repaints_once_without_trimming() {
-    let service = RenderService::new().unwrap();
-    let probe = Arc::new(Probe::default());
-    let mut link = settled_link(&service, &probe);
-    let base = probe.presents.load(Relaxed);
-    let invalidations = probe.invalidations.load(Relaxed);
-    probe.maintenance_changes.store(true, Relaxed);
-    *probe.maintenance_at.lock().unwrap() = Some(WallInstant::now() + Duration::from_millis(20));
-    link.push_scene(&mut scene_with("#336699"));
-    wait_until("the maintenance repaint", || {
-        probe.presents.load(Relaxed) >= base + 2 && probe.maintenance_done.load(Relaxed) == 1
-    });
-    std::thread::sleep(Duration::from_millis(100));
-    assert_eq!(probe.presents.load(Relaxed), base + 2);
-    assert_eq!(probe.maintenance_done.load(Relaxed), 1);
-    assert_eq!(stats_of(&link).trims.load(Relaxed), 0);
-    assert!(probe.invalidations.load(Relaxed) > invalidations);
-}
-
-#[test]
-fn unchanged_maintenance_returns_to_sleep_without_repainting() {
-    let service = RenderService::new().unwrap();
-    let probe = Arc::new(Probe::default());
-    let mut link = settled_link(&service, &probe);
-    let base = probe.presents.load(Relaxed);
-    *probe.maintenance_at.lock().unwrap() = Some(WallInstant::now() + Duration::from_millis(20));
-    link.push_scene(&mut scene_with("#336699"));
-    wait_until("the maintenance check", || {
-        probe.maintenance_done.load(Relaxed) == 1
-    });
-    std::thread::sleep(Duration::from_millis(100));
-    assert_eq!(probe.presents.load(Relaxed), base + 1);
-    assert_eq!(probe.maintenance_done.load(Relaxed), 1);
-    assert_eq!(stats_of(&link).trims.load(Relaxed), 0);
 }
 
 #[test]
@@ -341,7 +350,7 @@ fn continuous_animation_keeps_presenting_until_it_stops() {
 }
 
 #[test]
-fn an_animating_scene_repaints_at_a_capped_rate_without_waking_the_app_or_the_damage_baseline() {
+fn an_animating_scene_uses_the_display_interval_without_waking_the_app_or_the_damage_baseline() {
     let service = RenderService::new().unwrap();
     let probe = Arc::new(Probe::default());
     let mut link = settled_link(&service, &probe);
@@ -356,7 +365,7 @@ fn an_animating_scene_repaints_at_a_capped_rate_without_waking_the_app_or_the_da
     std::thread::sleep(Duration::from_millis(300));
     let presents = probe.presents.load(Relaxed) - base;
     assert!(
-        (10..=25).contains(&presents),
+        (35..=95).contains(&presents),
         "{presents} animation presents in 300 ms"
     );
     assert_eq!(
@@ -536,4 +545,36 @@ fn a_scene_arriving_during_the_frame_slot_wait_is_presented_immediately() {
     });
     assert_eq!(link.stats().scenes_applied.load(Relaxed), 2);
     link.shutdown();
+}
+
+#[test]
+fn hardware_paced_animation_does_not_sleep_between_available_slots() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    probe.native_pacing.store(true, Relaxed);
+    *probe.script.lock().unwrap() = vec![Repaint::Animating; 40];
+    let started = WallInstant::now();
+    link.set_viewport(Size { w: 100.0, h: 101.0 }, 1.0);
+    wait_until("the hardware-paced frames", || {
+        probe.presents.load(Relaxed) >= base + 41
+    });
+    assert!(started.elapsed() < INTERVAL * 30);
+}
+
+#[test]
+fn expensive_background_repaints_remain_bounded_with_immediate_presentation() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    probe.native_pacing.store(true, Relaxed);
+    *probe.script.lock().unwrap() = vec![Repaint::Heavy; 8];
+    let started = WallInstant::now();
+    link.set_viewport(Size { w: 100.0, h: 101.0 }, 1.0);
+    wait_until("the bounded background frames", || {
+        probe.presents.load(Relaxed) >= base + 9
+    });
+    assert!(started.elapsed() >= Duration::from_millis(230));
 }

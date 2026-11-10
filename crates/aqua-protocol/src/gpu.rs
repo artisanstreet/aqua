@@ -252,7 +252,7 @@ pub trait GpuBackend {
         Ok(())
     }
 
-    fn wait_for_present_slot(
+    fn wait_for_frame_slot_with_hint(
         &mut self,
         surface: SurfaceId,
         _hint: PresentHint,

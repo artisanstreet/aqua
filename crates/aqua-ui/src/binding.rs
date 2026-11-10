@@ -2182,12 +2182,7 @@ fn apply_bindings(
     tree.clear_canvas_prepaint(id);
     tree.clear_canvas_observer(id);
     tree.clear_canvas_painter(id);
-    if let Some(record) = tree.get_mut(id) {
-        record.description = None;
-        record.debug_selector = None;
-        record.hit_test_excluded = false;
-        record.keyboard_release_activation = false;
-    }
+    tree.reset_binding_metadata(id);
     let styled = bindings
         .iter()
         .any(|binding| matches!(binding, ElementBinding::InteractionStyle { .. }));

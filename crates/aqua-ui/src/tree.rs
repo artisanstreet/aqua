@@ -1125,6 +1125,7 @@ pub struct UiTree {
     hoist_guards: Vec<(taffy::NodeId, taffy::NodeId)>,
     motion_declared: bool,
     paint_changes: HashSet<NodeId>,
+    paint_coverage: crate::incremental::PaintCoverage,
     own_paint_changes: HashSet<NodeId>,
     update_log: crate::program::UpdateLog,
     regions: crate::region::Regions,
@@ -1138,7 +1139,7 @@ pub struct UiTree {
     pending_boundaries: HashSet<NodeId>,
     full_layout: bool,
     layout_work: crate::incremental::LayoutWork,
-    emission_contexts: RefCell<HashMap<NodeId, crate::incremental::EmissionContext>>,
+    emission_contexts: RefCell<Vec<Option<crate::incremental::CachedEmissionContext>>>,
     pub(crate) control_router: crate::controls::ControlRouter,
     pub(crate) input: crate::input::InputRouter,
     nodes: Arena<NodeRecord>,
@@ -1269,6 +1270,7 @@ impl UiTree {
             hoist_guards: Vec::new(),
             motion_declared: false,
             paint_changes: HashSet::new(),
+            paint_coverage: crate::incremental::PaintCoverage::Sparse,
             own_paint_changes: HashSet::new(),
             update_log: crate::program::UpdateLog::default(),
             regions: HashMap::new(),
@@ -1282,7 +1284,7 @@ impl UiTree {
             pending_boundaries: HashSet::new(),
             full_layout: true,
             layout_work: crate::incremental::LayoutWork::default(),
-            emission_contexts: RefCell::new(HashMap::new()),
+            emission_contexts: RefCell::new(Vec::new()),
             control_router: crate::controls::ControlRouter::default(),
             input: crate::input::InputRouter::default(),
             nodes: Arena::new(),
@@ -1428,10 +1430,29 @@ impl UiTree {
         self.content_version += 1;
     }
 
-    fn touch_paint(&mut self, id: NodeId) {
+    fn note_paint_change(&mut self, id: NodeId) {
+        if self.paint_coverage == crate::incremental::PaintCoverage::Full {
+            return;
+        }
         self.own_paint_changes.remove(&id);
         self.paint_changes.insert(id);
-        self.text_index.candidates.insert(id);
+        if self.paint_changes.len() > 1
+            && self.paint_changes.len().saturating_mul(4) >= self.nodes.len()
+        {
+            self.paint_coverage = crate::incremental::PaintCoverage::Full;
+            self.paint_changes.clear();
+            self.own_paint_changes.clear();
+        }
+    }
+
+    fn touch_paint(&mut self, id: NodeId) {
+        self.note_paint_change(id);
+        if self
+            .get(id)
+            .is_some_and(|record| matches!(record.kind, NodeKind::Text(_)))
+        {
+            self.text_index.candidates.insert(id);
+        }
         self.trace_work(id, crate::program::WorkStage::PaintInvalidated);
         self.content_version += 1;
         let rev = self.content_version;
@@ -1463,7 +1484,26 @@ impl UiTree {
             return None;
         }
         self.touch_paint(id);
+        self.text_index.candidates.insert(id);
         self.nodes.get_mut(id.raw())
+    }
+
+    pub(crate) fn reset_binding_metadata(&mut self, id: NodeId) {
+        let changed = self.get(id).is_some_and(|record| {
+            record.description.is_some()
+                || record.debug_selector.is_some()
+                || record.hit_test_excluded
+                || record.keyboard_release_activation
+        });
+        if changed {
+            self.touch_paint(id);
+            if let Some(record) = self.nodes.get_mut(id.raw()) {
+                record.description = None;
+                record.debug_selector = None;
+                record.hit_test_excluded = false;
+                record.keyboard_release_activation = false;
+            }
+        }
     }
 
     /// Currently focused node.
@@ -2594,7 +2634,12 @@ impl UiTree {
             semantics: NodeSemantics::default(),
         }));
         self.tmap.insert(id.raw(), tnode);
-        self.text_index.candidates.insert(id);
+        if self
+            .get(id)
+            .is_some_and(|record| matches!(record.kind, NodeKind::Text(_)))
+        {
+            self.text_index.candidates.insert(id);
+        }
         for child in children {
             let cid = self.build_detached(child);
             self.attach(id, cid);
@@ -2823,7 +2868,13 @@ impl UiTree {
             self.regions.remove(&n);
             self.paint_changes.remove(&n);
             self.own_paint_changes.remove(&n);
-            self.emission_contexts.borrow_mut().remove(&n);
+            if let Some(slot) = self
+                .emission_contexts
+                .borrow_mut()
+                .get_mut(n.raw().index as usize)
+            {
+                *slot = None;
+            }
             self.rects.remove(&n.raw());
             self.content.remove(&n.raw());
             self.actions.retain(|(raw, _), _| *raw != n.raw());
@@ -2881,7 +2932,7 @@ impl UiTree {
         if *current == paint {
             return false;
         }
-        let own_only = {
+        let own_only = self.paint_coverage == crate::incremental::PaintCoverage::Sparse && {
             let mut normalized = current.clone();
             normalized.opacity = paint.opacity;
             normalized.fill = paint.fill;
@@ -2910,7 +2961,7 @@ impl UiTree {
             self.mark_layout_dirty(id);
         }
         self.touch_paint(id);
-        if own_only {
+        if own_only && self.paint_coverage == crate::incremental::PaintCoverage::Sparse {
             self.own_paint_changes.insert(id);
         }
         true
@@ -3071,8 +3122,7 @@ impl UiTree {
     }
 
     pub fn mark_layout_dirty(&mut self, mut id: NodeId) {
-        self.own_paint_changes.remove(&id);
-        self.paint_changes.insert(id);
+        self.note_paint_change(id);
         self.bump_layout();
         loop {
             if self.region_layouts.contains(&id) {
@@ -3589,7 +3639,7 @@ impl UiTree {
             };
             let moved = self.rects.insert(id.raw(), rect) != Some(rect);
             if moved {
-                self.paint_changes.insert(id);
+                self.note_paint_change(id);
             }
             let was_dirty = dirty.contains(&id.raw());
             if !moved && !was_dirty {
@@ -3818,7 +3868,9 @@ impl UiTree {
     }
 
     pub fn emit_scene(&mut self) -> Vec<(NodeId, DisplayItem)> {
-        self.emission_contexts.borrow_mut().clear();
+        self.emission_contexts
+            .borrow_mut()
+            .resize(self.nodes.capacity_slots(), None);
         for node in self.traverse() {
             if let Some(callback) = self.prepaints.get(&node.raw()) {
                 callback(self, node);
@@ -3856,6 +3908,7 @@ impl UiTree {
         self.last_stats.content_version = self.content_version;
         self.paint_changes.clear();
         self.own_paint_changes.clear();
+        self.paint_coverage = crate::incremental::PaintCoverage::Sparse;
         out
     }
 
@@ -4035,14 +4088,22 @@ impl UiTree {
     }
 
     pub fn pending_paint_nodes(&self) -> Vec<NodeId> {
-        self.paint_changes.iter().copied().collect()
+        match self.paint_coverage {
+            crate::incremental::PaintCoverage::Sparse => {
+                self.paint_changes.iter().copied().collect()
+            }
+            crate::incremental::PaintCoverage::Full => self.traverse(),
+        }
     }
 
     pub fn emit_dirty_fragments(&mut self) -> Option<crate::incremental::SceneFragments> {
-        if !self.prepaints.is_empty() || self.paint_changes.is_empty() {
+        if self.paint_coverage == crate::incremental::PaintCoverage::Full
+            || !self.prepaints.is_empty()
+            || self.paint_changes.is_empty()
+        {
             return None;
         }
-        let dirty = self.paint_changes.clone();
+        let dirty = &self.paint_changes;
         let mut roots = Vec::new();
         for node in dirty.iter().copied() {
             let mut parent = self.get(node)?.parent;
@@ -4063,15 +4124,29 @@ impl UiTree {
         let mut nodes = Vec::new();
         let mut replacements = Vec::new();
         for node in roots {
+            let context = self
+                .emission_contexts
+                .borrow()
+                .get(node.raw().index as usize)
+                .copied()
+                .flatten()
+                .filter(|entry| entry.node == node && entry.epoch == self.emit_generation.get())?
+                .context;
             let include_children = !self.own_paint_changes.contains(&node);
             let mut stack = vec![node];
             while let Some(id) = stack.pop() {
                 nodes.push(id);
+                if let Some(slot) = self
+                    .emission_contexts
+                    .borrow_mut()
+                    .get_mut(id.raw().index as usize)
+                {
+                    *slot = None;
+                }
                 if include_children {
                     stack.extend(self.get(id)?.children.iter().copied());
                 }
             }
-            let context = self.emission_contexts.borrow().get(&node).copied()?;
             let start = out.len();
             self.emit_node(
                 node,
@@ -4104,18 +4179,26 @@ impl UiTree {
         include_children: bool,
         out: &mut Vec<(NodeId, DisplayItem)>,
     ) {
-        self.emission_contexts.borrow_mut().insert(
-            id,
-            crate::incremental::EmissionContext {
-                scrolled,
-                clip,
-                cull,
-                transform: inherited_transform,
-            },
-        );
         let Some(rec) = self.nodes.get(id.raw()) else {
             return;
         };
+        {
+            let mut contexts = self.emission_contexts.borrow_mut();
+            let index = id.raw().index as usize;
+            if index >= contexts.len() {
+                contexts.resize(index + 1, None);
+            }
+            contexts[index] = Some(crate::incremental::CachedEmissionContext {
+                node: id,
+                epoch: self.emit_generation.get(),
+                context: crate::incremental::EmissionContext {
+                    scrolled,
+                    clip,
+                    cull,
+                    transform: inherited_transform,
+                },
+            });
+        }
         self.visited.set(self.visited.get() + 1);
         let Some(rect) = self.rects.get(&id.raw()).copied() else {
             return;

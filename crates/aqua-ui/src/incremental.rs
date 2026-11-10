@@ -1,11 +1,24 @@
 use aqua_core::{Point, Rect, Transform2D};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaintCoverage {
+    Sparse,
+    Full,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct EmissionContext {
     pub scrolled: Point,
     pub clip: Option<Rect>,
     pub cull: Option<Rect>,
     pub transform: Transform2D,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct CachedEmissionContext {
+    pub node: aqua_core::NodeId,
+    pub epoch: u64,
+    pub context: EmissionContext,
 }
 
 pub struct SceneFragments {

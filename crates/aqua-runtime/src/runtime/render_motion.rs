@@ -71,6 +71,9 @@ fn slot_for(property: Property) -> MotionSlot {
 pub(super) type MotionKeys = HashMap<(NodeId, MotionSlot), Vec<SceneKey>>;
 
 pub(super) fn forget_motion_node(keys: &mut MotionKeys, node: NodeId) {
+    if keys.is_empty() {
+        return;
+    }
     for slot in [
         MotionSlot::Opacity,
         MotionSlot::Translate,

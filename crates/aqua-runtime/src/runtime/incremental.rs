@@ -46,34 +46,45 @@ impl Runtime {
             return false;
         };
         for node in &fragments.nodes {
-            self.sync_text_runs_for(Some(*node));
+            if self
+                .tree
+                .get(*node)
+                .is_some_and(|record| matches!(record.kind, NodeKind::Text(_)))
+            {
+                self.sync_text_runs_for(Some(*node));
+            }
         }
         for node in &fragments.nodes {
             render_motion::forget_motion_node(&mut self.motion_keys, *node);
         }
-        let root_nodes: Vec<_> = fragments
-            .roots
-            .iter()
-            .map(|(_, range)| {
-                fragments.items[range.clone()]
-                    .iter()
-                    .map(|(node, _)| *node)
-                    .collect::<HashSet<_>>()
-            })
-            .collect();
-        let items = self.key_tree_items(fragments.items);
         let expected = fragments
             .nodes
             .iter()
             .map(|node| self.fragment_slots.get(node).map_or(0, Vec::len))
             .sum::<usize>();
         let structure_changed = self.scene_structure != Some(self.tree.structure_epoch());
+        let root_nodes = (structure_changed || fragments.items.len() != expected).then(|| {
+            fragments
+                .roots
+                .iter()
+                .map(|(_, range)| {
+                    fragments.items[range.clone()]
+                        .iter()
+                        .map(|(node, _)| *node)
+                        .collect::<HashSet<_>>()
+                })
+                .collect::<Vec<_>>()
+        });
+        let items = self.key_tree_items(fragments.items);
         if structure_changed
             || items.len() != expected
             || items
                 .iter()
                 .any(|(key, _)| !self.scene_map.contains_key(key))
         {
+            let Some(root_nodes) = root_nodes else {
+                return false;
+            };
             let mut replacements = Vec::new();
             for ((root, _), nodes) in fragments.roots.iter().zip(&root_nodes) {
                 let Some(range) = self.fragment_spans.get(root).cloned() else {

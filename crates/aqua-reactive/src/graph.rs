@@ -351,10 +351,18 @@ impl Inner {
             self.stamp_cur = 1;
         }
         let mark = self.stamp_cur;
+        let sorting_work = |nodes: usize| nodes.saturating_mul(nodes.max(1).ilog2() as usize + 1);
+        let scan_order = sorting_work(
+            self.records[root as usize]
+                .dependents
+                .len()
+                .saturating_add(1),
+        ) >= self.order.len();
         let Self {
             records,
             stamps,
             stack_scratch: stack,
+            order,
             ..
         } = self;
         stack.clear();
@@ -364,10 +372,23 @@ impl Inner {
                 continue;
             }
             stamps[slot as usize] = mark;
-            out.push(slot);
+            if !scan_order {
+                out.push(slot);
+            }
             stack.extend(records[slot as usize].dependents.iter().copied());
         }
-        out.sort_unstable_by_key(|slot| (records[*slot as usize].rank, *slot));
+        match scan_order || sorting_work(out.len()) >= order.len() {
+            true => {
+                out.clear();
+                out.extend(
+                    order
+                        .iter()
+                        .copied()
+                        .filter(|slot| stamps[*slot as usize] == mark),
+                );
+            }
+            false => out.sort_unstable_by_key(|slot| (records[*slot as usize].rank, *slot)),
+        }
     }
 
     /// Park a used order buffer for reuse by the next write.

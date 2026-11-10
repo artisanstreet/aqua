@@ -732,3 +732,174 @@ fn unsupported_property_targets_fail_before_mounting_nodes() {
     assert!(outcome.is_err());
     assert!(runtime.tree().root().is_none());
 }
+
+#[test]
+fn dense_paint_updates_preserve_scene_identity_and_resume_sparse_updates() {
+    let mut runtime = runtime();
+    let scope = runtime.scope().clone();
+    let (label, set_label) = scope.signal("first".to_string());
+    runtime
+        .mount(|_| {
+            UiBox::new()
+                .layout(Axis::Column)
+                .child(Text::new(label).width(300).height(24).build())
+                .children(
+                    (0..128).map(|_| UiBox::new().width(8).height(8).fill(Oklch::BLACK).build()),
+                )
+                .build()
+        })
+        .unwrap();
+    runtime.build_frame().unwrap();
+    let identities: Vec<_> = runtime.scene().ordered().map(|(id, _)| id).collect();
+    let boxes: Vec<_> = runtime
+        .tree()
+        .traverse()
+        .into_iter()
+        .filter(|node| runtime.tree().paint(*node).unwrap().fill.is_some())
+        .collect();
+    for color in [Oklch::WHITE, Oklch::BLACK] {
+        for node in &boxes {
+            let mut paint = runtime.tree().paint(*node).unwrap();
+            paint.fill = Some(color);
+            runtime.tree_mut().set_paint(*node, paint);
+        }
+        runtime.build_frame().unwrap();
+        assert_eq!(
+            runtime
+                .scene()
+                .ordered()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>(),
+            identities
+        );
+        let updated = runtime
+            .scene()
+            .ordered()
+            .filter(|(_, item)| matches!(item, DisplayItem::Rect { fill, .. } if *fill == color))
+            .count();
+        assert_eq!(updated, boxes.len());
+    }
+    runtime.set_viewport(900.0, 600.0, 1.25);
+    runtime.build_frame().unwrap();
+    set_label.set("sparse after dense resize".into());
+    runtime.build_frame().unwrap();
+    assert_eq!(runtime.frame_work().text_nodes_checked, 1);
+    assert_eq!(runtime.frame_work().scene_items_reconciled, 1);
+    let incremental: Vec<_> = runtime
+        .scene()
+        .ordered()
+        .map(|(_, item)| item.clone())
+        .collect();
+    runtime.tree_mut().invalidate_layout_cache();
+    runtime.build_frame().unwrap();
+    assert_eq!(
+        runtime
+            .scene()
+            .ordered()
+            .map(|(_, item)| item.clone())
+            .collect::<Vec<_>>(),
+        incremental
+    );
+}
+
+#[test]
+fn adding_paint_operations_after_a_dense_frame_matches_full_reconstruction() {
+    let mut runtime = runtime();
+    runtime
+        .mount(|_| {
+            UiBox::new()
+                .children(
+                    (0..64).map(|_| UiBox::new().width(8).height(8).fill(Oklch::BLACK).build()),
+                )
+                .build()
+        })
+        .unwrap();
+    runtime.build_frame().unwrap();
+    let root = runtime.tree().root().unwrap();
+    for node in runtime.tree().get(root).unwrap().children.clone() {
+        let mut paint = runtime.tree().paint(node).unwrap();
+        paint.fill = Some(Oklch::WHITE);
+        runtime.tree_mut().set_paint(node, paint);
+    }
+    runtime.build_frame().unwrap();
+    let mut paint = runtime.tree().paint(root).unwrap();
+    paint.opacity = Some(0.5);
+    runtime.tree_mut().set_paint(root, paint);
+    runtime.build_frame().unwrap();
+    let incremental: Vec<_> = runtime
+        .scene()
+        .ordered()
+        .map(|(_, item)| item.clone())
+        .collect();
+    assert!(incremental
+        .iter()
+        .any(|item| matches!(item, DisplayItem::PushOpacity(value) if *value == 0.5)));
+    runtime.tree_mut().invalidate_layout_cache();
+    runtime.build_frame().unwrap();
+    assert_eq!(
+        runtime
+            .scene()
+            .ordered()
+            .map(|(_, item)| item.clone())
+            .collect::<Vec<_>>(),
+        incremental
+    );
+}
+
+#[test]
+fn repainting_a_culled_child_does_not_reuse_its_old_parent_context() {
+    let mut runtime = runtime();
+    runtime
+        .mount(|_| {
+            UiBox::new()
+                .child(
+                    UiBox::new()
+                        .width(100)
+                        .height(100)
+                        .clip(true)
+                        .child(UiBox::new().width(20).height(20).fill(Oklch::BLACK).build())
+                        .build(),
+                )
+                .build()
+        })
+        .unwrap();
+    runtime.build_frame().unwrap();
+    let parent = runtime
+        .tree()
+        .traverse()
+        .into_iter()
+        .find(|node| runtime.tree().paint(*node).unwrap().clip)
+        .unwrap();
+    let child = runtime.tree().get(parent).unwrap().children[0];
+    let mut paint = runtime.tree().paint(parent).unwrap();
+    paint.transform = Some(aqua_core::Transform2D::translate(2000.0, 0.0));
+    runtime.tree_mut().set_paint(parent, paint);
+    runtime.build_frame().unwrap();
+    let mut paint = runtime.tree().paint(child).unwrap();
+    paint.fill = Some(Oklch::WHITE);
+    runtime.tree_mut().set_paint(child, paint);
+    runtime.build_frame().unwrap();
+    let culled: Vec<_> = runtime
+        .scene()
+        .ordered()
+        .map(|(_, item)| item.clone())
+        .collect();
+    runtime.tree_mut().invalidate_layout_cache();
+    runtime.build_frame().unwrap();
+    assert_eq!(
+        runtime
+            .scene()
+            .ordered()
+            .map(|(_, item)| item.clone())
+            .collect::<Vec<_>>(),
+        culled
+    );
+    let mut paint = runtime.tree().paint(parent).unwrap();
+    paint.transform = None;
+    runtime.tree_mut().set_paint(parent, paint);
+    runtime.build_frame().unwrap();
+    assert!(runtime
+        .scene()
+        .ordered()
+        .any(|(_, item)| matches!(item, DisplayItem::Rect { fill, .. } if *fill == Oklch::WHITE)));
+}

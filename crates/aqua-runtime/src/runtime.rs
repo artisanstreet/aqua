@@ -1328,7 +1328,11 @@ impl Runtime {
         self.tree.run_observers();
         let content_changed = self.cached_version != Some(version);
         let patched = content_changed && self.patch_dirty_scene(version);
-        if content_changed && !patched {
+        if content_changed
+            && !patched
+            && (!self.cached_text_nodes.is_empty()
+                || self.scene_structure != Some(self.tree.structure_epoch()))
+        {
             let _span = probe::span(Phase::Text);
             self.sync_text_runs();
         }
@@ -1346,18 +1350,30 @@ impl Runtime {
         let rebuilt = changed && !patched;
         if rebuilt {
             let _span = probe::span(Phase::Build);
-            self.cached_scene = self.emit_keyed();
-            self.index_fragments();
+            let emitted = self.emit_keyed();
+            let same_topology = self.scene_structure == Some(self.tree.structure_epoch())
+                && emitted.len() == self.cached_scene.len()
+                && emitted
+                    .iter()
+                    .zip(&self.cached_scene)
+                    .all(|((key, item), (old, previous))| {
+                        key == old
+                            && std::mem::discriminant(item) == std::mem::discriminant(previous)
+                    });
+            self.cached_scene = emitted;
+            if !same_topology {
+                self.index_fragments();
+                self.cached_text_nodes = self
+                    .cached_scene
+                    .iter()
+                    .filter_map(|(key, item)| {
+                        matches!(item, DisplayItem::Text { .. }).then_some(key.node())
+                    })
+                    .collect();
+            }
             self.scene_structure = Some(self.tree.structure_epoch());
             self.scroll_revision = self.tree.scroll_revision();
             aqua_core::checkpoint::reach();
-            self.cached_text_nodes = self
-                .cached_scene
-                .iter()
-                .filter_map(|(key, item)| {
-                    matches!(item, DisplayItem::Text { .. }).then_some(key.node())
-                })
-                .collect();
             self.native_paint_revisions = self
                 .cached_text_nodes
                 .iter()

@@ -126,7 +126,10 @@
 //! }
 //! ```
 //!
-use super::{DetailedLayoutInfo, Layout, LayoutInput, LayoutOutput, NodeId, RequestedAxis, RunMode, SizingMode};
+use super::{
+    DetailedLayoutInfo, Layout, LayoutInput, LayoutOutput, NodeId, RequestedAxis, RunMode,
+    SizingMode,
+};
 use crate::debug::debug_log;
 use crate::geometry::{AbsoluteAxis, Line, Size};
 use crate::style::{AvailableSpace, CoreStyle, OofItemStyle};
@@ -348,7 +351,11 @@ pub trait LayoutGridContainer: LayoutPartialTree {
     ///
     /// Implementing this method is optional. Doing so allows you to access details about the the grid such as
     /// the computed size of each grid track and the computed placement of each grid item.
-    fn set_detailed_grid_info(&mut self, _node_id: NodeId, _detailed_grid_info: DetailedGridInfo<Self::CustomIdent>) {
+    fn set_detailed_grid_info(
+        &mut self,
+        _node_id: NodeId,
+        _detailed_grid_info: DetailedGridInfo<Self::CustomIdent>,
+    ) {
         debug_log!("LayoutGridContainer::set_detailed_grid_info called");
     }
 }
@@ -408,7 +415,10 @@ pub(crate) trait LayoutPartialTreeExt: LayoutPartialTree {
             node_id,
             LayoutInput {
                 known_dimensions,
-                known_dimensions_are_definite: Size { width: true, height: true },
+                known_dimensions_are_definite: Size {
+                    width: true,
+                    height: true,
+                },
                 parent_size,
                 available_space,
                 sizing_mode,
@@ -437,7 +447,10 @@ pub(crate) trait LayoutPartialTreeExt: LayoutPartialTree {
             node_id,
             LayoutInput {
                 known_dimensions,
-                known_dimensions_are_definite: Size { width: true, height: true },
+                known_dimensions_are_definite: Size {
+                    width: true,
+                    height: true,
+                },
                 parent_size,
                 available_space,
                 sizing_mode,
@@ -464,7 +477,10 @@ pub(crate) trait LayoutPartialTreeExt: LayoutPartialTree {
             node_id,
             LayoutInput {
                 known_dimensions,
-                known_dimensions_are_definite: Size { width: true, height: true },
+                known_dimensions_are_definite: Size {
+                    width: true,
+                    height: true,
+                },
                 parent_size,
                 available_space,
                 sizing_mode,

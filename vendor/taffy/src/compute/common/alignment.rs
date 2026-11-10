@@ -1,5 +1,7 @@
 //! Generic CSS alignment code that is shared between both the Flexbox and CSS Grid algorithms.
-use crate::style::{AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, AlignmentSafety, Overflow};
+use crate::style::{
+    AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, AlignmentSafety, Overflow,
+};
 
 /// The first baseline of a child box (measured from the top of its border box, like [`crate::Baselines`]) as used
 /// for baseline alignment and for determining its container's baseline, given the baseline it reported, its
@@ -9,7 +11,11 @@ use crate::style::{AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyw
 /// additionally clamped to their border box. A scroll container with no baseline synthesizes one from its border-box
 /// bottom edge. See <https://github.com/w3c/csswg-drafts/issues/7660>
 #[inline]
-pub(crate) fn child_first_baseline(first_baseline: Option<f32>, height: f32, overflow_y: Overflow) -> Option<f32> {
+pub(crate) fn child_first_baseline(
+    first_baseline: Option<f32>,
+    height: f32,
+    overflow_y: Overflow,
+) -> Option<f32> {
     if overflow_y.is_scroll_container() {
         Some(first_baseline.unwrap_or(height).min(height).max(0.0))
     } else {
@@ -24,7 +30,10 @@ pub(crate) fn child_first_baseline(first_baseline: Option<f32>, height: f32, ove
 /// <https://www.w3.org/TR/css-align-3/#overflow-values>. Otherwise drop the safety modifier
 /// and return the bare keyword.
 #[inline]
-pub(crate) fn resolve_self_alignment_safety(alignment: AlignItems, overflows: bool) -> AlignItemsKeyword {
+pub(crate) fn resolve_self_alignment_safety(
+    alignment: AlignItems,
+    overflows: bool,
+) -> AlignItemsKeyword {
     if matches!(alignment.safety, AlignmentSafety::Safe) && overflows {
         AlignItemsKeyword::Start
     } else {
@@ -62,8 +71,12 @@ pub(crate) fn apply_alignment_fallback(
     //    https://www.w3.org/TR/css-align-3/#distribution-values
     if num_items <= 1 || free_space <= 0.0 {
         (keyword, is_safe) = match keyword {
-            AlignContentKeyword::Stretch | AlignContentKeyword::SpaceBetween => (AlignContentKeyword::FlexStart, true),
-            AlignContentKeyword::SpaceAround | AlignContentKeyword::SpaceEvenly => (AlignContentKeyword::Center, true),
+            AlignContentKeyword::Stretch | AlignContentKeyword::SpaceBetween => {
+                (AlignContentKeyword::FlexStart, true)
+            }
+            AlignContentKeyword::SpaceAround | AlignContentKeyword::SpaceEvenly => {
+                (AlignContentKeyword::Center, true)
+            }
             other => (other, is_safe),
         };
     }

@@ -1,0 +1,23 @@
+{
+  "description": "Frozen current Aqua plus PR6, PR7, PR8, PR9 and the complete PR10 monitor-clock and presentation-mode fixes; frozen Editor snapshot. Original worktrees untouched.",
+  "source_digest_method": "sorted relative POSIX path, NUL, file bytes, NUL; extensions .rs .toml .lock .hlsl .wgsl",
+  "aqua_source": {
+    "sha256": "763d4878b0fd64da4d8e0a0e26b2433f5a0e113926402812cba06c23760a0db4",
+    "files": 867
+  },
+  "editor_source": {
+    "sha256": "99a9b928394849b412d9cebe06279ebdba97da0093ea506b6a039e33d8e3fcf7",
+    "files": 1056
+  },
+  "aqua_base_commit": "5f4ec00",
+  "applied_commits": [
+    "36cd19a",
+    "4cb0559",
+    "4fff52e",
+    "9077af9",
+    "670b4c1",
+    "86a25f7"
+  ],
+  "binary": "/home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-present-modes.exe",
+  "binary_sha256": "636d42c94521bf134f6545dcd72f866454eb1f0939588d20e244269df6c808f0"
+}

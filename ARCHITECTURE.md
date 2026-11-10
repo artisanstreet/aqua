@@ -1,16 +1,56 @@
 # Aqua architecture: pure core, native adapters
 
-Last updated: 2026-11-04.
+Last updated: 2026-11-08.
 
-Implementation update (2026-11-03): the scene/protocol/runtime extractions,
-explicit time and analytic springs have landed, together with text, native
-Windows rasterization and full Editor application qualification in
-[`docs/EDITOR_READINESS.md`](docs/EDITOR_READINESS.md).
-The native host backend and render transport replacements below
-remain the target architecture. The historical current-state descriptions
-are not the latest feature ledger.
+## Implementation status, Windows Editor
 
-This document supersedes the foundation choices in `GUI_FRAMEWORK_DESIGN.md` (winit and wgpu) and records the target architecture. It is a design, not an implementation ledger: nothing below the "Current state" sections exists yet. Numbers marked "estimate" are unmeasured.
+The native Windows architecture described here is implemented in the current
+source. The application uses `aqua-shell-win32`, the retained `aqua-scene` and
+`aqua-protocol`, a render service in `aqua-transport`, and the D3D11 backend in
+`aqua-gpu-d3d11`. DirectWrite supplies Windows text services and rasterization;
+curve text also has a GPU path. UI Automation and TSF have native adapters.
+D3D12 is an optional backend. Linux and macOS window adapters remain future work.
+The older “Current state” sections below describe the migration baseline,
+not the current executable. This design supersedes the original winit/wgpu
+foundation in `GUI_FRAMEWORK_DESIGN.md`.
+
+The November 8 implementation closes several additional gaps:
+
+- Editor update causes select mounted sidebar and transcript subtrees, with
+  full workspace fallback for structural changes or failed subtree refresh.
+  Cause collection works with profiling disabled.
+- Work-clock reels use declarative render tracks. The connected tab/card
+  outline uses retained procedural shape transitions, including continuous
+  interruption and reduced motion, rather than per-frame application rebuilds.
+- The transport reuses an unchanged drawing plan, and can update one custom
+  shader's uniforms without replanning. D3D11 retains packed geometry and skips
+  instance-buffer uploads when drawable instances are unchanged. Draw calls
+  are still recorded for rendered frames; this is not command-list reuse.
+- Vector fills and strokes use the GPU curve store, including even-odd holes,
+  multi-stop linear/radial gradients, and transformed Drawing/SVG geometry.
+  SVG paint order, group opacity, and post-composite tinting are preserved.
+  SVG masks, filters, pattern paints, non-pad gradients, and other unsupported
+  combinations keep the existing raster fallback rather than losing content.
+- Raw SVG/drawing sources, compiled curves, and vector tiles have independent
+  byte and entry bounds. Their ownership keeps source identities valid until
+  eviction. Full trim drops vector/run caches;
+  oversize run and outline-cache entries are not retained. Full trims flush
+  GPU texture releases before idling, and discard obsolete frame references.
+  The application
+  uses bounded curve insertion with raster fallback when the store is full.
+- Curve-store texture handles leave the upper byte available for per-window
+  namespaces. Retained rendering tests cover trim and device recovery.
+
+Sidebar width, wordmark, and footer animation refresh the mounted sidebar frame;
+transcript changes can refresh alongside it. Width animation still runs layout
+on the UI thread so text and hit regions reflow correctly. One workspace build
+at the end resolves width-dependent structural choices. Navigation and other
+structural changes also retain the full workspace fallback.
+Cache budgets do not constitute a hard process-RAM limit: live document data,
+decoded media, driver allocations, and OS resources have separate lifetimes.
+No current result establishes lower memory use or greater stability than GPUI.
+`docs/PERFORMANCE.md` records the distinction between operation-count tests,
+native rendering checks, and measured application resource use.
 
 ## 1. Goals
 
@@ -1131,6 +1171,8 @@ Verified on Windows (RX 9070 XT and WARP): the conformance suite had 133 cases a
 
 Attribution of frame spikes needs per-phase times inside pure crates that may not read a clock. Decision: `aqua-protocol::probe` defines `Phase` (input, reactive, build, layout, text, lower, upload, plan, record, submit, present, wait), `Metric` (layouts, nodes measured, text runs shaped, scene ops emitted, upload bytes, passes, transient bytes, PSO compiled/loaded, atlas growth and the rest) and an install-once `fn(Event)` sink behind a `OnceLock`. Pure crates and adapters call `probe::span(Phase)` and `probe::count(Metric, n)`; with no sink installed each call is one failed atomic load. The host installs the sink only when `AQUA_PROFILE=1`. `aqua::profile` implements it: a per-thread recorder charges time and heap counters to the innermost open phase (exclusive times), `begin_frame`/`end_frame` close an app-thread frame in `Aqua::draw_ready` and a render-thread frame in `Slot::run`, a per-second summary line (`aqua-profile role=... work p50/p90/p99/max, frames over 4, 8.3 and 16.7 ms, allocations per frame, per-phase maxima`) is printed for each role, and every frame whose work (everything but `wait`) is at least `AQUA_PROFILE_SPIKE_MS` (default 4) prints an `aqua-spike` line with the phase breakdown, per-phase allocation count and bytes, the non-zero metrics, the rebuild reason (`FrameReason` bits) or render cause (arrived, forced, trim, repaint), the dominant phase and any unattributed wall time. `AQUA_PROFILE_OUT=path` appends to a file instead of stderr. Heap counters come from the `profile-alloc` cargo feature of `aqua` (a thread-local counting `GlobalAlloc`, off by default so release builds without it pay nothing; the Editor port exposes it as `profile-heap`). Not done: ETW (`wpr.exe`) capture, D3D12 internal split of `record` into command recording and queue submission, transient-heap reallocation as a counter.
 
+GPU pass attribution correction (2026-11-06): D3D11 and D3D12 record a frame-start timestamp, then a marker before each pass, then frame end. A pass duration therefore spans its own start marker and the next marker, including frame end for the last pass. The profiler previously used the preceding pair, assigning setup time to the first pass and each pass to the next label. Total GPU frame time is unchanged. Both Windows conformance suites pass after correcting the indices: six D3D11 and four D3D12 adapter/format variants, with no skipped cases. In the sprint trace this distinction matters: the roughly 262 ms interval reported as the first shadow pass belongs to the preceding quad pass.
+
 ### 14.15 Host composition root (2026-11-04, `crates/aqua`)
 
 aqua is the only event loop. `native::looping::Host` implements the `aqua-shell-win32` `Handler` and drives `Aqua`, which steps the single-window `aqua_runtime::Runtime` Machine with time as an input (`Tick`, `Frame { window, presentation }`) and executes every `RuntimeOutput` in `apply_output` (shell, IME, access tree, render commands, `wake_at`, clipboard feedback). The `Application` trait remains as the compatibility layer for the Editor port, extended with `step_input`, `take_output`, `on_dialog`, `on_motion_event` and `motion_commands`. winit is gone from the runtime; an `Inbox` (mutex queue of `AquaUserEvent` plus the shell `Waker`) replaces the event-loop proxy. Window creation order: hidden shell window, UIA attach, `TsfIme::from_hwnd`, show, render link. One render service thread for all windows (record 14.N); the D3D12 `WindowBackend` is not `Send`, so `RenderLink` ships an `InitFactory` and the backend is built lazily on the service thread. Pacing: a slot waits on its waitable swapchain slot each time it runs and, when its previous iteration did not present, may not run again for one frame interval (`not_before`), so an idle or failing present cannot busy-loop and one window never sleeps for another. `Presented` and motion events return to the Machine as `GpuEvent::Presented` and `RenderEvent`. Lowering of the display-item scene to `PaintCommand`s lives in `crates/aqua/src/render/lower.rs` (rects, quads, shadows, clips, opacity, blur, scale and translate transforms, glyphs through `GlyphResolver` and `Residency`, retained images and vectors); images reach the render thread over an `ExternalUpdate` side channel. A full command ring drops a command, so `RenderLink` keeps a backlog and retries. Snapshot transitions and text raster mode are implemented in the lowering (10.6). Not supported and reported as `WindowError::Unsupported` or counted in `LowerReport.skipped`: rounded clip radius, inset shadows, dashed borders, general transforms, GPUI items. Not built: caption hover forwarding, image and file clipboard payloads. `FrameReport::gpu_time` is filled by the backend but the host does not yet surface it. The host depends on neither `aqua-platform` nor `aqua-render` (both are deleted; image decode lives in `aqua-media::decode`), and no manifest names `winit` or `wgpu`.
@@ -1500,3 +1542,40 @@ Aqua passes 33 of 41 gated performance rows, versus 31 of 41 in the earlier join
 Median key-to-Present p50/p99 are 1.54/2.07 ms versus GPUI 17.67/19.40 ms. All 435 evaluated posts match, with none above 8.3 ms. CPU per scroll input is 0.70 versus 3.98 ms; streaming CPU is 3.46% versus 12.47% of one core. These are separate full-run measurements rather than an interleaved before/after comparison with the earlier Aqua executable. Screenshot-based key-to-pixel values remain informational. The eight failed rows are scroll p50, busiest idle-thread context switches, post-scroll private and GPU memory, first-content and rich-content capture, resize p50, and streaming p50. First-content medians are 444 versus 396 ms, rich-content 444 versus 397 ms, and resize p50 1.50 versus 1.39 ms.
 
 The complete visual capture passes using PR11's glyph-aware control criterion: worst whole-image difference 14.390% against 18%, jump-chevron errors 0/0/0/22.7/13.6% against 30%, and all functional actions pass. Every scene opens on its first attempt. This changes the historical raw control-region criterion, whose failures remain preserved in the earlier evidence. Depth-4 and lightbox image pairs, all capture logs and the pixel report accompany the new result. Repository CI still stops before tests on the removed `aqua-macros` package; affected local package checks above pass.
+
+### 14.WB Round 12 window buffer settling
+
+When idle cache trimming is disabled, an opaque D3D11 window can retain capacity from an earlier resize. The allocation trace starts at 17,082,000 swapchain bytes, grows to 19,660,800 and keeps that larger capacity after the client shrinks. Commit 619ffab adds a separate one-shot maintenance deadline 500 ms after a successfully presented viewport change. The deadline settles that surface, invalidates its damage baseline and repaints only when buffers changed. An unchanged check returns to sleep. It does not request a trim. The per-surface backend operation preserves another window’s pending frame and pixels. Commit f75e709 requests repaint after a failed settle so the normal recovery path can run.
+
+Three control/candidate pairs, ordered AB/BA/AB, use the same frozen Editor, the same framework baseline, stats off and no foreground changes or retries. Dedicated GPU medians fall from 47.9 to 35.4 MiB at boot (26.1%) and from 54.9 to 50.9 MiB after 600 wheel inputs (7.3%). Private bytes show no established gain: 129 versus 128 MiB medians with overlapping 128–133 and 122–131 MiB ranges. Scroll p50 is 0.144 versus 0.143 ms, p99 0.391 ms in both, and maximum medians 1.874 versus 1.693 ms. First-content capture medians are 593 versus 626 ms with overlapping ranges; no startup improvement is claimed. These are focused diagnostics, not a GPUI scoreboard.
+
+The complete visual capture passes with the glyph-aware check in PR 11: worst whole-image difference 13.669% against 18%, maximum glyph error 22.7% against 30%, and every functional action check passes. A focused key trace matches all 145 evaluated inputs at p50 1.56 ms, p99 2.10 ms and maximum 2.34 ms, with none above 8.3 ms. Raw images, reports, interleaved logs, source digests and own-process PresentStop events are under `docs/scoreboard/round-12/surface-settle/`. These images and measurements use binary 3eb8ab003c0b9da9 at commit 619ffab before the error-only follow-up; the new combined release is being measured separately.
+
+Validation: 11 Windows scheduler tests pass on this isolated patch; the hidden-window GPU regression passes on WARP and hardware. Windows library clippy passes with warnings denied for Aqua and D3D11, and the D3D12 host configuration checks. The combined checkout passes 14 scheduler tests and all six GPU conformance variants with the existing driver-memory option enabled. The later combined comparison, including the native driver-memory default, passes 33/41 performance rows and the glyph-aware visual gate; the overall verdict remains FAIL. Its evidence is tracked on the perf/native-driver-memory branch under docs/scoreboard/round-12/window-memory/. The earlier raw joint report passes 31/41; the earlier 30/40 prose count omitted one passing row.
+
+### 14.VC Monitor vblank pacing across idle periods (2026-11-06 to 2026-11-07, round 12)
+
+The current worktree's D3D11 monitor clock fell back to the swapchain wait after three waits returned in under 1 ms, even when idle intervals separated those waits. A diagnostic captured 49 waits above 25 ms: 7764.62 ms in the swapchain wait versus 0.02 ms in the monitor clock, with a maximum swapchain wait of 260.79 ms. Resetting the fast-wait streak after one monitor interval of idle time removes that false fallback. Three rapid nonblocking waits still disable the clock, and a blocking wait still resets the streak.
+
+The presentation-aware slot API forwards the current hint through the host and native wrapper. Only full-rate Vsync uses the monitor clock; immediate and half-rate frames retain their swapchain wait. A present consumes its clocked result once, and monitor or factory reinitialization resets the guard. Clocked frames use non-tearing `Present1(0, 0)`. The clock follows the window's monitor and retries unavailable outputs after one second. This change packages the existing monitor-clock work with these corrections; the original debug-panel checkout is untouched, and unrelated debug and idle-trim changes are excluded from the PR.
+
+Validation: all 80 render tests, six transport tests and ten pacing tests pass on Windows. The regressions cover sparse fast waits, rapid consecutive fast waits, a blocking wait resetting the streak, selecting the mode before acquisition, and forwarding the current hint. Windows library clippy passes across the protocol, transport, D3D11 backend and host with warnings denied; the D3D12 host configuration passes its Windows library check. Formatting and diff checks pass. The corrected release build's focused trace matched all 145 inputs at p50 1.46 ms, p99 2.22 ms and maximum 2.31 ms, with none above 8.3 ms. Focused traces and source manifests are tracked in `docs/scoreboard/round-12/`.
+
+Completed joint scoreboard: `docs/scoreboard/round-12/joint/` records three interleaved release runs, alternating editor order, using one frozen Editor source and a frozen current Aqua source with the reconciliation, frame-slot, timing-span and monitor-clock fixes. The source manifest identifies the uncommitted baseline and applied changes; the harness's shared-checkout git row is explicitly overridden. All runs completed without retries or foreground changes and passed the quiet-machine check. Aqua passes 31 of 41 performance rows under the existing 3% rule; the overall verdict is FAIL. Median key-present p50 is 1.56 versus GPUI 17.68 ms, p99 2.15 versus 20.34 ms, and maximum 2.40 versus 20.37 ms. Every one of 435 evaluated inputs matched, with none above 8.3 ms. CPU per scroll input is 0.83 versus 4.12 ms; scroll p99 is 0.36 versus 2.70 ms.
+
+Ten performance rows remain open: scroll p50; busiest idle-thread context switches (0.10 versus 0.10 per second); private memory after startup and scrolling; dedicated GPU memory after startup and scrolling; the two first-content capture rows; resize p50; and streaming p50. GPU startup memory is numerically lower at 47.9 versus 49.1 MiB but misses the required 3% margin. Private memory after scrolling is 130.3 versus 118.1 MiB; the absolute 142 MiB windowed budget still passes. The previous joint attempt stopped at key validation, and the first corrected attempt was intentionally stopped after one main scenario per editor to fix presentation modes; neither is an additional completed scoreboard.
+
+The visual gate fails only its checked jump-to-latest regions: the button is absent from Aqua at depths 1 through 4, producing over 95% difference against a 30% region limit. The worst whole-image difference is 14.32%, below the 18% limit. All action checks change their frames, including turn navigation and image lightboxes. The depth-1 screenshot pair and the full pixel-diff report are tracked under `docs/scoreboard/round-12/joint/visual/`.
+
+Disabling window redirection, using composition for opaque windows, removing the queue limit with composition, forcing the surface mirror, and disabling GPU timing queries did not remove the latency tail. Those experiments were rejected; their hashes and traces are recorded in `docs/scoreboard/round-12/rejected-variants.json`. Repository CI still stops before tests because its workflow requests the removed `aqua-macros` package on both platforms; the local validation above ran the actual affected packages.
+### 14.LL Frame-slot freshness (decided 2026-11-06; `aqua::render::service`)
+
+The render service selected a scene before waiting for a free frame slot. An update arriving during that wait missed the imminent present. A deterministic channel-controlled target reproduces it: select red, block the slot wait, queue green, release the wait; the old service presents red first. The service now drains and applies commands again after acquiring the slot, presents the newest frame id, and acknowledges every scene consumed by that present. Late updates also prevent a maintenance or quiet repaint from suppressing their completion event. Unchanged commands still acquire no extra slot.
+
+Validation: the regression test fails before the change and passes after it. All 12 render-service tests pass, along with the related suites (88 tests on Linux; 63 on Windows). Windows library clippy passes with warnings denied. Linux library clippy encounters existing Windows-only dead-code warnings, and Linux library unit tests encounter the existing unconditional `wtsapi32` link; the relevant integration tests run independently.
+
+The initial clean-main comparison did not establish an Editor latency win. Against one fixed Editor source snapshot, release key traces with 150 posted inputs (145 evaluated) reproduced a pre-existing slow presentation path: unchanged `5f4ec00` matched 112 inputs at p50 94.47 ms; the two reconciliation changes plus this fix matched 113 at p50 94.90 ms. The GPUI control matched all 145 at p50 17.71 ms. The attempted three-run joint scoreboard stopped after its first Aqua key phase failed validation twice, so there is no completed round 12 scoreboard or overall pass.
+
+The working tree is ahead of that clean-main baseline. The separate UI overhaul thread added uncommitted vblank pacing and removed automatic idle trimming, alongside a debug panel. A frozen copy of that work matched 127 of 145 inputs at p50 62.76 ms. Those changes remain untouched in the original checkout. Current-worktree validation must use that frozen source rather than silently describing the shared checkout's HEAD as the measured code. The local measurements and source manifests live under the sprint worktree's `target/measurements/`.
+
+Current-code A/B follow-up: the frozen worktree baseline produced key-present p50 values of 62.76 and 48.06 ms; that same source plus the reactive-scope, lowered-descriptor, and frame-slot changes produced 16.36 and 16.63 ms. These are two interleaved release runs per version with one fixed Editor source snapshot, not a complete joint scoreboard. The p99 values remained about 188 ms, so the tail-latency gate is still open. End-of-key-phase private memory was 136 and 132 MiB before, versus 126 MiB in both candidate runs. All four runs left foreground focus unchanged. The baseline and candidate source and binary hashes are recorded in `target/measurements/current/*-source-manifest.json` in the isolated sprint worktree. Removing the swapchain waitable-object limit was also tried separately and worsened the key trace; that experiment was rejected.

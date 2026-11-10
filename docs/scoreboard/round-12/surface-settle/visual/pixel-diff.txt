@@ -1,0 +1,42 @@
+bottom         changed=   59617 px ( 2.792%) bbox=1876x1107+22+0 worst_tiles(row,col)=1,5=11.8% 1,3=7.2% 1,2=6.5%
+depth1         changed=  115470 px ( 5.408%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,2=14.5% 2,3=12.7% 1,5=11.8%
+depth2         changed=  121598 px ( 5.695%) bbox=1876x1122+22+0 worst_tiles(row,col)=0,3=16.3% 0,2=16.3% 1,5=11.8%
+depth3         changed=  180497 px ( 8.453%) bbox=1876x1122+22+0 worst_tiles(row,col)=1,2=27.4% 1,3=25.6% 0,2=17.1%
+depth4         changed=  171442 px ( 8.029%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,2=29.8% 2,3=25.4% 1,2=19.7%
+depth5         changed=  166137 px ( 7.781%) bbox=1876x1115+22+0 worst_tiles(row,col)=2,3=39.8% 2,2=31.2% 2,4=21.9%
+depth6         changed=  183825 px ( 8.609%) bbox=1876x1107+22+0 worst_tiles(row,col)=2,2=23.9% 2,3=22.9% 0,2=19.6%
+depth7         changed=  152093 px ( 7.123%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,2=23.7% 2,3=22.7% 1,2=19.1%
+depth8         changed=  155292 px ( 7.273%) bbox=1876x1120+22+0 worst_tiles(row,col)=0,3=34.6% 0,2=29.5% 0,4=20.3%
+dialog         changed=  162349 px ( 7.603%) bbox=1893x1121+5+0 worst_tiles(row,col)=3,0=21.0% 0,3=15.7% 2,2=14.2%
+edge           changed=  133364 px ( 6.246%) bbox=1876x1107+22+0 worst_tiles(row,col)=1,2=22.0% 1,3=18.9% 0,2=15.7%
+edge2          changed=  110963 px ( 5.197%) bbox=1876x1120+22+0 worst_tiles(row,col)=1,2=16.1% 0,2=14.9% 0,3=14.3%
+emoji          changed=  189245 px ( 8.863%) bbox=1876x1119+22+0 worst_tiles(row,col)=2,2=33.1% 2,3=27.7% 1,3=16.1%
+far1           changed=  140177 px ( 6.565%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,2=16.9% 1,2=16.9% 2,3=15.9%
+far10          changed=  189042 px ( 8.853%) bbox=1876x1119+22+0 worst_tiles(row,col)=1,2=30.9% 1,3=25.6% 2,2=23.9%
+far11          changed=  198326 px ( 9.288%) bbox=1876x1122+22+0 worst_tiles(row,col)=1,2=31.8% 1,3=25.7% 2,3=21.9%
+far12          changed=  194677 px ( 9.117%) bbox=1876x1111+22+0 worst_tiles(row,col)=2,2=33.0% 2,3=28.1% 0,2=19.2%
+far2           changed=  179574 px ( 8.410%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,2=26.5% 2,3=24.3% 1,2=22.4%
+far3           changed=  291867 px (13.669%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,3=56.2% 2,2=40.7% 2,4=31.8%
+far4           changed=  162744 px ( 7.622%) bbox=1876x1122+22+0 worst_tiles(row,col)=3,3=22.3% 3,2=20.1% 1,2=16.4%
+far5           changed=  173290 px ( 8.116%) bbox=1876x1122+22+0 worst_tiles(row,col)=0,3=21.3% 2,2=18.3% 0,2=17.7%
+far6           changed=  192113 px ( 8.997%) bbox=1876x1122+22+0 worst_tiles(row,col)=0,2=25.1% 0,3=24.6% 1,2=22.3%
+far7           changed=  211117 px ( 9.887%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,3=36.4% 2,2=30.4% 0,2=22.5%
+far8           changed=  242928 px (11.377%) bbox=1876x1120+22+0 worst_tiles(row,col)=2,3=32.9% 2,2=29.9% 0,3=28.4%
+far9           changed=  211994 px ( 9.928%) bbox=1876x1122+22+0 worst_tiles(row,col)=2,3=34.8% 2,2=32.7% 0,3=20.0%
+jump-a         changed=  184647 px ( 8.648%) bbox=1876x1112+22+0 worst_tiles(row,col)=1,2=31.1% 1,3=22.9% 2,2=20.0%
+jump-b         changed=  169112 px ( 7.920%) bbox=1876x1122+22+0 worst_tiles(row,col)=0,3=25.9% 0,2=22.0% 1,2=17.3%
+menu           changed=  147754 px ( 6.920%) bbox=1876x1107+22+0 worst_tiles(row,col)=0,3=30.2% 1,3=23.5% 0,4=21.3%
+notch1         changed=   65353 px ( 3.061%) bbox=1876x1107+22+0 worst_tiles(row,col)=1,5=11.8% 2,2=7.3% 2,3=6.4%
+v-account      changed=   86646 px ( 4.058%) bbox=1893x1121+5+0 worst_tiles(row,col)=1,2=12.3% 2,2=12.2% 1,3=10.7%
+v-emoji        changed=   82185 px ( 3.849%) bbox=1876x1121+22+0 worst_tiles(row,col)=1,2=12.3% 2,2=12.2% 1,3=10.7%
+v-lightbox     changed=     697 px ( 0.033%) bbox=1200x675+349+225 worst_tiles(row,col)=0,4=0.6% 3,4=0.0% 3,1=0.0%
+v-menu         changed=   69988 px ( 3.278%) bbox=1876x1122+22+0 worst_tiles(row,col)=1,3=14.5% 0,3=9.4% 0,2=9.1%
+v-scroll       changed=   41707 px ( 1.953%) bbox=1876x1122+22+0 worst_tiles(row,col)=0,3=9.4% 0,2=9.1% 0,5=4.0%
+v-tail         changed=   37542 px ( 1.758%) bbox=1876x1107+22+0 worst_tiles(row,col)=2,3=8.8% 2,2=8.3% 0,5=4.0%
+v-top          changed=   80191 px ( 3.756%) bbox=1876x1121+22+0 worst_tiles(row,col)=1,2=12.3% 2,2=12.2% 1,3=10.7%
+region notch1       jump-latest    changed=    0 px (  0.0%, limit 30%, reference_pixels=22 foreground=60%)
+region depth1       jump-latest    changed=    0 px (  0.0%, limit 30%, reference_pixels=22 foreground=60%)
+region depth2       jump-latest    changed=    0 px (  0.0%, limit 30%, reference_pixels=22 foreground=60%)
+region depth3       jump-latest    changed=    5 px ( 22.7%, limit 30%, reference_pixels=22 foreground=60%)
+region depth4       jump-latest    changed=    0 px (  0.0%, limit 30%, reference_pixels=22 foreground=60%)
+worst_changed_pct=13.669

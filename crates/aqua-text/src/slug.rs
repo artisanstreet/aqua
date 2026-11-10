@@ -153,7 +153,10 @@ impl SlugCache {
         }
         let built = build(fonts, key);
         let added = lookup_bytes(&built);
-        if self.bytes + added > self.budget {
+        if added > self.budget {
+            return built;
+        }
+        if self.bytes + added > self.budget || self.glyphs.len() >= 4096 {
             self.clear();
         }
         self.bytes += added;
@@ -208,7 +211,7 @@ fn build(fonts: &mut FontManager, key: &RasterKey) -> SlugLookup {
     }
 }
 
-pub const STORE_HANDLE: TextureHandle = TextureHandle(u32::MAX - 1);
+pub const STORE_HANDLE: TextureHandle = TextureHandle(0x00ff_fffe);
 
 const MIN_STORE_ROWS: u32 = 8;
 const ROW_TEXELS: usize = STORE_WIDTH as usize;
@@ -238,12 +241,14 @@ struct StoreEntry {
 
 pub struct SlugStore<K = SlugKey> {
     entries: FastMap<K, StoreEntry>,
+    indices: FastMap<u32, K>,
     warmed: Vec<SlugKey>,
     texels: Vec<[f32; 4]>,
     free: Vec<(u32, u32)>,
     rows: u32,
     dirty: Option<(usize, usize)>,
     created: bool,
+    release_pending: bool,
     revision: u64,
     epoch: u64,
     budget_texels: usize,
@@ -261,12 +266,14 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
     pub fn with_budget(bytes: u64) -> Self {
         Self {
             entries: FastMap::default(),
+            indices: FastMap::default(),
             warmed: Vec::new(),
             texels: Vec::new(),
             free: Vec::new(),
             rows: 0,
             dirty: None,
             created: false,
+            release_pending: false,
             revision: 0,
             epoch: 0,
             budget_texels: (bytes / 16) as usize,
@@ -306,6 +313,7 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.indices.clear();
         self.warmed.clear();
         self.texels = Vec::new();
         self.free = Vec::new();
@@ -313,13 +321,22 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
         self.revision = 0;
     }
 
+    pub fn release_resources(&mut self) {
+        self.release_pending |= self.created;
+        self.clear();
+        self.created = false;
+        self.rows = 0;
+    }
+
     pub fn reset(&mut self) {
         self.entries.clear();
+        self.indices.clear();
         self.warmed.clear();
         self.texels.clear();
         self.free.clear();
         self.dirty = None;
         self.created = false;
+        self.release_pending = false;
         self.revision = 0;
     }
 
@@ -361,12 +378,12 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
         Some(start)
     }
 
-    fn allocate(&mut self, len: u32) -> u32 {
+    fn allocate(&mut self, len: u32, bounded: bool) -> Option<u32> {
         if let Some(start) = self.take_free(len) {
-            return start;
+            return Some(start);
         }
         if self.texels.len() + len as usize <= self.budget_texels {
-            return self.texels.len() as u32;
+            return Some(self.texels.len() as u32);
         }
         let mut candidates: Vec<(u64, u32, K)> = self
             .entries
@@ -378,19 +395,23 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
         for (_, _, key) in candidates {
             if let Some(entry) = self.entries.remove(&key) {
                 if let Some((start, size)) = entry.block {
+                    self.indices.remove(&start);
                     self.evictions += 1;
                     self.release(start, size);
                 }
             }
             if let Some(start) = self.take_free(len) {
-                return start;
+                return Some(start);
             }
             if self.texels.len() + len as usize <= self.budget_texels {
-                return self.texels.len() as u32;
+                return Some(self.texels.len() as u32);
             }
         }
+        if bounded {
+            return None;
+        }
         self.overruns += 1;
-        self.texels.len() as u32
+        Some(self.texels.len() as u32)
     }
 
     fn mark_dirty(&mut self, from: usize, to: usize) {
@@ -401,8 +422,17 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
     }
 
     pub fn insert(&mut self, key: K, glyph: &SlugGlyph) -> StoreLookup {
+        self.insert_with_budget(key, glyph, false)
+    }
+
+    fn insert_with_budget(&mut self, key: K, glyph: &SlugGlyph, bounded: bool) -> StoreLookup {
         let len = pack_glyph(glyph, 0).len() as u32;
-        let base = self.allocate(len);
+        if bounded && len as usize > self.budget_texels {
+            return StoreLookup::Unsupported;
+        }
+        let Some(base) = self.allocate(len, bounded) else {
+            return StoreLookup::Unsupported;
+        };
         let packed = pack_glyph(glyph, base);
         let end = base as usize + packed.len();
         if self.texels.len() < end {
@@ -422,8 +452,20 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
             last_used: self.epoch,
             block: Some((base, len)),
         };
+        self.indices.insert(base, key);
         self.entries.insert(key, entry);
         entry.lookup
+    }
+
+    pub fn insert_bounded(&mut self, key: K, glyph: &SlugGlyph) -> StoreLookup {
+        self.insert_with_budget(key, glyph, true)
+    }
+
+    pub fn touch_index(&mut self, index: u32) -> bool {
+        let Some(key) = self.indices.get(&index).copied() else {
+            return false;
+        };
+        self.touch(&key).is_some()
     }
 
     pub fn insert_empty(&mut self, key: K, lookup: StoreLookup) -> StoreLookup {
@@ -448,14 +490,20 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
 
     pub fn uploads(&mut self) -> UploadBatch {
         self.epoch += 1;
+        let mut textures = Vec::new();
+        if std::mem::take(&mut self.release_pending) {
+            textures.push(TextureUpload {
+                handle: STORE_HANDLE,
+                op: TextureOp::Release,
+            });
+        }
         if self.texels.is_empty() && !self.created {
-            return UploadBatch::default();
+            return UploadBatch { textures };
         }
         let needed_rows = self.texels.len().div_ceil(ROW_TEXELS) as u32;
         let wanted_rows = needed_rows.max(MIN_STORE_ROWS).next_power_of_two();
         let shrink = self.created && !self.texels.is_empty() && wanted_rows * 4 <= self.rows;
         let recreate = !self.created || needed_rows > self.rows || shrink;
-        let mut textures = Vec::new();
         let rows_range = match recreate {
             true => {
                 if self.created {
@@ -551,7 +599,7 @@ impl SlugStore<SlugKey> {
         slug_key: SlugKey,
     ) -> StoreLookup {
         match cache.lookup(fonts, key) {
-            SlugLookup::Outline(glyph) => self.insert(slug_key, &glyph),
+            SlugLookup::Outline(glyph) => self.insert_bounded(slug_key, &glyph),
             SlugLookup::Blank => self.insert_empty(slug_key, StoreLookup::Blank),
             SlugLookup::Unsupported => self.insert_empty(slug_key, StoreLookup::Unsupported),
         }

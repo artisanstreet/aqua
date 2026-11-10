@@ -1,0 +1,30 @@
+{
+  "description": "Accepted round-12 Aqua source plus surface-settle commit 619ffab; retained original idle-trim removal and other frozen WIP. The frozen Editor includes jump-control commit 98ff2009. Runtime methods verified against the isolated branch before benchmarking.",
+  "source_digest_method": "sorted relative POSIX path, NUL, file bytes, NUL; extensions .rs .toml .lock .hlsl .wgsl",
+  "aqua_source": {
+    "sha256": "f27b711db146d09ef431186039180feb567ee53c14569d0e27d87cd05fe365ef",
+    "files": 867
+  },
+  "editor_source": {
+    "sha256": "3d9b9f679b64d5871c1c337a1be71b1f9a77e29334f70b8350718072b5647e1e",
+    "files": 1056
+  },
+  "aqua_base_commit": "5f4ec00",
+  "applied_commits": [
+    "36cd19a",
+    "4cb0559",
+    "4fff52e",
+    "9077af9",
+    "670b4c1",
+    "86a25f7",
+    "619ffab"
+  ],
+  "editor_patch_sha256": "88f90289e0e2529630eed4281f231bd93a792234dcb882b8268cc676d127d667",
+  "editor_pr_base": "6606f059",
+  "previous_aqua_source": {
+    "sha256": "763d4878b0fd64da4d8e0a0e26b2433f5a0e113926402812cba06c23760a0db4",
+    "files": 867
+  },
+  "binary": "/home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-surface-settle.exe",
+  "binary_sha256": "3eb8ab003c0b9da91d49e6ae06d0150e0f9cea0f89a8d9d02de7979c2b2d3c67"
+}

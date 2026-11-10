@@ -346,3 +346,59 @@ fn transformed_accessibility_bounds_and_character_geometry_follow_visual_positio
         Point::new(30.0, 10.0)
     );
 }
+
+#[test]
+fn cached_accessible_text_tracks_edits_reflow_and_scale() {
+    use aqua_ui::style::{px, Style};
+    let fonts = SharedFonts::new();
+    let runs = SharedRuns::new();
+    let mut runtime = Runtime::new(fonts.clone(), runs.clone());
+    runtime.set_viewport(400.0, 300.0, 1.0);
+    runtime
+        .mount(|_| {
+            Text::new("alpha beta gamma delta")
+                .editable(true)
+                .multiline(true)
+                .style(Style::new().width(px(200.0)))
+                .build()
+        })
+        .unwrap();
+    runtime.build_frame().unwrap();
+    let node = field(&runtime);
+    let text = |runtime: &Runtime| {
+        runtime
+            .a11y_nodes()
+            .unwrap()
+            .2
+            .into_iter()
+            .find(|item| item.semantic.node == node)
+            .unwrap()
+            .text
+            .unwrap()
+    };
+    let initial = text(&runtime);
+    assert_eq!(text(&runtime), initial);
+    runtime.tree_mut().set_text(node, "changed é👩‍💻 אב words");
+    runtime.build_frame().unwrap();
+    let edited = text(&runtime);
+    assert_ne!(edited.runs, initial.runs);
+    assert_eq!(
+        edited
+            .runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>(),
+        "changed é👩‍💻 אב words"
+    );
+    runtime
+        .tree_mut()
+        .set_style(node, Style::new().width(px(75.0)).resolve_layout());
+    runtime.build_frame().unwrap();
+    let wrapped = text(&runtime);
+    assert!(wrapped.runs.len() > edited.runs.len());
+    runtime.set_viewport(400.0, 300.0, 2.0);
+    runtime.build_frame().unwrap();
+    let scaled = text(&runtime);
+    assert!(scaled.runs[0].bounds.h > wrapped.runs[0].bounds.h * 1.5);
+    assert_eq!(text(&runtime), scaled);
+}

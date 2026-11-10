@@ -40,7 +40,7 @@ fn hit_node(tree: &UiTree, id: NodeId, at: Point, clip: Option<Rect>) -> Option<
         return None;
     }
     let clip = if tree.is_portal(id) { None } else { clip };
-    let clips = matches!(&rec.kind, NodeKind::Box(b) if b.paint().clip)
+    let clips = matches!(&rec.kind, NodeKind::Box(b) if b.paint_ref().clip)
         || matches!(rec.kind, NodeKind::Scroll(_));
     let child_clip = if clips {
         let rect = tree.visual_rect(id)?;

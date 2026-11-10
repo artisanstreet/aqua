@@ -1,0 +1,6 @@
+probe-launch unix_ms=1794030102313 pid=21636
+probe-startup window_ms=63 first_content_ms=615 nondominant=0.286 rich_content_ms=615
+probe-open thread=bench-visual unix_ms=1794030102513 since_launch_ms=200 since_click_ms=-1
+pid=21636 dpi=120 working_set_mb=125 private_mb=120
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---

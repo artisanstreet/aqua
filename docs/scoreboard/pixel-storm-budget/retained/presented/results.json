@@ -1,0 +1,196 @@
+{
+  "aggregation": "Median of six window p50 values, not a pooled percentile. Windows 1 and 2 after the first 10 seconds.",
+  "candidate_warm_frames": 2120,
+  "candidate_median_window_p50_ms": 27.990000000000002,
+  "candidate_p50_range_ms": [
+    27.59,
+    28.65
+  ],
+  "candidate_window_p99_range_ms": [
+    30.03,
+    35.76
+  ],
+  "candidate_max_warm_ms": 50.77,
+  "windows": [
+    {
+      "run": "candidate-1",
+      "window": 0,
+      "seconds": 10.0,
+      "frames": 323,
+      "p50_ms": 27.68,
+      "p99_ms": 33.31,
+      "max_ms": 1010.64,
+      "first_frame_ms": 13623.8
+    },
+    {
+      "run": "candidate-1",
+      "window": 1,
+      "seconds": 10.0,
+      "frames": 360,
+      "p50_ms": 27.66,
+      "p99_ms": 30.03,
+      "max_ms": 33.43,
+      "first_frame_ms": 13623.8
+    },
+    {
+      "run": "candidate-1",
+      "window": 2,
+      "seconds": 10.0,
+      "frames": 357,
+      "p50_ms": 27.59,
+      "p99_ms": 33.98,
+      "max_ms": 39.58,
+      "first_frame_ms": 13623.8
+    },
+    {
+      "run": "candidate-2",
+      "window": 0,
+      "seconds": 10.0,
+      "frames": 307,
+      "p50_ms": 27.91,
+      "p99_ms": 43.48,
+      "max_ms": 976.96,
+      "first_frame_ms": 13553.6
+    },
+    {
+      "run": "candidate-2",
+      "window": 1,
+      "seconds": 10.0,
+      "frames": 342,
+      "p50_ms": 28.65,
+      "p99_ms": 35.76,
+      "max_ms": 42.43,
+      "first_frame_ms": 13553.6
+    },
+    {
+      "run": "candidate-2",
+      "window": 2,
+      "seconds": 10.0,
+      "frames": 354,
+      "p50_ms": 28.08,
+      "p99_ms": 31.67,
+      "max_ms": 38.92,
+      "first_frame_ms": 13553.6
+    },
+    {
+      "run": "candidate-3",
+      "window": 0,
+      "seconds": 10.0,
+      "frames": 319,
+      "p50_ms": 27.87,
+      "p99_ms": 32.92,
+      "max_ms": 989.26,
+      "first_frame_ms": 13611.5
+    },
+    {
+      "run": "candidate-3",
+      "window": 1,
+      "seconds": 10.0,
+      "frames": 354,
+      "p50_ms": 27.94,
+      "p99_ms": 31.59,
+      "max_ms": 50.77,
+      "first_frame_ms": 13611.5
+    },
+    {
+      "run": "candidate-3",
+      "window": 2,
+      "seconds": 10.0,
+      "frames": 353,
+      "p50_ms": 28.04,
+      "p99_ms": 32.09,
+      "max_ms": 33.73,
+      "first_frame_ms": 13611.5
+    },
+    {
+      "run": "control-1",
+      "window": 0,
+      "seconds": 10.0,
+      "frames": 118,
+      "p50_ms": 84.3,
+      "p99_ms": 101.18,
+      "max_ms": 163.8,
+      "first_frame_ms": 15364.2
+    },
+    {
+      "run": "control-1",
+      "window": 1,
+      "seconds": 10.1,
+      "frames": 128,
+      "p50_ms": 78.7,
+      "p99_ms": 85.96,
+      "max_ms": 90.91,
+      "first_frame_ms": 15364.2
+    },
+    {
+      "run": "control-1",
+      "window": 2,
+      "seconds": 10.1,
+      "frames": 127,
+      "p50_ms": 78.85,
+      "p99_ms": 90.79,
+      "max_ms": 91.66,
+      "first_frame_ms": 15364.2
+    },
+    {
+      "run": "control-2-repeat",
+      "window": 0,
+      "seconds": 10.0,
+      "frames": 146,
+      "p50_ms": 54.98,
+      "p99_ms": 248.46,
+      "max_ms": 1654.8,
+      "first_frame_ms": 14456.8
+    },
+    {
+      "run": "control-2-repeat",
+      "window": 1,
+      "seconds": 10.0,
+      "frames": 181,
+      "p50_ms": 54.94,
+      "p99_ms": 65.03,
+      "max_ms": 65.51,
+      "first_frame_ms": 14456.8
+    },
+    {
+      "run": "control-2-repeat",
+      "window": 2,
+      "seconds": 10.0,
+      "frames": 182,
+      "p50_ms": 54.72,
+      "p99_ms": 59.55,
+      "max_ms": 63.59,
+      "first_frame_ms": 14456.8
+    },
+    {
+      "run": "control-3",
+      "window": 0,
+      "seconds": 10.0,
+      "frames": 127,
+      "p50_ms": 78.66,
+      "p99_ms": 83.82,
+      "max_ms": 97.83,
+      "first_frame_ms": 13651.3
+    },
+    {
+      "run": "control-3",
+      "window": 1,
+      "seconds": 10.0,
+      "frames": 127,
+      "p50_ms": 78.85,
+      "p99_ms": 85.29,
+      "max_ms": 86.57,
+      "first_frame_ms": 13651.3
+    },
+    {
+      "run": "control-3",
+      "window": 2,
+      "seconds": 10.0,
+      "frames": 127,
+      "p50_ms": 78.86,
+      "p99_ms": 80.79,
+      "max_ms": 84.59,
+      "first_frame_ms": 13651.3
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "change_commit": "73a979f",
+  "base_commit": "1faf00b",
+  "design": "A 64 KiB dynamic constant buffer uses 256-byte slots. A frame starts with DISCARD; subsequent changed constants append with NO_OVERWRITE until wrap, which discards again. Range bindings are restored after custom passes. Both required D3D11 options are queried; unsupported drivers retain the existing discard path.",
+  "validation": {
+    "unit_tests": 7,
+    "conformance_tests": 7,
+    "conformance_adapters": [
+      "WARP",
+      "AMD Radeon(TM) Graphics integrated",
+      "AMD Radeon RX 9070 XT"
+    ],
+    "new_pixel_regression": "300 isolated opacity groups across three frames on WARP and hardware, exceeding 256 changed constant ranges; matches the reference.",
+    "debug_layer_tests": 3,
+    "debug_layer_errors": 0,
+    "windows_clippy": "PASS --lib --tests -D warnings",
+    "path_confirmation": "Targeted regression reports 65,808 live constant-buffer bytes on WARP and Radeon, confirming the 64 KiB stream plus custom/compute buffers; integrated adapter conformance passes but its active path was not separately logged.",
+    "path_test_commit": "0d292db",
+    "unit_test_commit": "7b09066",
+    "legacy_path": "Forced legacy allocation and uploads match range uploads byte-for-byte over five frames, including repeated constants, opacity layers and context ClearState between frames."
+  },
+  "api_sources": [
+    "https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ns-d3d11-d3d11_feature_data_d3d11_options",
+    "https://learn.microsoft.com/en-us/windows/win32/api/d3d11_1/nf-d3d11_1-id3d11devicecontext1-vssetconstantbuffers1",
+    "https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_map"
+  ],
+  "limits": [
+    "The existing path is selected when either required capability is absent. WARP and Radeon range-path activation and forced legacy-path rendering are validated; integrated conformance passes without a separate active-path log.",
+    "Correctness checks do not establish a performance gain; the measured medians do not justify integrating this change."
+  ],
+  "outcome": "REJECTED after the focused Editor comparison in result.json; correctness passes but no memory gain is established."
+}

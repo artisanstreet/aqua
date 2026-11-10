@@ -160,6 +160,8 @@ pub struct GpuRenderHost<B: GpuBackend<Error = GpuError>, L: Lowering, C: Clock>
     trim_handle: TrimHandle,
     last: Option<FrameRecord>,
     last_error: Option<String>,
+    solids: Option<crate::solid::Solids>,
+    solids_rejected: Option<crate::solid::Key>,
     retained: RetainedPlan,
     plans_built: u64,
     plans_reused: u64,
@@ -197,6 +199,8 @@ where
             trim_handle: TrimHandle::default(),
             last: None,
             last_error: None,
+            solids: None,
+            solids_rejected: None,
             retained: RetainedPlan::default(),
             plans_built: 0,
             plans_reused: 0,
@@ -321,6 +325,20 @@ where
         }
     }
 
+    pub fn retains_solid_geometry(&self, side: &RenderSide) -> bool {
+        self.lowering.retained_solids()
+            && side.viewport().is_some_and(|(size, scale)| {
+                let context = LowerContext {
+                    size,
+                    scale,
+                    now: Instant::ZERO,
+                };
+                self.solids.as_ref().is_some_and(|cached| {
+                    cached.key == crate::solid::Key::new(side.scene(), &context)
+                })
+            })
+    }
+
     fn render(&mut self, side: &mut RenderSide) -> Result<(FrameReport, FrameRecord), GpuError> {
         let (size, scale) = side
             .viewport()
@@ -334,7 +352,32 @@ where
             scale,
             now: self.clock.now(),
         };
-        let lowered = self.lowering.lower(side.scene(), &context);
+        let mut solids = self.solids.take();
+        if !self.lowering.retained_solids() {
+            solids = None;
+        } else {
+            if solids
+                .as_mut()
+                .is_some_and(|cached| !cached.update(side.scene_mut(), &context))
+            {
+                solids = None;
+            }
+            let key = crate::solid::Key::new(side.scene(), &context);
+            if solids.is_none() && self.solids_rejected != Some(key) {
+                solids = crate::solid::Solids::compile(
+                    side.scene_mut(),
+                    &context,
+                    extent,
+                    self.config.clear,
+                    self.backend.capabilities().plan_limits(),
+                );
+                self.solids_rejected = solids.is_none().then_some(key);
+            }
+        }
+        let lowered = match solids {
+            Some(_) => crate::Lowered::default(),
+            None => self.lowering.lower(side.scene(), &context),
+        };
         drop(lower_span);
         let uploaded = !lowered.uploads.textures.is_empty();
         if uploaded {
@@ -349,6 +392,7 @@ where
             self.backend.upload(lowered.uploads.clone())?;
         }
         let plan_span = probe::span(Phase::Plan);
+        if solids.is_none() {
         let limits = self.backend.capabilities().plan_limits();
         let reused = self
             .retained
@@ -371,15 +415,18 @@ where
                 self.plans_built += 1;
             }
         }
+        } else {
+            self.retained.clear();
+        }
         drop(plan_span);
         let wait_span = probe::span(Phase::Wait);
         self.acquire_slot(surface)?;
         drop(wait_span);
         let record_span = probe::span(Phase::Record);
-        let plan = self
-            .retained
-            .get()
-            .ok_or(GpuError::Unsupported("retained frame plan unavailable"))?;
+        let plan = match &solids {
+            Some(cached) => &cached.plan,
+            None => self.retained.get().ok_or(GpuError::Unsupported("retained frame plan unavailable"))?,
+        };
         let report = self.backend.execute(plan, &FrameInputs::new(surface))?;
         drop(record_span);
         let present_span = probe::span(Phase::Present);
@@ -416,6 +463,7 @@ where
                 .map(|t| u64::try_from(t.as_micros()).unwrap_or(u64::MAX)),
             present_queued_micros: u64::try_from(times.queued.as_micros()).unwrap_or(u64::MAX),
         };
+        self.solids = solids;
         if !self.retained.bounded() {
             self.retained.clear();
         }

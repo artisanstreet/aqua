@@ -1,0 +1,7 @@
+
+running 1 test
+Warp constant_buffer_bytes=65808
+HighPerformance constant_buffer_bytes=65808
+test constant_ranges_wrap_and_reset_without_changing_pixels ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 20.56s

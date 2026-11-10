@@ -5,6 +5,7 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Once};
 use std::time::Duration;
+use std::time::Instant as WallInstant;
 
 use aqua_core::{Oklch, Rect};
 #[cfg(not(feature = "d3d12"))]
@@ -120,9 +121,22 @@ fn stage_nth(label: &str, counter: &std::sync::atomic::AtomicU32, limit: u32) {
     }
 }
 
+fn window_options() -> WindowOptions {
+    let options = WindowOptions::from_env();
+    #[cfg(not(feature = "d3d12"))]
+    let options = match std::env::var_os("AQUA_D3D11_PREVENT_THREADING") {
+        None => WindowOptions {
+            device: options.device.with_prevent_internal_threading(true),
+            ..options
+        },
+        Some(_) => options,
+    };
+    options
+}
+
 pub fn prewarm() {
     startup_mark("prewarm_start");
-    WindowBackend::begin_early(WindowOptions::from_env(), persist::load_pipeline_cache);
+    WindowBackend::begin_early(window_options(), persist::load_pipeline_cache);
 }
 
 fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
@@ -139,7 +153,7 @@ fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
         Some(backend) => backend,
         None => {
             let cache = persist::load_pipeline_cache();
-            WindowBackend::with_pipeline_cache(WindowOptions::from_env(), cache.as_deref())
+            WindowBackend::with_pipeline_cache(window_options(), cache.as_deref())
                 .map_err(|e| e.to_string())?
         }
     };
@@ -285,8 +299,12 @@ impl WindowHandle {
                 .map(|pass| format!("{}={:.3}", pass.label, pass.duration.as_secs_f64() * 1000.0))
                 .collect();
             let phases = backend.phases();
+            let api = match cfg!(feature = "d3d12") {
+                true => "d3d12",
+                false => "d3d11",
+            };
             format!(
-                "d3d12 gpu_ms={:.3} passes_ms=[{}] slot_wait_us={} reserve_us={} resize_us={} transients_recreated={} late_pso={:?} window={:?}",
+                "{api} gpu_ms={:.3} passes_ms=[{}] slot_wait_us={} reserve_us={} resize_us={} transients_recreated={} late_pso={:?} window={:?}",
                 backend
                     .gpu_frame_time()
                     .map_or(0.0, |time| time.as_secs_f64() * 1000.0),
@@ -357,6 +375,24 @@ impl WindowHandle {
     fn settle_surfaces(&mut self) {
         if let Err(error) = self.hub.backend.borrow_mut().settle_surfaces() {
             eprintln!("aqua: swapchain settle failed: {error}");
+        }
+    }
+
+    fn settle_surface(&mut self, surface: SurfaceId) -> bool {
+        #[cfg(not(feature = "d3d12"))]
+        {
+            match self.hub.backend.borrow_mut().settle_surface(surface) {
+                Ok(changed) => changed,
+                Err(error) => {
+                    eprintln!("aqua: swapchain settle failed: {error}");
+                    true
+                }
+            }
+        }
+        #[cfg(feature = "d3d12")]
+        {
+            let _ = surface;
+            false
         }
     }
 
@@ -534,6 +570,8 @@ struct WindowTarget {
     composition: Option<CompositionSink>,
     delivered: Option<u32>,
     announced: bool,
+    viewport: Option<(aqua_core::Size, f32)>,
+    settle_at: Option<WallInstant>,
 }
 
 impl WindowTarget {
@@ -572,6 +610,16 @@ impl FrameTarget for WindowTarget {
             startup_mark("frame_present_begin");
         }
         let feedback = self.frames.present(side, frame);
+        if !cfg!(feature = "d3d12")
+            && self.composition.is_none()
+            && self.viewport != side.viewport()
+            && feedback
+                .iter()
+                .any(|item| matches!(item, Feedback::Presented(_)))
+        {
+            self.viewport = side.viewport();
+            self.settle_at = Some(WallInstant::now() + Duration::from_millis(500));
+        }
         if crate::mem_probe::memory_report_enabled() {
             static PRESENTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let count = PRESENTS.fetch_add(1, Ordering::Relaxed) + 1;
@@ -603,6 +651,16 @@ impl FrameTarget for WindowTarget {
 
     fn startup_step(&mut self) {
         self.frames.backend().startup_step();
+    }
+
+    fn maintenance_in(&self) -> Option<Duration> {
+        self.settle_at
+            .map(|at| at.saturating_duration_since(WallInstant::now()))
+    }
+
+    fn maintenance(&mut self) -> bool {
+        self.settle_at = None;
+        self.frames.backend_mut().settle_surface(self.surface)
     }
 
     fn animation_interval(&self, fallback: Duration) -> Duration {
@@ -693,6 +751,8 @@ pub fn factory(
                 composition: transparent.then_some(composition),
                 delivered: None,
                 announced: false,
+                viewport: None,
+                settle_at: None,
             };
             target.deliver_composition();
             Ok(Box::new(target) as Box<dyn FrameTarget>)

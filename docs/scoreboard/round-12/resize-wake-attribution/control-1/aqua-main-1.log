@@ -1,0 +1,35 @@
+probe-launch unix_ms=1794025198030 pid=12988
+probe-startup window_ms=60 first_content_ms=580 nondominant=0.165 rich_content_ms=580
+probe-open thread=bench-large unix_ms=1794025198214 since_launch_ms=184 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=2
+probe-cpu name=boot unix_ms=1794025213762 cpu_ms=281 user_ms=219 private_mb=107.8 working_set_mb=123.7 peak_working_set_mb=126.3 threads=32 handles=1056
+probe-gpumem name=boot dedicated_mb=35.4
+probe-cpu name=idle0 unix_ms=1794025216796 cpu_ms=281 user_ms=219 private_mb=107.8 working_set_mb=123.7 peak_working_set_mb=126.3 threads=32 handles=1056
+probe-wake-thread name=idle second=11 tid=24752 created_100ns=134384987982237356 ctx_delta=1 thread='' module=ntdll.dll start_address=0x7ffc407c4990
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=0.03 max=1 top_threads=24752=0(),23336=0(),5628=0(),23872=0() attempt=1
+probe-ctxseries name=idle start_unix_ms=1794025216967 per_second=0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-thread name=idle_threads tid=24056 thread='' started_ms=170 module=combase.dll start_rva=0x49f4921e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=24752 thread='' started_ms=170 module=ntdll.dll start_rva=0x4a0c94990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=2 total=27
+probe-cpu name=idle1 unix_ms=1794025262361 cpu_ms=281 user_ms=219 private_mb=107.6 working_set_mb=123.6 peak_working_set_mb=126.3 threads=27 handles=1048
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.065 p90_ms=0.108 p99_ms=0.235 max_ms=1.16 mean_ms=0.077 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=scroll0 unix_ms=1794025268108 cpu_ms=281 user_ms=219 private_mb=107.6 working_set_mb=123.6 peak_working_set_mb=126.3 threads=27 handles=1048
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.143 p90_ms=0.256 p99_ms=0.377 max_ms=0.41 mean_ms=0.147 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.2/0,0.2/0,0.1/0,0.1/0,0.1/0,0.2/0
+probe-cpu name=scroll1 unix_ms=1794025284413 cpu_ms=766 user_ms=625 private_mb=111.2 working_set_mb=125.6 peak_working_set_mb=126.3 threads=27 handles=1048
+probe-changed name=pre pixels=280593 total=2135250 nondominant=0.203
+probe-cpu name=settle unix_ms=1794025288657 cpu_ms=766 user_ms=625 private_mb=111.2 working_set_mb=125.6 peak_working_set_mb=126.3 threads=27 handles=1048
+probe-gpumem name=settle dedicated_mb=46.2
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=264.288 p90_ms=271.129 p99_ms=273.233 max_ms=273.233 mean_ms=264.411 over4_ms=40 over8_ms=40 over16_ms=40 over50_ms=40 grab_p50_ms=264
+probe-latency name=resize_setpos kind=resize samples=120 timeouts=0 p50_ms=1.341 p90_ms=1.809 p99_ms=2.108 max_ms=2.342 mean_ms=1.378 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=1.506 p90_ms=1.978 p99_ms=2.246 max_ms=2.521 mean_ms=1.54 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0
+probe-cpu name=rs0 unix_ms=1794025320499 cpu_ms=1453 user_ms=1250 private_mb=129.5 working_set_mb=130.3 peak_working_set_mb=139.5 threads=29 handles=1050
+probe-wake-thread name=after_resize second=1 tid=6284 created_100ns=134384987980538476 ctx_delta=2 thread='main' module=aquarunf3c4f453.exe start_address=0x7ff79fb31440
+probe-wakes name=after_resize seconds=30 context_switches_per_sec_avg=0.07 max=2 top_threads=6284=0.1(main),23964=0(),17288=0(),23872=0() attempt=1
+probe-ctxseries name=after_resize start_unix_ms=1794025320518 per_second=2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-cpu name=rs1 unix_ms=1794025350859 cpu_ms=1453 user_ms=1250 private_mb=129.3 working_set_mb=130.3 peak_working_set_mb=139.5 threads=24 handles=1040
+probe-threads-done name=after_resize_threads seconds=15 active=0 total=24
+probe-load name=end_load seconds=3 system_cpu_pct=1.8
+pid=12988 dpi=120 working_set_mb=130 private_mb=129
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---

@@ -1,0 +1,63 @@
+{
+  "purpose": "Attribution of post-scroll GPU memory on the combined layout/window-memory snapshot. Not a performance comparison or scoreboard.",
+  "runtime": "AQUA_LEDGER=1, normal profile and memory-report modes off; same fixture, 600 wheel inputs.",
+  "records": [
+    {
+      "sampling": "present-samples",
+      "run": 1,
+      "gpu_mib": {
+        "boot": "35.4",
+        "settle": "53.7"
+      },
+      "final_sample_ledger": "aqua-ledger present-100 dxgi_usage_mib=48.31 ledger live 23.049 MiB: swapchain_buffer[Swapchain] live 2x16.291 peak 2x18.750 created 8; persistent_rgba8_page[Texture] live 5x4.626 peak 5x4.626 created 5; persistent_other_page[Texture] live 1x1.000 peak 1x1.000 created 1; transient_texture[TransientTexture] live 24x0.630 peak 24x0.630 created 40; instance_buffer[DynamicBuffer] live 1x0.250 peak 2x0.312 created 2; persistent_rgba8_small[Texture] live 1x0.250 peak 1x0.250 created 1; timestamp_queries[Query] live 1x0.002 peak 1x0.002 created 1; constant_buffer[DynamicBuffer] live 3x0.000 peak 3x0.000 created 3; shader_program[Shader] live 9x0.000 peak 9x0.000 created 9",
+      "final_sample_persistent": "aqua-persistent present-100 Some(PersistentStats { textures: 7, resident_bytes: 6161776, staging_bytes: 0, uploaded_bytes: 5714948, pooled_textures: 0, pooled_bytes: 0, reused: 0 })",
+      "foreground_unchanged": true
+    },
+    {
+      "sampling": "present-samples",
+      "run": 2,
+      "gpu_mib": {
+        "boot": "35.4",
+        "settle": "50.9"
+      },
+      "final_sample_ledger": "aqua-ledger present-100 dxgi_usage_mib=48.31 ledger live 23.049 MiB: swapchain_buffer[Swapchain] live 2x16.291 peak 2x18.750 created 8; persistent_rgba8_page[Texture] live 5x4.626 peak 5x4.626 created 5; persistent_other_page[Texture] live 1x1.000 peak 1x1.000 created 1; transient_texture[TransientTexture] live 24x0.630 peak 24x0.630 created 40; instance_buffer[DynamicBuffer] live 1x0.250 peak 2x0.312 created 2; persistent_other_small[Texture] live 0x0.000 peak 1x0.250 created 1; persistent_rgba8_small[Texture] live 1x0.250 peak 1x0.250 created 1; timestamp_queries[Query] live 1x0.002 peak 1x0.002 created 1; constant_buffer[DynamicBuffer] live 3x0.000 peak 3x0.000 created 3; shader_program[Shader] live 9x0.000 peak 9x0.000 created 9",
+      "final_sample_persistent": "aqua-persistent present-100 Some(PersistentStats { textures: 7, resident_bytes: 6161776, staging_bytes: 0, uploaded_bytes: 5927940, pooled_textures: 0, pooled_bytes: 0, reused: 0 })",
+      "foreground_unchanged": true
+    },
+    {
+      "sampling": "settled-samples",
+      "run": 1,
+      "gpu_mib": {
+        "boot": "35.4",
+        "settle": "48.9"
+      },
+      "final_sample_ledger": "aqua-ledger settled dxgi_usage_mib=46.31 ledger live 23.042 MiB: swapchain_buffer[Swapchain] live 2x16.291 peak 2x18.750 created 8; persistent_rgba8_page[Texture] live 5x4.626 peak 5x4.626 created 5; persistent_other_page[Texture] live 1x1.000 peak 1x1.000 created 1; transient_texture[TransientTexture] live 24x0.623 peak 25x0.630 created 41; instance_buffer[DynamicBuffer] live 1x0.250 peak 2x0.312 created 2; persistent_rgba8_small[Texture] live 1x0.250 peak 1x0.250 created 1; timestamp_queries[Query] live 1x0.002 peak 1x0.002 created 1; constant_buffer[DynamicBuffer] live 3x0.000 peak 3x0.000 created 3; shader_program[Shader] live 9x0.000 peak 9x0.000 created 9",
+      "final_sample_persistent": "aqua-persistent settled Some(PersistentStats { textures: 7, resident_bytes: 6161776, staging_bytes: 0, uploaded_bytes: 5698564, pooled_textures: 0, pooled_bytes: 0, reused: 0 })",
+      "foreground_unchanged": true
+    },
+    {
+      "sampling": "settled-samples",
+      "run": 2,
+      "gpu_mib": {
+        "boot": "35.4",
+        "settle": "48.7"
+      },
+      "final_sample_ledger": "aqua-ledger settled dxgi_usage_mib=46.06 ledger live 23.049 MiB: swapchain_buffer[Swapchain] live 2x16.291 peak 2x18.750 created 8; persistent_rgba8_page[Texture] live 5x4.626 peak 5x4.626 created 5; persistent_other_page[Texture] live 1x1.000 peak 1x1.000 created 1; transient_texture[TransientTexture] live 24x0.630 peak 25x0.630 created 42; instance_buffer[DynamicBuffer] live 1x0.250 peak 2x0.312 created 2; persistent_other_small[Texture] live 0x0.000 peak 1x0.250 created 1; persistent_rgba8_small[Texture] live 1x0.250 peak 1x0.250 created 1; timestamp_queries[Query] live 1x0.002 peak 1x0.002 created 1; constant_buffer[DynamicBuffer] live 3x0.000 peak 3x0.000 created 3; shader_program[Shader] live 9x0.000 peak 9x0.000 created 9",
+      "final_sample_persistent": "aqua-persistent settled Some(PersistentStats { textures: 7, resident_bytes: 6161776, staging_bytes: 0, uploaded_bytes: 5927940, pooled_textures: 0, pooled_bytes: 0, reused: 0 })",
+      "foreground_unchanged": true
+    }
+  ],
+  "observations": [
+    "All final sampled persistent sets contain seven live textures with 6,161,776 resident bytes and zero pooled bytes.",
+    "Present-only sampling stops at present 100 and does not establish the final idle state.",
+    "Settled sampling confirms zero retired persistent-pool bytes after scrolling. The explicit ledger is approximately 23.0 MiB; process GPU meters remain substantially higher.",
+    "Persistent RGBA8 page creation stays at five; the older snapshot\u2019s persistent page churn is not reproduced here.",
+    "A constant-buffer upload prototype is being tested; these counters do not establish its cause or benefit."
+  ],
+  "limitations": [
+    "Instrumentation allocates, queries DXGI and adds maintenance wakes, so it can change timing and driver allocation behavior.",
+    "The two sampling variants are grouped diagnostics and cannot establish a before/after improvement.",
+    "DXGI sampled usage and the external dedicated-GPU counter are taken at different times and cover different accounting details.",
+    "Original shared-checkout git rows in harness manifests do not identify the measured snapshot; source-manifest.json and instrumentation.json do."
+  ]
+}

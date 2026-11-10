@@ -58,6 +58,53 @@ fn measure(work: impl FnOnce()) -> Cost {
     }
 }
 
+#[test]
+fn cached_path_lookup_allocation_stays_bounded_as_geometry_grows() {
+    use aqua::render::vector::VectorCache;
+    use aqua_core::vector::{FillRule, GpuiPath, GpuiPathStyle, PathCommand, VectorSource};
+    use aqua_core::{GpuiBackground, GpuiHsla, Point, Transform2D};
+
+    let path = GpuiPath {
+        commands_local: std::iter::once(PathCommand::Move(Point::new(0.0, 0.0)))
+            .chain((0..10_000).map(|_| PathCommand::Cubic {
+                first: Point::new(10.0, 0.0),
+                second: Point::new(10.0, 10.0),
+                to: Point::new(0.0, 0.0),
+            }))
+            .chain(std::iter::once(PathCommand::Close))
+            .collect(),
+        origin_window_logical: Point::new(3.25, 7.5),
+        element_transform: Transform2D::IDENTITY,
+        style: GpuiPathStyle::Fill {
+            rule: FillRule::NonZero,
+        },
+        background: GpuiBackground::Solid(GpuiHsla {
+            h: 0.0,
+            s: 1.0,
+            l: 0.5,
+            a: 0.75,
+        }),
+    };
+    let mut cache = VectorCache::default();
+    let first = cache.path(&path, Transform2D::IDENTITY).unwrap();
+    let mut repeated = None;
+    let cost = measure(|| repeated = cache.path(&path, Transform2D::IDENTITY));
+    let repeated = repeated.unwrap();
+    assert_eq!(first.placement, repeated.placement);
+    assert_eq!(
+        (first.width, first.height),
+        (repeated.width, repeated.height)
+    );
+    match (&first.source, &repeated.source) {
+        (VectorSource::Drawing(first), VectorSource::Drawing(repeated)) => {
+            assert!(std::sync::Arc::ptr_eq(first, repeated));
+        }
+        _ => panic!("path cache returns drawing sources"),
+    }
+    eprintln!("cached path lookup: {cost:?}");
+    assert!(cost.bytes < 2048, "cached path lookup allocated {cost:?}");
+}
+
 fn percentile(sorted: &[f64], fraction: f64) -> f64 {
     let index = ((sorted.len() as f64 - 1.0) * fraction).round() as usize;
     sorted[index]

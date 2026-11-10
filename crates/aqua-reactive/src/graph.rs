@@ -337,12 +337,6 @@ impl Inner {
         self.ranks_dirty = false;
     }
 
-    /// Fill `out` (cleared first) with the deterministic propagation order
-    /// for the live transitive dependents of `start`, as dense slots in rank
-    /// order: stamp the dirty subgraph with the version-stamped dense array,
-    /// then filter the cached global order. No hashing, no per-write sort,
-    /// no per-write Kahn. Pair with [`reclaim_order`](Self::reclaim_order)
-    /// to reuse `out`'s capacity across writes.
     pub fn topo_into(&mut self, start: NodeId, out: &mut Vec<Slot>) {
         out.clear();
         if self.ranks_dirty {
@@ -351,11 +345,19 @@ impl Inner {
         let Some(&root) = self.id_to_slot.get(&start) else {
             return;
         };
-        if !self.handle_live(start, root) {
-            return;
+        self.stamp_cur = self.stamp_cur.wrapping_add(1);
+        if self.stamp_cur == 0 {
+            self.stamps.fill(0);
+            self.stamp_cur = 1;
         }
-        self.stamp_cur += 1;
         let mark = self.stamp_cur;
+        let sorting_work = |nodes: usize| nodes.saturating_mul(nodes.max(1).ilog2() as usize + 1);
+        let scan_order = sorting_work(
+            self.records[root as usize]
+                .dependents
+                .len()
+                .saturating_add(1),
+        ) >= self.order.len();
         let Self {
             records,
             stamps,
@@ -365,22 +367,28 @@ impl Inner {
         } = self;
         stack.clear();
         stack.push(root);
-        while let Some(s) = stack.pop() {
-            if stamps[s as usize] == mark {
+        while let Some(slot) = stack.pop() {
+            if stamps[slot as usize] == mark || !records[slot as usize].occupied {
                 continue;
             }
-            if !records[s as usize].occupied {
-                continue;
+            stamps[slot as usize] = mark;
+            if !scan_order {
+                out.push(slot);
             }
-            stamps[s as usize] = mark;
-            stack.extend(records[s as usize].dependents.iter().copied());
+            stack.extend(records[slot as usize].dependents.iter().copied());
         }
-        out.extend(
-            order
-                .iter()
-                .copied()
-                .filter(|s| stamps[*s as usize] == mark),
-        );
+        match scan_order || sorting_work(out.len()) >= order.len() {
+            true => {
+                out.clear();
+                out.extend(
+                    order
+                        .iter()
+                        .copied()
+                        .filter(|slot| stamps[*slot as usize] == mark),
+                );
+            }
+            false => out.sort_unstable_by_key(|slot| (records[*slot as usize].rank, *slot)),
+        }
     }
 
     /// Park a used order buffer for reuse by the next write.

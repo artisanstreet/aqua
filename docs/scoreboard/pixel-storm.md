@@ -67,3 +67,19 @@ Profiled at 640x400 animated (`AQUA_STATS_OVERRIDE=profile AQUA_PROFILE=1`, 256,
 | render | present | under 1 |
 
 About 85% of the frame is the app thread's `build` phase, which diffs the new element tree against the retained one and patches every scene item. Building the elements, layout and the whole GPU side together are under 20%. Because the next frame starts only after the previous present, the app-thread and render-thread costs add up rather than overlap.
+
+## Sprint continuation: scopes only for reactive bindings (2026-11-06)
+
+Based on `5f4ec00`, measured from the isolated `perf/reconcile` worktree. Nodes with only imperative bindings or no bindings now skip child reactive scope creation and the per-node binding-state entry. Switching from a reactive binding to a plain binding still disposes the previous subscription; adding a reactive binding creates a fresh owned scope.
+
+Release Windows `pixel_storm --size 320x200 --static`, same driver as above, stats disabled, 5 s boot and 5 s observation: private memory was 535.8 MiB before and 512.7 MiB after; peak working set was 490.3 and 467.2 MiB. Dedicated GPU memory stayed 48.7 MiB, settled process CPU did not advance, and neither run took foreground. Animated runs (8 s boot, 21 s observation) had comparable second-window frame medians, 266.68 and 264.78 ms; this change establishes a memory improvement, not a frame-time improvement. These are individual A/B runs on a shared machine, not a new official Editor scoreboard.
+
+Validation: all 317 `aqua-ui` tests passed on Linux, with one documentation example ignored. New behavioral tests cover plain-node scope counts across tree churn and repeated plain/reactive transitions without stale subscriptions. The Windows release pixel-storm example built and ran for both versions.
+
+## Sprint continuation: reuse lowered child descriptors (2026-11-06)
+
+A retained single-root `View::set_content` refresh previously lowered the entire element tree for validation, then lowered all children again in `Element::refresh_mounted`. The refresh now consumes the already validated child descriptors. Subtree-only refreshes continue to lower their children with the inherited typography chain, and kind/key changes retain the existing remount path.
+
+Windows release `pixel_storm --size 640x400`, stats disabled, 8 s boot and 21 s observation per run, interleaved original/new/original/new: second-window frame medians were 1285.67 / 927.77 / 1313.02 / 940.42 ms. The median of the two runs improved from 1299.35 to 934.10 ms (28.1%). The new binary includes the preceding reactive-scope change; these results compare both changes against `5f4ec00`. End-of-observation private memory was 2761.6 / 2430.1 / 2798.3 / 2350.7 MiB; animated allocation churn makes those point samples noisy. GPU dedicated memory stayed 147.2 MiB in every run, and no run took foreground. The machine was shared, so these are A/B stress measurements, not an official Editor scoreboard.
+
+Validation: all 317 `aqua-ui` tests passed on Linux (one documentation example ignored), including root refresh/remount, typography, editable-state preservation, keyed reconciliation, collection realization, and structural fuzzing. `cargo clippy -p aqua-ui --lib -- -D warnings` passed. Windows release pixel-storm builds and runs passed.

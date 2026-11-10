@@ -1,0 +1,10 @@
+& : The term 
+'\\wsl.localhost\NixOS\home\sander\projects\artisanstreet\aqua-storm-budget\target\storm-budget\prototype.exe' is not 
+recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if 
+a path was included, verify that the path is correct and try again.
+At line:1 char:37
++ ... 280x800"; & "\\wsl.localhost\NixOS\home\sander\projects\artisanstreet ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (\\wsl.localhost...t\prototype.exe:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 

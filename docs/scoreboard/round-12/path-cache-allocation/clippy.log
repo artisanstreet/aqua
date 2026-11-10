@@ -1,0 +1,154 @@
+build slot 1
+warning: Git tree '/home/sander/projects/artisanstreet/editor' is dirty
+    Checking stable_deref_trait v1.2.1
+    Checking bitflags v2.13.2
+    Checking smallvec v1.16.4
+    Checking writeable v0.6.4
+    Checking simd-adler32 v0.3.10
+    Checking bytemuck v1.25.2
+    Checking zerofrom v0.1.8
+    Checking yoke v0.8.4
+    Checking adler2 v2.0.1
+    Checking windows-link v0.2.1
+    Checking litemap v0.8.3
+    Checking aqua-core v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-core)
+    Checking cfg-if v1.0.5
+    Checking miniz_oxide v0.9.1
+    Checking crc32fast v1.5.3
+    Checking utf_types v1.0.0
+    Checking zerovec v0.11.9
+    Checking zerotrie v0.2.5
+    Checking log v0.4.34
+    Checking utf8_iter v1.1.0
+    Checking miniz_oxide v0.8.9
+    Checking fdeflate v0.3.7
+    Checking flate2 v1.1.10
+    Checking arrayvec v0.7.8
+    Checking aqua-graph v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-graph)
+    Checking aqua-motion v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-motion)
+    Checking weezl v0.1.12
+    Checking byteorder-lite v0.1.0
+    Checking png v0.18.1
+    Checking color_quant v1.1.0
+    Checking quick-error v2.0.1
+    Checking zune-core v0.5.3
+    Checking float-cmp v0.9.0
+    Checking image-webp v0.2.4
+    Checking strict-num v0.1.1
+    Checking tinystr v0.8.5
+    Checking potential_utf v0.1.6
+    Checking zune-jpeg v0.5.15
+    Checking icu_collections v2.4.0
+    Checking icu_locale_core v2.4.0
+    Checking aqua-protocol v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-protocol)
+    Checking gif v0.14.2
+    Checking num-traits v0.2.19
+    Checking polycool v0.4.0
+    Checking font-types v0.12.7
+    Checking windows-result v0.4.1
+    Checking windows-strings v0.5.1
+    Checking memchr v2.8.3
+    Checking arrayref v0.3.9
+    Checking pxfm v0.1.30
+    Checking once_cell v1.21.4
+    Checking tiny-skia-path v0.12.0
+    Checking kurbo v0.13.1
+    Checking siphasher v1.0.4
+    Checking icu_provider v2.4.0
+    Checking windows-core v0.62.2
+    Checking roxmltree v0.21.2
+    Checking simplecss v0.2.2
+    Checking imagesize v0.15.0
+    Checking pico-args v0.5.0
+    Checking data-url v0.3.2
+    Checking tiny-skia v0.12.0
+    Checking icu_locale_fallback_data v2.4.0
+    Checking read-fonts v0.43.3
+    Checking rgb v0.8.53
+    Checking icu_locale_fallback v2.4.0
+    Checking svgtypes v0.16.1
+    Checking icu_segmenter_data v2.4.0
+    Checking read-fonts v0.41.0
+    Checking windows-threading v0.2.1
+    Checking usvg v0.48.1
+    Checking memmap2 v0.9.12
+    Checking windows-future v0.3.2
+    Checking icu_segmenter v2.4.0
+    Checking windows-collections v0.3.2
+    Checking resvg v0.48.1
+    Checking moxcms v0.8.1
+    Checking windows-numerics v0.3.1
+    Checking unicode-script v0.5.8
+    Checking unicode-bidi v0.3.18
+    Checking zeno v0.3.3
+    Checking unicode-segmentation v1.13.3
+    Checking windows v0.62.2
+    Checking icu_normalizer_data v2.4.0
+    Checking icu_properties_data v2.4.0
+    Checking taffy v0.15.1 (/home/sander/projects/artisanstreet/aqua-vector-cache/vendor/taffy)
+    Checking icu_properties v2.4.0
+    Checking icu_normalizer v2.4.0
+    Checking uuid v1.29.0
+    Checking foldhash v0.2.0
+    Checking hashbrown v0.17.1
+    Checking accesskit v0.25.1
+    Checking idna_adapter v1.2.2
+    Checking image v0.25.10
+    Checking windows-sys v0.61.2
+    Checking percent-encoding v2.3.2
+    Checking error-code v3.4.0
+    Checking aqua-reactive v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-reactive)
+    Checking raw-window-handle v0.6.2
+   Compiling aqua-shaders v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-shaders)
+    Checking harfrust v0.12.0
+    Checking skrifa v0.46.2
+    Checking aqua-media v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-media)
+    Checking clipboard-win v5.4.3
+    Checking form_urlencoded v1.2.2
+    Checking accesskit_consumer v0.39.1
+    Checking idna v1.1.0
+    Checking aqua-scene v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-scene)
+warning: linker stderr: rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-barrier.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-clock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-cond.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-misc.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-mutex.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-nanosleep.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-rwlock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-sem.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-spinlock.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-sched.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'libwinpthread_la-thread.o' is neither ET_REL nor LLVM bitcode
+         rust-lld: /nix/store/zj7qhm5rdjqcjxgmn72vc219l7x3sa4b-mingw_w64-pthreads-x86_64-w64-mingw32-14.0.0/lib/libpthread.a: archive member 'version.o' is neither ET_REL nor LLVM bitcode
+  |
+  = note: `#[warn(linker_messages)]` on by default
+  = note: the `linker_messages` lint ignores `-D warnings`
+
+warning: `aqua-shaders` (build script) generated 1 warning
+    Checking static_assertions v1.1.0
+    Checking url v2.5.8
+    Checking arboard v3.7.0
+    Checking rfd v0.17.2
+    Checking windows-registry v0.6.1
+    Checking aqua-fonts-system v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-fonts-system)
+    Checking xmlwriter v0.1.0
+    Checking aqua-kernels v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-kernels)
+    Checking dunce v1.0.5
+    Checking zmij v1.0.23
+    Checking serde_core v1.0.229
+    Checking aqua-gpu-ref v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-gpu-ref)
+    Checking itoa v1.0.18
+    Checking aqua-text v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-text)
+    Checking serde_json v1.0.154
+    Checking aqua-style v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-style)
+    Checking aqua-layout v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-layout)
+    Checking aqua-ui v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-ui)
+    Checking aqua-runtime v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-runtime)
+    Checking aqua-transport v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-transport)
+    Checking accesskit_windows v0.35.1
+    Checking aqua-shell-win32 v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-shell-win32)
+    Checking aqua-gpu-d3d11 v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-gpu-d3d11)
+    Checking aqua-ime-tsf v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-ime-tsf)
+    Checking aqua-a11y-uia v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua-a11y-uia)
+    Checking aqua v0.1.0 (/home/sander/projects/artisanstreet/aqua-vector-cache/crates/aqua)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 18.29s

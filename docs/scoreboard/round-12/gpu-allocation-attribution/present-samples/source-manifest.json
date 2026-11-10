@@ -1,0 +1,52 @@
+{
+  "description": "Temporary stats-off allocation attribution build. Adds AQUA_LEDGER present sampling at 1..8 and every 100 presents, including existing DXGI ledger and persistent-pool counters. Not a production candidate or scoreboard. Sampling allocates and queries DXGI, so it can perturb timing and allocator behavior.",
+  "source_digest_method": "sorted relative POSIX path, NUL, file bytes, NUL; extensions .rs .toml .lock .hlsl .wgsl",
+  "aqua_source": {
+    "sha256": "2af7273103074a7b293ecae5e38a6d6809c2c015783f42684596bd5069fcc492",
+    "files": 867
+  },
+  "editor_source": {
+    "sha256": "3d9b9f679b64d5871c1c337a1be71b1f9a77e29334f70b8350718072b5647e1e",
+    "files": 1056
+  },
+  "aqua_base_commit": "5f4ec00",
+  "applied_commits": [
+    "36cd19a",
+    "4cb0559",
+    "4fff52e",
+    "9077af9",
+    "670b4c1",
+    "86a25f7",
+    "619ffab",
+    "f75e709",
+    "b9e3c65",
+    "6314c9c"
+  ],
+  "editor_patch_sha256": "88f90289e0e2529630eed4281f231bd93a792234dcb882b8268cc676d127d667",
+  "editor_pr_base": "6606f059",
+  "previous_aqua_source": {
+    "sha256": "fefe9850da0aaa2ec4ffe641f547fbc59fc8d3f1a32e73f69083e181042e1443",
+    "files": 867
+  },
+  "binary": "/home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-live-ledger.exe",
+  "binary_sha256": "bb0671d6f8d984af94d8a03e9197d2c54b07cd91d2ee1374f99c5b9235b56630",
+  "runtime_environment": {
+    "AQUA_D3D11_PREVENT_THREADING": "unset; new native-host default enables it",
+    "stats": "off",
+    "AQUA_LEDGER": "1",
+    "AQUA_MEMORY_REPORT": "unset"
+  },
+  "validation": {
+    "combined_checkout": "4ef5231",
+    "windows_scheduler_tests": 14,
+    "windows_gpu_conformance_tests": 6,
+    "library_clippy": "PASS -D warnings",
+    "d3d12_host_check": "PASS",
+    "windows_text_tests": 211,
+    "windows_text_suites": 33,
+    "windows_text_ignored": 3,
+    "layout_library_and_tests_clippy": "PASS -D warnings"
+  },
+  "instrumentation_source": "gpu-with-live-ledger.rs",
+  "instrumentation_patch": "instrumentation.json"
+}

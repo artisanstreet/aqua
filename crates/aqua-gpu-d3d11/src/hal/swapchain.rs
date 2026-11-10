@@ -18,6 +18,7 @@ const MAX_SLACK: u32 = 384;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresentMode {
     Vsync,
+    Latest,
     HalfVsync,
     Immediate,
 }
@@ -300,6 +301,7 @@ impl Swapchain {
             (PresentMode::Immediate, true) => (0, DXGI_PRESENT_ALLOW_TEARING),
             (PresentMode::Immediate, false) => (0, DXGI_PRESENT(0)),
             (PresentMode::Vsync, _) => (1, DXGI_PRESENT(0)),
+            (PresentMode::Latest, _) => (0, DXGI_PRESENT(0)),
             (PresentMode::HalfVsync, _) => (2, DXGI_PRESENT(0)),
         };
         let parameters = DXGI_PRESENT_PARAMETERS {

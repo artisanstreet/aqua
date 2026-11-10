@@ -1,0 +1,6 @@
+aqua: clipboard backend: System
+2026-11-07T04:35:28.922450Z  INFO tm: what="ext" ms=15.764400000000002
+2026-11-07T04:35:29.463929Z  INFO tm: what="wake" ms=4.2741999999999996
+2026-11-07T04:37:30.295348Z  INFO tm: what="fc.viewports" ms=51.0745
+2026-11-07T04:37:30.296139Z  INFO tm: what="fc.events" ms=52.7093
+2026-11-07T04:37:30.296833Z  INFO tm: what="fc" ms=53.7252

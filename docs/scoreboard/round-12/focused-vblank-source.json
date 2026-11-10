@@ -1,0 +1,22 @@
+{
+  "description": "Frozen current Aqua worktree plus PR6, PR7, PR8, PR9 timing spans and 670b4c1 monitor-vblank guard; frozen Editor snapshot. Original worktrees untouched.",
+  "source_digest_method": "sorted relative POSIX path, NUL, file bytes, NUL; extensions .rs .toml .lock .hlsl .wgsl",
+  "aqua_source": {
+    "sha256": "fdcc8dff8bff828f574250442e8766035f986d473a2aacbc1c916711d2318cfd",
+    "files": 867
+  },
+  "editor_source": {
+    "sha256": "99a9b928394849b412d9cebe06279ebdba97da0093ea506b6a039e33d8e3fcf7",
+    "files": 1056
+  },
+  "aqua_base_commit": "5f4ec00",
+  "applied_commits": [
+    "36cd19a",
+    "4cb0559",
+    "4fff52e",
+    "9077af9",
+    "670b4c1"
+  ],
+  "binary": "/home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-vblank-guard.exe",
+  "binary_sha256": "e5141b455a653c84b33effc5e86b278cb6127fd0aacf0b73496ef95e0b3e93be"
+}

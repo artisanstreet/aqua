@@ -1,4 +1,5 @@
 pub(crate) mod interaction;
+mod layout;
 
 use std::hash::Hash;
 
@@ -12,7 +13,7 @@ use crate::controls::{
     Control, SelectControl, SelectOption, SliderControl, SliderRange, TabsControl,
 };
 use crate::input::{EventPhase, InputCallback, InputKind, InputResponse, RoutedEvent, Shortcut};
-use crate::style::{Axis, LayoutStyle, Length, Paint, Style, Typography};
+use crate::style::{Axis, LayoutStyle, Length, Paint, PaintValue, Style, Typography};
 use crate::tree::{
     hash_key, ActionCallback, ActionEvent, ActionKind, BoxContent, CanvasContent,
     CanvasPaintCallback, MediaContent, NodeKind, NodeSpec, ScrollContent, TextAppearance,
@@ -220,6 +221,7 @@ pub trait StyleArg: private::Sealed {
 }
 
 impl StyleArg for Style {
+    #[inline]
     fn apply(&self, target: &mut dyn Stylable) {
         {
             let (layout, paint, typo) = target.style_parts();
@@ -270,6 +272,7 @@ impl StyleArg for Style {
 }
 
 impl StyleArg for &Style {
+    #[inline]
     fn apply(&self, target: &mut dyn Stylable) {
         (*self).apply(target);
     }
@@ -280,6 +283,7 @@ impl StyleArg for &Style {
 }
 
 impl StyleArg for LayoutStyle {
+    #[inline]
     fn apply(&self, target: &mut dyn Stylable) {
         let (layout, _, _) = target.style_parts();
         *layout = self.clone();
@@ -291,6 +295,7 @@ impl StyleArg for LayoutStyle {
 }
 
 impl StyleArg for &LayoutStyle {
+    #[inline]
     fn apply(&self, target: &mut dyn Stylable) {
         (*self).apply(target);
     }
@@ -382,10 +387,8 @@ impl TextSource for ReadSignal<String> {
     }
 }
 
-/// Mount-time binding attached to a mounted node. Applied once per node id by
-/// [`crate::binding::View`]; effects reference the [`NodeId`], never rebuilt
-/// subtrees.
 pub enum ElementBinding {
+    Install(std::rc::Rc<dyn crate::program::MountBinding>),
     Popup {
         options: crate::popup::PopupOptions,
         content: std::rc::Rc<dyn Fn() -> Element>,
@@ -421,26 +424,23 @@ pub enum ElementBinding {
     },
     Cursor(aqua_core::CursorIcon),
     Shortcut(Shortcut),
-    /// Subscribe a text source: effect pushes `UiCommand::SetText`.
+
     SubscribeText(ReadSignal<String>),
-    /// Two-way editable binding: effect pushes `SetText`; `TextChanged`
-    /// actions write back through the write handle (`try_set`, never panics).
+
     SubscribeEdit {
-        /// Read side (effect input).
         read: ReadSignal<String>,
-        /// Write side (event handler target).
+
         write: WriteSignal<String>,
     },
-    /// Register an action callback (activation, custom events).
+
     OnAction {
-        /// Which action to listen for.
         kind: ActionKind,
-        /// Data-only callback (cannot reenter the tree by signature).
+
         callback: ActionCallback,
     },
-    /// Make the node focusable (keyboard activation path).
+
     Focusable,
-    /// Register a canvas painter callback.
+
     Painter(CanvasPaintCallback),
     ContextPainter(crate::tree::ContextCanvasPaintCallback),
     ScrollStablePainter(CanvasPaintCallback),
@@ -569,8 +569,43 @@ pub struct Box {
     children: Vec<Element>,
 }
 
+struct BoxProperties {
+    control: Option<std::boxed::Box<Control>>,
+    style: std::rc::Rc<LayoutStyle>,
+    paint: PaintValue,
+    typo: Option<std::boxed::Box<TypoChain>>,
+}
+
+impl From<Box> for BoxProperties {
+    #[inline]
+    fn from(builder: Box) -> Self {
+        Self {
+            control: builder.control,
+            style: layout::intern(builder.style),
+            paint: builder.paint.into(),
+            typo: (builder.typo != TypoChain::default())
+                .then(|| std::boxed::Box::new(builder.typo)),
+        }
+    }
+}
+
+impl BoxProperties {
+    fn apply(&mut self, style: &dyn StyleArg) {
+        let mut builder = Box {
+            control: self.control.take(),
+            style: self.style.as_ref().clone(),
+            paint: std::mem::take(&mut self.paint).into(),
+            typo: self.typo.take().map(|typo| *typo).unwrap_or_default(),
+            children: Vec::new(),
+        };
+        style.apply(&mut builder);
+        *self = builder.into();
+    }
+}
+
 impl Box {
     /// Start a box builder.
+    #[inline]
     pub fn builder() -> Self {
         Self {
             control: None,
@@ -582,6 +617,7 @@ impl Box {
     }
 
     /// Alias for [`Box::builder`].
+    #[inline]
     pub fn new() -> Self {
         Self::builder()
     }
@@ -599,25 +635,21 @@ impl Box {
         self
     }
 
-    /// Append several children in call order (arrays, `Vec`s, and lazy
-    /// iterators all work). Repeated calls append; existing single-child
-    /// calls remain valid.
     pub fn children<I, E>(mut self, children: I) -> Self
     where
         I: IntoIterator<Item = E>,
         E: Into<Element>,
     {
-        for c in children {
-            self.children.push(c.into());
-        }
+        self.children.extend(children.into_iter().map(Into::into));
         self
     }
 
     /// Finish as an [`Element`].
+    #[inline]
     pub fn build(mut self) -> Element {
         let children = std::mem::take(&mut self.children);
         Element {
-            kind: ElementKind::Box(self),
+            kind: ElementKind::Box(self.into()),
             key: None,
             role: None,
             collection_semantics: None,
@@ -1098,7 +1130,7 @@ impl Media {
     pub fn build(mut self) -> Element {
         let children = std::mem::take(&mut self.children);
         Element {
-            kind: ElementKind::Media(self),
+            kind: ElementKind::Media(std::boxed::Box::new(self)),
             key: None,
             role: None,
             collection_semantics: None,
@@ -1180,7 +1212,7 @@ impl Scroll {
     pub fn build(mut self) -> Element {
         let children = std::mem::take(&mut self.children);
         Element {
-            kind: ElementKind::Scroll(self),
+            kind: ElementKind::Scroll(std::boxed::Box::new(self)),
             key: None,
             role: None,
             collection_semantics: None,
@@ -1313,7 +1345,7 @@ impl Canvas {
             bindings.push(ElementBinding::Observe(observer));
         }
         Element {
-            kind: ElementKind::Canvas(self),
+            kind: ElementKind::Canvas(std::boxed::Box::new(self)),
             key: None,
             role: None,
             collection_semantics: None,
@@ -1392,7 +1424,7 @@ impl Viewport3D {
     pub fn build(mut self) -> Element {
         let children = std::mem::take(&mut self.children);
         Element {
-            kind: ElementKind::Viewport3D(self),
+            kind: ElementKind::Viewport3D(std::boxed::Box::new(self)),
             key: None,
             role: None,
             collection_semantics: None,
@@ -1478,7 +1510,7 @@ impl Button {
             });
         }
         Element {
-            kind: ElementKind::Button(self),
+            kind: ElementKind::Button(std::boxed::Box::new(self)),
             key: None,
             role: None,
             collection_semantics: None,
@@ -1597,7 +1629,7 @@ impl Checkbox {
             Text::builder().arg(self.label.clone()).build(),
         ];
         Element {
-            kind: ElementKind::Checkbox(self),
+            kind: ElementKind::Checkbox(std::boxed::Box::new(self)),
             key: None,
             role: None,
             collection_semantics: None,
@@ -1687,7 +1719,7 @@ impl Slider {
             .fill(Oklch::WHITE)
             .build();
         Element {
-            kind: ElementKind::Slider(self),
+            kind: ElementKind::Slider(std::boxed::Box::new(self)),
             key: None,
             role: None,
             collection_semantics: None,
@@ -1798,7 +1830,7 @@ impl Dropdown {
             synth.push(Text::builder().arg(self.label.clone()).build());
         }
         Element {
-            kind: ElementKind::Dropdown(self),
+            kind: ElementKind::Dropdown(std::boxed::Box::new(self)),
             key: None,
             role: None,
             collection_semantics: None,
@@ -1901,7 +1933,7 @@ impl Tabs {
             );
         }
         Element {
-            kind: ElementKind::Tabs(self),
+            kind: ElementKind::Tabs(std::boxed::Box::new(self)),
             key: None,
             role: None,
             collection_semantics: None,
@@ -1980,7 +2012,7 @@ impl Dynamic {
             bindings.push(ElementBinding::SubscribeText(source.clone()));
         }
         Element {
-            kind: ElementKind::Dynamic(self),
+            kind: ElementKind::Dynamic(std::boxed::Box::new(self)),
             key: None,
             role: None,
             collection_semantics: None,
@@ -2054,6 +2086,7 @@ impl From<Fragment> for Element {
 macro_rules! stylable {
     ($t:ty) => {
         impl Stylable for $t {
+            #[inline]
             fn style_parts(&mut self) -> (&mut LayoutStyle, &mut Paint, &mut TypoChain) {
                 (&mut self.style, &mut self.paint, &mut self.typo)
             }
@@ -2117,7 +2150,7 @@ pub struct Element {
     role: Option<Role>,
     /// Collection coordinates override for this node (lists/tables report
     /// totals and logical indices through core metadata; `None` = unset).
-    collection_semantics: Option<CollectionSemantics>,
+    collection_semantics: Option<std::boxed::Box<CollectionSemantics>>,
     /// Explicit children (paint order).
     children: Vec<Element>,
     /// Synthetic children generated by composite builders (checkbox
@@ -2129,6 +2162,27 @@ pub struct Element {
 }
 
 impl Element {
+    pub fn layout_boundary(self, size: aqua_core::Size) -> Self {
+        self.install(crate::program::LayoutBoundary(size))
+    }
+
+    pub fn bind<T: Clone + 'static, P: crate::program::Property<T>>(
+        mut self,
+        property: P,
+        source: ReadSignal<T>,
+    ) -> Self {
+        self.bindings.push(ElementBinding::Install(std::rc::Rc::new(
+            crate::program::Binding::new(source, property),
+        )));
+        self
+    }
+
+    pub(crate) fn install(mut self, binding: impl crate::program::MountBinding + 'static) -> Self {
+        self.bindings
+            .push(ElementBinding::Install(std::rc::Rc::new(binding)));
+        self
+    }
+
     /// Attach a stable reconciliation key (macro `key(expr)` generates this).
     pub fn with_key(mut self, key: impl Into<Key>) -> Self {
         self.key = Some(key.into());
@@ -2146,7 +2200,7 @@ impl Element {
     /// window in sync on every `compute_layout`.
     pub fn collection(desc: CollectionDescriptor) -> Self {
         Element {
-            kind: ElementKind::Collection(desc),
+            kind: ElementKind::Collection(std::boxed::Box::new(desc)),
             key: None,
             role: None,
             collection_semantics: None,
@@ -2366,11 +2420,11 @@ impl Element {
         if self.is_fragment() {
             for c in self.synth.iter_mut().chain(self.children.iter_mut()) {
                 if c.collection_semantics.is_none() {
-                    c.collection_semantics = Some(cs);
+                    c.collection_semantics = Some(std::boxed::Box::new(cs));
                 }
             }
         } else {
-            self.collection_semantics = Some(cs);
+            self.collection_semantics = Some(std::boxed::Box::new(cs));
         }
         self
     }
@@ -2393,7 +2447,7 @@ impl Element {
 
     /// This element's collection coordinates override, if any.
     pub(crate) fn collection_semantics_opt(&self) -> Option<CollectionSemantics> {
-        self.collection_semantics
+        self.collection_semantics.as_deref().copied()
     }
 
     /// Whether this element is a collection container (window-managed by the
@@ -2449,18 +2503,18 @@ impl Element {
 
     fn apply_arg(&mut self, style: &dyn StyleArg) {
         match &mut self.kind {
-            ElementKind::Box(b) => style.apply(b),
+            ElementKind::Box(b) => b.apply(style),
             ElementKind::Text(t) => style.apply(t.as_mut()),
-            ElementKind::Media(m) => style.apply(m),
-            ElementKind::Scroll(s) => style.apply(s),
-            ElementKind::Canvas(c) => style.apply(c),
-            ElementKind::Viewport3D(v) => style.apply(v),
-            ElementKind::Button(b) => style.apply(b),
-            ElementKind::Checkbox(c) => style.apply(c),
-            ElementKind::Slider(s) => style.apply(s),
-            ElementKind::Dropdown(d) => style.apply(d),
-            ElementKind::Tabs(t) => style.apply(t),
-            ElementKind::Dynamic(d) => style.apply(d),
+            ElementKind::Media(m) => style.apply(m.as_mut()),
+            ElementKind::Scroll(s) => style.apply(s.as_mut()),
+            ElementKind::Canvas(c) => style.apply(c.as_mut()),
+            ElementKind::Viewport3D(v) => style.apply(v.as_mut()),
+            ElementKind::Button(b) => style.apply(b.as_mut()),
+            ElementKind::Checkbox(c) => style.apply(c.as_mut()),
+            ElementKind::Slider(s) => style.apply(s.as_mut()),
+            ElementKind::Dropdown(d) => style.apply(d.as_mut()),
+            ElementKind::Tabs(t) => style.apply(t.as_mut()),
+            ElementKind::Dynamic(d) => style.apply(d.as_mut()),
             ElementKind::Collection(d) => {
                 // Descriptor styles are normal Style merges in call order:
                 // record the new style without disturbing earlier fields.
@@ -2478,7 +2532,7 @@ impl Element {
     /// empty for fragments, which carry no props of their own).
     pub(crate) fn typo_chain(&self) -> TypoChain {
         match &self.kind {
-            ElementKind::Box(b) => b.typo.clone(),
+            ElementKind::Box(b) => b.typo.as_deref().cloned().unwrap_or_default(),
             ElementKind::Text(t) => t.typo.clone(),
             ElementKind::Media(m) => m.typo.clone(),
             ElementKind::Scroll(s) => s.typo.clone(),
@@ -2537,7 +2591,7 @@ impl Element {
     /// This element's resolved paint (every builder carries a real one).
     pub(crate) fn resolved_paint(&self) -> Paint {
         match &self.kind {
-            ElementKind::Box(b) => b.paint.clone(),
+            ElementKind::Box(b) => b.paint.resolve(),
             ElementKind::Text(t) => t.paint.clone(),
             ElementKind::Media(m) => m.paint.clone(),
             ElementKind::Scroll(s) => s.paint.clone(),
@@ -2598,7 +2652,7 @@ impl Element {
                 c.role = role;
             }
             if c.collection_semantics.is_none() {
-                c.collection_semantics = collection_semantics;
+                c.collection_semantics = collection_semantics.clone();
             }
         }
         if key.is_some() {
@@ -2677,6 +2731,58 @@ impl Element {
         &mut self.bindings
     }
 
+    pub(crate) fn layout_identity(&self) -> Option<std::rc::Rc<LayoutStyle>> {
+        match &self.kind {
+            ElementKind::Box(properties) => Some(std::rc::Rc::clone(&properties.style)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn can_refresh_plain_boxes(&self, tree: &UiTree, id: NodeId) -> bool {
+        let ElementKind::Box(properties) = &self.kind else {
+            return false;
+        };
+        let Some(record) = tree.get(id) else {
+            return false;
+        };
+        let NodeKind::Box(current) = &record.kind else {
+            return false;
+        };
+        record.plain_bindings
+            && record.control.is_none()
+            && properties.control.is_none()
+            && self.bindings.is_empty()
+            && self.synth.is_empty()
+            && self.role.is_none()
+            && self.collection_semantics.is_none()
+            && properties.typo.is_none()
+            && record.key == self.key_hash()
+            && (record
+                .style_identity
+                .as_ref()
+                .is_some_and(|current| std::rc::Rc::ptr_eq(current, &properties.style))
+                || record.style == *properties.style)
+            && record.children.len() == self.children.len()
+            && properties.paint.is_plain()
+            && current.plain_paint()
+            && self
+                .children
+                .iter()
+                .zip(&record.children)
+                .all(|(child, id)| child.can_refresh_plain_boxes(tree, *id))
+    }
+
+    pub(crate) fn refresh_plain_boxes(&self, tree: &mut UiTree, id: NodeId) {
+        let ElementKind::Box(properties) = &self.kind else {
+            unreachable!()
+        };
+        tree.refresh_plain_box(id, properties.paint.fill(), &properties.style);
+        for (index, child) in self.children.iter().enumerate() {
+            let child_id = tree.get(id).unwrap().children[index];
+            child.refresh_plain_boxes(tree, child_id);
+        }
+    }
+
     /// Mutable flattened children (synthetic first, then explicit, splicing
     /// nested fragments). Mirrors [`Element::flat_children`] exactly —
     /// lowering and binding walks must agree.
@@ -2698,16 +2804,12 @@ impl Element {
         }
     }
 
-    /// Refresh a live mounted node in place from this element's props and
-    /// re-sync its children. `inherited` is the typography chain from the
-    /// element's ancestors. Returns `Ok(false)` when the retained kind
-    /// differs (caller remounts) or the node is gone; `Err` on lowering
-    /// failures (keyed fragment, sourceless dynamic, non-uniform corners).
     pub(crate) fn refresh_mounted(
         &self,
         tree: &mut UiTree,
         id: NodeId,
         inherited: &TypoChain,
+        children: Option<Vec<NodeSpec>>,
     ) -> Result<bool, LowerError> {
         let Some(rec) = tree.get(id) else {
             return Ok(false);
@@ -2731,18 +2833,12 @@ impl Element {
                 return Err(LowerError::InvalidTextOpacity);
             }
         }
-        // Clone the committed style up front: later arms refresh through
-        // `&mut tree`, so the shared `rec` borrow must end here (NLL).
         let rec_style = rec.style.clone();
         if let Some(style) = self.style_opt() {
             if rec.style != *style {
                 tree.set_style(id, style.clone());
             }
         }
-        // Paint refreshes through the tree seam for every kind (paint-only,
-        // no layout invalidation, no identity change). `set_paint` no-ops on
-        // equality, so unchanged styles cost nothing here. Non-uniform
-        // corners are rejected here too, so refresh fails as loudly as mount.
         let paint = self.resolved_paint();
         check_paint(&paint)?;
         tree.set_paint(id, paint);
@@ -2752,10 +2848,7 @@ impl Element {
             | ElementKind::Checkbox(_)
             | ElementKind::Slider(_)
             | ElementKind::Dropdown(_)
-            | ElementKind::Tabs(_) => {
-                // Box-lowered kinds carry paint only (structure lives in
-                // synthetic children, synced below).
-            }
+            | ElementKind::Tabs(_) => {}
             ElementKind::Text(t) => {
                 let (live_editable, live_multiline) = match tree.get(id) {
                     Some(rec) => match &rec.kind {
@@ -2765,16 +2858,10 @@ impl Element {
                     None => return Ok(false),
                 };
                 if live_editable != t.editable {
-                    // Genuine mode change: rebuild the backing store in
-                    // place (node id preserved, text + caret carried over,
-                    // undo history resets with the new backing).
                     if !Self::switch_text_backing(tree, id, t) {
                         return Ok(false);
                     }
                 } else if live_editable && live_multiline != t.multiline {
-                    // In-place line-mode switch (the editor preserves text
-                    // and caret; folding newlines going single is editor
-                    // policy, not UI policy).
                     if let Some(rec) = tree.get_mut(id) {
                         if let NodeKind::Text(ref mut tc) = rec.kind {
                             if let TextBacking::Editable(ref mut ed) = tc.backing {
@@ -2787,11 +2874,6 @@ impl Element {
                         }
                     }
                 }
-                // Uncontrolled editable: the live editor owns its content;
-                // the descriptor's `initial` is the mount-time default, not a
-                // controlled value. Preserve backing/caret/selection and
-                // apply cosmetic props only. Controlled text (effect
-                // bindings present) and static labels go through set_text.
                 let uncontrolled = t.editable
                     && !self.bindings.iter().any(|b| {
                         matches!(
@@ -2833,9 +2915,7 @@ impl Element {
                     tree.scroll_to(id, s.offset);
                 }
             }
-            ElementKind::Canvas(_) => {
-                // Painters persist in the registry; nothing to refresh.
-            }
+            ElementKind::Canvas(_) => {}
             ElementKind::Viewport3D(v) => {
                 if let Some(rec) = tree.get_mut(id) {
                     if let NodeKind::Viewport3D(ref mut cur) = rec.kind {
@@ -2845,11 +2925,6 @@ impl Element {
                 }
             }
             ElementKind::Collection(d) => {
-                // Container style/paint refresh only, in BOTH modes. The
-                // driver owns realization end to end (rows/header/spacers,
-                // window, scroll, bindings) and reconciles the snapshot, so
-                // refresh never touches children: shells are empty and
-                // managed, and re-lowering here would double-run factories.
                 if !self.children.is_empty() || !self.synth.is_empty() {
                     return Err(LowerError::CollectionChildren);
                 }
@@ -2861,15 +2936,19 @@ impl Element {
                 tree.set_paint(id, paint);
                 return Ok(true);
             }
-            ElementKind::Fragment => {
-                // Caller routes fragments to children sync, never here.
+            ElementKind::Fragment => {}
+        }
+        let child_specs = match children {
+            Some(specs) => specs,
+            None => {
+                let own = inherited.child(&self.typo_chain());
+                let mut specs = Vec::new();
+                for child in self.flat_children() {
+                    specs.extend(lower_specs_in(child, &own)?);
+                }
+                specs
             }
-        }
-        let own = inherited.child(&self.typo_chain());
-        let mut child_specs = Vec::new();
-        for c in self.flat_children() {
-            child_specs.extend(lower_specs_in(c, &own)?);
-        }
+        };
         tree.sync_children(id, child_specs);
         Ok(true)
     }
@@ -3006,22 +3085,22 @@ impl std::fmt::Debug for Element {
 
 /// Retained content of an [`Element`] (the builder structs double as props).
 enum ElementKind {
-    Box(Box),
+    Box(BoxProperties),
     Text(std::boxed::Box<Text>),
-    Media(Media),
-    Scroll(Scroll),
-    Canvas(Canvas),
-    Viewport3D(Viewport3D),
-    Button(Button),
-    Checkbox(Checkbox),
-    Slider(Slider),
-    Dropdown(Dropdown),
-    Tabs(Tabs),
-    Dynamic(Dynamic),
+    Media(std::boxed::Box<Media>),
+    Scroll(std::boxed::Box<Scroll>),
+    Canvas(std::boxed::Box<Canvas>),
+    Viewport3D(std::boxed::Box<Viewport3D>),
+    Button(std::boxed::Box<Button>),
+    Checkbox(std::boxed::Box<Checkbox>),
+    Slider(std::boxed::Box<Slider>),
+    Dropdown(std::boxed::Box<Dropdown>),
+    Tabs(std::boxed::Box<Tabs>),
+    Dynamic(std::boxed::Box<Dynamic>),
     /// Collection container: lowers to ordinary nodes (Scroll/Box); the
     /// runtime driver owns the children window. Carries no stored Element
     /// children — rows are generated from the source snapshot.
-    Collection(CollectionDescriptor),
+    Collection(std::boxed::Box<CollectionDescriptor>),
     Fragment,
 }
 
@@ -3046,10 +3125,6 @@ impl ElementKind {
     }
 }
 
-/// Splice top-level fragments into a flat element list (structural
-/// flattening — never an artificial node). A keyed fragment collapses onto
-/// its single child; any other keyed fragment is an error (the key would
-/// silently vanish). After this, node↔element pairing is always positional.
 pub(crate) fn splice_top_level(elements: Vec<Element>) -> Result<Vec<Element>, LowerError> {
     let mut out = Vec::new();
     for el in elements {
@@ -3057,41 +3132,26 @@ pub(crate) fn splice_top_level(elements: Vec<Element>) -> Result<Vec<Element>, L
     }
     Ok(out)
 }
-/// missing dynamic source cannot be represented — all fail here, loudly.
-/// Per-corner radii have a scalar-only scene seam (the emitter renders
-/// `corners.top_left`): uniform values round-trip exactly, but truly
-/// non-uniform values cannot be represented — so a `corners(...)` style with
-/// unequal radii reaching lowering is an explicit error, never a silent
-/// fallback to the uniform radius.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LowerError {
+    InvalidBinding(&'static str),
     InvalidTransform,
     InvalidContentBlur,
     InvalidTextColorMap,
     InvalidTextOpacity,
     InvalidMediaSource,
     InvalidFocusRing,
-    /// A keyed fragment flattened to other than exactly one child.
-    KeyedFragment {
-        /// Flattened child count.
-        children: usize,
-    },
-    /// `Dynamic` built without `.value(source)`.
+    KeyedFragment { children: usize },
     DynamicWithoutSource,
-    /// Per-corner radii with unequal values cannot be rendered; use uniform
-    /// `radius` (or an all-equal `corners` value).
     NonUniformCorners,
-    /// A collection element carrying explicit Element children. Collection
-    /// containers are window-managed (rows come from the source snapshot);
-    /// attaching children would silently drop them, so it fails loudly.
     CollectionChildren,
-    /// Collection descriptor or snapshot validation failed.
     Collection(CollectionError),
 }
 
 impl std::fmt::Display for LowerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            LowerError::InvalidBinding(message) => f.write_str(message),
             LowerError::InvalidTransform => write!(
                 f,
                 "subtree transform requires finite components and a nonzero determinant"
@@ -3257,15 +3317,6 @@ fn lower_collection(
     Ok(vec![root])
 }
 
-/// Convert one non-fragment element to its [`NodeSpec`]. Composite builders
-/// lower to honest retained kinds (checkbox/tab/slider structure as real
-/// boxes + texts; interaction that the tree cannot represent is a binding
-/// or a documented gap, never a fake field).
-///
-/// `inherited` is the typography chain from the element's ancestors: text
-/// nodes resolve their own explicit overrides over it. Box-lowered kinds
-/// carry their builder paint in the legacy [`BoxContent`] slot; every other
-/// kind carries it in [`NodeSpec::paint`] — no wrapper nodes either way.
 fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError> {
     let paint = el.resolved_paint();
     check_paint(&paint)?;
@@ -3294,8 +3345,8 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
     let mut spec = match &el.kind {
         ElementKind::Box(b) => {
             let mut spec = NodeSpec::new(
-                NodeKind::Box(BoxContent::new(b.paint.clone())),
-                b.style.clone(),
+                NodeKind::Box(BoxContent::new(b.paint.resolve())),
+                b.style.as_ref().clone(),
             );
             spec.control = b.control.clone();
             spec
@@ -3401,10 +3452,16 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
             unreachable!("fragments are spliced by lower_specs, never lowered directly")
         }
     };
-    // Every node carries its resolved paint: boxes through the legacy
-    // `BoxContent` slot (kept identical here), every other kind through
-    // `NodeSpec::paint` for the tree's generic emission.
+
+    for binding in &el.bindings {
+        if let ElementBinding::Install(installation) = binding {
+            installation
+                .validate(&spec.kind)
+                .map_err(LowerError::InvalidBinding)?;
+        }
+    }
     spec.paint = paint;
+    spec.collection_managed = el.bindings.iter().any(|binding| matches!(binding, ElementBinding::Install(installation) if installation.owns_children()));
     spec.key = el.key.clone().map(hash_key);
     Ok(spec)
 }
@@ -3551,7 +3608,7 @@ mod tests {
 
     fn box_paint_of(spec: &NodeSpec) -> Paint {
         match &spec.kind {
-            NodeKind::Box(b) => b.paint().clone(),
+            NodeKind::Box(b) => b.paint_ref().into_owned(),
             other => panic!("expected box, got {other:?}"),
         }
     }

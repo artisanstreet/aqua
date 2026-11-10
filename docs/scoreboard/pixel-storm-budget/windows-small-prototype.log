@@ -1,0 +1,44 @@
+
+running 2 tests
+storm-cpu bytes element=1208 spec=824 record=464 paint=504 display_item=200
+test color_refresh_preserves_identity_layout_and_updates_every_cell ... ok
+storm-cpu sample=1 grid=1280x800
+storm-cpu phase=integer_colors boxes=1024000 ms=6.822 ns_per_box=6.7
+storm-cpu phase=srgb_to_oklch boxes=1024000 ms=301.631 ns_per_box=294.6
+storm-cpu phase=oklch_to_gpu boxes=1024000 ms=190.246 ns_per_box=185.8
+storm-cpu phase=element_build boxes=1024000 ms=485.466 ns_per_box=474.1
+storm-cpu phase=lower_specs_diagnostic boxes=1024000 ms=656.686 ns_per_box=641.3
+storm-cpu phase=set_content boxes=1024000 ms=2262.466 ns_per_box=2209.4
+storm-cpu phase=drain_commands boxes=1024000 ms=844.075 ns_per_box=824.3
+storm-cpu phase=layout boxes=1024000 ms=0.000 ns_per_box=0.0
+storm-cpu phase=emit_scene boxes=1024000 ms=319.515 ns_per_box=312.0
+storm-cpu phase=direct_paint_write boxes=1024000 ms=149.038 ns_per_box=145.5
+storm-cpu phase=emit_after_direct_paint boxes=1024000 ms=315.731 ns_per_box=308.3
+storm-cpu sample=2 grid=1280x800
+storm-cpu phase=integer_colors boxes=1024000 ms=7.103 ns_per_box=6.9
+storm-cpu phase=srgb_to_oklch boxes=1024000 ms=307.096 ns_per_box=299.9
+storm-cpu phase=oklch_to_gpu boxes=1024000 ms=198.124 ns_per_box=193.5
+storm-cpu phase=element_build boxes=1024000 ms=513.455 ns_per_box=501.4
+storm-cpu phase=lower_specs_diagnostic boxes=1024000 ms=734.505 ns_per_box=717.3
+storm-cpu phase=set_content boxes=1024000 ms=2402.187 ns_per_box=2345.9
+storm-cpu phase=drain_commands boxes=1024000 ms=839.639 ns_per_box=820.0
+storm-cpu phase=layout boxes=1024000 ms=0.000 ns_per_box=0.0
+storm-cpu phase=emit_scene boxes=1024000 ms=323.930 ns_per_box=316.3
+storm-cpu phase=direct_paint_write boxes=1024000 ms=147.105 ns_per_box=143.7
+storm-cpu phase=emit_after_direct_paint boxes=1024000 ms=321.644 ns_per_box=314.1
+storm-cpu sample=3 grid=1280x800
+storm-cpu phase=integer_colors boxes=1024000 ms=6.813 ns_per_box=6.7
+storm-cpu phase=srgb_to_oklch boxes=1024000 ms=309.026 ns_per_box=301.8
+storm-cpu phase=oklch_to_gpu boxes=1024000 ms=203.858 ns_per_box=199.1
+storm-cpu phase=element_build boxes=1024000 ms=495.179 ns_per_box=483.6
+storm-cpu phase=lower_specs_diagnostic boxes=1024000 ms=745.159 ns_per_box=727.7
+storm-cpu phase=set_content boxes=1024000 ms=2345.773 ns_per_box=2290.8
+storm-cpu phase=drain_commands boxes=1024000 ms=853.211 ns_per_box=833.2
+storm-cpu phase=layout boxes=1024000 ms=0.001 ns_per_box=0.0
+storm-cpu phase=emit_scene boxes=1024000 ms=335.012 ns_per_box=327.2
+storm-cpu phase=direct_paint_write boxes=1024000 ms=154.397 ns_per_box=150.8
+storm-cpu phase=emit_after_direct_paint boxes=1024000 ms=326.425 ns_per_box=318.8
+test pixel_storm_phase_report ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 37.07s
+

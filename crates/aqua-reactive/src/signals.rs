@@ -172,11 +172,7 @@ impl<T: Clone + 'static> WriteSignal<T> {
         }
     }
 
-    /// Fallible [`set`](Self::set).
-    ///
-    /// Fails with [`GraphError::DerivedWrite`] when called while a derived
-    /// computation is evaluating: derived values must be pure and read-only.
-    pub fn try_set(&self, value: T) -> Result<(), GraphError> {
+    pub(crate) fn check_writable(&self) -> Result<(), GraphError> {
         let inner = self.graph.upgraded().ok_or(GraphError::RuntimeDropped)?;
         {
             let guard = inner.borrow();
@@ -194,6 +190,11 @@ impl<T: Clone + 'static> WriteSignal<T> {
                 )));
             }
         }
+        Ok(())
+    }
+
+    pub fn try_set(&self, value: T) -> Result<(), GraphError> {
+        self.check_writable()?;
         {
             let mut cell = self.cell.borrow_mut();
             cell.value = value;

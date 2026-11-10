@@ -616,6 +616,7 @@ impl UiTree {
     ) -> bool {
         let registered = self.listen_input(node, kind, phase, callback);
         if registered {
+            self.invalidate_bindings(node);
             self.input
                 .bound
                 .entry(node)
@@ -628,6 +629,7 @@ impl UiTree {
     pub fn set_cursor_bound(&mut self, node: NodeId, cursor: CursorIcon) -> bool {
         let registered = self.set_cursor(node, cursor);
         if registered {
+            self.invalidate_bindings(node);
             self.input
                 .bound
                 .entry(node)
@@ -640,6 +642,7 @@ impl UiTree {
     pub fn bind_shortcut_bound(&mut self, node: NodeId, shortcut: Shortcut) -> bool {
         let registered = self.bind_shortcut(node, shortcut);
         if registered {
+            self.invalidate_bindings(node);
             self.input
                 .bound
                 .entry(node)

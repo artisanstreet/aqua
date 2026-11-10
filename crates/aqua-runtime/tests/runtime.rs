@@ -443,3 +443,8 @@ mod selection_sources;
 
 #[path = "runtime/controls.rs"]
 mod controls;
+
+#[path = "runtime/incremental.rs"]
+mod incremental;
+#[path = "runtime/paint.rs"]
+mod paint;

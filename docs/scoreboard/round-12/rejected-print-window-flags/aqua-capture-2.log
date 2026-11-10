@@ -1,0 +1,13 @@
+probe-launch unix_ms=1794031431393 pid=16112
+probe-startup window_ms=55 first_content_ms=499 nondominant=0.165 rich_content_ms=499
+probe-open thread=bench-large unix_ms=1794031431586 since_launch_ms=193 since_click_ms=-1
+probe-capture-reference name=capture width=1898 height=1125 nondominant=0.2762
+probe-capture name=capture sample=0 flags=0 printed=True elapsed_ms=7.722 changed_pixels=2133073 total_pixels=2135250 changed_pct=99.898 nondominant=0
+probe-capture name=capture sample=0 flags=2 printed=True elapsed_ms=239.32 changed_pixels=0 total_pixels=2135250 changed_pct=0 nondominant=0.2762
+probe-capture name=capture sample=1 flags=0 printed=True elapsed_ms=9.176 changed_pixels=2133073 total_pixels=2135250 changed_pct=99.898 nondominant=0
+probe-capture name=capture sample=1 flags=2 printed=True elapsed_ms=247.643 changed_pixels=0 total_pixels=2135250 changed_pct=0 nondominant=0.2762
+probe-capture name=capture sample=2 flags=0 printed=True elapsed_ms=5.231 changed_pixels=2133073 total_pixels=2135250 changed_pct=99.898 nondominant=0
+probe-capture name=capture sample=2 flags=2 printed=True elapsed_ms=250.674 changed_pixels=0 total_pixels=2135250 changed_pct=0 nondominant=0.2762
+pid=16112 dpi=120 working_set_mb=122 private_mb=106
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---

@@ -21,13 +21,16 @@ pub mod runtime;
 pub mod ui_app;
 pub mod worker;
 
-pub use app::{App, Context, IntoView, ReactiveView};
+pub use app::{App, Context, IntoView, Program, ReactiveView};
 pub use aqua_protocol::chrome::{CaptionControl, CaptionRegion, DragRegions};
+pub use aqua_reactive::collection::{Changes, Collection, CollectionError, Delta, Query};
 #[cfg(windows)]
 pub use aqua_shell_win32::local_time;
+pub use aqua_ui::live::LiveList;
 pub use aqua_ui::motion::{
     Animate, Easing, Motion, MotionTheme, MotionToken, Presence, SpringParams,
 };
+pub use aqua_ui::program as property;
 pub use config::{
     AquaConfig, Config, ConfigError, Material, ResolvedConfig, ResolvedMaterial, Theme, Titlebar,
     Window,
@@ -57,9 +60,10 @@ pub mod prelude {
     pub use crate::mailbox::{Mailbox, SendError, Sender};
     pub use crate::{
         auto, fr, pct, px, ui, App, AppCtx, Application, Aqua, AquaConfig, AquaUserEvent, Axis,
-        CaptionControl, CaptionRegion, Column, ColumnBuilder, ColumnWidth, Config, Context,
-        DragRegions, Error, ExternalFrame, IntoView, List, Material, ReactiveView,
-        ResolvedMaterial, Style, Table, Theme, Titlebar, Typography, UiApp, UiAppError, Window,
+        CaptionControl, CaptionRegion, Collection, Column, ColumnBuilder, ColumnWidth, Config,
+        Context, DragRegions, Error, ExternalFrame, IntoView, List, LiveList, Material, Program,
+        ReactiveView, ResolvedMaterial, Style, Table, Theme, Titlebar, Typography, UiApp,
+        UiAppError, Window,
     };
     pub use aqua_core::image::*;
     pub use aqua_core::scene::{
@@ -69,7 +73,7 @@ pub mod prelude {
     pub use aqua_core::vector::*;
     pub use aqua_core::{
         CursorIcon, DisplayItem, ImeEvent, InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId,
-        Oklch, Point, PointerButton, PointerEvent, Rect, TextRun,
+        Oklch, Point, PointerButton, PointerEvent, Rect, Srgba8, TextRun,
     };
     pub use aqua_protocol::prefs::{PrefState, PreferenceSource, SystemPrefs as OsPreferences};
     pub use aqua_protocol::{

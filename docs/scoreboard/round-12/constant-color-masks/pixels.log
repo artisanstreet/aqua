@@ -1,0 +1,38 @@
+
+running 20 tests
+test lowering::a_device_that_needs_reuploads_clears_the_atlas_through_the_listener ... ok
+test lowering::a_device_that_replayed_its_textures_keeps_the_atlas ... ok
+test lowering::alpha_gradient_path_masks_match_rgba_fills_and_dashed_strokes ... reference alpha_gradient=GpuiHsla { h: 0.0, s: 0.0, l: 1.0, a: 0.43 } maximum_channel_error=0
+d3d11 HighPerformance software=false alpha_gradient=GpuiHsla { h: 0.0, s: 0.0, l: 1.0, a: 0.43 } maximum_channel_error=0
+d3d11 Warp software=true alpha_gradient=GpuiHsla { h: 0.0, s: 0.0, l: 1.0, a: 0.43 } maximum_channel_error=0
+reference alpha_gradient=GpuiHsla { h: 0.0, s: 0.0, l: 1.0, a: 0.43 } maximum_channel_error=0
+d3d11 HighPerformance software=false alpha_gradient=GpuiHsla { h: 0.0, s: 0.0, l: 1.0, a: 0.43 } maximum_channel_error=0
+d3d11 Warp software=true alpha_gradient=GpuiHsla { h: 0.0, s: 0.0, l: 1.0, a: 0.43 } maximum_channel_error=0
+reference alpha_gradient=GpuiHsla { h: 0.13, s: 0.71, l: 0.36, a: 0.83 } maximum_channel_error=2
+d3d11 HighPerformance software=false alpha_gradient=GpuiHsla { h: 0.13, s: 0.71, l: 0.36, a: 0.83 } maximum_channel_error=2
+d3d11 Warp software=true alpha_gradient=GpuiHsla { h: 0.13, s: 0.71, l: 0.36, a: 0.83 } maximum_channel_error=2
+reference alpha_gradient=GpuiHsla { h: 0.13, s: 0.71, l: 0.36, a: 0.83 } maximum_channel_error=1
+d3d11 HighPerformance software=false alpha_gradient=GpuiHsla { h: 0.13, s: 0.71, l: 0.36, a: 0.83 } maximum_channel_error=1
+d3d11 Warp software=true alpha_gradient=GpuiHsla { h: 0.13, s: 0.71, l: 0.36, a: 0.83 } maximum_channel_error=1
+ok
+test lowering::atlas_uploads_are_sent_once_and_again_after_a_device_that_lost_its_textures ... ok
+test lowering::constant_color_paths_use_one_channel_and_reuse_their_resident_mask ... path mask_bytes=252504 rgba_bytes=1010016
+path mask_bytes=252504 rgba_bytes=1010016
+ok
+test lowering::culling_while_walking_matches_culling_the_finished_commands ... ok
+test lowering::dashed_borders_leave_gaps_along_straight_edges ... ok
+test lowering::gpui_inset_shadow_matches_the_native_one_in_shape ... ok
+test lowering::images_drawn_small_upload_a_reduced_copy_and_release_every_level ... ok
+test lowering::inset_shadows_darken_the_inside_of_the_edges_only ... ok
+test lowering::leaves_outside_the_active_clip_are_not_lowered ... ok
+test lowering::outline_text_raster_mode_lowers_with_exact_glyph_coverage ... ok
+test lowering::per_corner_radii_round_only_the_requested_corners ... ok
+test lowering::rotated_quads_are_rotated_exactly_and_not_reported_as_approximated ... ok
+test lowering::rounded_clips_cut_the_corners_of_what_they_contain ... ok
+test lowering::solid_path_masks_preserve_translucent_fill_and_stroke_edges ... ok
+test lowering::svg_vectors_paths_and_meshes_reach_the_surface ... ok
+test lowering::transforms_translate_and_scale_every_primitive_under_them ... ok
+test lowering::trimming_everything_releases_pages_that_the_last_frame_did_not_use ... ok
+test lowering::uneven_borders_draw_each_side_at_its_own_width ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 62 filtered out; finished in 1.75s

@@ -1,5 +1,6 @@
 //! Contains [TaffyTree](crate::tree::TaffyTree): the default implementation of [LayoutTree](crate::tree::LayoutTree), and the error type for Taffy.
 use super::slab::{Key, Secondary, Slab};
+use crate::style_helpers::TaffyAuto as _;
 
 #[cfg(feature = "block_layout")]
 use crate::block::BlockContext;
@@ -1013,6 +1014,84 @@ impl<NodeContext> TaffyTree<NodeContext> {
     #[inline]
     pub fn dirty(&self, node: NodeId) -> TaffyResult<bool> {
         Ok(self.nodes[node.into()].cache.is_empty())
+    }
+
+    #[allow(missing_docs)]
+    pub fn compute_contained_layout_with_measure<MeasureFunction>(
+        &mut self,
+        node_id: NodeId,
+        measure_function: MeasureFunction,
+    ) -> Result<(), TaffyError>
+    where
+        MeasureFunction: FnMut(LayoutInput, NodeId, Option<&mut NodeContext>, &Style) -> LayoutOutput,
+    {
+        let key = node_id.into();
+        let original = self.nodes[key].clone();
+        let size = original.unrounded_layout.size;
+        let mut style = original.style.clone();
+        style.size = Size {
+            width: crate::style::Dimension::length(size.width),
+            height: crate::style::Dimension::length(size.height),
+        };
+        style.min_size = Size {
+            width: crate::style::LengthPercentageAuto::length(size.width),
+            height: crate::style::LengthPercentageAuto::length(size.height),
+        };
+        style.max_size = style.min_size;
+        style.margin = crate::geometry::Rect {
+            left: crate::style::LengthPercentageAuto::length(0.0),
+            right: crate::style::LengthPercentageAuto::length(0.0),
+            top: crate::style::LengthPercentageAuto::length(0.0),
+            bottom: crate::style::LengthPercentageAuto::length(0.0),
+        };
+        style.inset = crate::geometry::Rect {
+            left: crate::style::LengthPercentageAuto::AUTO,
+            right: crate::style::LengthPercentageAuto::AUTO,
+            top: crate::style::LengthPercentageAuto::AUTO,
+            bottom: crate::style::LengthPercentageAuto::AUTO,
+        };
+        style.position = crate::style::Position::Relative;
+        self.nodes[key].style = style;
+        self.nodes[key].cache.clear();
+        let mut absolute = original.unrounded_layout.location;
+        let mut parent = self.parents[key];
+        while let Some(node) = parent {
+            let location = self.nodes[node.into()].unrounded_layout.location;
+            absolute.x += location.x;
+            absolute.y += location.y;
+            parent = self.parents[node.into()];
+        }
+        let use_rounding = self.config.use_rounding;
+        {
+            let mut view = TaffyView {
+                taffy: self,
+                measure_function,
+            };
+            compute_root_layout(
+                &mut view,
+                node_id,
+                Size {
+                    width: AvailableSpace::Definite(size.width),
+                    height: AvailableSpace::Definite(size.height),
+                },
+            );
+            if use_rounding {
+                view.taffy.nodes[key].unrounded_layout.location = absolute;
+                round_layout(&mut view, node_id);
+            }
+        }
+        #[cfg(feature = "content_size")]
+        let overflow = self.nodes[key].unrounded_layout.scrollable_overflow_rect;
+        self.nodes[key].style = original.style;
+        self.nodes[key].unrounded_layout = original.unrounded_layout;
+        self.nodes[key].final_layout = original.final_layout;
+        #[cfg(feature = "content_size")]
+        {
+            self.nodes[key].unrounded_layout.scrollable_overflow_rect = overflow;
+            self.nodes[key].final_layout.scrollable_overflow_rect = overflow;
+        }
+        self.nodes[key].cache.clear();
+        Ok(())
     }
 
     /// Updates the stored layout of the provided `node` and its children

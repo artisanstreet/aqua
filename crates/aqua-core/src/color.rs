@@ -1,5 +1,9 @@
 #![allow(clippy::excessive_precision)]
 
+pub mod memo;
+pub mod srgba;
+pub use srgba::Srgba8;
+
 /// Authored UI color: OKLCH + alpha.
 ///
 /// Ranges: `l` 0..=1 (perceptual lightness), `c` >= 0 (chroma),
@@ -114,10 +118,17 @@ impl Oklch {
     /// Convert 8-bit sRGB + float alpha into the canonical model.
     #[must_use]
     pub fn from_srgb8(r: u8, g: u8, b: u8, alpha: f32) -> Self {
-        let lin = srgb8_to_linear([r, g, b]);
-        let (l, a, b2) = linear_srgb_to_oklab(lin);
-        let (c, h) = oklab_to_lch(a, b2);
-        Self::oklch(l, c, h, alpha)
+        let [l, c, h] = memo::srgb([r, g, b]);
+        Self {
+            l,
+            c,
+            h,
+            alpha: alpha.clamp(0.0, 1.0),
+        }
+    }
+
+    pub fn extend_srgb8(output: &mut Vec<Self>, colors: impl IntoIterator<Item = ([u8; 3], f32)>) {
+        memo::extend_srgb(output, colors);
     }
 
     /// Convert HSL to the canonical model. Convention: `h` degrees 0..360,
@@ -208,17 +219,19 @@ impl Oklch {
     }
 }
 
-/// sRGB bytes to linear light (IEC 61966-2-1 transfer curve).
 #[must_use]
 pub fn srgb8_to_linear([r, g, b]: [u8; 3]) -> [f32; 3] {
-    [r, g, b].map(|v| {
-        let s = f32::from(v) / 255.0;
-        if s <= 0.04045 {
-            s / 12.92
-        } else {
-            ((s + 0.055) / 1.055).powf(2.4)
-        }
-    })
+    static CHANNELS: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let channels = CHANNELS.get_or_init(|| {
+        std::array::from_fn(|value| {
+            let encoded = value as f32 / 255.0;
+            match encoded <= 0.04045 {
+                true => encoded / 12.92,
+                false => ((encoded + 0.055) / 1.055).powf(2.4),
+            }
+        })
+    });
+    [r, g, b].map(|value| channels[usize::from(value)])
 }
 
 #[must_use]

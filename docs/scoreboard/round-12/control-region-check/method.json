@@ -1,0 +1,21 @@
+{
+  "purpose": "Measure the white chevron independently of the blurred backdrop in the fixed dark benchmark fixture. This is a harness criterion correction, not a rendering or scroll fix.",
+  "region_format": "shot:width,height,x,y:limit:label[:foreground_luma_threshold]",
+  "foreground_threshold": "60% luminance",
+  "comparison": "Binary foreground mask symmetric difference, divided by reference foreground pixel count. Extra and missing pixels both count; an empty reference fails. The percentage may exceed 100 when extra foreground is present.",
+  "jump_limit_pct": 30,
+  "whole_image_limit_pct": 18,
+  "before_editor_fix": "FAIL: every original missing-control capture fails the corrected check (100.0\u2013654.5% normalized foreground error).",
+  "after_editor_fix": "PASS on reanalysis of the already captured complete visual run: errors 0%, 0%, 0%, 27.3%, 0%; worst whole-image difference 15.366%. Functional action checks passed during capture.",
+  "limitations": "Checks glyph presence and shape in this fixed dark fixture, not equality of glass response over different backgrounds. The whole-image comparison still checks rendering. Scroll position drift remains visible and is not fixed by this change. Historical raw region and performance verdicts are unchanged.",
+  "candidate_sha256": "ba9a14654a9e5476bb68267892c020b5f95204645b6390b49ae6aab8af91bd4a",
+  "reference_sha256": "d0f3a99f1a3f6b3e4d41147fc374f2001e3ae406c16584519ef12ea1cba293fc",
+  "tests": [
+    "same glyph with different dark backdrop passes foreground mode and fails raw comparison",
+    "whole-image threshold still fails with identical glyphs",
+    "missing glyph fails",
+    "incorrect horizontal bar fails",
+    "reversed chevron fails",
+    "empty reference fails foreground mode but passes raw equality"
+  ]
+}

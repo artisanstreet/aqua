@@ -6,8 +6,8 @@ use crate::analysis::{
     align_up, first_writers, independent, intersect, lifetimes, union, Lifetime,
 };
 use crate::plan::{
-    Barrier, Extent, FramePlan, GlyphInstance, LoadOp, Pass, PassKind, QuadInstance, ResourceState,
-    ShaderId, ShadowInstance, TextureFormat, TextureHandle, TextureRef, TransientId,
+    Barrier, Coverage, Extent, FramePlan, GlyphInstance, LoadOp, Pass, PassKind, QuadInstance,
+    ResourceState, ShaderId, ShadowInstance, TextureFormat, TextureHandle, TextureRef, TransientId,
     TransientTexture,
 };
 use crate::slug::SlugInstance;
@@ -137,8 +137,18 @@ impl RenderGraph {
         atlas: TextureHandle,
         glyphs: impl Iterator<Item = GlyphInstance> + Clone,
     ) {
+        self.draw_coverage(target, atlas, glyphs, Coverage::Text);
+    }
+
+    pub fn draw_coverage(
+        &mut self,
+        target: TextureRef,
+        atlas: TextureHandle,
+        glyphs: impl Iterator<Item = GlyphInstance> + Clone,
+        coverage: Coverage,
+    ) {
         let extent = fold_extent(glyphs.clone().map(|g| clip_to(g.bounds, g.clip))).flatten();
-        let found = self.find_batch(target, Tag::Glyphs(atlas), extent);
+        let found = self.find_batch(target, Tag::Glyphs(atlas, coverage), extent);
         match found {
             Some(index) => {
                 if let PassKind::Glyphs { instances, .. } = &mut self.passes[index].kind {
@@ -150,6 +160,7 @@ impl RenderGraph {
             None => self.start_batch(
                 PassKind::Glyphs {
                     atlas,
+                    coverage,
                     instances: glyphs.collect(),
                 },
                 vec![TextureRef::Persistent(atlas)],
@@ -315,6 +326,7 @@ fn cull_instances(graph: &RenderGraph, passes: &mut Vec<Pass>) -> usize {
         let target = target_extent(graph, pass);
         let before = pass.kind.draw_count();
         match &mut pass.kind {
+            PassKind::Solids { .. } | PassKind::SrgbaSolids { .. } => {}
             PassKind::Instanced { instances, .. } => instances.retain(|quad| {
                 let paints = quad.opacity > 0.0
                     && (quad.fill.alpha > 0.0
@@ -403,7 +415,18 @@ fn same_batch(a: &Pass, b: &Pass) -> bool {
                 x == y
             }
             (PassKind::Shadows { .. }, PassKind::Shadows { .. }) => true,
-            (PassKind::Glyphs { atlas: x, .. }, PassKind::Glyphs { atlas: y, .. }) => x == y,
+            (
+                PassKind::Glyphs {
+                    atlas: x,
+                    coverage: a,
+                    ..
+                },
+                PassKind::Glyphs {
+                    atlas: y,
+                    coverage: b,
+                    ..
+                },
+            ) => x == y && a == b,
             (PassKind::Images { .. }, PassKind::Images { .. }) => true,
             (PassKind::Slug { store: x, .. }, PassKind::Slug { store: y, .. }) => x == y,
             _ => false,
@@ -450,7 +473,7 @@ fn absorb(target: &mut Pass, source: Pass) {
 enum Tag {
     Quad,
     Shadow,
-    Glyphs(TextureHandle),
+    Glyphs(TextureHandle, Coverage),
     Slug(TextureHandle),
 }
 
@@ -465,7 +488,12 @@ impl Tag {
                 },
             ) => true,
             (Tag::Shadow, PassKind::Shadows { .. }) => true,
-            (Tag::Glyphs(a), PassKind::Glyphs { atlas, .. }) => a == *atlas,
+            (
+                Tag::Glyphs(a, tone),
+                PassKind::Glyphs {
+                    atlas, coverage, ..
+                },
+            ) => a == *atlas && tone == *coverage,
             (Tag::Slug(a), PassKind::Slug { store, .. }) => a == *store,
             _ => false,
         }

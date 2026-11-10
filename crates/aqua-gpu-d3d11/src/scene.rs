@@ -8,6 +8,7 @@ mod offscreen;
 mod persistent;
 mod pipeline;
 mod renderer;
+mod solid;
 mod timestamps;
 mod transients;
 

@@ -458,6 +458,261 @@ fn context() -> LowerContext {
     }
 }
 
+fn rgba_path(path: GpuiPath) -> DisplayItem {
+    let raster = aqua::render::vector::VectorCache::default()
+        .path(&path, Transform2D::IDENTITY)
+        .unwrap();
+    DisplayItem::Vector {
+        bounds: raster.placement,
+        source: raster.source,
+        opacity: 1.0,
+    }
+}
+
+#[test]
+fn solid_path_masks_preserve_translucent_fill_and_stroke_edges() {
+    let color = GpuiHsla {
+        h: 0.13,
+        s: 0.71,
+        l: 0.36,
+        a: 0.43,
+    };
+    let gradient = GpuiBackground::LinearGradient {
+        angle: 37.0,
+        color_space: aqua_core::GpuiGradientColorSpace::Srgb,
+        stops: [
+            aqua_core::GpuiGradientStop {
+                percentage: 0.0,
+                color,
+            },
+            aqua_core::GpuiGradientStop {
+                percentage: 1.0,
+                color,
+            },
+        ],
+    };
+    for style in [
+        GpuiPathStyle::Fill {
+            rule: FillRule::EvenOdd,
+        },
+        GpuiPathStyle::Stroke {
+            width: 2.4,
+            cap: aqua_core::vector::LineCap::Round,
+            join: aqua_core::vector::LineJoin::Round,
+            dash: vec![3.0, 1.0],
+            dash_offset: 0.7,
+        },
+    ] {
+        let path = GpuiPath {
+            commands_local: vec![
+                PathCommand::Move(Point::new(0.0, 0.0)),
+                PathCommand::Line(Point::new(22.0, 3.0)),
+                PathCommand::Line(Point::new(6.0, 23.0)),
+                PathCommand::Close,
+            ],
+            origin_window_logical: Point::new(11.3, 8.7),
+            element_transform: Transform2D::IDENTITY,
+            style,
+            background: GpuiBackground::Solid(color),
+        };
+        for mut painter in painters() {
+            let item = |path| DisplayItem::GpuiPath {
+                transformed_window_logical_bounds: rect(8.0, 5.0, 32.0, 32.0),
+                path: Arc::new(path),
+            };
+            let mask = paint(&mut painter, vec![item(path.clone())]);
+            let mut colored = path.clone();
+            colored.background = gradient;
+            let rgba = paint(&mut painter, vec![rgba_path(colored)]);
+            let error = mask
+                .pixels()
+                .zip(rgba.pixels())
+                .flat_map(|(a, b)| a.into_iter().zip(b).map(|(a, b)| a.abs_diff(b)))
+                .max()
+                .unwrap();
+            assert!(error <= 2, "{} {error}", painter.label);
+            assert!(mask.pixels().any(|pixel| pixel[3] > 100));
+            assert!(mask.pixels().all(|pixel| pixel[3] < 113));
+        }
+    }
+}
+
+#[test]
+fn alpha_gradient_path_masks_match_rgba_fills_and_dashed_strokes() {
+    for color in [
+        GpuiHsla {
+            h: 0.0,
+            s: 0.0,
+            l: 1.0,
+            a: 0.43,
+        },
+        GpuiHsla {
+            h: 0.13,
+            s: 0.71,
+            l: 0.36,
+            a: 0.83,
+        },
+    ] {
+        for style in [
+            GpuiPathStyle::Fill {
+                rule: FillRule::EvenOdd,
+            },
+            GpuiPathStyle::Stroke {
+                width: 2.4,
+                cap: aqua_core::vector::LineCap::Round,
+                join: aqua_core::vector::LineJoin::Round,
+                dash: vec![3.0, 1.0],
+                dash_offset: 0.7,
+            },
+        ] {
+            let path = GpuiPath {
+                commands_local: vec![
+                    PathCommand::Move(Point::new(0.0, 0.0)),
+                    PathCommand::Line(Point::new(22.0, 3.0)),
+                    PathCommand::Line(Point::new(6.0, 23.0)),
+                    PathCommand::Close,
+                ],
+                origin_window_logical: Point::new(11.3, 8.7),
+                element_transform: Transform2D::IDENTITY,
+                style,
+                background: GpuiBackground::LinearGradient {
+                    angle: 37.0,
+                    color_space: aqua_core::GpuiGradientColorSpace::Srgb,
+                    stops: [
+                        aqua_core::GpuiGradientStop {
+                            percentage: 0.15,
+                            color,
+                        },
+                        aqua_core::GpuiGradientStop {
+                            percentage: 0.75,
+                            color: GpuiHsla { a: 0.0, ..color },
+                        },
+                    ],
+                },
+            };
+            for mut painter in painters() {
+                let mask = paint(
+                    &mut painter,
+                    vec![DisplayItem::GpuiPath {
+                        transformed_window_logical_bounds: rect(8.0, 5.0, 32.0, 32.0),
+                        path: Arc::new(path.clone()),
+                    }],
+                );
+                let rgba = paint(&mut painter, vec![rgba_path(path.clone())]);
+                let error = mask
+                    .pixels()
+                    .zip(rgba.pixels())
+                    .flat_map(|(a, b)| a.into_iter().zip(b).map(|(a, b)| a.abs_diff(b)))
+                    .max()
+                    .unwrap();
+                eprintln!(
+                    "{} alpha_gradient={color:?} maximum_channel_error={error}",
+                    painter.label
+                );
+                assert!(error <= 2, "{} {color:?} {error}", painter.label);
+                assert!(mask.pixels().any(|pixel| pixel[3] > 10));
+                assert!(mask.pixels().any(|pixel| pixel[3] == 0));
+            }
+        }
+    }
+}
+
+#[test]
+fn constant_color_paths_use_one_channel_and_reuse_their_resident_mask() {
+    let color = GpuiHsla {
+        h: 0.2,
+        s: 0.6,
+        l: 0.4,
+        a: 0.7,
+    };
+    for background in [
+        GpuiBackground::Solid(color),
+        GpuiBackground::LinearGradient {
+            angle: 145.0,
+            color_space: aqua_core::GpuiGradientColorSpace::Srgb,
+            stops: [
+                aqua_core::GpuiGradientStop {
+                    percentage: 0.15,
+                    color,
+                },
+                aqua_core::GpuiGradientStop {
+                    percentage: 0.8,
+                    color: GpuiHsla { a: 0.0, ..color },
+                },
+            ],
+        },
+    ] {
+        let path = GpuiPath {
+            commands_local: vec![
+                PathCommand::Move(Point::new(0.0, 0.0)),
+                PathCommand::Line(Point::new(1000.0, 0.0)),
+                PathCommand::Line(Point::new(1000.0, 250.0)),
+                PathCommand::Line(Point::new(0.0, 250.0)),
+                PathCommand::Close,
+            ],
+            origin_window_logical: Point::new(0.0, 0.0),
+            element_transform: Transform2D::IDENTITY,
+            style: GpuiPathStyle::Fill {
+                rule: FillRule::NonZero,
+            },
+            background,
+        };
+        let scene = |path| {
+            scene_of(vec![DisplayItem::GpuiPath {
+                transformed_window_logical_bounds: rect(0.0, 0.0, 1000.0, 250.0),
+                path: Arc::new(path),
+            }])
+        };
+        let mut mask_lowering = Lowering::new(SharedFonts::new(), SharedRuns::new());
+        let mask_scene = scene(path.clone());
+        let mask = lowered(&mut mask_lowering, &mask_scene);
+        let mask_stats = mask_lowering.residency().stats();
+        assert!(mask.commands.iter().any(|command| matches!(command,
+            aqua_graph::PaintCommand::Glyphs(run) if run.coverage == aqua_graph::Coverage::Exact
+        )));
+        assert!(lowered(&mut mask_lowering, &mask_scene)
+            .uploads
+            .textures
+            .is_empty());
+        assert_eq!(mask_lowering.residency().stats().rasterizations, 1);
+        let mut colored = path;
+        colored.background = GpuiBackground::LinearGradient {
+            angle: 0.0,
+            color_space: aqua_core::GpuiGradientColorSpace::Srgb,
+            stops: [
+                aqua_core::GpuiGradientStop {
+                    percentage: 0.0,
+                    color,
+                },
+                aqua_core::GpuiGradientStop {
+                    percentage: 1.0,
+                    color: GpuiHsla { l: 0.8, ..color },
+                },
+            ],
+        };
+        let mut color_lowering = Lowering::new(SharedFonts::new(), SharedRuns::new());
+        let color_scene = scene(colored);
+        let color_frame = lowered(&mut color_lowering, &color_scene);
+        let color_stats = color_lowering.residency().stats();
+        assert!(color_frame
+            .commands
+            .iter()
+            .any(|command| matches!(command, aqua_graph::PaintCommand::Image(_))));
+        assert!(mask_stats.masks.resident_bytes > 0);
+        assert_eq!(
+            mask_stats.masks.resident_bytes * 4,
+            color_stats.colors.resident_bytes
+        );
+        eprintln!(
+            "path mask_bytes={} rgba_bytes={}",
+            mask_stats.masks.resident_bytes, color_stats.colors.resident_bytes
+        );
+        lowered(&mut mask_lowering, &color_scene);
+        assert_eq!(mask_lowering.residency().stats().masks.entries, 0);
+        assert_eq!(mask_lowering.residency().stats().colors.entries, 1);
+    }
+}
+
 #[test]
 fn outline_text_raster_mode_lowers_with_exact_glyph_coverage() {
     let (app, fonts, runs) = text_app();

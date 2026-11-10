@@ -1,0 +1,7 @@
+{
+  "pursued": false,
+  "reason": "The duplicate allocation in the optional D3D11 recovery texture mirror is not on the measured Editor path. WindowOptions::from_env enables it only for AQUA_MIRROR_TEXTURES=1; the inherited Windows process environment is unset, and no native-host with_mirror override exists.",
+  "source": "crates/aqua-gpu-d3d11/src/window/backend.rs:42",
+  "environment_check": "Windows PowerShell [Environment]::GetEnvironmentVariable(\"AQUA_MIRROR_TEXTURES\", \"Process\") returned null.",
+  "changes": "A private API shim and allocation-test draft were prepared, then discarded before compilation or execution. No runtime change was integrated or measured."
+}

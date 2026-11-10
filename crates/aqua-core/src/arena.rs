@@ -17,12 +17,11 @@ pub enum ArenaError {
 }
 
 #[derive(Debug)]
+#[repr(C)]
 struct Entry<T> {
     generation: u32,
-    value: Option<T>,
-    /// Set when the generation counter wraps: the slot is permanently retired
-    /// and never reused, so no new handle can ever alias an outstanding one.
     retired: bool,
+    value: Option<T>,
 }
 
 /// Bump a generation counter. Returns `false` when the counter wraps, in

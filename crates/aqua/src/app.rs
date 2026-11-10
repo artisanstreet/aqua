@@ -45,11 +45,6 @@ use crate::ui_app::{UiApp, UiAppError};
 // Setup context + view vocabulary
 // ---------------------------------------------------------------------------
 
-/// Setup context handed to the [`App::run`] factory.
-///
-/// Gives the factory the root reactive [`Scope`] for signal setup, the
-/// startup [`ResolvedMaterial`] for backdrop-aware styling, and the
-/// [`Context::view`] constructor for explicit-dependency views.
 pub struct Context<'a> {
     scope: &'a Scope,
     material: &'a ResolvedMaterial,
@@ -57,6 +52,12 @@ pub struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
+    pub fn program(&self, build: impl FnOnce(&Scope) -> Element) -> Program {
+        Program {
+            root: build(self.scope),
+        }
+    }
+
     pub fn images(&self) -> crate::images::ImageAssets {
         self.images.clone()
     }
@@ -76,10 +77,9 @@ impl<'a> Context<'a> {
         self.material
     }
 
-    /// Explicit-dependency view: `render` rebuilds the whole element
-    /// whenever `deps` change (keyed reconciliation preserves nodes);
-    /// targeted prop updates keep flowing through bindings. No hidden
-    /// subscriptions — the dependency tuple is the whole subscription set.
+    #[deprecated(
+        note = "mount a persistent program with Context::program; use bound properties, When and LiveList for updates"
+    )]
     pub fn view<D, F>(&self, deps: D, render: F) -> ReactiveView<D, F>
     where
         D: DepTuple,
@@ -96,9 +96,14 @@ pub struct ReactiveView<D, F> {
     render: F,
 }
 
+pub struct Program {
+    root: Element,
+}
+
 mod sealed {
     pub trait Sealed {}
     impl Sealed for aqua_ui::element::Element {}
+    impl Sealed for super::Program {}
     impl<
             D: aqua_reactive::DepTuple,
             F: FnMut(D::Values) -> aqua_ui::element::Element + 'static,
@@ -107,16 +112,14 @@ mod sealed {
     }
 }
 
-/// What an [`App::run`] setup factory may return, implemented for exactly:
-/// - [`Element`] (static content), and
-/// - [`ReactiveView<D, F>`](ReactiveView) (explicit dependencies).
-///
-/// Sealed: no other implementations exist. Mounting shares the existing
-/// [`UiApp::mount`] / [`UiApp::mount_reactive`] seams, scopes, and disposal
-/// — no hidden dependencies, no alternate reactive graph.
 pub trait IntoView: sealed::Sealed {
-    /// Mount into a fresh host. The host must be unmounted.
     fn mount_into(self, ui: &mut UiApp) -> Result<(), UiAppError>;
+}
+
+impl IntoView for Program {
+    fn mount_into(self, ui: &mut UiApp) -> Result<(), UiAppError> {
+        ui.mount(|_| self.root)
+    }
 }
 
 impl IntoView for Element {

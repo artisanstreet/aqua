@@ -1,0 +1,20 @@
+{
+  "scope": "Headless CPU construction diagnostic; not native presented-frame performance. All 1,024,000 declarations and original colour recurrence are evaluated per sample.",
+  "control_commit": "89111af",
+  "candidate_commit": "ff1e61f1cfdfa0646bb226d2940961f23b425cf3",
+  "benchmark_sha256": "b549d8dda2775e63e018e58bf472ab794f2345dc387189656dbd3c65e51b9f4d",
+  "priority": "nice 19, ionice idle",
+  "windows_launched": false,
+  "order": [
+    "control-1",
+    "candidate-1",
+    "candidate-2",
+    "control-2",
+    "control-3",
+    "candidate-3"
+  ],
+  "executables": {
+    "control": "a24f71b09818f13a09e713f8ca11e6cbd08ff3a321d2d723b6052b3f5b3e4332",
+    "candidate": "8c36d2e01c9c18c052d85503a3fbaea2f715f55c0f3ce2a6e53c31543af825e6"
+  }
+}

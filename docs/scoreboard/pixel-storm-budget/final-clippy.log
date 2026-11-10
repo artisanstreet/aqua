@@ -1,0 +1,85 @@
+    Checking simd-adler32 v0.3.10
+    Checking stable_deref_trait v1.2.1
+    Checking adler2 v2.0.1
+    Checking cfg-if v1.0.5
+    Checking smallvec v1.16.4
+    Checking bitflags v2.13.2
+    Checking arrayvec v0.7.8
+    Checking writeable v0.6.4
+    Checking float-cmp v0.9.0
+    Checking once_cell v1.21.4
+    Checking arrayref v0.3.9
+    Checking log v0.4.34
+    Checking zune-core v0.5.3
+    Checking byteorder-lite v0.1.0
+    Checking litemap v0.8.3
+    Checking bytemuck v1.25.2
+    Checking zerofrom v0.1.8
+    Checking crc32fast v1.5.3
+    Checking weezl v0.1.12
+    Checking color_quant v1.1.0
+    Checking strict-num v0.1.1
+    Checking yoke v0.8.4
+    Checking quick-error v2.0.1
+    Checking miniz_oxide v0.9.1
+    Checking fdeflate v0.3.7
+    Checking polycool v0.4.0
+    Checking miniz_oxide v0.8.9
+    Checking siphasher v1.0.4
+    Checking aqua-core v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-core)
+    Checking memchr v2.8.3
+    Checking simplecss v0.2.2
+    Checking num-traits v0.2.19
+    Checking utf_types v1.0.0
+    Checking pico-args v0.5.0
+    Checking zune-jpeg v0.5.15
+    Checking font-types v0.12.7
+    Checking tiny-skia-path v0.12.0
+    Checking gif v0.14.2
+    Checking image-webp v0.2.4
+    Checking zerovec v0.11.9
+    Checking kurbo v0.13.1
+    Checking zerotrie v0.2.5
+    Checking pxfm v0.1.30
+    Checking data-url v0.3.2
+    Checking imagesize v0.15.0
+    Checking aqua-motion v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-motion)
+    Checking flate2 v1.1.10
+    Checking aqua-graph v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-graph)
+    Checking read-fonts v0.43.3
+    Checking utf8_iter v1.1.0
+    Checking roxmltree v0.21.2
+    Checking rgb v0.8.53
+    Checking icu_locale_fallback_data v2.4.0
+    Checking libc v0.2.191
+    Checking icu_segmenter_data v2.4.0
+    Checking read-fonts v0.41.0
+    Checking zeno v0.3.3
+    Checking unicode-bidi v0.3.18
+    Checking unicode-script v0.5.8
+    Checking unicode-segmentation v1.13.3
+    Checking png v0.18.1
+    Checking taffy v0.15.1 (/home/sander/projects/artisanstreet/aqua-storm-budget/vendor/taffy)
+    Checking aqua-reactive v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-reactive)
+    Checking aqua-protocol v0.1.0 (/home/sander/projects/artisanstreet/aqua-storm-budget/crates/aqua-protocol)
+    Checking tinystr v0.8.5
+    Checking potential_utf v0.1.6
+error: field `0` is never read
+ --> crates/aqua-reactive/src/read_check.rs:8:12
+  |
+8 |     Render(Vec<NodeId>),
+  |     ------ ^^^^^^^^^^^
+  |     |
+  |     field in this variant
+  |
+  = note: `-D dead-code` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+  |
+8 -     Render(Vec<NodeId>),
+8 +     Render(()),
+  |
+
+    Checking icu_collections v2.4.0
+error: could not compile `aqua-reactive` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

@@ -1,0 +1,33 @@
+{
+  "source_commit": "9059e95a1149d7370bc5559f67a7e2e38b5a655b",
+  "exe_sha256": "2ea1748bdb0cd1d35fe087a26cef98b803dc99cc512104cf3b924e35670dcca2",
+  "control_args": "--size 1280x800 --retained-oklch",
+  "candidate_args": "--size 1280x800 --retained",
+  "logical_size": [
+    1280,
+    800
+  ],
+  "boxes": 1024000,
+  "stats": "off",
+  "placement": "HWND_BOTTOM, SWP_NOACTIVATE",
+  "presentation": "unchanged default Vsync",
+  "order": [
+    "control-1",
+    "candidate-1",
+    "candidate-2",
+    "control-2",
+    "control-3",
+    "candidate-3",
+    "control-2-repeat"
+  ],
+  "backend": "D3D11 (default features, no d3d12 feature)",
+  "target": "x86_64-pc-windows-gnu",
+  "build": "nix develop /home/sander/projects/artisanstreet/editor#cargo-windows --command cargo build --release -p aqua --example pixel_storm --target x86_64-pc-windows-gnu -j6",
+  "warm_windows": [
+    1,
+    2
+  ],
+  "exclusions": {
+    "control-2": "No complete 10-second window was recorded; retained in full, replaced by control-2-repeat. No cause established."
+  }
+}

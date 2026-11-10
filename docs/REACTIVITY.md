@@ -151,9 +151,10 @@ snapshot (`ReadSignal::get` / `snapshot`).
   `(rank, id)` instead of running Kahn per write. Scratch buffers are reused.
 - The effect queue is deduplicated (one entry per effect); per-node version
   checks make re-runs and re-propagations no-ops.
-- Follow-up (not yet done): arena/dense storage for hot records, dirty
-  worklists avoiding full subgraph collection on deep chains. Contributions
-  welcome provided the tests above stay green.
+- Dense slots and stamped traversal collect the reachable dependent subgraph.
+  Propagation sorts that subgraph by cached rank and slot; it does not filter
+  a global node order on every source write. Rank rebuilding after graph
+  structure changes remains global.
 
 ## Async resources (`Scope::resource`)
 
@@ -190,13 +191,38 @@ Steady-state, counting allocator, warmed rank cache (Linux x86-64, release):
 | wide/10000 | ~579,000 (~58 ns/derive) | 0 | 0 |
 | chain/1000 (depth 1000) | ~50,000 (~50 ns/link) | 0 | 0 |
 
-Cost is linear in affected nodes with zero per-update allocation (dense
-slots, stamped dirty filter over a cached rank order, reused buffers). No
-further dense-storage work warranted at this scale; revisit with profiler
-evidence if UI-sized graphs disagree.
+Those timings describe the earlier cached-global-order implementation.
+The current implementation collects reachable nodes and sorts only that set:
+O(affected edges + affected nodes log affected nodes), with reused scratch
+buffers. The measurements above are historical and have not been rerun for
+this implementation.
 
 ## Deferred (out of scope for this crate)
 - Cross-thread handles: facade message handoff only.
 - Keyed collections, lenses, field-level granularity: UI-layer facilities
   over these primitives; `Signal<Vec<T>>` is collection-level state until
   then.
+
+## Persistent collections and compiled sinks
+
+`Scope::bind(source, sink)` installs a typed `BindingSink<T>`. The scheduler
+checks the source version and passes the borrowed value with `BindingCause`
+(source identity and version). UI sinks enqueue typed property commands and
+never mutate the tree during graph propagation. `bind_at_version` acknowledges
+an already-delivered version and schedules only later changes. UI compilation
+queues initial property values directly, so mounting many bindings does not
+consume the user-effect flush budget.
+
+`collection::Collection<K, T>` stores shared records separately from an
+order-statistic treap. Index lookup, insertion, removal and movement use the
+order index; replacement touches one record and its resident observers.
+`observe` and `field` allocate subscriptions in the caller's owner scope.
+`count_where` and sorted `Query` update from old/new records. Their initial
+construction and `Query::configure` scan the dataset explicitly.
+
+The delta journal retains at most 1,024 changes. Independent cursors receive
+`Changes::Reset` when they fall behind the retained history. Reentrant
+collection writes queue notifications in commit order. Scope disposal clears
+data and listeners, rejects later mutations and releases resident observers.
+Collection UI presentation lives in `aqua-ui::live`; it is separate from data
+and query lifetime.

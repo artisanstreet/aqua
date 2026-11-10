@@ -1,0 +1,81 @@
+{
+  "performance_rows": 41,
+  "passed": 32,
+  "overall": "FAIL",
+  "failed_rows": [
+    {
+      "metric": "scroll p50 (ms)",
+      "aqua": 0.14,
+      "gpui": 0.06,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "idle busiest thread context switches/s",
+      "aqua": 0.1,
+      "gpui": 0.1,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "idle context switches/s after resize",
+      "aqua": 0.87,
+      "gpui": 0.13,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "private MiB after 600 scrolls",
+      "aqua": 120.5,
+      "gpui": 118.2,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "GPU dedicated MiB after 600 scrolls",
+      "aqua": 53.4,
+      "gpui": 51.1,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "cold start to first content (ms)",
+      "aqua": 505.0,
+      "gpui": 366.0,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "cold start to a frame with 15% non-dominant pixels (ms)",
+      "aqua": 505.0,
+      "gpui": 367.0,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "resize p50 (ms)",
+      "aqua": 1.49,
+      "gpui": 1.33,
+      "verdict": "FAIL"
+    },
+    {
+      "metric": "streaming latency p50 (ms)",
+      "aqua": 0.07,
+      "gpui": 0.06,
+      "verdict": "FAIL"
+    }
+  ],
+  "visual": "PASS under PR11 foreground-glyph method",
+  "visual_worst_whole_changed_pct": 14.171,
+  "jump_glyph_changed_pct": [
+    0,
+    0,
+    0,
+    22.7,
+    13.6
+  ],
+  "key_events_matched": 435,
+  "key_events_unmatched": 0,
+  "key_events_above_8_3_ms": 0,
+  "design": "Three release fixture repetitions, interleaved AB/BA/AB, no retries or foreground activation. Exact source and binary hashes are in source-manifest.json.",
+  "limitations": [
+    "Focused texture allocation saving does not establish total Editor memory improvement. The full post-scroll memory gates fail.",
+    "Compared with the prior full run this executable includes both layout ownership and solid masks; separate focused controls are archived.",
+    "New after-resize wake failure has per-run rates 0, 0.87, 3.47/s; the second has one 26-switch burst at second 17 and the third one 103-switch burst at second 1. All subsequent 15-second thread samples are inactive. Attribution remains unresolved.",
+    "PrintWindow pixel measurements are informational; ETW PresentStop is not physical display latency.",
+    "Hosted CI stops before tests because its package list still names removed aqua-macros."
+  ]
+}

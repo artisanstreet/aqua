@@ -1,0 +1,130 @@
+metric                                               aqua       gpui  verdict
+scroll p50 (ms)                                      0.14        n/a  MISSING
+scroll p90 (ms)                                      0.26        n/a  MISSING
+scroll p99 (ms)                                      0.39        n/a  MISSING
+scroll max (ms)                                      0.45        n/a  MISSING
+scroll frames over 4 ms                              0.00        n/a  MISSING
+scroll frames over 8.3 ms                            0.00        n/a  MISSING
+scroll frames over 16.7 ms                           0.00        n/a  MISSING
+CPU per scroll input (ms)                            0.57        n/a  MISSING
+keystroke to present p50, ETW (ms)                    n/a        n/a  MISSING
+keystroke to present p90, ETW (ms)                    n/a        n/a  MISSING
+keystroke to present p99, ETW (ms)                    n/a        n/a  MISSING
+keystroke to present max, ETW (ms)                    n/a        n/a  MISSING
+keystrokes over 8.3 ms, ETW                           n/a        n/a  MISSING
+keystrokes over 16.7 ms, ETW                          n/a        n/a  MISSING
+keystroke to pixel p50, pixel probe (ms)           264.06        n/a  info MISSING
+keystroke to pixel p99, pixel probe (ms)           275.67        n/a  info MISSING
+idle CPU (% of one core)                             0.00        n/a  MISSING
+idle context switches/s                              0.03        n/a  MISSING
+idle threads waking at 1/s or more                   0.00        n/a  MISSING
+idle busiest thread context switches/s               0.10        n/a  MISSING
+idle CPU after resize (% of one core)                0.00        n/a  MISSING
+idle context switches/s after resize                 0.00        n/a  MISSING
+idle threads waking after resize                     0.00        n/a  MISSING
+private MiB after startup                          106.10        n/a  MISSING
+private MiB after 600 scrolls                      119.80        n/a  MISSING
+peak working set MiB after startup (untrimmed)     122.10        n/a  MISSING
+peak working set MiB after 600 scrolls (untrimmed)     127.10        n/a  MISSING
+working set MiB after startup (current, trim-sensitive)     120.70        n/a  info MISSING
+working set MiB after 600 scrolls (current, trim-sensitive)     126.90        n/a  info MISSING
+GPU dedicated MiB after startup                     35.40        n/a  MISSING
+GPU dedicated MiB after 600 scrolls                 53.40        n/a  MISSING
+cold start to first content (ms)                   513.00        n/a  MISSING
+cold start to a frame with 15% non-dominant pixels (ms)     513.00        n/a  MISSING
+cold start to thread painted (ms)                  192.00        n/a  MISSING
+open large thread, click to painted (ms)              n/a        n/a  MISSING
+resize p50 (ms)                                      1.59        n/a  MISSING
+resize p99 (ms)                                      2.55        n/a  MISSING
+resize max (ms)                                      2.56        n/a  MISSING
+resize frames over 16.7 ms                           0.00        n/a  MISSING
+streaming CPU (% of one core)                         n/a        n/a  MISSING
+streaming latency p50 (ms)                            n/a        n/a  MISSING
+streaming latency p99 (ms)                            n/a        n/a  MISSING
+streaming frames over 4 ms                            n/a        n/a  MISSING
+streaming frames over 16.7 ms                         n/a        n/a  MISSING
+streaming context switches/s                          n/a        n/a  MISSING
+
+display state and system load per run
+  aqua: probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+  aqua: system CPU % per run (boot/end median): ['2.40']
+  gpui: system CPU % per run (boot/end median): []
+
+per-thread idle breakdown (run 1, threads with any context switch or CPU)
+  aqua idle: 2 active threads
+    tid24184@combase.dll                             ctx/s     0.10 cpu ms/s     0.00 started 173 ms
+    tid8368@ntdll.dll                                ctx/s     0.10 cpu ms/s     0.00 started 174 ms
+  aqua after resize: 0 active threads
+  gpui idle: 0 active threads
+  gpui after resize: 0 active threads
+
+wake sources, aqua instrumented idle run (AQUA_WAKE_STATS, diagnostic only, not gated)
+  not collected
+
+frames over 4 ms, aqua spike recorder (AQUA_PROFILE, diagnostic only, not gated)
+  not collected
+
+scroll p50 (ms): MISSING (aqua 0.14 vs gpui n/a, must beat gpui by 3% or tie at 0)
+scroll p90 (ms): MISSING (aqua 0.26 vs gpui n/a, must beat gpui by 3% or tie at 0)
+scroll p99 (ms): MISSING (aqua 0.39 vs gpui n/a, must beat gpui by 3% or tie at 0)
+scroll max (ms): MISSING (aqua 0.45 vs gpui n/a, must beat gpui by 3% or tie at 0)
+scroll frames over 4 ms: MISSING (aqua 0.00 vs gpui n/a, must beat gpui by 3% or tie at 0)
+scroll frames over 8.3 ms: MISSING (aqua 0.00 vs gpui n/a, must beat gpui by 3% or tie at 0)
+scroll frames over 16.7 ms: MISSING (aqua 0.00 vs gpui n/a, must beat gpui by 3% or tie at 0)
+CPU per scroll input (ms): MISSING (aqua 0.57 vs gpui n/a, must beat gpui by 3% or tie at 0)
+keystroke to present p50, ETW (ms): MISSING (aqua n/a vs gpui n/a, must beat gpui by 3% or tie at 0)
+keystroke to present p90, ETW (ms): MISSING (aqua n/a vs gpui n/a, must beat gpui by 3% or tie at 0)
+keystroke to present p99, ETW (ms): MISSING (aqua n/a vs gpui n/a, must beat gpui by 3% or tie at 0)
+keystroke to present max, ETW (ms): MISSING (aqua n/a vs gpui n/a, must beat gpui by 3% or tie at 0)
+keystrokes over 8.3 ms, ETW: MISSING (aqua n/a vs gpui n/a, must beat gpui by 3% or tie at 0)
+keystrokes over 16.7 ms, ETW: MISSING (aqua n/a vs gpui n/a, must beat gpui by 3% or tie at 0)
+keystroke to pixel p50, pixel probe (ms): info MISSING (aqua 264.06 vs gpui n/a, must beat gpui by 3% or tie at 0)
+keystroke to pixel p99, pixel probe (ms): info MISSING (aqua 275.67 vs gpui n/a, must beat gpui by 3% or tie at 0)
+idle CPU (% of one core): MISSING (aqua 0.00 vs gpui n/a, must beat gpui by 3% or tie at 0)
+idle context switches/s: MISSING (aqua 0.03 vs gpui n/a, must beat gpui by 3% or tie at 0)
+idle threads waking at 1/s or more: MISSING (aqua 0.00 vs gpui n/a, must beat gpui by 3% or tie at 0)
+idle busiest thread context switches/s: MISSING (aqua 0.10 vs gpui n/a, must beat gpui by 3% or tie at 0)
+idle CPU after resize (% of one core): MISSING (aqua 0.00 vs gpui n/a, must beat gpui by 3% or tie at 0)
+idle context switches/s after resize: MISSING (aqua 0.00 vs gpui n/a, must beat gpui by 3% or tie at 0)
+idle threads waking after resize: MISSING (aqua 0.00 vs gpui n/a, must beat gpui by 3% or tie at 0)
+private MiB after startup: MISSING (aqua 106.10 vs gpui n/a, must beat gpui by 3% or tie at 0)
+private MiB after 600 scrolls: MISSING (aqua 119.80 vs gpui n/a, must beat gpui by 3% or tie at 0)
+peak working set MiB after startup (untrimmed): MISSING (aqua 122.10 vs gpui n/a, must beat gpui by 3% or tie at 0)
+peak working set MiB after 600 scrolls (untrimmed): MISSING (aqua 127.10 vs gpui n/a, must beat gpui by 3% or tie at 0)
+working set MiB after startup (current, trim-sensitive): info MISSING (aqua 120.70 vs gpui n/a, must beat gpui by 3% or tie at 0)
+working set MiB after 600 scrolls (current, trim-sensitive): info MISSING (aqua 126.90 vs gpui n/a, must beat gpui by 3% or tie at 0)
+GPU dedicated MiB after startup: MISSING (aqua 35.40 vs gpui n/a, must beat gpui by 3% or tie at 0)
+GPU dedicated MiB after 600 scrolls: MISSING (aqua 53.40 vs gpui n/a, must beat gpui by 3% or tie at 0)
+cold start to first content (ms): MISSING (aqua 513.00 vs gpui n/a, must beat gpui by 3% or tie at 0)
+cold start to a frame with 15% non-dominant pixels (ms): MISSING (aqua 513.00 vs gpui n/a, must beat gpui by 3% or tie at 0)
+cold start to thread painted (ms): MISSING (aqua 192.00 vs gpui n/a, must beat gpui by 3% or tie at 0)
+open large thread, click to painted (ms): MISSING (aqua n/a vs gpui n/a, must beat gpui by 3% or tie at 0)
+resize p50 (ms): MISSING (aqua 1.59 vs gpui n/a, must beat gpui by 3% or tie at 0)
+resize p99 (ms): MISSING (aqua 2.55 vs gpui n/a, must beat gpui by 3% or tie at 0)
+resize max (ms): MISSING (aqua 2.56 vs gpui n/a, must beat gpui by 3% or tie at 0)
+resize frames over 16.7 ms: MISSING (aqua 0.00 vs gpui n/a, must beat gpui by 3% or tie at 0)
+streaming CPU (% of one core): MISSING (aqua n/a vs gpui n/a, must beat gpui by 3% or tie at 0)
+streaming latency p50 (ms): MISSING (aqua n/a vs gpui n/a, must beat gpui by 3% or tie at 0)
+streaming latency p99 (ms): MISSING (aqua n/a vs gpui n/a, must beat gpui by 3% or tie at 0)
+streaming frames over 4 ms: MISSING (aqua n/a vs gpui n/a, must beat gpui by 3% or tie at 0)
+streaming frames over 16.7 ms: MISSING (aqua n/a vs gpui n/a, must beat gpui by 3% or tie at 0)
+streaming context switches/s: MISSING (aqua n/a vs gpui n/a, must beat gpui by 3% or tie at 0)
+aqua ran to completion: PASS
+aqua never took foreground: PASS
+gpui ran to completion: FAIL
+gpui never took foreground: PASS
+section 11 windowed private memory (142 MiB, release): PASS (119.80)
+section 11 windowed GPU dedicated (64 MiB, release): PASS (53.40)
+visual gate: FAIL (skipped; a scoreboard without the visual gate does not count)
+aqua runs measured on a quiet machine (system CPU 2.40% median, limit 25%): PASS
+gpui runs measured on a quiet machine (system CPU n/a% median, limit 25%): FAIL
+OVERALL: FAIL (fixture-based, release, 1 interleaved runs, median)
+
+manifest
+date 2026-11-07T05:25:58+01:00
+profile release runs 1 idle_seconds 30 scroll_frames 600
+aqua_git 5f4ec00 port_git 08f2e75f dirty_aqua=25
+fixture_server bench-fixture links the port forge-http (SSE keep-alive from_secs(300)) while the GPUI repo forge-http keeps from_secs(15); both editors talk to the same fixture server in every run, so neither sees a different heartbeat, but absolute idle wakes differ from a real 15 s Forge
+gpui_baseline release build of the gpui-ce fork at rev = "6cd20f9c5deab2b160b68ac66f453ec70820e8a2", built by tools/compare-editors.sh build with the same cargo-windows toolchain as the port
+aqua exe /home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-solid-masks.exe built 2026-11-07T04:11:46+01:00 sha256 105ab67b81db2468 size 38871040
+gpui exe /home/sander/projects/artisanstreet/editor/target/x86_64-pc-windows-gnu/release/artisan-editor.exe built 2026-11-04T11:09:28+01:00 sha256 d0f3a99f1a3f6b3e size 40648704

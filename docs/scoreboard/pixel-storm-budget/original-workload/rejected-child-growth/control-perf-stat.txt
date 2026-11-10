@@ -1,0 +1,18 @@
+# started on Sat Nov  7 14:47:34 2026
+
+
+ Performance counter stats for '/home/sander/projects/artisanstreet/aqua-storm-budget/target/original-children-control pixel_storm_original_construction_report --ignored --test-threads=1':
+
+        3476348372      cycles:u
+        7834736603      instructions:u                   #    2.25  insn per cycle
+         122636966      cache-references:u
+           6839751      cache-misses:u                   #    5.58% of all cache refs
+        1824766964      branches:u
+           1988433      branch-misses:u                  #    0.11% of all branches
+                 0      context-switches:u
+             89616      page-faults:u
+
+       0.917263624 seconds time elapsed
+
+       0.744302000 seconds user
+       0.171149000 seconds sys

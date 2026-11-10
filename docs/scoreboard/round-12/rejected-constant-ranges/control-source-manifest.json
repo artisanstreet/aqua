@@ -1,0 +1,48 @@
+{
+  "description": "Frozen combined window-memory framework and Editor, plus single-paragraph layout ownership 6314c9c. Runtime comparison control is immutable editor-window-memory.exe.",
+  "source_digest_method": "sorted relative POSIX path, NUL, file bytes, NUL; extensions .rs .toml .lock .hlsl .wgsl",
+  "aqua_source": {
+    "sha256": "fefe9850da0aaa2ec4ffe641f547fbc59fc8d3f1a32e73f69083e181042e1443",
+    "files": 867
+  },
+  "editor_source": {
+    "sha256": "3d9b9f679b64d5871c1c337a1be71b1f9a77e29334f70b8350718072b5647e1e",
+    "files": 1056
+  },
+  "aqua_base_commit": "5f4ec00",
+  "applied_commits": [
+    "36cd19a",
+    "4cb0559",
+    "4fff52e",
+    "9077af9",
+    "670b4c1",
+    "86a25f7",
+    "619ffab",
+    "f75e709",
+    "b9e3c65",
+    "6314c9c"
+  ],
+  "editor_patch_sha256": "88f90289e0e2529630eed4281f231bd93a792234dcb882b8268cc676d127d667",
+  "editor_pr_base": "6606f059",
+  "previous_aqua_source": {
+    "sha256": "ba3bd314589f3e2545ed0c451f2c5150a8f9311d431ab5d85d3d6b446b08a38a",
+    "files": 867
+  },
+  "binary": "/home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-layout-ownership.exe",
+  "binary_sha256": "f5b6dc86cf05ff47d5fb92beb5ab84514349a951081d37023569d738c79eea17",
+  "runtime_environment": {
+    "AQUA_D3D11_PREVENT_THREADING": "unset; new native-host default enables it",
+    "stats": "off"
+  },
+  "validation": {
+    "combined_checkout": "4ef5231",
+    "windows_scheduler_tests": 14,
+    "windows_gpu_conformance_tests": 6,
+    "library_clippy": "PASS -D warnings",
+    "d3d12_host_check": "PASS",
+    "windows_text_tests": 211,
+    "windows_text_suites": 33,
+    "windows_text_ignored": 3,
+    "layout_library_and_tests_clippy": "PASS -D warnings"
+  }
+}

@@ -88,6 +88,12 @@ pub trait FrameTarget {
         false
     }
     fn startup_step(&mut self) {}
+    fn maintenance_in(&self) -> Option<Duration> {
+        None
+    }
+    fn maintenance(&mut self) -> bool {
+        false
+    }
     fn idle_trim_in(&mut self) -> Option<Duration> {
         None
     }
@@ -237,6 +243,10 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
         self
     }
 
+    fn prepare_present(&mut self) {
+        self.host.set_present(self.present_hint());
+    }
+
     pub fn with_inspector(mut self, inspector: Inspector) -> Self {
         self.host.set_inspector(inspector);
         self
@@ -300,7 +310,8 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
         let Some(stage) = self.damage.as_mut() else {
             return;
         };
-        let transitioning = self.host.lowering().transition_active();
+        let transitioning =
+            self.host.lowering().transition_active() || self.host.retains_solid_geometry(side);
         let mut plan = match side.viewport() {
             _ if transitioning => Plan::Full,
             Some((size, scale)) => stage.planner.plan(
@@ -451,7 +462,7 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
     }
 
     fn wait_frame(&mut self) {
-        self.host.set_present(self.present_hint());
+        self.prepare_present();
         self.host.wait_frame();
     }
 
@@ -464,8 +475,7 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
     }
 
     fn present(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback> {
-        let hint = self.present_hint();
-        self.host.set_present(hint);
+        self.prepare_present();
         let idle = self.stats.trim.swap(false, Ordering::AcqRel);
         if idle {
             self.host.trim_handle().request();

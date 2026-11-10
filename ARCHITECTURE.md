@@ -1525,6 +1525,14 @@ Not met: scroll p50 stays 0.12 to 0.14 ms against GPUI 0.06 to 0.08 ms. The prob
 
 Not done: retained plan and record replay for unchanged glyph runs (per-glyph instance materialisation in `draw_glyphs`, about 0.2 ms plan and 0.3 ms record per frame, needs a run-relative instance format across `aqua-graph` and the D3D11 backend) and app frame coalescing for input frames (119 app frames against 83 render frames).
 
+### 14.WA Round 12 transient wake attribution (2026-11-07)
+
+The wake probe previously resolved thread names only after its 30-second window, which loses metadata for workers that have exited. With optional `AQUA_WAKE_ATTRIBUTION=1`, it caches names, start modules and addresses while threads are alive, keyed by ID and native creation timestamp, then emits per-second `probe-wake-thread` records for positive deltas. Normal wake totals use the existing calculation. Native thread-description buffers are released after conversion. PowerShell parsing, live module lookup and exact creation-time comparisons with ProcessThread.StartTime pass on three live threads.
+
+Three stats-off control/mask pairs repeat the original main workload in AB/BA/AB order, with monitor-side attribution enabled. The layout-only control's post-resize rates are 0.07/0/0 switches per second and the mask candidate's 0/0/0.13; both medians are zero. The nonzero windows contain only two main-thread switches for the control and four main/render switches over the first two seconds for the candidate. The earlier 26- and 103-switch bursts did not recur. Startup captures also retain module information for an unnamed ntdll worker that is absent from the later thread sample. All six sequences complete without foreground changes or retries, with exact binaries and logs under `docs/scoreboard/round-12/resize-wake-attribution/`.
+
+This does not establish a mask-related wake regression or demonstrate that the original failure is fixed. Metadata queries can shift wall-clock scheduling, and a thread's module is not a call-stack attribution. The original failing full result remains intact: 32/41 performance rows pass, overall FAIL; visuals pass. Aqua-only phase verdicts have missing GPUI metrics by design and are not a new scoreboard.
+
 ### 14.VA Round 12 cached path allocation (2026-11-07, proposal)
 
 Every VectorCache path lookup allocated a Vec for each command's control points, collected all transformed points into another Vec, and formatted its style/background into a String before hashing. Bounds now fold over stack-backed point iterators. Debug formatting streams directly into the existing FNV hasher, retaining the string-hash terminator. Drawing construction on a miss is unchanged.

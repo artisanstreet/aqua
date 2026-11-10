@@ -237,6 +237,25 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
         self
     }
 
+    fn prepare_present(&mut self) -> bool {
+        let hint = match self.stats.immediate.load(Ordering::Relaxed) {
+            true => PresentHint::Immediate,
+            false => self.hint,
+        };
+        self.host.set_present(hint);
+        let half = hint == PresentHint::Vsync
+            && self
+                .cadence
+                .half_rate(self.stats.glide.load(Ordering::Relaxed));
+        if half != self.halved {
+            if let Some(set) = self.half_rate.as_mut() {
+                set(self.host.backend_mut(), self.surface, half);
+            }
+            self.halved = half;
+        }
+        half
+    }
+
     pub fn with_inspector(mut self, inspector: Inspector) -> Self {
         self.host.set_inspector(inspector);
         self
@@ -444,7 +463,7 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
     }
 
     fn wait_frame(&mut self) {
-        self.host.set_present(self.present_hint());
+        self.prepare_present();
         self.host.wait_frame();
     }
 
@@ -457,8 +476,7 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
     }
 
     fn present(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback> {
-        let hint = self.present_hint();
-        self.host.set_present(hint);
+        self.prepare_present();
         let idle = self.stats.trim.swap(false, Ordering::AcqRel);
         if idle {
             self.host.trim_handle().request();

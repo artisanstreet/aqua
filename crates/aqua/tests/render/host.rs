@@ -18,6 +18,7 @@ use aqua_transport::{GpuRenderHost, HostConfig, Inspector, RenderHost, SharedClo
 struct Flaky {
     inner: RefBackend,
     fail_next: bool,
+    waits: Arc<Mutex<Vec<PresentHint>>>,
     curve_stores: Vec<aqua_graph::TextureHandle>,
     released: Vec<aqua_graph::TextureHandle>,
 }
@@ -29,6 +30,7 @@ impl Flaky {
         Self {
             inner,
             fail_next: false,
+            waits: Arc::default(),
             curve_stores: Vec::new(),
             released: Vec::new(),
         }
@@ -84,6 +86,54 @@ impl GpuBackend for Flaky {
     fn destroy_surface(&mut self, surface: SurfaceId) -> Result<(), GpuError> {
         self.inner.destroy_surface(surface)
     }
+
+    fn wait_for_frame_slot_with_hint(
+        &mut self,
+        _surface: SurfaceId,
+        hint: PresentHint,
+    ) -> Result<(), GpuError> {
+        self.waits.lock().unwrap().push(hint);
+        Ok(())
+    }
+}
+
+#[test]
+fn frame_mode_is_selected_before_acquiring_the_slot() {
+    let (diff, fonts, runs, _app) = workload();
+    let mut side = RenderSide::new();
+    let frame = start(&mut side, diff);
+    let mut backend = Flaky::new();
+    let waits = backend.waits.clone();
+    let extent = Extent {
+        width: 160,
+        height: 64,
+    };
+    let surface = backend
+        .create_surface(SurfaceTarget::Offscreen(extent))
+        .unwrap();
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    let stats = Arc::new(RenderStats::default());
+    stats.immediate.store(true, Ordering::Relaxed);
+    let mut frames = GpuFrames::new(
+        backend,
+        surface,
+        extent,
+        Lowering::new(fonts, runs),
+        receiver,
+        stats.clone(),
+    );
+    frames.wait_frame();
+    assert_eq!(*waits.lock().unwrap(), [PresentHint::Immediate]);
+    assert_eq!(
+        frames.present(&mut side, frame),
+        [Feedback::Presented(frame)]
+    );
+    stats.immediate.store(false, Ordering::Relaxed);
+    frames.wait_frame();
+    assert_eq!(
+        *waits.lock().unwrap(),
+        [PresentHint::Immediate, PresentHint::Vsync]
+    );
 }
 
 impl GpuReadback for Flaky {
@@ -247,6 +297,10 @@ fn an_explicit_trim_request_releases_unused_atlas_pages_between_frames() {
     let trimmed = inspector.snapshot().last.unwrap().trimmed_entries;
     assert!(trimmed > 0, "{trimmed}");
 }
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
+
+use aqua::render::host::{FrameTarget, GpuFrames, RenderStats};
 
 #[test]
 fn full_trim_flushes_curve_releases_before_idle_and_theme_changes_rebuild_safely() {

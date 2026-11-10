@@ -2503,7 +2503,11 @@ impl Lowering {
         }
         let tint = match path.background {
             GpuiBackground::Solid(value) => Some(color::oklch(color::hsla(value)).with_alpha(1.0)),
-            _ => None,
+            GpuiBackground::LinearGradient { stops, .. } => {
+                let first = color::hsla(stops[0].color);
+                let second = color::hsla(stops[1].color);
+                (first[..3] == second[..3]).then(|| color::oklch(first).with_alpha(1.0))
+            }
         };
         let mode = match tint {
             Some(_) => VectorMode::Mask,

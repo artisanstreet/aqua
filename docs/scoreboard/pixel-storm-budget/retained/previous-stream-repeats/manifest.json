@@ -1,0 +1,25 @@
+{
+  "source_commit": "f48452149a575eaca2c26752269f25b72b569dc5",
+  "source_sha256": "4eb5af0d1c72bb66cb51ee04a5540d6183c8de40a7a4deb2a585a0c7f9aa136a",
+  "source_files": 880,
+  "exe_sha256": "91468110d6917fbbca5b7d2637aa2889ebff0edc9fef0b950145bfb2e0c96a28",
+  "build": "nix develop /home/sander/projects/artisanstreet/editor#cargo-windows --command cargo build --release -p aqua --example pixel_storm --target x86_64-pc-windows-gnu -j6",
+  "control_args": "--size 1280x800 --retained-oklch",
+  "candidate_args": "--size 1280x800 --retained",
+  "logical_size": [
+    1280,
+    800
+  ],
+  "boxes": 1024000,
+  "stats": "off",
+  "placement": "HWND_BOTTOM, SWP_NOACTIVATE",
+  "presentation": "unchanged default Vsync",
+  "order": [
+    "control-1",
+    "candidate-1",
+    "candidate-2",
+    "control-2",
+    "control-3",
+    "candidate-3"
+  ]
+}

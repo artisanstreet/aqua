@@ -1,0 +1,10 @@
+probe-launch unix_ms=1794051119155 pid=23120
+probe-startup window_ms=10598 first_content_ms=14041 nondominant=0.999 rich_content_ms=14041
+pid=23120 dpi=120 working_set_mb=7 private_mb=3344
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=17656 foreground_after_pid=17656
+probe-launch unix_ms=1794051146301 pid=10892
+probe-startup window_ms=10658 first_content_ms=13205 nondominant=0.999 rich_content_ms=13205
+C:\Users\sander\AppData\Local\aqua-port-tools\win-drive.ps1 : Exception calling "Shot" with "2" argument(s):
+"Rectangle '{X=0,Y=0,Width=0,Height=0}' cannot have a width or height equal to 0."
+    + CategoryInfo          : NotSpecified: (:) [win-drive.ps1], MethodInvocationException
+    + FullyQualifiedErrorId : ArgumentException,win-drive.ps1

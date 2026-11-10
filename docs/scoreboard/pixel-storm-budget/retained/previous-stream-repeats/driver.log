@@ -1,0 +1,36 @@
+probe-launch unix_ms=1794048795120 pid=19696
+probe-startup window_ms=10764 first_content_ms=10967 nondominant=0.156 rich_content_ms=10968
+probe-display name=setup gpus=AMD_Radeon_RX_9070_XT:2560x1440@165Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=system seconds=2 system_cpu_pct=13.9
+pid=19696 dpi=120 working_set_mb=3330 private_mb=3552
+foreground_changed=True foreground_stolen_by_app=False foreground_before_pid=17656 foreground_after_pid=21200
+probe-launch unix_ms=1794048840794 pid=22496
+probe-startup window_ms=10862 first_content_ms=11114 nondominant=0.25 rich_content_ms=11115
+probe-display name=setup gpus=AMD_Radeon_RX_9070_XT:2560x1440@165Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=system seconds=2 system_cpu_pct=21
+pid=22496 dpi=120 working_set_mb=2913 private_mb=3025
+foreground_changed=True foreground_stolen_by_app=False foreground_before_pid=21200 foreground_after_pid=20616
+probe-launch unix_ms=1794048886061 pid=24456
+probe-startup window_ms=11205 first_content_ms=11444 nondominant=0.291 rich_content_ms=11444
+probe-display name=setup gpus=AMD_Radeon_RX_9070_XT:2560x1440@165Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=system seconds=2 system_cpu_pct=28.3
+pid=24456 dpi=120 working_set_mb=2915 private_mb=3023
+foreground_changed=True foreground_stolen_by_app=False foreground_before_pid=20616 foreground_after_pid=21200
+probe-launch unix_ms=1794048931640 pid=12908
+probe-startup window_ms=10925 first_content_ms=11189 nondominant=0.336 rich_content_ms=11190
+probe-display name=setup gpus=AMD_Radeon_RX_9070_XT:2560x1440@165Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=system seconds=2 system_cpu_pct=10.6
+pid=12908 dpi=120 working_set_mb=3330 private_mb=3553
+foreground_changed=True foreground_stolen_by_app=False foreground_before_pid=21200 foreground_after_pid=20616
+probe-launch unix_ms=1794048977349 pid=2828
+probe-startup window_ms=11100 first_content_ms=11311 nondominant=0.377 rich_content_ms=11311
+probe-display name=setup gpus=AMD_Radeon_RX_9070_XT:2560x1440@165Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=system seconds=2 system_cpu_pct=12.1
+pid=2828 dpi=120 working_set_mb=2 private_mb=3529
+foreground_changed=True foreground_stolen_by_app=False foreground_before_pid=20616 foreground_after_pid=21200
+probe-launch unix_ms=1794049022698 pid=9136
+probe-startup window_ms=10827 first_content_ms=13367 nondominant=0.999 rich_content_ms=13367
+probe-display name=setup gpus=AMD_Radeon_RX_9070_XT:2560x1440@165Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=system seconds=2 system_cpu_pct=11.5
+pid=9136 dpi=120 working_set_mb=2798 private_mb=2908
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=21200 foreground_after_pid=21200

@@ -666,7 +666,7 @@ impl Runtime {
     }
 
     pub(super) fn sync_selection_bindings(&mut self) {
-        if self.interaction.binding_version == Some(self.tree.content_version()) {
+        if self.interaction.binding_version == Some(self.tree.descriptor_version()) {
             return;
         }
         for node in std::mem::take(&mut self.interaction.descriptor_bindings) {
@@ -688,7 +688,7 @@ impl Runtime {
                 }
             }
         }
-        self.interaction.binding_version = Some(self.tree.content_version());
+        self.interaction.binding_version = Some(self.tree.descriptor_version());
         self.paint_source_selection();
     }
 

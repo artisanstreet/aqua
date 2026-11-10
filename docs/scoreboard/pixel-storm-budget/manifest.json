@@ -1,0 +1,422 @@
+{
+  "framework_base": "e5836e8c521cb5037f2574fca618967d4eead05a",
+  "branch": "perf/pixel-storm-budget",
+  "date": "2026-11-07",
+  "grid": [
+    1280,
+    800
+  ],
+  "boxes": 1024000,
+  "phase_samples": 3,
+  "workload": "UI CPU diagnostics plus separate exact colour memo experiments; original integer recurrence; no native window or GPU is created",
+  "comparison_limits": [
+    "shared machine",
+    "one control/prototype pair with three internal samples",
+    "diagnostic lowering and direct writes are separate workloads",
+    "headless timings omit runtime reconciliation, transport, renderer, GPU and presentation",
+    "first excluded candidate overlaps native control build",
+    "first setup attempt used an incorrect WSL UNC distribution name"
+  ],
+  "small_prototype_source": "framework_base plus small-prototype.patch",
+  "production_changes_retained": false,
+  "target_25_to_50_ms_demonstrated": false,
+  "colour_cache_slots": [
+    256,
+    4096,
+    65536
+  ],
+  "colour_cache_verification": "Every forward and reverse output equals the existing scalar conversion output; caches persist across frames 1, 2, 3; all input alpha is 1",
+  "harness_note": "Final tests/element.rs adds a separate ignored colour-cache report and formatting to the original phase harness; the measured phase-report algorithm is unchanged",
+  "harness_sha256": "53025142773f5c805efb2be8ade48ba442677de41f6b66497a4704c9ef181029",
+  "binaries": {
+    "control": {
+      "path": "target/storm-budget/control.exe",
+      "sha256": "16a1df95a7b7825f443b1f80d470654451e45781d22d08f0f5ef2aafe96a9b9b"
+    },
+    "small_prototype": {
+      "path": "target/storm-budget/prototype.exe",
+      "sha256": "2cfc7cceeb3d4ee01c3eb7150f3deb8abea103462b8abcf4bf3221ebfd2a4f8c"
+    },
+    "colour_harness": {
+      "path": "target/x86_64-pc-windows-gnu/release/deps/element-02c9406391b41927.exe",
+      "sha256": "b9f19459a5c43dae97d15551379659bba3e77cea5056b446c67ff60418a967ee"
+    }
+  },
+  "phase_results": {
+    "linux-control.log": {
+      "integer_colors": {
+        "samples_ms": [
+          4.871,
+          6.152,
+          4.999
+        ],
+        "median_ms": 4.999
+      },
+      "srgb_to_oklch": {
+        "samples_ms": [
+          77.772,
+          78.328,
+          78.509
+        ],
+        "median_ms": 78.328
+      },
+      "oklch_to_gpu": {
+        "samples_ms": [
+          28.388,
+          27.295,
+          27.969
+        ],
+        "median_ms": 27.969
+      },
+      "element_build": {
+        "samples_ms": [
+          551.833,
+          375.018,
+          118.575
+        ],
+        "median_ms": 375.018
+      },
+      "lower_specs_diagnostic": {
+        "samples_ms": [
+          1317.91,
+          656.093,
+          724.924
+        ],
+        "median_ms": 724.924
+      },
+      "set_content": {
+        "samples_ms": [
+          1380.2,
+          1070.323,
+          1201.71
+        ],
+        "median_ms": 1201.71
+      },
+      "drain_commands": {
+        "samples_ms": [
+          475.431,
+          467.938,
+          473.295
+        ],
+        "median_ms": 473.295
+      },
+      "layout": {
+        "samples_ms": [
+          0.0,
+          0.001,
+          0.001
+        ],
+        "median_ms": 0.001
+      },
+      "emit_scene": {
+        "samples_ms": [
+          370.429,
+          205.018,
+          297.835
+        ],
+        "median_ms": 297.835
+      },
+      "direct_paint_write": {
+        "samples_ms": [
+          95.499,
+          92.318,
+          86.361
+        ],
+        "median_ms": 92.318
+      },
+      "emit_after_direct_paint": {
+        "samples_ms": [
+          261.463,
+          191.929,
+          272.532
+        ],
+        "median_ms": 261.463
+      }
+    },
+    "linux-small-prototype.log": {
+      "integer_colors": {
+        "samples_ms": [
+          4.865,
+          5.009,
+          4.972
+        ],
+        "median_ms": 4.972
+      },
+      "srgb_to_oklch": {
+        "samples_ms": [
+          78.251,
+          76.582,
+          78.384
+        ],
+        "median_ms": 78.251
+      },
+      "oklch_to_gpu": {
+        "samples_ms": [
+          28.357,
+          27.831,
+          27.948
+        ],
+        "median_ms": 27.948
+      },
+      "element_build": {
+        "samples_ms": [
+          520.567,
+          461.865,
+          111.339
+        ],
+        "median_ms": 461.865
+      },
+      "lower_specs_diagnostic": {
+        "samples_ms": [
+          1231.902,
+          613.327,
+          596.43
+        ],
+        "median_ms": 613.327
+      },
+      "set_content": {
+        "samples_ms": [
+          1237.387,
+          945.946,
+          1032.404
+        ],
+        "median_ms": 1032.404
+      },
+      "drain_commands": {
+        "samples_ms": [
+          455.688,
+          458.258,
+          463.928
+        ],
+        "median_ms": 458.258
+      },
+      "layout": {
+        "samples_ms": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "median_ms": 0.001
+      },
+      "emit_scene": {
+        "samples_ms": [
+          289.985,
+          194.799,
+          300.233
+        ],
+        "median_ms": 289.985
+      },
+      "direct_paint_write": {
+        "samples_ms": [
+          70.081,
+          70.971,
+          65.497
+        ],
+        "median_ms": 70.081
+      },
+      "emit_after_direct_paint": {
+        "samples_ms": [
+          281.352,
+          195.699,
+          273.425
+        ],
+        "median_ms": 273.425
+      }
+    },
+    "windows-control.log": {
+      "integer_colors": {
+        "samples_ms": [
+          6.586,
+          6.86,
+          6.689
+        ],
+        "median_ms": 6.689
+      },
+      "srgb_to_oklch": {
+        "samples_ms": [
+          310.903,
+          292.257,
+          301.467
+        ],
+        "median_ms": 301.467
+      },
+      "oklch_to_gpu": {
+        "samples_ms": [
+          195.325,
+          192.674,
+          195.493
+        ],
+        "median_ms": 195.325
+      },
+      "element_build": {
+        "samples_ms": [
+          536.537,
+          505.227,
+          508.446
+        ],
+        "median_ms": 508.446
+      },
+      "lower_specs_diagnostic": {
+        "samples_ms": [
+          1192.041,
+          726.481,
+          628.206
+        ],
+        "median_ms": 726.481
+      },
+      "set_content": {
+        "samples_ms": [
+          3121.726,
+          2771.855,
+          2384.569
+        ],
+        "median_ms": 2771.855
+      },
+      "drain_commands": {
+        "samples_ms": [
+          882.168,
+          815.322,
+          747.851
+        ],
+        "median_ms": 815.322
+      },
+      "layout": {
+        "samples_ms": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "median_ms": 0.001
+      },
+      "emit_scene": {
+        "samples_ms": [
+          341.741,
+          330.504,
+          319.893
+        ],
+        "median_ms": 330.504
+      },
+      "direct_paint_write": {
+        "samples_ms": [
+          217.249,
+          212.903,
+          223.511
+        ],
+        "median_ms": 217.249
+      },
+      "emit_after_direct_paint": {
+        "samples_ms": [
+          315.085,
+          318.474,
+          320.088
+        ],
+        "median_ms": 318.474
+      }
+    },
+    "windows-small-prototype.log": {
+      "integer_colors": {
+        "samples_ms": [
+          6.822,
+          7.103,
+          6.813
+        ],
+        "median_ms": 6.822
+      },
+      "srgb_to_oklch": {
+        "samples_ms": [
+          301.631,
+          307.096,
+          309.026
+        ],
+        "median_ms": 307.096
+      },
+      "oklch_to_gpu": {
+        "samples_ms": [
+          190.246,
+          198.124,
+          203.858
+        ],
+        "median_ms": 198.124
+      },
+      "element_build": {
+        "samples_ms": [
+          485.466,
+          513.455,
+          495.179
+        ],
+        "median_ms": 495.179
+      },
+      "lower_specs_diagnostic": {
+        "samples_ms": [
+          656.686,
+          734.505,
+          745.159
+        ],
+        "median_ms": 734.505
+      },
+      "set_content": {
+        "samples_ms": [
+          2262.466,
+          2402.187,
+          2345.773
+        ],
+        "median_ms": 2345.773
+      },
+      "drain_commands": {
+        "samples_ms": [
+          844.075,
+          839.639,
+          853.211
+        ],
+        "median_ms": 844.075
+      },
+      "layout": {
+        "samples_ms": [
+          0.0,
+          0.0,
+          0.001
+        ],
+        "median_ms": 0.0
+      },
+      "emit_scene": {
+        "samples_ms": [
+          319.515,
+          323.93,
+          335.012
+        ],
+        "median_ms": 323.93
+      },
+      "direct_paint_write": {
+        "samples_ms": [
+          149.038,
+          147.105,
+          154.397
+        ],
+        "median_ms": 149.038
+      },
+      "emit_after_direct_paint": {
+        "samples_ms": [
+          315.731,
+          321.644,
+          326.425
+        ],
+        "median_ms": 321.644
+      }
+    }
+  },
+  "validation": {
+    "prototype_linux_non_ignored_ui_tests": 318,
+    "prototype_native_phase_harness": "2 passed",
+    "control_native_phase_harness": "2 passed",
+    "native_exact_colour_report": "1 passed",
+    "final_default_harness": "1 passed, 2 reports ignored",
+    "strict_clippy": "blocked by existing aqua-reactive/src/read_check.rs:8 dead-code warning"
+  },
+  "commands": [
+    "cargo test -p aqua-ui --test element --release -- --include-ignored --nocapture; AQUA_STORM_SIZES=1280x800 for the million-box phase run before adding the separate colour report",
+    "nix develop /home/sander/projects/artisanstreet/editor#cargo-windows --command cargo test --release -p aqua-ui --test element --target x86_64-pc-windows-gnu --no-run -j6",
+    "PowerShell: $env:AQUA_STORM_SIZES=\"1280x800\"; & <immutable-executable> --include-ignored --nocapture; exit $LASTEXITCODE",
+    "PowerShell: & <final-harness> pixel_storm_color_report --ignored --nocapture --test-threads=1; exit $LASTEXITCODE",
+    "Current phase-only rerun: AQUA_STORM_SIZES=1280x800 cargo test -p aqua-ui --test element --release pixel_storm_phase_report -- --ignored --nocapture --test-threads=1"
+  ]
+}

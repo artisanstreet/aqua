@@ -128,19 +128,7 @@ impl GpuBackend for Probe {
         Ok(())
     }
 
-    fn wait_for_frame_slot_with_hint(
-        &mut self,
-        surface: SurfaceId,
-        hint: PresentHint,
-    ) -> Result<(), GpuError> {
-        match hint {
-            PresentHint::Immediate => {
-                self.log.push("wait-immediate");
-                Ok(())
-            }
-            PresentHint::Vsync => self.wait_for_frame_slot(surface),
-        }
-    }
+
 }
 
 impl GpuReadback for Probe {
@@ -175,6 +163,8 @@ fn setup(side: &mut RenderSide, items: Vec<(NodeId, DisplayItem)>) {
                 scale: 1.0,
             },
             RenderCommand::Scene(SceneDiff {
+                fills: Vec::new(),
+                srgba_fills: Vec::new(),
                 upserts: items,
                 order: Some(order),
             }),
@@ -224,7 +214,7 @@ fn slot_waits_follow_the_current_presentation_hint() {
     host.execute(&mut side, 1);
     assert_eq!(
         log.take(),
-        vec!["create", "wait-immediate", "execute", "present"]
+        vec!["create", "wait", "execute", "present"]
     );
     host.set_present(PresentHint::Vsync);
     host.wait_frame();
@@ -233,7 +223,8 @@ fn slot_waits_follow_the_current_presentation_hint() {
     assert_eq!(log.take(), vec!["execute", "present"]);
     host.set_present(PresentHint::Immediate);
     host.wait_frame();
-    assert_eq!(log.take(), vec!["wait-immediate"]);
+    assert_eq!(log.take(), vec!["wait"]);
+    assert_eq!(host.backend().wait_hints, vec![PresentHint::Immediate, PresentHint::Vsync, PresentHint::Immediate]);
 }
 
 #[test]
@@ -372,6 +363,94 @@ fn lowering_applies_translation_scale_and_balances_groups() {
         .map(std::mem::discriminant)
         .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn retained_solids_patch_pixels_and_rebuild_after_geometry_changes() {
+    let log = Log::default();
+    let mut host = host(&log, SharedClock::default());
+    let mut side = RenderSide::new();
+    setup(
+        &mut side,
+        vec![(node(0), solid_rect(0.0, color("#ff0000")))],
+    );
+    host.execute(&mut side, 1);
+    assert!(host.retains_solid_geometry(&side));
+    assert_eq!(pixel(&mut host, 4, 4), [255, 0, 0, 255]);
+    side.step(input(
+        vec![RenderCommand::Scene(SceneDiff {
+            fills: vec![aqua_core::FillPatch {
+                node: node(0),
+                fill: color("#00ff00"),
+            }],
+            ..SceneDiff::default()
+        })],
+        1.0,
+    ));
+    host.execute(&mut side, 2);
+    assert!(host.retains_solid_geometry(&side));
+    assert_eq!(pixel(&mut host, 4, 4), [0, 255, 0, 255]);
+    side.step(input(
+        vec![RenderCommand::Scene(SceneDiff {
+            upserts: vec![(node(0), solid_rect(16.0, color("#0000ff")))],
+            ..SceneDiff::default()
+        })],
+        2.0,
+    ));
+    assert!(!host.retains_solid_geometry(&side));
+    host.execute(&mut side, 3);
+    assert_eq!(pixel(&mut host, 20, 4), [0, 0, 255, 255]);
+    assert_eq!(pixel(&mut host, 4, 4), [0, 0, 0, 255]);
+}
+
+fn solid_rect(x: f32, fill: Oklch) -> DisplayItem {
+    let mut item = rect_item(x, fill);
+    if let DisplayItem::Rect { border_color, .. } = &mut item {
+        *border_color = Oklch::TRANSPARENT;
+    }
+    item
+}
+
+#[test]
+fn native_batches_update_cached_solid_pixels_with_alpha() {
+    use aqua_core::{Srgba8, SrgbaFillBatch, SrgbaFillPatch};
+    let log = Log::default();
+    let mut host = host(&log, SharedClock::default());
+    let mut side = RenderSide::new();
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 16.0,
+        h: 16.0,
+    };
+    setup(
+        &mut side,
+        vec![(
+            node(0),
+            DisplayItem::SrgbaRect {
+                bounds,
+                fill: Srgba8::new(255, 0, 0, 255),
+            },
+        )],
+    );
+    host.execute(&mut side, 1);
+    assert!(host.retains_solid_geometry(&side));
+    assert_eq!(pixel(&mut host, 4, 4), [255, 0, 0, 255]);
+    let mut batch = SrgbaFillBatch::default();
+    batch.push(SrgbaFillPatch {
+        node: node(0),
+        fill: Srgba8::new(0, 255, 0, 102),
+    });
+    side.step(input(
+        vec![RenderCommand::Scene(SceneDiff {
+            srgba_fills: vec![batch],
+            ..SceneDiff::default()
+        })],
+        0.1,
+    ));
+    host.execute(&mut side, 2);
+    assert!(host.retains_solid_geometry(&side));
+    assert_eq!(pixel(&mut host, 4, 4), [0, 102, 0, 255]);
 }
 
 #[test]

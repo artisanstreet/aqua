@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use aqua_gpu_d3d11::window::pacing::{
     interval_from_ticks, reconcile_interval, ticks_until_next_vblank, vblanks_spanned, Pacer,
-    VblankGuard, FALLBACK_INTERVAL,
+    VblankGuard,
 };
 
 const FREQUENCY: u64 = 10_000_000;

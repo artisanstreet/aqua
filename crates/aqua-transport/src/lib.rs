@@ -5,6 +5,7 @@ pub mod inspector;
 pub mod lower;
 mod retained;
 pub mod ring;
+mod solid;
 pub mod thread;
 pub mod trim;
 

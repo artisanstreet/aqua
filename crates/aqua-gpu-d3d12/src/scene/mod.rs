@@ -6,6 +6,7 @@ mod custom;
 pub(crate) mod debug;
 mod device;
 mod formats;
+mod geometry;
 mod hint;
 mod offscreen;
 mod persistent;

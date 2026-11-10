@@ -1667,6 +1667,14 @@ impl Lowering {
         let at = walk.at();
         let s = at.scale();
         match item {
+            DisplayItem::SrgbaRect { bounds, fill } => {
+                walk.emit_box(
+                    at.rect(*bounds),
+                    Radii::uniform(0.0),
+                    Some(Paint::Solid(fill.to_oklch())),
+                    None,
+                );
+            }
             DisplayItem::Rect {
                 bounds,
                 radius,
@@ -3041,6 +3049,10 @@ fn record_lowering(stats: &RenderStats, report: &LowerReport, elapsed: std::time
 }
 
 impl aqua_transport::Lowering for Lowering {
+    fn retained_solids(&self) -> bool {
+        !self.transition_active()
+    }
+
     fn lower(&mut self, scene: &Scene, context: &LowerContext) -> Commands {
         let (commands, uploads, report) =
             self.commands(scene, context.size, context.scale, context.now);

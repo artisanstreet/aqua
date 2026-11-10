@@ -243,23 +243,8 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
         self
     }
 
-    fn prepare_present(&mut self) -> bool {
-        let hint = match self.stats.immediate.load(Ordering::Relaxed) {
-            true => PresentHint::Immediate,
-            false => self.hint,
-        };
-        self.host.set_present(hint);
-        let half = hint == PresentHint::Vsync
-            && self
-                .cadence
-                .half_rate(self.stats.glide.load(Ordering::Relaxed));
-        if half != self.halved {
-            if let Some(set) = self.half_rate.as_mut() {
-                set(self.host.backend_mut(), self.surface, half);
-            }
-            self.halved = half;
-        }
-        half
+    fn prepare_present(&mut self) {
+        self.host.set_present(self.present_hint());
     }
 
     pub fn with_inspector(mut self, inspector: Inspector) -> Self {
@@ -325,7 +310,8 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
         let Some(stage) = self.damage.as_mut() else {
             return;
         };
-        let transitioning = self.host.lowering().transition_active();
+        let transitioning =
+            self.host.lowering().transition_active() || self.host.retains_solid_geometry(side);
         let plan = match side.viewport() {
             _ if transitioning => Plan::Full,
             Some((size, scale)) => stage.planner.plan(

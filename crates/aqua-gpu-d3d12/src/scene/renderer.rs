@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use aqua_graph::{
     Barrier, Blend, Extent, FramePlan, LoadOp, PassKind, ResourceState, ShaderId, TextureHandle,
@@ -67,10 +68,13 @@ struct Slot {
     srv_heap: ID3D12DescriptorHeap,
     srv_capacity: u32,
     _tokens: [Token; 2],
+    geometries: Vec<super::geometry::Geometry>,
 }
 
 fn pass_label(kind: &PassKind) -> &'static str {
     match kind {
+        PassKind::SrgbaSolids { .. } => "srgba_solids",
+        PassKind::Solids { .. } => "solids",
         PassKind::Instanced { .. } => "quads",
         PassKind::Shadows { .. } => "shadows",
         PassKind::Glyphs { .. } => "glyphs",
@@ -169,6 +173,7 @@ fn create_slot(device: &ID3D12Device, capacity: u64, descriptors: u32) -> Result
         capacity,
         srv_heap: create_srv_heap(device, descriptors)?,
         srv_capacity: descriptors,
+        geometries: Vec::new(),
     })
 }
 
@@ -192,6 +197,8 @@ fn srv_desc(format: DXGI_FORMAT) -> D3D12_SHADER_RESOURCE_VIEW_DESC {
 enum Upload {
     None,
     Quads { offset: u64, count: u32 },
+    Solids { offset: u64, count: u32 },
+    Srgba { offset: u64, count: u32 },
     Shadows { offset: u64, count: u32 },
     Sprites { offset: u64, count: u32 },
     Parameters { offset: u64 },
@@ -236,6 +243,16 @@ impl Scratch {
         let bytes = &mut self.bytes;
         for pass in &plan.passes {
             let upload = match &pass.kind {
+                PassKind::SrgbaSolids { fills, .. } if !fills.is_empty() => {
+                    let (offset, count) =
+                        append_all(bytes, fills.iter().map(|fill| u32::from_le_bytes(fill.0)));
+                    Upload::Srgba { offset, count }
+                }
+                PassKind::Solids { instances } if !instances.is_empty() => {
+                    let (offset, count) =
+                        append_all(bytes, instances.iter().map(crate::pack::pack_solid));
+                    Upload::Solids { offset, count }
+                }
                 PassKind::Instanced { instances, .. } if !instances.is_empty() => {
                     let (offset, count) = append_all(bytes, instances.iter().map(pack_quad));
                     Upload::Quads { offset, count }
@@ -378,7 +395,17 @@ impl SceneRenderer {
     }
 
     pub fn slot_upload_bytes(&self) -> u64 {
-        self.slots.iter().map(|slot| slot.capacity).sum()
+        self.slots
+            .iter()
+            .map(|slot| {
+                slot.capacity
+                    + slot
+                        .geometries
+                        .iter()
+                        .map(|geometry| geometry.bounds.len() as u64 * 16)
+                        .sum::<u64>()
+            })
+            .sum()
     }
 
     pub fn retired_transient_bytes(&self) -> u64 {
@@ -522,6 +549,8 @@ impl SceneRenderer {
         let read_total: u32 = plan.passes.iter().map(pass_descriptors).sum();
         let descriptors = (plan.textures.len() as u32 + 1).max(read_total + 1);
         self.prepare_slot(slot, (bytes.len() as u64).max(16), descriptors)?;
+        let geometry_bytes =
+            super::geometry::retain(&self.device, &mut self.slots[slot].geometries, plan)?;
         self.transients.ensure(&self.device, plan, frame_fence)?;
         let slot_data = &self.slots[slot];
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), slot_data.mapped, bytes.len()) };
@@ -567,7 +596,7 @@ impl SceneRenderer {
         let mut stats = SceneStats {
             passes: plan.passes.len() as u32,
             instances: plan.instance_count() as u32,
-            upload_bytes: bytes.len() as u64,
+            upload_bytes: bytes.len() as u64 + geometry_bytes,
             ..SceneStats::default()
         };
         let surface_bound = Bound {
@@ -989,6 +1018,52 @@ impl SceneRenderer {
                     list.DrawInstanced(4, count, 0, 0);
                     stats.draws += 1;
                 },
+                (PassKind::SrgbaSolids { bounds, .. }, Upload::Srgba { offset, count }) => unsafe {
+                    let geometry = self.slots[slot]
+                        .geometries
+                        .iter()
+                        .find(|geometry| Arc::ptr_eq(bounds, &geometry.bounds))
+                        .ok_or(Error::Unsupported("missing solid geometry"))?;
+                    list.SetPipelineState(&self.pipelines.get(Kind::Srgba, write_bound.format)?);
+                    let values = constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent);
+                    self.active
+                        .binding
+                        .set_constants(list, &values, bound_index);
+                    list.IASetVertexBuffers(
+                        0,
+                        Some(&[
+                            D3D12_VERTEX_BUFFER_VIEW {
+                                BufferLocation: geometry.buffer.GetGPUVirtualAddress(),
+                                SizeInBytes: count * 16,
+                                StrideInBytes: 16,
+                            },
+                            D3D12_VERTEX_BUFFER_VIEW {
+                                BufferLocation: upload_address + offset,
+                                SizeInBytes: count * 4,
+                                StrideInBytes: 4,
+                            },
+                        ]),
+                    );
+                    list.DrawInstanced(4, count, 0, 0);
+                    stats.draws += 1;
+                },
+                (PassKind::Solids { .. }, Upload::Solids { offset, count }) => unsafe {
+                    list.SetPipelineState(&self.pipelines.get(Kind::Solid, write_bound.format)?);
+                    let values = constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent);
+                    self.active
+                        .binding
+                        .set_constants(list, &values, bound_index);
+                    list.IASetVertexBuffers(
+                        0,
+                        Some(&[D3D12_VERTEX_BUFFER_VIEW {
+                            BufferLocation: upload_address + offset,
+                            SizeInBytes: count * crate::pack::SOLID_STRIDE as u32,
+                            StrideInBytes: crate::pack::SOLID_STRIDE as u32,
+                        }]),
+                    );
+                    list.DrawInstanced(4, count, 0, 0);
+                    stats.draws += 1;
+                },
                 (PassKind::Shadows { .. }, Upload::Shadows { offset, count }) => unsafe {
                     list.SetPipelineState(&self.pipelines.get(Kind::Shadow, write_bound.format)?);
                     let values = constants(extent, 1.0, [0.0; 4], [0.0; 4], source_extent);
@@ -1101,6 +1176,8 @@ impl SceneRenderer {
                 },
                 (
                     PassKind::Instanced { .. }
+                    | PassKind::Solids { .. }
+                    | PassKind::SrgbaSolids { .. }
                     | PassKind::Shadows { .. }
                     | PassKind::Glyphs { .. }
                     | PassKind::Slug { .. }
@@ -1152,6 +1229,10 @@ impl SceneRenderer {
             timestamps.end(list, slot, frame_fence);
         }
         self.scratch = scratch;
+        aqua_protocol::probe::count(
+            aqua_protocol::probe::Metric::UploadBytes,
+            stats.upload_bytes,
+        );
         Ok(stats)
     }
 }

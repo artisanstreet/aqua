@@ -8,6 +8,7 @@ mod interaction;
 mod keyed_focus;
 mod machine;
 mod overlays;
+mod paint;
 mod render_motion;
 mod wheel;
 pub use machine::GpuState;
@@ -305,6 +306,8 @@ impl FrameWorkWindow {
 }
 
 pub struct Runtime {
+    fill_slots: Vec<Option<paint::FillSlot>>,
+    cached_fills_dirty: bool,
     color_profile: aqua_core::ColorProfile,
     interaction: TextInteraction,
     glides: crate::render::scroll::ScrollGlides,
@@ -465,6 +468,8 @@ impl Runtime {
             runs,
             viewport: Rect::ZERO,
             scale: 1.0,
+            fill_slots: Vec::new(),
+            cached_fills_dirty: false,
             scene_map: HashMap::new(),
             scene_order: Vec::new(),
             text_runs: HashMap::new(),
@@ -1316,7 +1321,15 @@ impl Runtime {
         self.sync_selection_bindings();
         self.tree.run_observers();
         let content_changed = self.cached_version != Some(version);
-        if content_changed {
+        let same_context = self.cached_version.is_some_and(|previous| {
+            (previous.1, previous.2, previous.3, previous.4)
+                == (version.1, version.2, version.3, version.4)
+        });
+        let fill_patched = content_changed && same_context && self.patch_fill_changes();
+        if fill_patched {
+            self.cached_version = Some(version);
+        }
+        if content_changed && !fill_patched {
             let _span = probe::span(Phase::Text);
             self.sync_text_runs();
         }
@@ -1330,10 +1343,11 @@ impl Runtime {
         };
         let before_scroll = focused_scroll(self);
         self.update_text_scroll();
-        let changed = content_changed || before_scroll != focused_scroll(self);
+        let changed = (content_changed && !fill_patched) || before_scroll != focused_scroll(self);
         if changed {
             let _span = probe::span(Phase::Build);
             self.cached_scene = self.emit_keyed();
+            self.cached_fills_dirty = false;
             self.scroll_revision = self.tree.scroll_revision();
             aqua_core::checkpoint::reach();
             self.cached_text_nodes = self
@@ -1387,6 +1401,7 @@ impl Runtime {
                 }
             }
         } else {
+            self.sync_cached_fills();
             let mut grouped: HashMap<NodeId, Vec<(SceneKey, DisplayItem)>> = HashMap::new();
             for (key, item) in dynamic {
                 grouped.entry(key.node()).or_default().push((key, item));
@@ -1402,6 +1417,8 @@ impl Runtime {
             }
             self.frame_work.scene_items_reconciled = keyed.len();
             self.reconcile(keyed);
+            self.rebuild_fill_slots();
+            self.tree.acknowledge_fills();
             self.dynamic_order = dynamic_order;
         }
         aqua_core::checkpoint::reach();

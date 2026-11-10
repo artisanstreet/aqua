@@ -109,8 +109,9 @@ pub use crate::compute::detailed_info::*;
 pub use crate::compute::{compute_block_align_content_offset, compute_block_layout};
 #[doc(inline)]
 pub use crate::compute::{
-    compute_cached_layout, compute_hidden_layout, compute_leaf_layout, compute_oof_layout, compute_oof_layout_for_area,
-    compute_root_layout, resolve_static_offset, round_layout, OofLayoutResult,
+    compute_cached_layout, compute_hidden_layout, compute_leaf_layout, compute_oof_layout,
+    compute_oof_layout_for_area, compute_root_layout, resolve_static_offset, round_layout,
+    OofLayoutResult,
 };
 #[doc(inline)]
 pub use crate::style::Style;

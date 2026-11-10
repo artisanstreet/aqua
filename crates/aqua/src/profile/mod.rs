@@ -12,6 +12,7 @@ pub use aqua_protocol::probe::{Metric as ProfileMetric, Phase};
 pub use recorder::Role;
 
 struct Session {
+    reporting: bool,
     config: report::Config,
     output: report::Output,
     sequence: AtomicU64,
@@ -47,12 +48,13 @@ fn sink(event: Event) {
 }
 
 pub fn init_from_environment() -> bool {
-    let wanted = std::env::var_os("AQUA_PROFILE").is_some_and(|value| value == "1");
-    if !wanted {
+    let reporting = std::env::var_os("AQUA_PROFILE").is_some_and(|value| value == "1");
+    if !reporting && !crate::debug::active() {
         return false;
     }
     let installed = SESSION
         .set(Session {
+            reporting,
             config: report::Config::from_environment(),
             output: report::Output::from_environment(),
             sequence: AtomicU64::new(0),
@@ -60,7 +62,7 @@ pub fn init_from_environment() -> bool {
         .is_ok();
     if installed {
         probe::install(sink);
-        if let Some(session) = SESSION.get() {
+        if let Some(session) = SESSION.get().filter(|session| session.reporting) {
             session.output.line(&format!(
                 "aqua-profile-start heap_counters={} spike_ms={:.1}",
                 alloc::counting(),
@@ -99,6 +101,10 @@ pub fn end_frame(role: Role, label: u64) {
     };
     with_local(|local| {
         let frame = local.recorder.finish(role, label);
+        crate::debug::frame(&frame);
+        if !session.reporting {
+            return;
+        }
         let sequence = session.sequence.fetch_add(1, Ordering::Relaxed);
         if frame.work_nanos() >= session.config.spike_nanos {
             session

@@ -80,15 +80,6 @@ impl From<LowerError> for MountError {
     }
 }
 
-/// Scope-owned view over one [`UiTree`]. One view per tree root: `traverse`
-/// (used for binding bookkeeping) covers the whole tree.
-///
-/// Every bound node gets a **child scope** owning exactly that node's
-/// effects. Removing a subtree disposes its scopes (no leaked
-/// subscriptions); reusing a node id with different sources disposes the
-/// stale scope and re-attaches (no duplicates, no clobbering). Always finish
-/// with [`View::dispose`]: dropping the view does not dispose scopes
-/// (reactive ownership is explicit).
 pub struct View {
     scope: Scope,
     sink: CommandSink,
@@ -602,29 +593,14 @@ impl View {
         &self.sink
     }
 
-    /// Set the whole content: first call mounts (single root required),
-    /// later calls refresh the root in place (single element) or keyed-sync
-    /// the root's children. Returns the node ids paired with the top-level
-    /// elements.
-    ///
-    /// Top-level fragments splice structurally before anything else, so
-    /// node↔element pairing is always positional. Reused node ids keep
-    /// their effects while the sources are identical; changed sources
-    /// dispose the stale child scope and re-attach without losing the node,
-    /// focus, or caret.
     pub fn set_content(
         &mut self,
         tree: &mut UiTree,
         elements: Vec<Element>,
     ) -> Result<Vec<NodeId>, MountError> {
-        // Normalize first: splice top-level fragments (keyed multi-child
-        // fragments error here, loudly, instead of vanishing a key).
         self.content = splice_top_level(elements)?;
-        let specs = lower_all(&self.content)?;
+        let mut specs = lower_all(&self.content)?;
         aqua_core::checkpoint::reach();
-        // `synced` tracks whether the tree already reflects the lowered
-        // specs, so a refreshed root spec is never synced as a child of
-        // itself.
         let mut synced = false;
         match self.root {
             None => {
@@ -638,7 +614,6 @@ impl View {
                 self.root = Some(tree.mount_spec(into_single(specs)));
             }
             Some(r) if tree.get(r).is_none() => {
-                // Root was removed out-of-band: remount from scratch.
                 self.dispose_bound();
                 if specs.len() != 1 {
                     self.root = None;
@@ -651,25 +626,25 @@ impl View {
                 self.root = Some(tree.mount_spec(into_single(specs)));
             }
             Some(r) => {
-                // A single root refreshes in place — props AND children,
-                // inside `refresh_mounted`. Anything else syncs the specs
-                // as the root's children. Never both: the refreshed root
-                // spec must not be synced as a child of itself.
                 if self.content.len() == 1 {
                     let same_key = tree.get(r).is_some_and(|record| record.key == specs[0].key);
                     let refreshed = same_key
-                        && self.content[0].refresh_mounted(tree, r, &TypoChain::default())?;
+                        && self.content[0].refresh_mounted(
+                            tree,
+                            r,
+                            &TypoChain::default(),
+                            Some(std::mem::take(&mut specs[0].children)),
+                        )?;
                     aqua_core::checkpoint::reach();
                     match refreshed {
-                        true => synced = true, // children already synced inside
+                        true => synced = true,
                         false => {
-                            // Kind changed: replace the whole root.
                             self.dispose_bound();
                             tree.remove(r);
                             let specs = lower_all(&self.content)?;
                             let fresh = tree.mount_spec(into_single(specs));
                             self.root = Some(fresh);
-                            synced = true; // mounted whole subtree; skip sync
+                            synced = true;
                         }
                     }
                 }
@@ -682,11 +657,6 @@ impl View {
         }
         aqua_core::checkpoint::reach();
         let root = self.root.unwrap();
-        // Pair nodes with elements positionally (fragments already spliced).
-        // Collection elements pair their container node with the window
-        // driver (`bind_collection` registers the mount; realization and row
-        // binding happen in `compute_layout`). Managed children are never
-        // asserted against element children here.
         let Self {
             scope,
             sink,
@@ -722,20 +692,11 @@ impl View {
                 )?;
             }
         }
-        // Prune bookkeeping AND scopes for removed subtrees (plus dead
-        // collection mounts): without this, effects outlive their rows and
-        // leak until the whole view disposes.
         aqua_core::checkpoint::reach();
         self.prune_dead(tree);
         Ok(self.paired_ids(tree, root))
     }
 
-    /// Refresh one mounted subtree in place from a freshly built element,
-    /// leaving every other node, scope, and collection mount untouched.
-    /// Returns `Ok(false)` when the subtree cannot be refreshed in place
-    /// (node gone, key or kind changed, unreachable through retained
-    /// content such as collection rows): callers fall back to
-    /// [`View::set_content`].
     pub fn refresh_subtree(
         &mut self,
         tree: &mut UiTree,
@@ -785,7 +746,7 @@ impl View {
             };
             current = next;
         }
-        if !element.refresh_mounted(tree, node, &inherited)? {
+        if !element.refresh_mounted(tree, node, &inherited, None)? {
             return Ok(false);
         }
         bind_new(
@@ -1944,17 +1905,6 @@ fn into_single(mut specs: Vec<NodeSpec>) -> NodeSpec {
     specs.pop().unwrap()
 }
 
-/// Bind `el` (and its subtree) to `id`, applying each binding once per
-/// source identity. Fresh ids bind under a new child scope; reused ids keep
-/// their effects while the sources are identical, otherwise the stale child
-/// scope is disposed (old sources stop) and bindings re-attach — the node
-/// id, focus, and caret survive. Non-effect bindings (actions, focus,
-/// painters) re-apply idempotently every pass.
-///
-/// Collection elements route to the window driver instead: their children
-/// are realized (not lowered from stored parts), so the normal child-count
-/// assert is skipped for them and no bindings are taken here. Row/header
-/// descriptors are bound by the driver from retained fresh builds.
 #[allow(clippy::too_many_arguments)]
 fn bind_new(
     scope: &Scope,
@@ -1966,8 +1916,6 @@ fn bind_new(
     el: &mut Element,
     inherited: &TypoChain,
 ) -> Result<(), MountError> {
-    // Effective chain at this position, exactly as normative lowering
-    // composes it (parent chain plus this element's explicit overrides).
     let local_typography = el.typo_chain();
     let own = inherited.child(&local_typography);
     if el.is_collection() {
@@ -2005,27 +1953,32 @@ fn bind_new(
             .get(&id.raw())
             .map(|s| s.effects == keys)
             .unwrap_or(false);
-    if same {
-        // Sources unchanged: effects already live; re-apply only the
-        // idempotent non-effect bindings (fresh callbacks from the new
-        // element tree). Effect handles are dropped, not re-subscribed.
-        let plain: Vec<ElementBinding> = bindings.into_iter().filter(|b| !is_effect(b)).collect();
-        apply_bindings(tree, scope, sink, id, plain);
-    } else {
-        // Fresh id, or sources changed: dispose any stale child scope (old
-        // sources stop), then (re)bind everything under a fresh scope.
-        if let Some(state) = bound.remove(&id.raw()) {
-            state.scope.dispose();
+    match (keys.is_empty(), same) {
+        (true, _) => {
+            if let Some(state) = bound.remove(&id.raw()) {
+                state.scope.dispose();
+            }
+            apply_bindings(tree, scope, sink, id, bindings);
         }
-        let child = scope.child();
-        apply_bindings(tree, &child, sink, id, bindings);
-        bound.insert(
-            id.raw(),
-            BoundState {
-                scope: child,
-                effects: keys,
-            },
-        );
+        (false, true) => {
+            let plain: Vec<ElementBinding> =
+                bindings.into_iter().filter(|b| !is_effect(b)).collect();
+            apply_bindings(tree, scope, sink, id, plain);
+        }
+        (false, false) => {
+            if let Some(state) = bound.remove(&id.raw()) {
+                state.scope.dispose();
+            }
+            let child = scope.child();
+            apply_bindings(tree, &child, sink, id, bindings);
+            bound.insert(
+                id.raw(),
+                BoundState {
+                    scope: child,
+                    effects: keys,
+                },
+            );
+        }
     }
     sink.interaction(
         crate::tree::interaction::InteractionCommand::TypographyColor {
@@ -2035,11 +1988,6 @@ fn bind_new(
             own_source: local_typography.explicit_gpui_source_color(),
         },
     );
-    // Explicit author semantics (`Element::role` /
-    // `Element::collection_semantics`): overlay the provided fields onto
-    // the mounted node, preserving everything else. Nodes without explicit
-    // overrides keep whatever they have — including inferred control roles
-    // (a missing override never resets to `Group`).
     if el.role_opt().is_some() || el.collection_semantics_opt().is_some() {
         if let Some(rec) = tree.get(id) {
             let mut sem = rec.semantics.clone();
@@ -3105,11 +3053,7 @@ mod tests {
         rt2.flush();
         let after = rt2.stats();
         assert_eq!(after.effects, baseline.effects + 1, "{after:?}");
-        assert_eq!(
-            after.live_scopes,
-            baseline.live_scopes + 2, // view scope + surviving row scope
-            "{after:?}"
-        );
+        assert_eq!(after.live_scopes, baseline.live_scopes + 1, "{after:?}");
     }
 
     #[test]

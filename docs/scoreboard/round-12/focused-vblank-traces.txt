@@ -1,0 +1,66 @@
+diagnostic-idle-vblank-control
+probe-launch unix_ms=1794003127230 pid=23600
+probe-startup window_ms=56 first_content_ms=593 nondominant=0.165 rich_content_ms=593
+probe-open thread=bench-large unix_ms=1794003127393 since_launch_ms=163 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=23600
+probe-latency name=type kind=type samples=1 timeouts=0 p50_ms=266.555 p90_ms=266.555 p99_ms=266.555 max_ms=266.555 mean_ms=266.555 over4_ms=1 over8_ms=1 over16_ms=1 over50_ms=1 grab_p50_ms=264.4
+pid=23600 dpi=120 working_set_mb=127 private_mb=130
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+key-latency target=aqua pid=23600 posts=145 matched=132 unmatched=13 p50_ms=15.93 p90_ms=154.67 p99_ms=186.22 max_ms=187.68 mean_ms=48.60 over8_3=66 over16_7=61
+
+diagnostic-idle-vblank
+probe-launch unix_ms=1794003072184 pid=8776
+probe-startup window_ms=55 first_content_ms=589 nondominant=0.165 rich_content_ms=589
+probe-open thread=bench-large unix_ms=1794003072345 since_launch_ms=161 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=8776
+probe-latency name=type kind=type samples=1 timeouts=0 p50_ms=262.711 p90_ms=262.711 p99_ms=262.711 max_ms=262.711 mean_ms=262.711 over4_ms=1 over8_ms=1 over16_ms=1 over50_ms=1 grab_p50_ms=260.5
+pid=8776 dpi=120 working_set_mb=126 private_mb=117
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+key-latency target=aqua pid=8776 posts=145 matched=145 unmatched=0 p50_ms=1.54 p90_ms=1.87 p99_ms=2.29 max_ms=2.42 mean_ms=1.58 over8_3=0 over16_7=0
+
+diagnostic-idle-vblank-repeat
+probe-launch unix_ms=1794003210551 pid=6440
+probe-startup window_ms=72 first_content_ms=644 nondominant=0.165 rich_content_ms=644
+probe-open thread=bench-large unix_ms=1794003210732 since_launch_ms=181 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=6440
+probe-latency name=type kind=type samples=1 timeouts=0 p50_ms=264.338 p90_ms=264.338 p99_ms=264.338 max_ms=264.338 mean_ms=264.338 over4_ms=1 over8_ms=1 over16_ms=1 over50_ms=1 grab_p50_ms=261.5
+pid=6440 dpi=120 working_set_mb=126 private_mb=118
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+key-latency target=aqua pid=6440 posts=145 matched=145 unmatched=0 p50_ms=2.31 p90_ms=2.66 p99_ms=3.17 max_ms=3.19 mean_ms=2.33 over8_3=0 over16_7=0
+
+diagnostic-vblank-guard
+probe-launch unix_ms=1794003476069 pid=20580
+probe-startup window_ms=57 first_content_ms=580 nondominant=0.165 rich_content_ms=580
+probe-open thread=bench-large unix_ms=1794003476234 since_launch_ms=165 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=20580
+probe-latency name=type kind=type samples=1 timeouts=0 p50_ms=264.71 p90_ms=264.71 p99_ms=264.71 max_ms=264.71 mean_ms=264.71 over4_ms=1 over8_ms=1 over16_ms=1 over50_ms=1 grab_p50_ms=262.4
+pid=20580 dpi=120 working_set_mb=125 private_mb=118
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+key-latency target=aqua pid=20580 posts=145 matched=145 unmatched=0 p50_ms=1.60 p90_ms=1.96 p99_ms=2.36 max_ms=2.50 mean_ms=1.63 over8_3=0 over16_7=0
+
+diagnostic-gpui-repeat
+probe-launch unix_ms=1794002147603 pid=25120
+probe-startup window_ms=133 first_content_ms=334 nondominant=0.155 rich_content_ms=335
+probe-open thread=bench-large unix_ms=1794002148098 since_launch_ms=495 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=25120
+probe-latency name=type kind=type samples=1 timeouts=0 p50_ms=267.256 p90_ms=267.256 p99_ms=267.256 max_ms=267.256 mean_ms=267.256 over4_ms=1 over8_ms=1 over16_ms=1 over50_ms=1 grab_p50_ms=264.9
+pid=25120 dpi=120 working_set_mb=125 private_mb=115
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+key-latency target=gpui pid=25120 posts=145 matched=145 unmatched=0 p50_ms=17.86 p90_ms=19.48 p99_ms=19.89 max_ms=20.18 mean_ms=18.16 over8_3=145 over16_7=145
+
+
+diagnostic-present-modes
+probe-launch unix_ms=1794004318659 pid=25040
+probe-startup window_ms=61 first_content_ms=535 nondominant=0.165 rich_content_ms=535
+probe-open thread=bench-large unix_ms=1794004318811 since_launch_ms=152 since_click_ms=-1
+probe-keypost posts=150 gap_ms=110 pid=25040
+probe-latency name=type kind=type samples=1 timeouts=0 p50_ms=264.66 p90_ms=264.66 p99_ms=264.66 max_ms=264.66 mean_ms=264.66 over4_ms=1 over8_ms=1 over16_ms=1 over50_ms=1 grab_p50_ms=262.3
+pid=25040 dpi=120 working_set_mb=127 private_mb=119
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---
+key-latency target=aqua pid=25040 posts=145 matched=145 unmatched=0 p50_ms=1.46 p90_ms=1.88 p99_ms=2.22 max_ms=2.31 mean_ms=1.55 over8_3=0 over16_7=0

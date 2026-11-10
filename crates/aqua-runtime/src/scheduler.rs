@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::time::Duration;
 
@@ -10,17 +10,11 @@ pub const MIN_FRAME_INTERVAL: Duration = Duration::from_micros(1);
 
 pub fn gpui_pulse_interval(
     refresh_interval: Duration,
-    active: bool,
-    last_invalidating_input: Option<Instant>,
-    now: Instant,
+    _active: bool,
+    _last_invalidating_input: Option<Instant>,
+    _now: Instant,
 ) -> Duration {
-    let recent = last_invalidating_input
-        .is_some_and(|last| now.saturating_duration_since(last) < Duration::from_secs(1));
-    if active || recent {
-        refresh_interval
-    } else {
-        refresh_interval.max(Duration::from_micros(33_333))
-    }
+    refresh_interval
 }
 
 struct Pending {
@@ -45,7 +39,12 @@ pub struct Scheduler {
     in_flight: HashMap<WindowId, u32>,
     pacing_gate: HashMap<WindowId, Instant>,
     resize_gate: HashMap<WindowId, Instant>,
+    awaiting_present: HashSet<WindowId>,
     stats: FrameStats,
+}
+
+fn animation_only(reasons: FrameReason) -> bool {
+    !reasons.is_empty() && (FrameReason::ANIMATION | FrameReason::GPUI_PULSE).contains(reasons)
 }
 
 impl Default for Scheduler {
@@ -65,6 +64,7 @@ impl Scheduler {
             in_flight: HashMap::new(),
             pacing_gate: HashMap::new(),
             resize_gate: HashMap::new(),
+            awaiting_present: HashSet::new(),
             stats: FrameStats::default(),
         }
     }
@@ -120,6 +120,7 @@ impl Scheduler {
         match self.pending.get_mut(&window) {
             Some(p) => {
                 p.reasons |= reason;
+                p.deadline = None;
                 self.stats.coalesced += 1;
             }
             None => {
@@ -139,10 +140,7 @@ impl Scheduler {
         match self.pending.get_mut(&window) {
             Some(p) => {
                 p.reasons |= FrameReason::ANIMATION;
-                p.deadline = Some(match p.deadline {
-                    Some(d) => d.min(deadline),
-                    None => deadline,
-                });
+                p.deadline = p.deadline.map(|d| d.min(deadline));
                 self.stats.coalesced += 1;
             }
             None => {
@@ -215,6 +213,9 @@ impl Scheduler {
             if reasons.is_empty() || self.resize_blocked(id, reasons, now) {
                 continue;
             }
+            if animation_only(reasons) && self.awaiting_present.contains(&id) {
+                continue;
+            }
             let flying = self.in_flight.get(&id).copied().unwrap_or(0);
             if flying >= self.max_in_flight {
                 deferred += 1;
@@ -268,6 +269,14 @@ impl Scheduler {
             && self.resize_gate.get(&id).is_some_and(|gate| now < *gate)
     }
 
+    pub fn await_present(&mut self, window: WindowId) {
+        self.awaiting_present.insert(window);
+    }
+
+    pub fn present_arrived(&mut self, window: WindowId) {
+        self.awaiting_present.remove(&window);
+    }
+
     pub fn mark_presented(&mut self, window: WindowId) {
         if let Some(n) = self.in_flight.get_mut(&window) {
             *n = n.saturating_sub(1);
@@ -288,6 +297,9 @@ impl Scheduler {
         for (id, p) in &self.pending {
             let flying = self.in_flight.get(id).copied().unwrap_or(0);
             if flying >= self.max_in_flight {
+                continue;
+            }
+            if animation_only(p.reasons) && self.awaiting_present.contains(id) {
                 continue;
             }
             if p.reasons == FrameReason::ANIMATION {
@@ -320,6 +332,9 @@ impl Scheduler {
             if self.in_flight.get(id).copied().unwrap_or(0) >= self.max_in_flight {
                 continue;
             }
+            if self.awaiting_present.contains(id) {
+                continue;
+            }
             let mut at = *deadline;
             if let Some(gate) = self.pacing_gate.get(id) {
                 at = at.max(*gate);
@@ -335,6 +350,7 @@ impl Scheduler {
         self.in_flight.remove(&window);
         self.pacing_gate.remove(&window);
         self.resize_gate.remove(&window);
+        self.awaiting_present.remove(&window);
         self.window_fps.remove(&window);
     }
 
@@ -386,6 +402,48 @@ mod tests {
         s.mark_produced(&[id(1)], now);
         assert_eq!(s.stats().produced, 1);
         assert!(!s.has_pending());
+    }
+
+    #[test]
+    fn animation_frames_wait_for_the_previous_present() {
+        let mut s = Scheduler::new();
+        let now = t0();
+        s.request_frame(id(5), FrameReason::ANIMATION);
+        assert_eq!(s.ready_windows(now).len(), 1);
+        s.mark_produced(&[id(5)], now);
+        s.mark_presented(id(5));
+        s.await_present(id(5));
+        s.request_frame(id(5), FrameReason::ANIMATION);
+        let later = now + Duration::from_millis(50);
+        assert!(s.ready_windows(later).is_empty());
+        assert_eq!(s.next_wakeup(later), None);
+        s.present_arrived(id(5));
+        assert_eq!(s.ready_windows(later).len(), 1);
+        assert_eq!(s.next_wakeup(later), Some(later));
+    }
+
+    #[test]
+    fn input_frames_do_not_wait_for_a_present() {
+        let mut s = Scheduler::new();
+        let now = t0();
+        s.await_present(id(6));
+        s.request_frame(id(6), FrameReason::ANIMATION);
+        s.request_frame(id(6), FrameReason::INPUT);
+        assert_eq!(s.ready_windows(now).len(), 1);
+    }
+
+    #[test]
+    fn a_later_deadline_never_postpones_an_immediate_animation_frame() {
+        let now = t0();
+        let later = now + Duration::from_millis(120);
+        let mut first = Scheduler::new();
+        first.request_frame(id(7), FrameReason::ANIMATION);
+        first.request_animation_deadline(id(7), later);
+        assert_eq!(first.ready_windows(now).len(), 1);
+        let mut second = Scheduler::new();
+        second.request_animation_deadline(id(7), later);
+        second.request_frame(id(7), FrameReason::ANIMATION);
+        assert_eq!(second.ready_windows(now).len(), 1);
     }
 
     #[test]

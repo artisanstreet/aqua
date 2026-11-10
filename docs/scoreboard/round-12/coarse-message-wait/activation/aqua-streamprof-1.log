@@ -1,0 +1,19 @@
+probe-launch unix_ms=1794026992717 pid=4880
+probe-startup window_ms=62 first_content_ms=599 nondominant=0.221 rich_content_ms=599
+probe-open thread=bench-stream unix_ms=1794026992932 since_launch_ms=215 since_click_ms=-1
+probe-cpu name=stream0 unix_ms=1794027005179 cpu_ms=250 user_ms=109 private_mb=101 working_set_mb=119.1 peak_working_set_mb=120.3 threads=30 handles=1049
+probe-trigger unix_ms=1794027005189
+probe-latency name=stream_latency kind=idle samples=300 timeouts=0 p50_ms=0.066 p90_ms=0.118 p99_ms=0.322 max_ms=3.162 mean_ms=0.092 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/3,0.1/0,0.1/0
+probe-cpu name=stream1 unix_ms=1794027014656 cpu_ms=875 user_ms=562 private_mb=140.8 working_set_mb=131.5 peak_working_set_mb=131.8 threads=32 handles=1051
+probe-thread name=stream_threads tid=24528 thread='main' started_ms=0 module=aquarunf261a38d.exe start_rva=0x1440 ctx_per_s=71.8 cpu_ms_per_s=9.8
+probe-thread name=stream_threads tid=18700 thread='forge-net' started_ms=23 module=aquarunf261a38d.exe start_rva=0x177a3d0 ctx_per_s=25.2 cpu_ms_per_s=2
+probe-thread name=stream_threads tid=23216 thread='forge-net' started_ms=23 module=aquarunf261a38d.exe start_rva=0x177a3d0 ctx_per_s=9.5 cpu_ms_per_s=0
+probe-thread name=stream_threads tid=19636 thread='aqua-render' started_ms=35 module=aquarunf261a38d.exe start_rva=0x177a3d0 ctx_per_s=36.9 cpu_ms_per_s=2
+probe-thread name=stream_threads tid=17680 thread='' started_ms=196 module=ntdll.dll start_rva=0x4551f4990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=stream_threads tid=7160 thread='forge-net' started_ms=12457 module=aquarunf261a38d.exe start_rva=0x177a3d0 ctx_per_s=0.4 cpu_ms_per_s=0
+probe-thread name=stream_threads tid=25264 thread='forge-net' started_ms=12461 module=aquarunf261a38d.exe start_rva=0x177a3d0 ctx_per_s=0.5 cpu_ms_per_s=0
+probe-threads-done name=stream_threads seconds=8 active=7 total=30
+probe-cpu name=stream2 unix_ms=1794027022839 cpu_ms=984 user_ms=641 private_mb=142.2 working_set_mb=133.6 peak_working_set_mb=133.6 threads=30 handles=1051
+pid=4880 dpi=120 working_set_mb=134 private_mb=145
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---

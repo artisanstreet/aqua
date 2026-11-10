@@ -1,0 +1,11 @@
+{
+  "source_trace_sha256": "b8b903e0660880516ddb17a3dcc1409e02fae8f7a57e9ad8c7fd05839de02edf",
+  "source_trace_bytes": 6150387,
+  "filter": {
+    "pid": 18520,
+    "event_id": 43
+  },
+  "retained_rows": 284,
+  "recorded_utc": "2026-11-07T05:37:06.571110+00:00",
+  "scope": "Own-process DXGI PresentStop, not physical display latency"
+}

@@ -1,0 +1,5 @@
+{
+  "change": "Capture the GetMessage failure before automatic timer cleanup can alter last-error state; successful waits keep the existing cleanup/dispatch sequence.",
+  "validation": "13 targeted Windows tests and library/targeted-test clippy -D warnings PASS",
+  "performance_provenance": "The full 33/41 scoreboard measures preceding commit 4352103, binary 0dbc9448...; this error-only follow-up has no separately measured release binary."
+}

@@ -132,7 +132,7 @@ impl Timestamps {
             self.latest = Some(total);
             self.latest_passes.clear();
             for (stamp, label) in self.slots[index].labels.iter().enumerate() {
-                if let Some(duration) = ticks(stamps[stamp], stamps[stamp + 1], frequency) {
+                if let Some(duration) = ticks(stamps[stamp + 1], stamps[stamp + 2], frequency) {
                     self.latest_passes.push(PassTime { label, duration });
                 }
             }

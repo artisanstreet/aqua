@@ -8,9 +8,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
-use super::pacing::{
-    interval_from_ticks, reconcile_interval, ticks_until_next_vblank, FALLBACK_INTERVAL,
-};
+use super::pacing::{interval_from_ticks, reconcile_interval, ticks_until_next_vblank};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Vblank {
@@ -40,8 +38,12 @@ pub fn query() -> Option<Vblank> {
     let now = counter();
     let period = info.qpcRefreshPeriod;
     let remaining = ticks_until_next_vblank(now, info.qpcVBlank, period);
+    let interval = interval_from_ticks(period, frequency);
+    if interval.is_zero() {
+        return None;
+    }
     Some(Vblank {
-        interval: interval_from_ticks(period, frequency),
+        interval,
         until_next: Duration::from_nanos(
             ((remaining as u128 * 1_000_000_000) / frequency.max(1) as u128) as u64,
         ),
@@ -51,7 +53,7 @@ pub fn query() -> Option<Vblank> {
 pub fn refresh_interval() -> Duration {
     query()
         .map(|vblank| vblank.interval)
-        .unwrap_or(FALLBACK_INTERVAL)
+        .unwrap_or(Duration::ZERO)
 }
 
 pub fn monitor_of(hwnd: isize) -> isize {

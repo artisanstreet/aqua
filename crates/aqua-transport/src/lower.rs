@@ -37,6 +37,10 @@ pub trait Lowering: 'static {
 
     fn reclaim(&mut self, _commands: Vec<PaintCommand>) {}
 
+    fn release_uploads(&mut self) -> UploadBatch {
+        UploadBatch::default()
+    }
+
     fn trim(&mut self, _request: TrimRequest) -> usize {
         0
     }

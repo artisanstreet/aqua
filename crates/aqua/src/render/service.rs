@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant as WallInstant};
 
@@ -12,49 +12,16 @@ use aqua_runtime::RenderSide;
 use aqua_transport::{Notify, Receiver, RecvError, Sender};
 
 use super::host::{epoch_ns, Clock, FrameTarget, RenderStats, Repaint, TargetInit};
+use super::wake::Signal;
 
 const DRAIN_LIMIT: usize = 4096;
 const MAX_PENDING_POLLS: u32 = 60;
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(3);
-const ANIMATION_PERIOD: Duration = Duration::from_millis(15);
-const HEAVY_ANIMATION_PERIOD: Duration = Duration::from_millis(33);
 
 fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-#[derive(Default)]
-struct Signal {
-    raised: Mutex<bool>,
-    condvar: Condvar,
-}
-
-impl Signal {
-    fn notify(&self) {
-        *locked(&self.raised) = true;
-        self.condvar.notify_one();
-    }
-
-    fn wait(&self, timeout: Option<Duration>) {
-        let mut raised = locked(&self.raised);
-        if !*raised {
-            raised = match timeout {
-                Some(timeout) => {
-                    self.condvar
-                        .wait_timeout(raised, timeout)
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .0
-                }
-                None => self
-                    .condvar
-                    .wait(raised)
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
-            };
-        }
-        *raised = false;
-    }
 }
 
 pub struct NewSlot {
@@ -167,6 +134,12 @@ enum Status {
     Waiting(Option<WallInstant>),
 }
 
+struct Execution {
+    feedback: Vec<Feedback>,
+    scenes: u64,
+    late_commands: bool,
+}
+
 struct Slot {
     id: u64,
     commands: Receiver<RenderCommand>,
@@ -177,7 +150,6 @@ struct Slot {
     interval: Duration,
     stats: Arc<RenderStats>,
     inbox: Vec<RenderCommand>,
-    feedback: Vec<Feedback>,
     wake: RenderWake,
     pending: Pending,
     polls: u32,
@@ -223,7 +195,6 @@ impl Slot {
             interval: new.interval,
             stats: new.stats,
             inbox: Vec::new(),
-            feedback: Vec::new(),
             wake: RenderWake::NextFrame,
             pending: Pending::Settled,
             polls: 0,
@@ -307,42 +278,60 @@ impl Slot {
         };
         let wake_at = self.wake_deadline(now);
         let idle_at = self.idle_trim_deadline(now);
+        let maintenance_at = match &self.stage {
+            Stage::Running(target) => target.maintenance_in().map(|after| now + after),
+            _ => None,
+        };
         let idle_due = idle_at.is_some_and(|at| at <= now);
         if idle_due {
             self.stats.trim.store(true, Ordering::Release);
         }
         let trim = trim || idle_due;
         let due = |at: Option<WallInstant>| at.is_some_and(|at| at <= now);
+        let maintenance = due(maintenance_at) && self.inbox.is_empty() && !arrived;
         let urgent = !self.inbox.is_empty()
-            || !self.feedback.is_empty()
             || arrived
             || trim
             || visibility
+            || maintenance
             || due(repaint_at)
             || due(wake_at);
         if !urgent && self.startup_step() {
             return Status::Ran;
         }
         if !urgent {
-            let earliest = [repaint_at, wake_at, idle_at].into_iter().flatten().min();
+            let earliest = [repaint_at, wake_at, idle_at, maintenance_at]
+                .into_iter()
+                .flatten()
+                .min();
             return Status::Waiting(earliest);
         }
         if let Some(not_before) = self.not_before.filter(|at| *at > now) {
             return Status::Waiting(Some(not_before));
         }
+        let maintained = match (&mut self.stage, maintenance) {
+            (Stage::Running(target), true) => {
+                let changed = target.maintenance();
+                if changed {
+                    target.invalidate();
+                }
+                changed
+            }
+            _ => false,
+        };
         self.cause = super::runs::RunCause {
             arrived,
             forced: false,
             trim,
-            repaint: due(repaint_at),
+            repaint: due(repaint_at) || maintained,
             wake_due: due(wake_at),
             inbox: !self.inbox.is_empty(),
-            feedback: !self.feedback.is_empty(),
+            feedback: false,
             visibility,
             framed: false,
             presented: false,
         };
-        self.run(now, arrived, trim, due(repaint_at));
+        self.run(now, arrived, trim, due(repaint_at) || maintained);
         Status::Ran
     }
 
@@ -361,45 +350,14 @@ impl Slot {
                 }
             }
             self.hidden_seen = hidden;
-            if let Stage::Running(target) = &mut self.stage {
-                let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Wait);
-                target.wait_frame();
-            }
         }
         self.stats.waited_ns.store(epoch_ns(), Ordering::Relaxed);
         let mut commands = std::mem::take(&mut self.inbox);
         drain(&mut self.commands, &mut commands);
-        let scenes = commands
-            .iter()
-            .filter(|command| matches!(command, RenderCommand::Scene(_)))
-            .count() as u64;
-        let applied = self
-            .stats
-            .scenes_applied
-            .fetch_add(scenes, Ordering::Relaxed)
-            + scenes;
-        if !commands.is_empty() {
-            self.polls = 0;
-        }
-        self.seen_arrivals = self.stats.arrivals.load(Ordering::Acquire);
-        let input = RenderInput {
-            commands,
-            feedback: std::mem::take(&mut self.feedback),
-            present_at: self.present_time(),
-        };
-        let step_span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Input);
-        let output = self.side.step(input);
-        drop(step_span);
-        self.stats.stepped_ns.store(epoch_ns(), Ordering::Relaxed);
-        self.wake = output.wake;
-        for event in output.events {
-            if self.events.send(event).is_err() {
-                break;
-            }
-        }
+        let (mut scenes, next_frame) = self.advance(commands);
         let sized = self.side.viewport().is_some();
-        let forced = output.frame.is_none() && (arrived || trim || repaint) && sized;
-        let frame = match (output.frame.filter(|_| sized), forced) {
+        let forced = next_frame.is_none() && (arrived || trim || repaint) && sized;
+        let frame = match (next_frame.filter(|_| sized), forced) {
             (Some(frame), _) => {
                 self.last_frame = frame;
                 Some(frame)
@@ -408,18 +366,22 @@ impl Slot {
             (None, false) => None,
         };
         self.presented_last = false;
+        let mut announced = false;
         if let Some(frame) = frame {
             if forced {
                 self.stats.forced.fetch_add(1, Ordering::Relaxed);
             }
             let silent = forced && !trim && !arrived && repaint && self.quiet;
-            let feedback = self.execute(frame, arrived || (forced && !trim && !silent));
-            let maintenance = forced && trim;
+            let execution = self.execute(frame, arrived || (forced && !trim && !silent));
+            scenes += execution.scenes;
+            let feedback = execution.feedback;
+            let silent = silent && !execution.late_commands;
+            let maintenance = forced && trim && !execution.late_commands;
             self.presented_last = maintenance
                 || feedback
                     .iter()
                     .any(|item| matches!(item, Feedback::Presented(_)));
-            self.feedback = match maintenance || silent {
+            let feedback = match maintenance || silent {
                 true => feedback
                     .into_iter()
                     .filter(|item| !matches!(item, Feedback::Presented(_)))
@@ -428,15 +390,26 @@ impl Slot {
             };
             self.settle_pending(started);
             if self.presented_last {
+                crate::debug::presented(self.id);
                 self.stats.presented_ns.store(epoch_ns(), Ordering::Relaxed);
-                self.stats
-                    .scenes_presented
-                    .store(applied, Ordering::Release);
+                self.stats.scenes_presented.store(
+                    self.stats.scenes_applied.load(Ordering::Relaxed),
+                    Ordering::Release,
+                );
             }
+            for feedback in feedback {
+                let event = self.side.feedback(feedback);
+                announced |= matches!(event, RenderEvent::Presented(_));
+                if self.events.send(event).is_err() {
+                    break;
+                }
+            }
+        }
+        if scenes > 0 && !announced {
+            let _ = self.events.send(RenderEvent::Skipped);
         }
         if trim {
             self.stats.trim.store(false, Ordering::Release);
-            crate::mem_probe::return_memory_to_os();
             if crate::mem_probe::memory_report_enabled() {
                 eprintln!(
                     "aqua-trim: window {} trim pass {:.2} ms",
@@ -473,9 +446,9 @@ impl Slot {
     }
 
     fn settle_pending(&mut self, now: WallInstant) {
-        let repaint = match &self.stage {
-            Stage::Running(target) => target.repaint(),
-            _ => Repaint::Settled,
+        let (repaint, interval) = match &self.stage {
+            Stage::Running(target) => (target.repaint(), target.animation_interval(self.interval)),
+            _ => (Repaint::Settled, self.interval),
         };
         self.pending = match repaint {
             Repaint::Settled => {
@@ -489,11 +462,11 @@ impl Slot {
             }
             Repaint::Animating => {
                 self.quiet = true;
-                Pending::At(now + ANIMATION_PERIOD)
+                Pending::At(now + interval)
             }
             Repaint::Heavy => {
                 self.quiet = true;
-                Pending::At(now + HEAVY_ANIMATION_PERIOD)
+                Pending::At(now + interval.max(Duration::from_nanos(33_333_333)))
             }
             Repaint::Still(rest) => {
                 self.quiet = true;
@@ -510,9 +483,60 @@ impl Slot {
         };
     }
 
-    fn execute(&mut self, frame: FrameId, invalidate: bool) -> Vec<Feedback> {
+    fn advance(&mut self, commands: Vec<RenderCommand>) -> (u64, Option<FrameId>) {
+        let scenes = commands
+            .iter()
+            .filter(|command| matches!(command, RenderCommand::Scene(_)))
+            .count() as u64;
+        self.stats
+            .scenes_applied
+            .fetch_add(scenes, Ordering::Relaxed);
+        if !commands.is_empty() {
+            self.polls = 0;
+        }
+        self.seen_arrivals = self.stats.arrivals.load(Ordering::Acquire);
+        let input = RenderInput {
+            commands,
+            feedback: Vec::new(),
+            present_at: self.present_time(),
+        };
+        let step_span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Input);
+        let output = self.side.step(input);
+        drop(step_span);
+        self.stats.stepped_ns.store(epoch_ns(), Ordering::Relaxed);
+        self.wake = output.wake;
+        for event in output.events {
+            if self.events.send(event).is_err() {
+                break;
+            }
+        }
+        (scenes, output.frame)
+    }
+
+    fn execute(&mut self, mut frame: FrameId, invalidate: bool) -> Execution {
         let live = self.start();
-        match (&mut self.stage, live) {
+        let mut scenes = 0;
+        let mut late_commands = false;
+        if let (Stage::Running(target), true) = (&mut self.stage, live) {
+            {
+                let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Wait);
+                target.wait_frame();
+            }
+            let mut commands = Vec::new();
+            drain(&mut self.commands, &mut commands);
+            if !commands.is_empty() {
+                late_commands = true;
+                self.stats.picked_ns.store(epoch_ns(), Ordering::Relaxed);
+                let (added, next_frame) = self.advance(commands);
+                scenes = added;
+                if let Some(next_frame) = next_frame {
+                    frame = next_frame;
+                    self.last_frame = frame;
+                }
+            }
+            self.stats.waited_ns.store(epoch_ns(), Ordering::Relaxed);
+        }
+        let feedback = match (&mut self.stage, live) {
             (Stage::Running(target), true) => {
                 if invalidate {
                     target.invalidate();
@@ -524,6 +548,11 @@ impl Slot {
                 false => vec![Feedback::DeviceLost],
             },
             _ => Vec::new(),
+        };
+        Execution {
+            feedback,
+            scenes,
+            late_commands,
         }
     }
 

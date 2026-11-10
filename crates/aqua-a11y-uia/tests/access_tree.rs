@@ -130,3 +130,46 @@ fn bridge_stays_dormant_until_a_client_activates_then_wakes_for_every_inbound_ev
     ));
     assert!(bridge.drain_actions().is_empty());
 }
+
+#[test]
+fn identical_snapshots_are_skipped_and_reactivation_sends_a_full_tree() {
+    let bridge = A11yBridge::new(std::sync::Arc::new(|| {}));
+    bridge.connect();
+    let mut update = AccessTreeUpdate {
+        root: owner(0),
+        focus: owner(0),
+        nodes: vec![text_node(0)],
+    };
+    assert!(bridge.snapshot(&update).is_some());
+    assert!(bridge.snapshot(&update).is_none());
+    update.nodes[0].text.as_mut().unwrap().selection = Some((1, 2));
+    assert!(bridge.snapshot(&update).is_some());
+    assert!(bridge.snapshot(&update).is_none());
+    bridge.connect();
+    assert!(bridge.snapshot(&update).is_some());
+}
+
+#[test]
+fn changed_snapshots_only_publish_changed_nodes_and_keep_text_actions_live() {
+    let bridge = A11yBridge::new(std::sync::Arc::new(|| {}));
+    bridge.connect();
+    let mut update = AccessTreeUpdate {
+        root: owner(0),
+        focus: owner(0),
+        nodes: vec![text_node(0)],
+    };
+    let initial = bridge.snapshot(&update).unwrap();
+    assert!(initial.nodes.len() > 1);
+    let run = initial.nodes[0].1.children()[0];
+    update.nodes[0].semantic.label = "Updated label".to_owned();
+    let changed = bridge.snapshot(&update).unwrap();
+    assert_eq!(changed.nodes.len(), 1);
+    assert_eq!(changed.nodes[0].0, pack_node_id(owner(0)));
+    bridge.native_action(&selection_request(owner(0), run));
+    assert_eq!(bridge.drain_actions().len(), 1);
+    bridge.connect();
+    assert_eq!(
+        bridge.snapshot(&update).unwrap().nodes.len(),
+        initial.nodes.len()
+    );
+}

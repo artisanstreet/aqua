@@ -341,6 +341,14 @@ impl Residency {
     }
 
     pub fn finish_frame(&mut self) -> AtlasUpdates {
+        self.drain_updates(self.stream)
+    }
+
+    pub fn release_updates(&mut self) -> AtlasUpdates {
+        self.drain_updates(StreamBudget { bytes_per_frame: 0 })
+    }
+
+    fn drain_updates(&mut self, budget: StreamBudget) -> AtlasUpdates {
         let mut merged = self.masks.take_updates();
         merged.merge(self.colors.take_updates());
         self.masks.take_evicted().into_iter().for_each(|key| {
@@ -353,7 +361,7 @@ impl Residency {
                 self.forget(vector);
             }
         });
-        self.streamer.submit(merged, self.stream)
+        self.streamer.submit(merged, budget)
     }
 
     pub fn trim_idle(&mut self, idle_frames: u64) -> usize {

@@ -286,12 +286,27 @@ impl<'a> Frame<'a> {
                 Err(GpuError::Unsupported("compute shaders other than custom"))
             }
             PassKind::Custom(spec) => {
-                let kernel = self
-                    .kernels
-                    .custom(&spec.name)
-                    .ok_or(GpuError::Unsupported("unregistered custom pass"))?;
-                let inputs = self.inputs(pass)?;
-                kernel(spec, &inputs, target);
+                match spec.reference {
+                    Some(sample) => {
+                        let width = target.width.max(1);
+                        let height = target.height.max(1);
+                        for (index, pixel) in target.pixels.iter_mut().enumerate() {
+                            let uv = [
+                                (index % width) as f32 / width as f32 + 0.5 / width as f32,
+                                (index / width) as f32 / height as f32 + 0.5 / height as f32,
+                            ];
+                            *pixel = (sample.0)(&spec.params, uv);
+                        }
+                    }
+                    None => {
+                        let kernel = self
+                            .kernels
+                            .custom(&spec.name)
+                            .ok_or(GpuError::Unsupported("unregistered custom pass"))?;
+                        let inputs = self.inputs(pass)?;
+                        kernel(spec, &inputs, target);
+                    }
+                }
                 Ok(())
             }
         }

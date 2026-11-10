@@ -297,6 +297,7 @@ pub fn draw_slug(
         let [r, g, b, a] = glyph.color.to_gpu();
         let color = [r, g, b, a].map(|channel| channel * glyph.opacity);
         let luminance = premultiplied_luminance(color);
+        let paint = fetch(glyph.glyph + 3)[1] as u32;
         let pixels_per_em = glyph.pixels_per_em();
         let margin = 1.0 / pixels_per_em.max(1.0e-4);
         let [x0, y0, x1, y1] = glyph.em_bounds;
@@ -313,8 +314,15 @@ pub fn draw_slug(
                     continue;
                 }
                 let coverage = slug::coverage(fetch, glyph.glyph, em, pixels_per_em);
-                let weight = tone.alpha(coverage, luminance) * clip_cover(clip, px, py);
-                let source = color.map(|channel| channel * weight);
+                let (sampled, cover) = match paint {
+                    0 => (color, tone.alpha(coverage, luminance)),
+                    _ => {
+                        let sampled = aqua_graph::curve_paint::sample(fetch, paint, em);
+                        (std::array::from_fn(|i| sampled[i] * color[i]), coverage)
+                    }
+                };
+                let weight = cover * clip_cover(clip, px, py);
+                let source = sampled.map(|channel| channel * weight);
                 let index = y * layer.width + x;
                 layer.pixels[index] = over(source, layer.pixels[index]);
             }

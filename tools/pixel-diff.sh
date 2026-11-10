@@ -44,15 +44,31 @@ for ((i = 0; i < ${#compared[@]}; i += 2)); do
   convert \( "$OUT/$first-sbs.png" -resize 45% -gravity NorthWest -fill white -undercolor '#00000099' -pointsize 22 -annotate +6+6 " $first " \) \( "$OUT/$second-sbs.png" -resize 45% -gravity NorthWest -fill white -undercolor '#00000099' -pointsize 22 -annotate +6+6 " $second " \) -append "$OUT/contact-$((i / 2 + 1)).png"
 done
 for region in $REGIONS; do
-  IFS=':' read -r name geometry limit label <<<"$region"
+  IFS=':' read -r name geometry limit label foreground <<<"$region"
   ref_png=$DIR/$REF-$name.png; cand_png=$DIR/$CAND-$name.png
   [ -s "$ref_png" ] && [ -s "$cand_png" ] || { echo "region ${label:-$geometry} of $name: missing shot" | tee -a "$REPORT"; over+=("$name@${label:-region}:missing"); continue; }
   IFS=',' read -r rw rh rx ry <<<"$geometry"
   crop="${rw}x${rh}+${rx}+${ry}"
-  changed=$(compare -metric AE -fuzz "$FUZZ" <(convert "$ref_png" -crop "$crop" +repage png:-) <(convert "$cand_png" -crop "$crop" +repage png:-) null: 2>&1 || true)
+  mask=()
+  total=$((rw * rh))
+  if [ -n "$foreground" ]; then
+    mask=(-colorspace Gray -threshold "$foreground")
+    total=$(convert "$ref_png" -crop "$crop" +repage "${mask[@]}" -format '%[fx:round(mean*w*h)]' info:)
+    if [ "$total" -eq 0 ]; then
+      echo "region ${label:-$geometry} of $name: reference has no foreground above $foreground" | tee -a "$REPORT"
+      over+=("$name@${label:-region}:empty-foreground")
+      continue
+    fi
+  fi
+  changed=$(compare -metric AE -fuzz "$FUZZ" <(convert "$ref_png" -crop "$crop" +repage "${mask[@]}" png:-) <(convert "$cand_png" -crop "$crop" +repage "${mask[@]}" png:-) null: 2>&1 || true)
   changed=${changed%% *}
-  pct=$(awk -v c="$changed" -v t="$((rw * rh))" 'BEGIN { printf "%.1f", c * 100 / t }')
-  printf 'region %-12s %-14s changed=%5s px (%5s%%, limit %s%%)\n' "$name" "${label:-$geometry}" "$changed" "$pct" "$limit" | tee -a "$REPORT"
+  if ! [[ "$changed" =~ ^[0-9]+$ ]]; then
+    echo "region ${label:-$geometry} of $name: comparison failed: $changed" | tee -a "$REPORT"
+    over+=("$name@${label:-region}:comparison-error")
+    continue
+  fi
+  pct=$(awk -v c="$changed" -v t="$total" 'BEGIN { printf "%.1f", c * 100 / t }')
+  printf 'region %-12s %-14s changed=%5s px (%5s%%, limit %s%%, reference_pixels=%s foreground=%s)\n' "$name" "${label:-$geometry}" "$changed" "$pct" "$limit" "$total" "${foreground:-all}" | tee -a "$REPORT"
   awk -v p="$pct" -v m="$limit" 'BEGIN { exit !(p > m) }' && over+=("$name@${label:-region}:$pct%")
 done
 echo "worst_changed_pct=$worst" | tee -a "$REPORT"

@@ -331,6 +331,8 @@ pub trait Application {
 
     fn on_frame_completed(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _sequence: u64) {}
 
+    fn on_animation_frame(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _now: Instant) {}
+
     fn on_dialog(
         &mut self,
         _ctx: &mut AppCtx,
@@ -611,6 +613,7 @@ impl Aqua {
         mut config: AquaConfig,
         prefs: OsPreferences,
     ) -> Result<Self, String> {
+        crate::debug::init_from_environment();
         crate::profile::init_from_environment();
         config
             .validated()
@@ -743,6 +746,19 @@ impl Aqua {
     }
 
     pub fn flush_output(&mut self, app: &mut impl Application, id: AquaWindowId) {
+        let requests = std::mem::take(&mut self.window_requests);
+        for request in requests {
+            match &request {
+                WindowRequest::BeginSnapshotTransition(window, _)
+                | WindowRequest::BeginGpuiSnapshotTransition(window, _)
+                | WindowRequest::BeginGpuiSourceSnapshotTransition(window, _) if *window == id => {
+                    if let Err(error) = self.apply_window_request(app, &request) {
+                        app.on_window_request_error(&request, &error);
+                    }
+                }
+                _ => self.window_requests.push_back(request),
+            }
+        }
         let mut rounds = 0;
         let mut output = app.take_output(id);
         loop {
@@ -838,6 +854,13 @@ impl Aqua {
                 sink.apply(update);
             }
             if let Some(link) = record.link.as_mut() {
+                if output
+                    .render
+                    .iter()
+                    .any(|command| matches!(command, RenderCommand::Scene(_)))
+                {
+                    self.scheduler.await_present(id);
+                }
                 link.push_commands(output.render);
             }
         }
@@ -1243,6 +1266,19 @@ impl Aqua {
     ) -> bool {
         let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Input);
         let count_activity = !matches!(event, CoreInputEvent::Focused(_));
+        if let CoreInputEvent::PointerMove(pointer) = event {
+            crate::profile::note(|| {
+                format!(
+                    "pointer_unix_us={} x={} y={}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_micros(),
+                    pointer.position.x,
+                    pointer.position.y
+                )
+            });
+        }
         crate::profile::note(|| {
             let text = format!("{event:?}");
             let kind = text.split(['(', ' ', '{']).next().unwrap_or("");
@@ -1538,6 +1574,7 @@ impl Aqua {
         for event in events {
             match event {
                 RenderEvent::Presented(frame) => {
+                    self.scheduler.present_arrived(id);
                     if let Some(record) = self.windows.get_mut(&id) {
                         record.presented += 1;
                     }
@@ -1565,10 +1602,12 @@ impl Aqua {
                     self.dispatch_frame_completed(app, id, frame);
                 }
                 RenderEvent::DeviceLost => {
+                    self.scheduler.present_arrived(id);
                     self.render_errors += 1;
                     app.step_input(id, RuntimeInput::Gpu(GpuEvent::DeviceLost));
                     self.with_ctx(|ctx| app.on_render_error(ctx, id, "device lost"));
                 }
+                RenderEvent::Skipped => self.scheduler.present_arrived(id),
                 RenderEvent::DeviceRecovered => {
                     app.step_input(id, RuntimeInput::Gpu(GpuEvent::DeviceRecovered));
                     self.scheduler.request_frame(id, FrameReason::EXPLICIT);
@@ -1619,6 +1658,9 @@ impl Aqua {
             }
             crate::profile::begin_frame();
             crate::profile::note(|| format!("rebuild_reason={reasons:?}"));
+            if reasons.intersects(FrameReason::ANIMATION | FrameReason::GPUI_PULSE) {
+                self.with_ctx(|ctx| app.on_animation_frame(ctx, id, now));
+            }
             let started = WallInstant::now();
             self.produce_frame(app, id, now);
             let cost = started.elapsed();
@@ -1702,7 +1744,9 @@ impl Aqua {
         }
         aqua_core::checkpoint::reach();
         if let Some(scene) = app.scene_mut(id) {
-            link.push_scene(scene);
+            if link.push_scene(scene) {
+                self.scheduler.await_present(id);
+            }
         }
         aqua_core::checkpoint::reach();
         if let Some(probe) = self.input_latency.as_mut() {
@@ -1882,7 +1926,7 @@ pub fn physical_extent(window: &ObservedWindowState) -> Extent {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 #[path = "../../aqua-verify/tests/support/desktop.rs"]
 mod desktop;
 
@@ -1956,6 +2000,8 @@ mod tests {
             self.errors.push(message.to_string());
         }
     }
+
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/runtime/snapshot.rs"));
 
     fn headless() -> (Aqua, Probe, AquaWindowId) {
         let mut aqua = Aqua::new(AquaConfig {
@@ -2094,6 +2140,7 @@ mod tests {
 
     #[test]
     fn clipboard_round_trips_through_ctx_and_reports_backend() {
+        #[cfg(windows)]
         if !super::desktop::require("clipboard_round_trips_through_ctx") {
             return;
         }

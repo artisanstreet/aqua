@@ -90,3 +90,81 @@ fn hardware_resizes_inside_the_swapchain_capacity() {
 fn warp_resizes_inside_the_swapchain_capacity() {
     stepped_resize(AdapterPreference::Warp, "warp-steps");
 }
+
+#[test]
+fn hidden_surface_settle_preserves_the_other_window() {
+    use aqua_protocol::{FrameInputs, GpuBackend, GpuReadback, NativeSurface, SurfaceTarget};
+    use aqua_shell_win32::{Window, WindowOptions};
+
+    for preference in [AdapterPreference::Warp, AdapterPreference::HighPerformance] {
+        let mut backend = backend(preference);
+        let windows = std::array::from_fn::<_, 2, _>(|_| {
+            Window::create(&WindowOptions {
+                visible: false,
+                logical_size: (240.0, 160.0),
+                ..Default::default()
+            })
+            .unwrap()
+        });
+        let surfaces = windows.map(|window| {
+            let (width, height) = window.inner_size();
+            let extent = Extent { width, height };
+            let id = backend
+                .create_surface(SurfaceTarget::Native(NativeSurface {
+                    window: window.id(),
+                    hwnd: window.raw_hwnd() as u64,
+                    extent,
+                }))
+                .unwrap();
+            (id, extent)
+        });
+        let exact = swapchain_bytes(&backend);
+        let mut extra = [0; 2];
+        for (index, (id, extent)) in surfaces.iter().enumerate() {
+            let before = swapchain_bytes(&backend);
+            backend
+                .resize_surface(
+                    *id,
+                    Extent {
+                        width: extent.width + 80,
+                        height: extent.height + 80,
+                    },
+                )
+                .unwrap();
+            backend.resize_surface(*id, *extent).unwrap();
+            extra[index] = swapchain_bytes(&backend) - before;
+            assert!(extra[index] > 0);
+        }
+        let (first, first_extent) = surfaces[0];
+        let (second, second_extent) = surfaces[1];
+        backend
+            .execute(&blurred(second_extent), &FrameInputs::new(second))
+            .unwrap();
+        let before = backend.read_surface(second).unwrap();
+        assert!(backend.settle_surface(first).unwrap());
+        assert_eq!(swapchain_bytes(&backend), exact + extra[1]);
+        assert!(!backend.settle_surface(first).unwrap());
+        let after = backend.read_surface(second).unwrap();
+        assert_eq!(before.rgba8, after.rgba8);
+        matches_reference(
+            &mut backend,
+            first,
+            &blurred(first_extent),
+            "settled-hidden",
+        );
+        assert!(backend.settle_surface(second).unwrap());
+        assert_eq!(swapchain_bytes(&backend), exact);
+        matches_reference(
+            &mut backend,
+            second,
+            &blurred(second_extent),
+            "other-settled-hidden",
+        );
+        for (id, _) in surfaces {
+            backend.destroy_surface(id).unwrap();
+        }
+        for window in windows {
+            window.destroy();
+        }
+    }
+}

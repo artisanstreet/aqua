@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use aqua::render::text::{ShimmerClocks, TextScope, TextStack};
-use aqua_core::scene::{GpuiTextColorMap, GpuiTextShimmer};
+use aqua_core::scene::{GpuiTextColorMap, GpuiTextOpacityRange, GpuiTextShimmer};
 use aqua_core::{GpuiHsla, GpuiTextColor, Rect};
 
 fn shimmer(key: u64, duration_ms: u64, delay_ms: u64) -> GpuiTextShimmer {
@@ -82,4 +82,82 @@ fn text_scopes_pop_only_their_own_kind() {
     assert!(stack.pop(TextScope::Color));
     assert!(!stack.pop(TextScope::Color));
     assert!(stack.is_balanced());
+}
+
+fn glyph_at(byte: usize) -> aqua_text::layout::LaidGlyph {
+    aqua_text::layout::LaidGlyph {
+        display_byte_start: byte,
+        display_byte_end: byte + 1,
+        src_byte_start: byte,
+        src_byte_end: byte + 1,
+        font_id: aqua_text::SharedFonts::new().lock().first_face().unwrap(),
+        font_weight: 400,
+        font_stretch: Default::default(),
+        synthetic_italic: false,
+        glyph_id: 0,
+        font_size_px: 16.0,
+        x: 0.0,
+        y: 0.0,
+        x_offset: 0.0,
+        y_offset: 0.0,
+        w: 8.0,
+        bidi_level: 0,
+        color_srgb: None,
+        color_hsla: None,
+        source_color_hsla: None,
+        font_max_width: None,
+    }
+}
+
+#[test]
+fn opacity_lookup_preserves_boundaries_and_first_matching_range() {
+    for ranges in [
+        vec![(0..3, 0.2), (3..3, 0.0), (5..8, 0.8)],
+        vec![(5..8, 0.8), (0..3, 0.2)],
+        vec![(2..7, 0.4), (0..4, 0.2), (6..9, 0.8)],
+        vec![(3..3, 0.0), (0..10, 1.0)],
+        vec![],
+    ] {
+        let ranges: Vec<_> = ranges
+            .into_iter()
+            .map(|(bytes, opacity)| GpuiTextOpacityRange { bytes, opacity })
+            .collect();
+        let mut stack = TextStack::default();
+        stack.push_opacity(ranges.clone().into());
+        for byte in 0..12 {
+            let expected = ranges
+                .iter()
+                .find(|range| range.bytes.contains(&byte))
+                .map_or(1.0, |range| range.opacity);
+            assert_eq!(stack.range_opacity(&glyph_at(byte)), expected);
+        }
+    }
+}
+
+#[test]
+fn settled_opacity_scopes_restore_caching_and_pop_to_the_previous_scope() {
+    let mut stack = TextStack::default();
+    let signature = stack.cache_signature();
+    stack.push_opacity(
+        vec![GpuiTextOpacityRange {
+            bytes: 0..10,
+            opacity: 0.5,
+        }]
+        .into(),
+    );
+    assert!(stack.cache_signature().is_none());
+    stack.push_opacity(
+        vec![GpuiTextOpacityRange {
+            bytes: 0..10,
+            opacity: 1.0,
+        }]
+        .into(),
+    );
+    assert_eq!(stack.cache_signature(), signature);
+    assert_eq!(stack.range_opacity(&glyph_at(5)), 1.0);
+    assert!(stack.pop(TextScope::Opacity));
+    assert_eq!(stack.range_opacity(&glyph_at(5)), 0.5);
+    assert!(stack.cache_signature().is_none());
+    assert!(stack.pop(TextScope::Opacity));
+    assert_eq!(stack.cache_signature(), signature);
 }

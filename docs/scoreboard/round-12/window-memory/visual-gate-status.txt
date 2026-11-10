@@ -1,0 +1,1 @@
+PASS shots in /home/sander/projects/artisanstreet/aqua-optimization/target/measurements/round-12-window-memory/visual-gate

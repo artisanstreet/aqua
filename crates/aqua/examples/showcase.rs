@@ -620,7 +620,7 @@ impl Application for Showcase {
                         self.remove_todo(todo_id);
                     } else {
                         self.toggle_todo(todo_id);
-                        ctx.request_animation_deadline(id, ctx.now() + Duration::from_millis(16));
+                        ctx.request_animation_deadline(id, ctx.now());
                     }
                 }
             }
@@ -1029,7 +1029,7 @@ impl Application for Showcase {
             if let Some(deadline) = self.motion.next_deadline_duration(elapsed) {
                 return Some(now + deadline.saturating_sub(elapsed));
             }
-            return Some(now + Duration::from_millis(16));
+            return Some(now);
         }
         self.pulse_row = None;
         None

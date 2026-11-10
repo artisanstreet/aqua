@@ -1,0 +1,25 @@
+{
+  "description": "The same accepted Aqua source as the round-12 joint run, with only the Editor tail-control visibility and refresh correction plus its regression test added to the frozen Editor source.",
+  "source_digest_method": "sorted relative POSIX path, NUL, file bytes, NUL; extensions .rs .toml .lock .hlsl .wgsl",
+  "aqua_source": {
+    "sha256": "763d4878b0fd64da4d8e0a0e26b2433f5a0e113926402812cba06c23760a0db4",
+    "files": 867
+  },
+  "editor_source": {
+    "sha256": "3d9b9f679b64d5871c1c337a1be71b1f9a77e29334f70b8350718072b5647e1e",
+    "files": 1056
+  },
+  "aqua_base_commit": "5f4ec00",
+  "applied_commits": [
+    "36cd19a",
+    "4cb0559",
+    "4fff52e",
+    "9077af9",
+    "670b4c1",
+    "86a25f7"
+  ],
+  "binary": "/home/sander/projects/artisanstreet/aqua-optimization/target/measurements/editor-jump-latest.exe",
+  "binary_sha256": "ba9a14654a9e5476bb68267892c020b5f95204645b6390b49ae6aab8af91bd4a",
+  "editor_patch_sha256": "88f90289e0e2529630eed4281f231bd93a792234dcb882b8268cc676d127d667",
+  "editor_pr_base": "6606f059"
+}

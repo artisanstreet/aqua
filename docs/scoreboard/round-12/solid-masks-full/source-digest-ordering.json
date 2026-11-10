@@ -1,0 +1,25 @@
+{
+  "ordering": "Python pathlib.Path component ordering from sorted(paths), not lexicographic ordering of joined POSIX strings",
+  "encoding": "For each path: relative POSIX path encoded UTF-8, NUL byte, raw file bytes, NUL byte",
+  "extensions": [
+    ".rs",
+    ".toml",
+    ".lock",
+    ".hlsl",
+    ".wgsl"
+  ],
+  "exclusions": [
+    ".git",
+    "target"
+  ],
+  "verified": {
+    "aqua": {
+      "files": 867,
+      "sha256": "ae6b3361793c513a7aa0c1c746997164228eed09315d6c7225c49d336e945241"
+    },
+    "editor": {
+      "files": 1056,
+      "sha256": "3d9b9f679b64d5871c1c337a1be71b1f9a77e29334f70b8350718072b5647e1e"
+    }
+  }
+}

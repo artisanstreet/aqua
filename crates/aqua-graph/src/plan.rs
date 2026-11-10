@@ -172,6 +172,22 @@ pub struct GlyphInstance {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Coverage {
+    #[default]
+    Text,
+    Exact,
+}
+
+impl Coverage {
+    pub fn tone(self, text: ToneCurve) -> ToneCurve {
+        match self {
+            Self::Text => text,
+            Self::Exact => ToneCurve::EXACT,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Blend {
     #[default]
     Over,
@@ -230,6 +246,8 @@ pub enum Barrier {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CustomPassSpec {
+    pub isolate_backdrop: bool,
+    pub reference: Option<aqua_core::shader::ReferenceShader>,
     pub name: String,
     pub hlsl: String,
     pub entry: String,
@@ -314,6 +332,7 @@ pub enum PassKind {
     },
     Glyphs {
         atlas: TextureHandle,
+        coverage: Coverage,
         instances: Vec<GlyphInstance>,
     },
     Images {

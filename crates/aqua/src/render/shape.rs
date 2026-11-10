@@ -505,6 +505,12 @@ pub fn emit_shadow(
             });
             Fidelity::Exact
         }
+        (true, true)
+            if spec.sigma == 0.0 && spec.dx == 0.0 && spec.dy == 0.0 && spec.spread >= 0.0 =>
+        {
+            ring(out, bounds, radii, spec.spread, spec.color);
+            Fidelity::Exact
+        }
         (true, true) => {
             let radius = radii.fitted(bounds).max();
             out.push(match radius >= 0.75 {

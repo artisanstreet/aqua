@@ -74,10 +74,12 @@ fn thins_glyph_runs_and_drops_empty_ones() {
     let mut commands = vec![
         PaintCommand::Glyphs(GlyphRun {
             atlas: TextureHandle(1),
+            coverage: aqua_graph::Coverage::Text,
             glyphs: vec![glyph(0.0), glyph(104.0), glyph(500.0)].into(),
         }),
         PaintCommand::Glyphs(GlyphRun {
             atlas: TextureHandle(1),
+            coverage: aqua_graph::Coverage::Text,
             glyphs: vec![glyph(0.0), glyph(500.0)].into(),
         }),
     ];

@@ -1794,7 +1794,7 @@ impl Runtime {
     pub(super) fn selection_deadline(&self) -> Option<f64> {
         let gesture = self.interaction.gesture.as_ref()?;
         self.selection_scroll(gesture)?;
-        Some(self.clock + 1.0 / 60.0)
+        Some(self.clock)
     }
 
     pub(super) fn advance_text_selection(&mut self) -> bool {

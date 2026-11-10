@@ -1,0 +1,33 @@
+probe-launch unix_ms=1794022459664 pid=24672
+probe-startup window_ms=63 first_content_ms=505 nondominant=0.165 rich_content_ms=505
+probe-open thread=bench-large unix_ms=1794022459847 since_launch_ms=183 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=10.9
+probe-cpu name=boot unix_ms=1794022475303 cpu_ms=328 user_ms=234 private_mb=105 working_set_mb=120.7 peak_working_set_mb=120.7 threads=30 handles=1050
+probe-gpumem name=boot dedicated_mb=35.4
+probe-cpu name=idle0 unix_ms=1794022478324 cpu_ms=328 user_ms=234 private_mb=105 working_set_mb=120.7 peak_working_set_mb=120.7 threads=30 handles=1050
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=0.07 max=1 top_threads=25452=0(),17176=0(),14892=0(forge-net),13728=0(WindhawkMainLoopThreadAttachExempt) attempt=1
+probe-ctxseries name=idle start_unix_ms=1794022478401 per_second=0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-thread name=idle_threads tid=23812 thread='' started_ms=174 module=combase.dll start_rva=0x5a6bf21e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=25452 thread='' started_ms=174 module=ntdll.dll start_rva=0x5a83f4990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=2 total=27
+probe-cpu name=idle1 unix_ms=1794022523867 cpu_ms=328 user_ms=234 private_mb=104.9 working_set_mb=120.6 peak_working_set_mb=120.7 threads=27 handles=1048
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.065 p90_ms=0.106 p99_ms=0.197 max_ms=1.16 mean_ms=0.077 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=scroll0 unix_ms=1794022529272 cpu_ms=328 user_ms=234 private_mb=104.9 working_set_mb=120.6 peak_working_set_mb=120.7 threads=27 handles=1048
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.136 p90_ms=0.252 p99_ms=0.363 max_ms=0.432 mean_ms=0.142 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/0,0.2/0,0.1/0,0.1/0,0.2/0,0.1/0
+probe-cpu name=scroll1 unix_ms=1794022545423 cpu_ms=812 user_ms=703 private_mb=120.8 working_set_mb=127.8 peak_working_set_mb=127.9 threads=27 handles=1048
+probe-changed name=pre pixels=265358 total=2135250 nondominant=0.202
+probe-cpu name=settle unix_ms=1794022549537 cpu_ms=812 user_ms=703 private_mb=121 working_set_mb=127.9 peak_working_set_mb=128.1 threads=27 handles=1048
+probe-gpumem name=settle dedicated_mb=53.7
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=264.976 p90_ms=271.726 p99_ms=278.53 max_ms=278.53 mean_ms=264.994 over4_ms=40 over8_ms=40 over16_ms=40 over50_ms=40 grab_p50_ms=264.8
+probe-latency name=resize_setpos kind=resize samples=120 timeouts=0 p50_ms=1.366 p90_ms=1.75 p99_ms=2.171 max_ms=2.229 mean_ms=1.371 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=1.534 p90_ms=1.904 p99_ms=2.345 max_ms=2.522 mean_ms=1.541 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0
+probe-cpu name=rs0 unix_ms=1794022581247 cpu_ms=1297 user_ms=1156 private_mb=140.5 working_set_mb=134 peak_working_set_mb=140.7 threads=29 handles=1081
+probe-wakes name=after_resize seconds=30 context_switches_per_sec_avg=0.87 max=26 top_threads=16108=0.9(),13728=0(WindhawkMainLoopThreadAttachExempt),14892=0(forge-net),17176=0() attempt=1
+probe-ctxseries name=after_resize start_unix_ms=1794022581250 per_second=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,26,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-cpu name=rs1 unix_ms=1794022611585 cpu_ms=1297 user_ms=1156 private_mb=140.3 working_set_mb=134 peak_working_set_mb=140.7 threads=24 handles=1043
+probe-threads-done name=after_resize_threads seconds=15 active=0 total=24
+probe-load name=end_load seconds=3 system_cpu_pct=2.5
+pid=24672 dpi=120 working_set_mb=134 private_mb=140
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---

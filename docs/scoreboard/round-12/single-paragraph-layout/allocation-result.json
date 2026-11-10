@@ -1,0 +1,22 @@
+{
+  "change_commit": "6314c9c",
+  "base_commit": "1faf00b",
+  "workload": "Windows FontManager, warmed single-paragraph 4480-glyph layout, no wrap, width changes 400 to 420. Allocation counts cover the reflow only.",
+  "baseline_allocated_bytes": 1810632,
+  "candidate_allocated_bytes": 1272744,
+  "reduction_bytes": 537888,
+  "reduction_percent": 29.70719616134035,
+  "budget_bytes": 1344000,
+  "regression": "Same regression fails on unchanged base and passes on candidate. Geometry and glyph identity/positions remain equal across unconstrained single-line reflow.",
+  "validation": {
+    "windows_text_suites": 33,
+    "passed_tests": 211,
+    "ignored_tests": 3,
+    "windows_clippy": "PASS --lib --tests -D warnings"
+  },
+  "limits": [
+    "This is a focused allocation measurement, not an Editor latency or retained-memory claim.",
+    "Multi-paragraph placement caching is preserved. Single-paragraph finished output was already discarded after cloning.",
+    "Release Editor resize comparison is recorded in resize/: percentile ranges overlap; no established application latency gain."
+  ]
+}

@@ -1,0 +1,33 @@
+probe-launch unix_ms=1794005910109 pid=19664
+probe-startup window_ms=61 first_content_ms=630 nondominant=0.165 rich_content_ms=630
+probe-open thread=bench-large unix_ms=1794005910262 since_launch_ms=153 since_click_ms=-1
+probe-display name=state gpus=AMD_Radeon_RX_9070_XT:3840x2160@240Hz power_plan=Ultimate_Performance ac_online=n/a
+probe-load name=boot_load seconds=3 system_cpu_pct=3.1
+probe-cpu name=boot unix_ms=1794005925900 cpu_ms=406 user_ms=234 private_mb=120.2 working_set_mb=125.3 peak_working_set_mb=130.6 threads=32 handles=1319
+probe-gpumem name=boot dedicated_mb=47.9
+probe-cpu name=idle0 unix_ms=1794005928938 cpu_ms=406 user_ms=234 private_mb=120.2 working_set_mb=125.3 peak_working_set_mb=130.6 threads=32 handles=1319
+probe-wakes name=idle seconds=30 context_switches_per_sec_avg=0.07 max=1 top_threads=4736=0(),20680=0(),23968=0(),2516=0() attempt=1
+probe-ctxseries name=idle start_unix_ms=1794005929016 per_second=0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-thread name=idle_threads tid=23976 thread='' started_ms=142 module=combase.dll start_rva=0x6371e21e0 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-thread name=idle_threads tid=20680 thread='' started_ms=142 module=ntdll.dll start_rva=0x6389e4990 ctx_per_s=0.1 cpu_ms_per_s=0
+probe-threads-done name=idle_threads seconds=15 active=2 total=29
+probe-cpu name=idle1 unix_ms=1794005974450 cpu_ms=406 user_ms=234 private_mb=120.1 working_set_mb=125.2 peak_working_set_mb=130.6 threads=29 handles=1317
+probe-latency name=idle_latency kind=idle samples=300 timeouts=0 p50_ms=0.067 p90_ms=0.126 p99_ms=0.241 max_ms=1.18 mean_ms=0.079 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/1,0.1/0,0.1/0
+probe-cpu name=scroll0 unix_ms=1794005979784 cpu_ms=422 user_ms=250 private_mb=120.1 working_set_mb=125.2 peak_working_set_mb=130.6 threads=29 handles=1317
+probe-latency name=scroll kind=scroll samples=600 timeouts=0 p50_ms=0.131 p90_ms=0.259 p99_ms=0.354 max_ms=0.438 mean_ms=0.139 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 p50_max_per_100=0.1/0,0.1/0,0.1/0,0.1/0,0.1/0,0.1/0
+probe-cpu name=scroll1 unix_ms=1794005996331 cpu_ms=969 user_ms=766 private_mb=134.3 working_set_mb=130 peak_working_set_mb=130.6 threads=29 handles=1317
+probe-changed name=pre pixels=277077 total=2135250 nondominant=0.201
+probe-cpu name=settle unix_ms=1794006000583 cpu_ms=969 user_ms=766 private_mb=134.3 working_set_mb=130 peak_working_set_mb=130.6 threads=29 handles=1317
+probe-gpumem name=settle dedicated_mb=57.4
+probe-latency name=type kind=type samples=40 timeouts=0 p50_ms=265.16 p90_ms=270.379 p99_ms=276.607 max_ms=276.607 mean_ms=264.747 over4_ms=40 over8_ms=40 over16_ms=40 over50_ms=40 grab_p50_ms=264.9
+probe-latency name=resize_setpos kind=resize samples=120 timeouts=0 p50_ms=1.315 p90_ms=1.783 p99_ms=2.289 max_ms=2.304 mean_ms=1.343 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 
+probe-latency name=resize kind=resize samples=120 timeouts=0 p50_ms=1.456 p90_ms=1.937 p99_ms=2.458 max_ms=2.459 mean_ms=1.51 over4_ms=0 over8_ms=0 over16_ms=0 over50_ms=0 
+probe-cpu name=rs0 unix_ms=1794006032546 cpu_ms=1438 user_ms=1188 private_mb=151.5 working_set_mb=144.5 peak_working_set_mb=149.3 threads=31 handles=1319
+probe-wakes name=after_resize seconds=30 context_switches_per_sec_avg=0.03 max=1 top_threads=4736=0(),23968=0(),2516=0(),5984=0() attempt=1
+probe-ctxseries name=after_resize start_unix_ms=1794006032549 per_second=0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 hard_faults=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 page_faults=5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+probe-cpu name=rs1 unix_ms=1794006062859 cpu_ms=1438 user_ms=1188 private_mb=151.3 working_set_mb=144.4 peak_working_set_mb=149.3 threads=26 handles=1309
+probe-threads-done name=after_resize_threads seconds=15 active=0 total=26
+probe-load name=end_load seconds=3 system_cpu_pct=1.5
+pid=19664 dpi=120 working_set_mb=144 private_mb=151
+foreground_changed=False foreground_stolen_by_app=False foreground_before_pid=11880 foreground_after_pid=11880
+--- frame stats (last 5) ---

@@ -302,16 +302,6 @@ impl WindowHandle {
         });
     }
 
-    fn set_half_rate(&self, surface: SurfaceId, half_rate: bool) {
-        #[cfg(not(feature = "d3d12"))]
-        self.hub
-            .backend
-            .borrow_mut()
-            .set_half_rate(surface, half_rate);
-        #[cfg(feature = "d3d12")]
-        let _ = (surface, half_rate);
-    }
-
     fn set_hidden(&self, hidden: bool) -> bool {
         let all_hidden = {
             let mut set = self.hub.hidden.borrow_mut();
@@ -528,6 +518,17 @@ impl GpuBackend for WindowHandle {
         self.hub.backend.borrow_mut().wait_for_frame_slot(surface)
     }
 
+    fn wait_for_frame_slot_with_hint(
+        &mut self,
+        surface: SurfaceId,
+        hint: PresentHint,
+    ) -> Result<(), GpuError> {
+        self.hub
+            .backend
+            .borrow_mut()
+            .wait_for_frame_slot_with_hint(surface, hint)
+    }
+
     fn present_with_damage(
         &mut self,
         surface: SurfaceId,
@@ -645,6 +646,10 @@ impl FrameTarget for WindowTarget {
         self.frames.backend_mut().settle_surface(self.surface)
     }
 
+    fn animation_interval(&self, fallback: Duration) -> Duration {
+        self.frames.animation_interval(fallback)
+    }
+
     fn idle_trim_in(&mut self) -> Option<std::time::Duration> {
         self.frames.idle_trim_in()
     }
@@ -698,12 +703,17 @@ pub fn factory(
                 })),
             }
             .map_err(|e| e.to_string())?;
+            if crate::debug::panel() {
+                crate::debug::watch(stats.clone(), hwnd);
+                crate::debug::window::open(fonts.clone(), runs.clone());
+            }
             let lowering = Lowering::new(fonts.clone(), runs.clone())
                 .with_clear(clear)
                 .with_recovery(signal);
             let mut saver = PipelineCacheSaver::default();
             let shared_stats = stats.clone();
             let frames = GpuFrames::new(handle, surface, extent, lowering, externals, stats)
+                .with_hint(PresentHint::Vsync)
                 .with_damage(damage, runs)
                 .with_repaint_probe(|backend: &WindowHandle, surface, damage: &[Rect]| {
                     backend.repaint_bounds(surface, damage)
@@ -711,9 +721,6 @@ pub fn factory(
                 .with_idle_release(|backend: &mut WindowHandle| backend.release_idle())
                 .with_pressure(|backend: &mut WindowHandle| backend.service_budget())
                 .with_visibility(|backend: &mut WindowHandle, hidden| backend.set_hidden(hidden))
-                .with_half_rate(|backend: &mut WindowHandle, surface, half| {
-                    backend.set_half_rate(surface, half)
-                })
                 .with_maintenance(move |backend: &mut WindowHandle| {
                     backend.settle_surfaces();
                     saver.save(backend.pipeline_cache());
@@ -734,4 +741,12 @@ pub fn factory(
             Ok(Box::new(target) as Box<dyn FrameTarget>)
         })
     })
+}
+
+#[must_use]
+pub(crate) fn refresh_of(hwnd: isize) -> Option<u64> {
+    let interval = gpu::window::timing::monitor_interval(gpu::window::timing::monitor_of(hwnd));
+    u64::try_from(interval.as_nanos())
+        .ok()
+        .filter(|nanos| *nanos > 0)
 }

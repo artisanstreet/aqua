@@ -1,0 +1,1 @@
+FAIL VISUAL GATE FAILED: aligned shots differ more than 18% or a checked region differs (see /home/sander/projects/artisanstreet/aqua-optimization/target/measurements/round-12-present-modes/visual-gate/diff/pixel-diff.txt)

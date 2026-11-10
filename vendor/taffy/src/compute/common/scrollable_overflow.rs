@@ -37,15 +37,31 @@ pub(crate) fn compute_scrollable_overflow_contribution(
         y: !is_scroll_container && !overflow_is_contained && overflow.y == Overflow::Visible,
     };
     let end_extent = Size {
-        width: if propagates.x { f32_max(size.width, scrollable_overflow_rect.right) } else { size.width },
-        height: if propagates.y { f32_max(size.height, scrollable_overflow_rect.bottom) } else { size.height },
+        width: if propagates.x {
+            f32_max(size.width, scrollable_overflow_rect.right)
+        } else {
+            size.width
+        },
+        height: if propagates.y {
+            f32_max(size.height, scrollable_overflow_rect.bottom)
+        } else {
+            size.height
+        },
     };
     if end_extent.width <= 0.0 || end_extent.height <= 0.0 {
         return Rect::ZERO;
     }
     let start_extent = Point {
-        x: if propagates.x { f32_min(0.0, scrollable_overflow_rect.left) } else { 0.0 },
-        y: if propagates.y { f32_min(0.0, scrollable_overflow_rect.top) } else { 0.0 },
+        x: if propagates.x {
+            f32_min(0.0, scrollable_overflow_rect.left)
+        } else {
+            0.0
+        },
+        y: if propagates.y {
+            f32_min(0.0, scrollable_overflow_rect.top)
+        } else {
+            0.0
+        },
     };
     let contribution = Rect {
         left: location.x + start_extent.x,

@@ -22,7 +22,7 @@ VISUAL_STEPS_FILE=${VISUAL_GATE_VISUAL_STEPS:-$HERE/visual-gate-visual.steps}
 ALIGNED_SHOTS=${VISUAL_GATE_ALIGNED:-"bottom menu notch1 depth1 depth2 depth3 depth4 depth5 depth6 depth7 depth8 edge edge2 far1 far2 far3 far4 far5 far6 far7 far8 far9 far10 far11 far12 emoji jump-a jump-b dialog v-tail v-scroll v-lightbox v-menu v-top v-account v-emoji"}
 MAX_DIFF_PCT=${VISUAL_GATE_MAX_DIFF_PCT:-18}
 JUMP_BUTTON_LIMIT=${VISUAL_GATE_JUMP_BUTTON_LIMIT:-30}
-REGIONS=${VISUAL_GATE_REGIONS:-"notch1:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest depth1:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest depth2:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest depth3:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest depth4:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest"}
+REGIONS=${VISUAL_GATE_REGIONS:-"notch1:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest:60% depth1:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest:60% depth2:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest:60% depth3:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest:60% depth4:30,30,995,855:$JUMP_BUTTON_LIMIT:jump-latest:60%"}
 die() { echo "VISUAL GATE FAILED: $*" >&2; exit 1; }
 win() { wslpath -w "$1"; }
 

@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use accesskit::TreeUpdate;
@@ -20,6 +20,8 @@ struct Shared {
     connection: Connection,
     actions: VecDeque<A11yActionRequest>,
     tree: A11yTree,
+    last_update: Option<AccessTreeUpdate>,
+    published: HashMap<accesskit::NodeId, accesskit::Node>,
 }
 
 pub struct A11yBridge {
@@ -46,7 +48,12 @@ impl A11yBridge {
     }
 
     pub fn connect(&self) {
-        self.shared().connection = Connection::Connected;
+        {
+            let mut shared = self.shared();
+            shared.connection = Connection::Connected;
+            shared.last_update = None;
+            shared.published.clear();
+        }
         (self.waker)();
     }
 
@@ -55,7 +62,20 @@ impl A11yBridge {
         match shared.connection {
             Connection::Dormant => None,
             Connection::Connected => {
-                Some(shared.tree.build(update.root, update.focus, &update.nodes))
+                if shared.last_update.as_ref() == Some(update) {
+                    return None;
+                }
+                let mut snapshot = shared.tree.build(update.root, update.focus, &update.nodes);
+                let live: HashSet<_> = snapshot.nodes.iter().map(|(id, _)| *id).collect();
+                shared.published.retain(|id, _| live.contains(id));
+                snapshot
+                    .nodes
+                    .retain(|(id, node)| shared.published.get(id) != Some(node));
+                for (id, node) in &snapshot.nodes {
+                    shared.published.insert(*id, node.clone());
+                }
+                shared.last_update = Some(update.clone());
+                Some(snapshot)
             }
         }
     }

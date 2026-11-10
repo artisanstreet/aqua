@@ -16,6 +16,8 @@ const INTERVAL: Duration = Duration::from_millis(4);
 #[derive(Default)]
 struct Probe {
     presents: AtomicU32,
+    unshown: AtomicU32,
+    frame_waits: AtomicU32,
     invalidations: AtomicU32,
     frames: Mutex<Vec<FrameId>>,
     script: Mutex<Vec<Repaint>>,
@@ -26,6 +28,8 @@ struct Probe {
     maintenance_at: Mutex<Option<WallInstant>>,
     maintenance_done: AtomicU32,
     maintenance_changes: AtomicBool,
+
+    native_pacing: AtomicBool,
 }
 
 struct Fake {
@@ -34,7 +38,16 @@ struct Fake {
 }
 
 impl FrameTarget for Fake {
-    fn wait_frame(&mut self) {}
+    fn animation_interval(&self, fallback: Duration) -> Duration {
+        match self.probe.native_pacing.load(Relaxed) {
+            true => Duration::ZERO,
+            false => fallback,
+        }
+    }
+
+    fn wait_frame(&mut self) {
+        self.probe.frame_waits.fetch_add(1, Relaxed);
+    }
 
     fn present(&mut self, _side: &mut RenderSide, frame: FrameId) -> Vec<Feedback> {
         self.probe.presents.fetch_add(1, Relaxed);
@@ -48,7 +61,13 @@ impl FrameTarget for Fake {
             },
             Relaxed,
         );
-        vec![Feedback::Presented(frame)]
+        match self.probe.unshown.load(Relaxed) {
+            0 => vec![Feedback::Presented(frame)],
+            left => {
+                self.probe.unshown.store(left - 1, Relaxed);
+                Vec::new()
+            }
+        }
     }
 
     fn startup_pending(&self) -> bool {
@@ -210,6 +229,58 @@ fn unchanged_maintenance_returns_to_sleep_without_repainting() {
 }
 
 #[test]
+fn completion_and_unchanged_commands_do_not_consume_another_frame_slot() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    assert_eq!(probe.frame_waits.load(Relaxed), 1);
+    let stepped = stats_of(&link).stepped_ns.load(Relaxed);
+    link.push_commands([aqua_protocol::RenderCommand::Viewport {
+        size: Size::new(100.0, 100.0),
+        scale: 1.0,
+    }]);
+    wait_until("the unchanged viewport to be processed", || {
+        stats_of(&link).stepped_ns.load(Relaxed) > stepped
+    });
+    assert_eq!(probe.frame_waits.load(Relaxed), 1);
+    assert_eq!(probe.presents.load(Relaxed), 1);
+    assert_eq!(presented_events(&mut link), 0);
+    link.set_viewport(Size::new(101.0, 100.0), 1.0);
+    wait_until("the changed viewport completion", || {
+        presented_events(&mut link) == 1
+    });
+    assert_eq!(probe.frame_waits.load(Relaxed), 2);
+    assert_eq!(probe.presents.load(Relaxed), 2);
+}
+
+#[test]
+fn a_scene_that_never_reaches_the_screen_is_still_answered() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    probe.unshown.store(1, Relaxed);
+    link.push_scene(&mut scene_with("#ff0000"));
+    let mut events = Vec::new();
+    wait_until("the unshown scene to be answered", || {
+        events.extend(link.poll());
+        !events.is_empty()
+    });
+    assert!(events.contains(&RenderEvent::Skipped));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, RenderEvent::Presented(_))));
+    link.push_scene(&mut scene_with("#00ff00"));
+    let mut events = Vec::new();
+    wait_until("the shown scene to present", || {
+        events.extend(link.poll());
+        events
+            .iter()
+            .any(|event| matches!(event, RenderEvent::Presented(_)))
+    });
+    assert!(!events.contains(&RenderEvent::Skipped));
+}
+
+#[test]
 fn windows_share_one_thread_and_idle_windows_do_nothing() {
     let service = RenderService::new().unwrap();
     let (a, b) = (Arc::new(Probe::default()), Arc::new(Probe::default()));
@@ -279,7 +350,7 @@ fn continuous_animation_keeps_presenting_until_it_stops() {
 }
 
 #[test]
-fn an_animating_scene_repaints_at_a_capped_rate_without_waking_the_app_or_the_damage_baseline() {
+fn an_animating_scene_uses_the_display_interval_without_waking_the_app_or_the_damage_baseline() {
     let service = RenderService::new().unwrap();
     let probe = Arc::new(Probe::default());
     let mut link = settled_link(&service, &probe);
@@ -294,7 +365,7 @@ fn an_animating_scene_repaints_at_a_capped_rate_without_waking_the_app_or_the_da
     std::thread::sleep(Duration::from_millis(300));
     let presents = probe.presents.load(Relaxed) - base;
     assert!(
-        (10..=25).contains(&presents),
+        (35..=95).contains(&presents),
         "{presents} animation presents in 300 ms"
     );
     assert_eq!(
@@ -402,4 +473,108 @@ fn startup_steps_run_one_per_idle_turn_without_presenting() {
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(probe.startup_done.load(Relaxed), 6);
     assert_eq!(probe.presents.load(Relaxed), presents);
+}
+
+#[test]
+fn a_scene_arriving_during_the_frame_slot_wait_is_presented_immediately() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc::{channel, Receiver, Sender};
+
+    struct ControlledTarget {
+        pause: Arc<AtomicBool>,
+        waiting: Sender<()>,
+        resume: Receiver<()>,
+        shown: Sender<Option<Oklch>>,
+    }
+
+    impl FrameTarget for ControlledTarget {
+        fn wait_frame(&mut self) {
+            if self.pause.swap(false, Relaxed) {
+                self.waiting.send(()).unwrap();
+                self.resume.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+        }
+
+        fn present(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback> {
+            let fill = side.scene().ordered().find_map(|(_, item)| match item {
+                DisplayItem::Rect { fill, .. } => Some(*fill),
+                _ => None,
+            });
+            self.shown.send(fill).unwrap();
+            vec![Feedback::Presented(frame)]
+        }
+    }
+
+    let service = RenderService::new().unwrap();
+    let pause = Arc::new(AtomicBool::new(false));
+    let target_pause = pause.clone();
+    let (waiting, waited) = channel();
+    let (resume, resumed) = channel();
+    let (shown, displayed) = channel();
+    let factory: InitFactory = Box::new(move |_| {
+        Box::new(move || {
+            Ok(Box::new(ControlledTarget {
+                pause: target_pause,
+                waiting,
+                resume: resumed,
+                shown,
+            }) as Box<dyn FrameTarget>)
+        })
+    });
+    let mut link = RenderLink::spawn(
+        &service,
+        factory,
+        Arc::new(|_| {}),
+        clock(),
+        INTERVAL,
+        Arc::new(|| {}),
+    );
+    link.set_viewport(Size::new(100.0, 100.0), 1.0);
+    displayed.recv_timeout(Duration::from_secs(5)).unwrap();
+    pause.store(true, Relaxed);
+    link.push_scene(&mut scene_with("#ff0000"));
+    waited.recv_timeout(Duration::from_secs(5)).unwrap();
+    link.push_scene(&mut scene_with("#00ff00"));
+    resume.send(()).unwrap();
+    assert_eq!(
+        displayed.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Some(Oklch::from_hex("#00ff00").unwrap())
+    );
+    wait_until("both scenes to be acknowledged", || {
+        link.stats().scenes_presented.load(Relaxed) == 2
+    });
+    assert_eq!(link.stats().scenes_applied.load(Relaxed), 2);
+    link.shutdown();
+}
+
+#[test]
+fn hardware_paced_animation_does_not_sleep_between_available_slots() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    probe.native_pacing.store(true, Relaxed);
+    *probe.script.lock().unwrap() = vec![Repaint::Animating; 40];
+    let started = WallInstant::now();
+    link.set_viewport(Size { w: 100.0, h: 101.0 }, 1.0);
+    wait_until("the hardware-paced frames", || {
+        probe.presents.load(Relaxed) >= base + 41
+    });
+    assert!(started.elapsed() < INTERVAL * 30);
+}
+
+#[test]
+fn expensive_background_repaints_remain_bounded_with_immediate_presentation() {
+    let service = RenderService::new().unwrap();
+    let probe = Arc::new(Probe::default());
+    let mut link = settled_link(&service, &probe);
+    let base = probe.presents.load(Relaxed);
+    probe.native_pacing.store(true, Relaxed);
+    *probe.script.lock().unwrap() = vec![Repaint::Heavy; 8];
+    let started = WallInstant::now();
+    link.set_viewport(Size { w: 100.0, h: 101.0 }, 1.0);
+    wait_until("the bounded background frames", || {
+        probe.presents.load(Relaxed) >= base + 9
+    });
+    assert!(started.elapsed() >= Duration::from_millis(230));
 }

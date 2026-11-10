@@ -64,21 +64,24 @@ fn available_space_cache_key(input: AvailableSpace) -> u32 {
 #[inline(always)]
 #[allow(dead_code)]
 fn size_available_space_cache_key(input: Size<AvailableSpace>) -> u64 {
-    (available_space_cache_key(input.width) as u64) << 32 | available_space_cache_key(input.height) as u64
+    (available_space_cache_key(input.width) as u64) << 32
+        | available_space_cache_key(input.height) as u64
 }
 
 /// Encodes combination of a `known_dimension` (Option<f32>) and `AvailableSpace` in
 /// a single dimension into a cache key in a single dimension.
 #[inline(always)]
 fn mixed_cache_key(kd: Option<f32>, avs: AvailableSpace) -> u32 {
-    kd.map(|kd| kd.to_bits()).unwrap_or_else(|| available_space_cache_key(avs))
+    kd.map(|kd| kd.to_bits())
+        .unwrap_or_else(|| available_space_cache_key(avs))
 }
 
 /// Encodes combination of a `known_dimension` (Option<f32>) and `AvailableSpace` in
 /// two dimensions into a cache key in a single dimension.
 #[inline(always)]
 fn size_mixed_cache_key(kd: Size<Option<f32>>, avs: Size<AvailableSpace>) -> u64 {
-    (mixed_cache_key(kd.width, avs.width) as u64) << 32 | mixed_cache_key(kd.height, avs.height) as u64
+    (mixed_cache_key(kd.width, avs.width) as u64) << 32
+        | mixed_cache_key(kd.height, avs.height) as u64
 }
 
 /// Space-optimised cache key that packs bits into as small a size as possible
@@ -133,10 +136,13 @@ impl From<&LayoutInput> for CacheKey {
 
         Self {
             kd_available_space: size_mixed_cache_key(input.known_dimensions, input.available_space),
-            parent_size: (size_option_cache_key(input.parent_size) & NON_SIGN_BITS_MASK) | extra_bits,
+            parent_size: (size_option_cache_key(input.parent_size) & NON_SIGN_BITS_MASK)
+                | extra_bits,
             known_dimensions_are_definite: input
                 .known_dimensions_are_definite
-                .zip_map(input.known_dimensions, |is_definite, kd| is_definite || kd.is_none()),
+                .zip_map(input.known_dimensions, |is_definite, kd| {
+                    is_definite || kd.is_none()
+                }),
         }
     }
 }
@@ -255,13 +261,16 @@ impl Cache {
         }
         let key = CacheKey::from(input);
         match input.run_mode {
-            RunMode::PerformLayout => {
-                self.final_layout_entry.as_ref().filter(|entry| entry.key == key).map(|e| e.content.clone())
-            }
+            RunMode::PerformLayout => self
+                .final_layout_entry
+                .as_ref()
+                .filter(|entry| entry.key == key)
+                .map(|e| e.content.clone()),
             RunMode::ComputeSize => {
                 for (index, entry) in self.measure_entries.iter().enumerate() {
                     if entry.key.kd_available_space == key.kd_available_space
-                        && entry.key.known_dimensions_are_definite == key.known_dimensions_are_definite
+                        && entry.key.known_dimensions_are_definite
+                            == key.known_dimensions_are_definite
                         && (entry.key.x_axis_parent_size() == key.x_axis_parent_size())
                         && entry.key.size_is_valid_for(&key)
                     {
@@ -294,7 +303,10 @@ impl Cache {
         match input.run_mode {
             RunMode::PerformLayout => {
                 self.is_empty = false;
-                self.final_layout_entry = Some(CacheEntry { key, content: layout_output })
+                self.final_layout_entry = Some(CacheEntry {
+                    key,
+                    content: layout_output,
+                })
             }
             RunMode::ComputeSize => {
                 // Measure entries only store the size, and cache hits are reconstructed with
@@ -308,7 +320,11 @@ impl Cache {
                     return;
                 }
                 self.is_empty = false;
-                if let Some(index) = self.measure_entries.iter().position(|entry| entry.key == key) {
+                if let Some(index) = self
+                    .measure_entries
+                    .iter()
+                    .position(|entry| entry.key == key)
+                {
                     self.measure_entries[index].content = layout_output.size;
                     self.recently_used_entries |= 1 << index;
                     return;
@@ -316,9 +332,13 @@ impl Cache {
                 if self.measure_entries.len() < CACHE_SIZE {
                     let entry_index = self.measure_entries.len();
                     if entry_index == self.measure_entries.capacity() {
-                        self.measure_entries.reserve_exact(2.min(CACHE_SIZE - entry_index));
+                        self.measure_entries
+                            .reserve_exact(2.min(CACHE_SIZE - entry_index));
                     }
-                    self.measure_entries.push(CacheEntry { key, content: layout_output.size });
+                    self.measure_entries.push(CacheEntry {
+                        key,
+                        content: layout_output.size,
+                    });
                     self.recently_used_entries |= 1 << entry_index;
                     self.next_measure_entry = ((entry_index + 1) % CACHE_SIZE) as u8;
                     return;
@@ -331,7 +351,10 @@ impl Cache {
                     }
                 }
                 let entry_index = self.next_measure_entry as usize;
-                self.measure_entries[entry_index] = CacheEntry { key, content: layout_output.size };
+                self.measure_entries[entry_index] = CacheEntry {
+                    key,
+                    content: layout_output.size,
+                };
                 self.recently_used_entries |= 1 << entry_index;
                 self.next_measure_entry += 1;
                 if self.next_measure_entry == CACHE_SIZE as u8 {
@@ -380,16 +403,28 @@ mod tests {
             run_mode: RunMode::ComputeSize,
             sizing_mode: SizingMode::InherentSize,
             axis: RequestedAxis::Both,
-            known_dimensions: Size { width: Some(width), height: None },
-            known_dimensions_are_definite: Size { width: true, height: true },
+            known_dimensions: Size {
+                width: Some(width),
+                height: None,
+            },
+            known_dimensions_are_definite: Size {
+                width: true,
+                height: true,
+            },
             parent_size: Size::NONE,
-            available_space: Size { width: AvailableSpace::MaxContent, height: AvailableSpace::MaxContent },
+            available_space: Size {
+                width: AvailableSpace::MaxContent,
+                height: AvailableSpace::MaxContent,
+            },
             vertical_margins_are_collapsible: Line::FALSE,
         }
     }
 
     fn output(width: f32) -> LayoutOutput {
-        LayoutOutput::from_outer_size(Size { width, height: width })
+        LayoutOutput::from_outer_size(Size {
+            width,
+            height: width,
+        })
     }
 
     #[test]
@@ -401,7 +436,10 @@ mod tests {
         cache.store(&input(CACHE_SIZE as f32), output(CACHE_SIZE as f32));
 
         assert_eq!(cache.get(&input(1.0)), Some(output(1.0)));
-        cache.store(&input((CACHE_SIZE + 1) as f32), output((CACHE_SIZE + 1) as f32));
+        cache.store(
+            &input((CACHE_SIZE + 1) as f32),
+            output((CACHE_SIZE + 1) as f32),
+        );
 
         assert_eq!(cache.get(&input(1.0)), Some(output(1.0)));
         assert_eq!(cache.get(&input(2.0)), None);
@@ -449,8 +487,14 @@ mod tests {
     fn perform_layout_input(width: f32, height: f32) -> LayoutInput {
         LayoutInput {
             run_mode: RunMode::PerformLayout,
-            known_dimensions: Size { width: Some(width), height: Some(height) },
-            parent_size: Size { width: Some(width), height: Some(height) },
+            known_dimensions: Size {
+                width: Some(width),
+                height: Some(height),
+            },
+            parent_size: Size {
+                width: Some(width),
+                height: Some(height),
+            },
             ..input(width)
         }
     }
@@ -458,10 +502,28 @@ mod tests {
     /// Inputs that differ from `input`/`perform_layout_input` only in their mode
     fn other_modes(input: LayoutInput) -> [LayoutInput; 4] {
         [
-            LayoutInput { sizing_mode: SizingMode::ContentSize, ..input },
-            LayoutInput { vertical_margins_are_collapsible: Line::TRUE, ..input },
-            LayoutInput { vertical_margins_are_collapsible: Line { start: true, end: false }, ..input },
-            LayoutInput { vertical_margins_are_collapsible: Line { start: false, end: true }, ..input },
+            LayoutInput {
+                sizing_mode: SizingMode::ContentSize,
+                ..input
+            },
+            LayoutInput {
+                vertical_margins_are_collapsible: Line::TRUE,
+                ..input
+            },
+            LayoutInput {
+                vertical_margins_are_collapsible: Line {
+                    start: true,
+                    end: false,
+                },
+                ..input
+            },
+            LayoutInput {
+                vertical_margins_are_collapsible: Line {
+                    start: false,
+                    end: true,
+                },
+                ..input
+            },
         ]
     }
 
@@ -470,8 +532,15 @@ mod tests {
         let mut modes = [CacheMode::INITIAL; 8];
         for (index, mode) in modes.iter_mut().enumerate() {
             *mode = CacheMode::from(&LayoutInput {
-                sizing_mode: if index & 1 == 0 { SizingMode::ContentSize } else { SizingMode::InherentSize },
-                vertical_margins_are_collapsible: Line { start: index & 2 != 0, end: index & 4 != 0 },
+                sizing_mode: if index & 1 == 0 {
+                    SizingMode::ContentSize
+                } else {
+                    SizingMode::InherentSize
+                },
+                vertical_margins_are_collapsible: Line {
+                    start: index & 2 != 0,
+                    end: index & 4 != 0,
+                },
                 ..input(1.0)
             });
         }
@@ -493,7 +562,10 @@ mod tests {
             assert_eq!(cache.get(&other), None);
         }
 
-        assert_eq!(cache.get(&perform_layout_input(100.0, 50.0)), Some(output(1.0)));
+        assert_eq!(
+            cache.get(&perform_layout_input(100.0, 50.0)),
+            Some(output(1.0))
+        );
         assert_eq!(cache.get(&input(1.0)), Some(output(2.0)));
     }
 
@@ -540,12 +612,21 @@ mod tests {
     #[test]
     #[cfg(all(debug_assertions, feature = "std"))]
     fn mode_change_evictions_are_counted_for_non_empty_caches_only() {
-        let content_size = LayoutInput { sizing_mode: SizingMode::ContentSize, ..input(1.0) };
+        let content_size = LayoutInput {
+            sizing_mode: SizingMode::ContentSize,
+            ..input(1.0)
+        };
         let evictions = cache_mode_change_evictions();
 
         let mut cache = Cache::new();
         cache.store(&content_size, output(1.0));
-        cache.store(&LayoutInput { sizing_mode: SizingMode::ContentSize, ..input(2.0) }, output(2.0));
+        cache.store(
+            &LayoutInput {
+                sizing_mode: SizingMode::ContentSize,
+                ..input(2.0)
+            },
+            output(2.0),
+        );
         assert_eq!(cache_mode_change_evictions(), evictions);
 
         cache.store(&input(1.0), output(1.0));

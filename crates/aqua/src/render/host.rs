@@ -14,7 +14,6 @@ use aqua_transport::{
     GpuRenderHost, HostConfig, HostCounters, Inspector, MonotonicClock, RenderHost,
 };
 
-use super::cadence::Cadence;
 use super::damage::{DamagePlanner, Plan};
 use super::link::ExternalUpdate;
 use super::lower::Lowering;
@@ -36,11 +35,51 @@ pub enum Repaint {
     Poll(Duration),
 }
 
+impl Repaint {
+    pub fn from_report(
+        report: &super::lower::LowerReport,
+        transition: bool,
+        repaint_ratio: f32,
+    ) -> Self {
+        let shader_only = report.shader_animation
+            && !report.pulsing
+            && !report.shimmering
+            && !report.shape_animation;
+        let still = report
+            .still_micros
+            .filter(|_| !report.animated())
+            .map(Duration::from_micros);
+        match (
+            report.animated() || report.shimmering,
+            transition,
+            report.pending > 0,
+            still,
+        ) {
+            (true, true, _, _) => Repaint::NextFrame,
+            (true, false, true, Some(rest)) => Repaint::Poll(rest.min(PENDING_POLL)),
+            (true, false, false, Some(rest)) => Repaint::Still(rest),
+            (true, false, _, None) if report.shape_animation => Repaint::Animating,
+            (true, false, _, None) if shader_only => {
+                Repaint::Still(Duration::from_nanos(33_333_333))
+            }
+            (true, false, _, None) => match repaint_ratio > HEAVY_REPAINT_RATIO {
+                true => Repaint::Heavy,
+                false => Repaint::Animating,
+            },
+            (false, _, true, _) => Repaint::Poll(PENDING_POLL),
+            (false, _, false, _) => Repaint::Settled,
+        }
+    }
+}
+
 pub type DamageSlot = Rc<RefCell<Option<Vec<Rect>>>>;
 
 pub trait FrameTarget {
     fn paced(&self) -> bool {
         false
+    }
+    fn animation_interval(&self, fallback: Duration) -> Duration {
+        fallback
     }
     fn wait_frame(&mut self);
     fn present(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback>;
@@ -132,7 +171,6 @@ type Maintenance<B> = Box<dyn FnMut(&mut B)>;
 type Release<B> = Box<dyn FnMut(&mut B)>;
 type Pressure<B> = Box<dyn FnMut(&mut B) -> bool>;
 type Visibility<B> = Box<dyn FnMut(&mut B, bool) -> bool>;
-type HalfRate<B> = Box<dyn FnMut(&mut B, SurfaceId, bool)>;
 
 struct DamageStage {
     planner: DamagePlanner,
@@ -150,9 +188,6 @@ pub struct GpuFrames<B: GpuBackend<Error = GpuError> + 'static> {
     pressure: Option<Pressure<B>>,
     probe: Option<RepaintProbe<B>>,
     visibility: Option<Visibility<B>>,
-    half_rate: Option<HalfRate<B>>,
-    cadence: Cadence,
-    halved: bool,
     since_maintenance: u64,
     counted: HostCounters,
     damage: Option<DamageStage>,
@@ -187,9 +222,6 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
             pressure: None,
             probe: None,
             visibility: None,
-            half_rate: None,
-            cadence: Cadence::new(),
-            halved: false,
             since_maintenance: 0,
             counted: HostCounters::default(),
             damage: None,
@@ -209,6 +241,25 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
     pub fn with_hint(mut self, hint: PresentHint) -> Self {
         self.hint = hint;
         self
+    }
+
+    fn prepare_present(&mut self) -> bool {
+        let hint = match self.stats.immediate.load(Ordering::Relaxed) {
+            true => PresentHint::Immediate,
+            false => self.hint,
+        };
+        self.host.set_present(hint);
+        let half = hint == PresentHint::Vsync
+            && self
+                .cadence
+                .half_rate(self.stats.glide.load(Ordering::Relaxed));
+        if half != self.halved {
+            if let Some(set) = self.half_rate.as_mut() {
+                set(self.host.backend_mut(), self.surface, half);
+            }
+            self.halved = half;
+        }
+        half
     }
 
     pub fn with_inspector(mut self, inspector: Inspector) -> Self {
@@ -247,14 +298,6 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
         self
     }
 
-    pub fn with_half_rate(
-        mut self,
-        half_rate: impl FnMut(&mut B, SurfaceId, bool) + 'static,
-    ) -> Self {
-        self.half_rate = Some(Box::new(half_rate));
-        self
-    }
-
     pub fn backend(&self) -> &B {
         self.host.backend()
     }
@@ -269,6 +312,13 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
 
     pub fn host(&self) -> &GpuRenderHost<B, Lowering, MonotonicClock> {
         &self.host
+    }
+
+    fn present_hint(&self) -> PresentHint {
+        match self.stats.immediate.load(Ordering::Relaxed) {
+            true => PresentHint::Immediate,
+            false => self.hint,
+        }
     }
 
     fn stage_damage(&mut self, side: &RenderSide) {
@@ -408,30 +458,31 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
         !self.host.backend().capabilities().features.window_surfaces
     }
 
+    fn animation_interval(&self, fallback: Duration) -> Duration {
+        match (
+            self.present_hint(),
+            self.host.backend().capabilities().features.window_surfaces,
+        ) {
+            (PresentHint::Vsync, true) => Duration::ZERO,
+            _ => fallback.max(Duration::from_nanos(4_166_667)),
+        }
+    }
+
     fn wait_frame(&mut self) {
+        self.prepare_present();
         self.host.wait_frame();
     }
 
     fn idle_trim_in(&mut self) -> Option<Duration> {
-        self.host.idle_trim_in()
+        self.stats
+            .hidden
+            .load(Ordering::Acquire)
+            .then(|| self.host.idle_trim_in())
+            .flatten()
     }
 
     fn present(&mut self, side: &mut RenderSide, frame: FrameId) -> Vec<Feedback> {
-        let hint = match self.stats.immediate.load(Ordering::Relaxed) {
-            true => PresentHint::Immediate,
-            false => self.hint,
-        };
-        self.host.set_present(hint);
-        let half = hint == PresentHint::Vsync
-            && self
-                .cadence
-                .half_rate(self.stats.glide.load(Ordering::Relaxed));
-        if half != self.halved {
-            if let Some(set) = self.half_rate.as_mut() {
-                set(self.host.backend_mut(), self.surface, half);
-            }
-            self.halved = half;
-        }
+        self.prepare_present();
         let idle = self.stats.trim.swap(false, Ordering::AcqRel);
         if idle {
             self.host.trim_handle().request();
@@ -444,12 +495,6 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
         self.stage_damage(side);
         crate::profile::note(|| format!("damage_us={}", staging.elapsed().as_micros()));
         let feedback = self.host.execute(side, frame);
-        if feedback
-            .iter()
-            .any(|item| matches!(item, Feedback::Presented(_)))
-        {
-            self.cadence.observe(WallInstant::now(), half);
-        }
         if idle {
             if let Some(release) = self.idle_release.as_mut() {
                 release(self.host.backend_mut());
@@ -483,26 +528,13 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
     fn repaint(&self) -> Repaint {
         let report = self.host.lowering().last_report();
         let transition = self.host.lowering().transition_active();
-        let still = report
-            .still_micros
-            .filter(|_| !report.pulsing)
-            .map(Duration::from_micros);
-        match (
-            report.pulsing || report.shimmering,
-            transition,
-            report.pending > 0,
-            still,
-        ) {
-            (true, true, _, _) => Repaint::NextFrame,
-            (true, false, true, Some(rest)) => Repaint::Poll(rest.min(PENDING_POLL)),
-            (true, false, false, Some(rest)) => Repaint::Still(rest),
-            (true, false, _, None) => match self.repaint_ratio > HEAVY_REPAINT_RATIO {
-                true => Repaint::Heavy,
-                false => Repaint::Animating,
-            },
-            (false, _, true, _) => Repaint::Poll(PENDING_POLL),
-            (false, _, false, _) => Repaint::Settled,
-        }
+        crate::profile::note(|| {
+            format!(
+                "animation=pulse:{},shader:{},shimmer:{},transition:{}",
+                report.pulsing, report.shader_animation, report.shimmering, transition
+            )
+        });
+        Repaint::from_report(report, transition, self.repaint_ratio)
     }
 }
 

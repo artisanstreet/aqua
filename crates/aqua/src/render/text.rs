@@ -24,10 +24,47 @@ pub enum TextScope {
     LegacyMap,
 }
 
+#[derive(Clone, Debug)]
+enum OpacityRanges {
+    Opaque,
+    Ordered(Arc<[GpuiTextOpacityRange]>),
+    Unordered(Arc<[GpuiTextOpacityRange]>),
+}
+
+impl OpacityRanges {
+    fn new(ranges: Arc<[GpuiTextOpacityRange]>) -> Self {
+        let ordered = ranges
+            .iter()
+            .all(|range| range.bytes.start <= range.bytes.end)
+            && ranges
+                .windows(2)
+                .all(|pair| pair[0].bytes.end <= pair[1].bytes.start);
+        let opaque = ranges
+            .iter()
+            .all(|range| range.opacity == 1.0 || range.bytes.is_empty());
+        match (opaque, ordered) {
+            (true, _) => Self::Opaque,
+            (false, true) => Self::Ordered(ranges),
+            (false, false) => Self::Unordered(ranges),
+        }
+    }
+
+    fn opacity(&self, byte: usize) -> f32 {
+        let range = match self {
+            Self::Opaque => return 1.0,
+            Self::Ordered(ranges) => ranges
+                .get(ranges.partition_point(|range| range.bytes.end <= byte))
+                .filter(|range| range.bytes.contains(&byte)),
+            Self::Unordered(ranges) => ranges.iter().find(|range| range.bytes.contains(&byte)),
+        };
+        range.map_or(1.0, |range| range.opacity)
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TextStack {
     bases: Vec<TextBase>,
-    opacities: Vec<Arc<[GpuiTextOpacityRange]>>,
+    opacities: Vec<OpacityRanges>,
     maps: Vec<(GpuiTextColorMap, Option<GpuiTextShimmer>)>,
     legacy: Vec<TextColorMap>,
 }
@@ -42,7 +79,7 @@ impl TextStack {
     }
 
     pub fn push_opacity(&mut self, ranges: Arc<[GpuiTextOpacityRange]>) {
-        self.opacities.push(ranges);
+        self.opacities.push(OpacityRanges::new(ranges));
     }
 
     pub fn push_map(&mut self, map: GpuiTextColorMap, shimmer: Option<GpuiTextShimmer>) {
@@ -111,12 +148,7 @@ impl TextStack {
     pub fn range_opacity(&self, glyph: &LaidGlyph) -> f32 {
         self.opacities
             .last()
-            .and_then(|ranges| {
-                ranges
-                    .iter()
-                    .find(|range| range.bytes.contains(&glyph.src_byte_start))
-            })
-            .map_or(1.0, |range| range.opacity)
+            .map_or(1.0, |ranges| ranges.opacity(glyph.src_byte_start))
     }
 
     #[must_use]
@@ -161,7 +193,12 @@ impl TextStack {
 
     #[must_use]
     pub fn cache_signature(&self) -> Option<[u32; 5]> {
-        match self.has_map() || !self.opacities.is_empty() {
+        match self.has_map()
+            || self
+                .opacities
+                .last()
+                .is_some_and(|ranges| !matches!(ranges, OpacityRanges::Opaque))
+        {
             true => None,
             false => Some(match self.bases.last() {
                 Some(TextBase::Normalized(color) | TextBase::Source(color)) => [

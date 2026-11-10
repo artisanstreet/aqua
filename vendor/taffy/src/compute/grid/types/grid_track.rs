@@ -91,7 +91,11 @@ impl GridTrack {
         min_track_sizing_function: MinTrackSizingFunction,
         max_track_sizing_function: MaxTrackSizingFunction,
     ) -> GridTrack {
-        Self::new_with_kind(GridTrackKind::Track, min_track_sizing_function, max_track_sizing_function)
+        Self::new_with_kind(
+            GridTrackKind::Track,
+            min_track_sizing_function,
+            max_track_sizing_function,
+        )
     }
 
     /// Create a new GridTrack representing a gutter
@@ -121,13 +125,15 @@ impl GridTrack {
     #[inline(always)]
     /// Returns true if the track is flexible (has a Flex MaxTrackSizingFunction), else false.
     pub fn uses_percentage(&self) -> bool {
-        self.min_track_sizing_function.uses_percentage() || self.max_track_sizing_function.uses_percentage()
+        self.min_track_sizing_function.uses_percentage()
+            || self.max_track_sizing_function.uses_percentage()
     }
 
     #[inline(always)]
     /// Returns true if the track has an intrinsic min and or max sizing function
     pub fn has_intrinsic_sizing_function(&self) -> bool {
-        self.min_track_sizing_function.is_intrinsic() || self.max_track_sizing_function.is_intrinsic()
+        self.min_track_sizing_function.is_intrinsic()
+            || self.max_track_sizing_function.is_intrinsic()
     }
 
     /// Cache the `fit-content()` limit of the max track sizing function (if any), resolved against the

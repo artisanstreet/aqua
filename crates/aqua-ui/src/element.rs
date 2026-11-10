@@ -1115,6 +1115,7 @@ pub struct Scroll {
     paint: Paint,
     typo: TypoChain,
     offset: Point,
+    preserve_offset: bool,
     children: Vec<Element>,
 }
 
@@ -1126,6 +1127,7 @@ impl Scroll {
             paint: Paint::default(),
             typo: TypoChain::default(),
             offset: Point::ZERO,
+            preserve_offset: false,
             children: Vec::new(),
         }
     }
@@ -1140,6 +1142,11 @@ impl Scroll {
     /// Scroll offset as a [`Point`].
     pub fn offset(mut self, offset: Point) -> Self {
         self.offset = offset;
+        self
+    }
+
+    pub fn preserve_offset(mut self, preserve: bool) -> Self {
+        self.preserve_offset = preserve;
         self
     }
 
@@ -2691,16 +2698,12 @@ impl Element {
         }
     }
 
-    /// Refresh a live mounted node in place from this element's props and
-    /// re-sync its children. `inherited` is the typography chain from the
-    /// element's ancestors. Returns `Ok(false)` when the retained kind
-    /// differs (caller remounts) or the node is gone; `Err` on lowering
-    /// failures (keyed fragment, sourceless dynamic, non-uniform corners).
     pub(crate) fn refresh_mounted(
         &self,
         tree: &mut UiTree,
         id: NodeId,
         inherited: &TypoChain,
+        children: Option<Vec<NodeSpec>>,
     ) -> Result<bool, LowerError> {
         let Some(rec) = tree.get(id) else {
             return Ok(false);
@@ -2724,18 +2727,12 @@ impl Element {
                 return Err(LowerError::InvalidTextOpacity);
             }
         }
-        // Clone the committed style up front: later arms refresh through
-        // `&mut tree`, so the shared `rec` borrow must end here (NLL).
         let rec_style = rec.style.clone();
         if let Some(style) = self.style_opt() {
             if rec.style != *style {
                 tree.set_style(id, style.clone());
             }
         }
-        // Paint refreshes through the tree seam for every kind (paint-only,
-        // no layout invalidation, no identity change). `set_paint` no-ops on
-        // equality, so unchanged styles cost nothing here. Non-uniform
-        // corners are rejected here too, so refresh fails as loudly as mount.
         let paint = self.resolved_paint();
         check_paint(&paint)?;
         tree.set_paint(id, paint);
@@ -2745,10 +2742,7 @@ impl Element {
             | ElementKind::Checkbox(_)
             | ElementKind::Slider(_)
             | ElementKind::Dropdown(_)
-            | ElementKind::Tabs(_) => {
-                // Box-lowered kinds carry paint only (structure lives in
-                // synthetic children, synced below).
-            }
+            | ElementKind::Tabs(_) => {}
             ElementKind::Text(t) => {
                 let (live_editable, live_multiline) = match tree.get(id) {
                     Some(rec) => match &rec.kind {
@@ -2758,16 +2752,10 @@ impl Element {
                     None => return Ok(false),
                 };
                 if live_editable != t.editable {
-                    // Genuine mode change: rebuild the backing store in
-                    // place (node id preserved, text + caret carried over,
-                    // undo history resets with the new backing).
                     if !Self::switch_text_backing(tree, id, t) {
                         return Ok(false);
                     }
                 } else if live_editable && live_multiline != t.multiline {
-                    // In-place line-mode switch (the editor preserves text
-                    // and caret; folding newlines going single is editor
-                    // policy, not UI policy).
                     if let Some(rec) = tree.get_mut(id) {
                         if let NodeKind::Text(ref mut tc) = rec.kind {
                             if let TextBacking::Editable(ref mut ed) = tc.backing {
@@ -2780,11 +2768,6 @@ impl Element {
                         }
                     }
                 }
-                // Uncontrolled editable: the live editor owns its content;
-                // the descriptor's `initial` is the mount-time default, not a
-                // controlled value. Preserve backing/caret/selection and
-                // apply cosmetic props only. Controlled text (effect
-                // bindings present) and static labels go through set_text.
                 let uncontrolled = t.editable
                     && !self.bindings.iter().any(|b| {
                         matches!(
@@ -2822,11 +2805,11 @@ impl Element {
                 }
             }
             ElementKind::Scroll(s) => {
-                tree.scroll_to(id, s.offset);
+                if !s.preserve_offset {
+                    tree.scroll_to(id, s.offset);
+                }
             }
-            ElementKind::Canvas(_) => {
-                // Painters persist in the registry; nothing to refresh.
-            }
+            ElementKind::Canvas(_) => {}
             ElementKind::Viewport3D(v) => {
                 if let Some(rec) = tree.get_mut(id) {
                     if let NodeKind::Viewport3D(ref mut cur) = rec.kind {
@@ -2836,11 +2819,6 @@ impl Element {
                 }
             }
             ElementKind::Collection(d) => {
-                // Container style/paint refresh only, in BOTH modes. The
-                // driver owns realization end to end (rows/header/spacers,
-                // window, scroll, bindings) and reconciles the snapshot, so
-                // refresh never touches children: shells are empty and
-                // managed, and re-lowering here would double-run factories.
                 if !self.children.is_empty() || !self.synth.is_empty() {
                     return Err(LowerError::CollectionChildren);
                 }
@@ -2852,15 +2830,19 @@ impl Element {
                 tree.set_paint(id, paint);
                 return Ok(true);
             }
-            ElementKind::Fragment => {
-                // Caller routes fragments to children sync, never here.
+            ElementKind::Fragment => {}
+        }
+        let child_specs = match children {
+            Some(specs) => specs,
+            None => {
+                let own = inherited.child(&self.typo_chain());
+                let mut specs = Vec::new();
+                for child in self.flat_children() {
+                    specs.extend(lower_specs_in(child, &own)?);
+                }
+                specs
             }
-        }
-        let own = inherited.child(&self.typo_chain());
-        let mut child_specs = Vec::new();
-        for c in self.flat_children() {
-            child_specs.extend(lower_specs_in(c, &own)?);
-        }
+        };
         tree.sync_children(id, child_specs);
         Ok(true)
     }
@@ -3308,10 +3290,14 @@ fn lower_one(el: &Element, inherited: &TypoChain) -> Result<NodeSpec, LowerError
             }),
             m.style.clone(),
         ),
-        ElementKind::Scroll(s) => NodeSpec::new(
-            NodeKind::Scroll(ScrollContent { offset: s.offset }),
-            s.style.clone(),
-        ),
+        ElementKind::Scroll(s) => {
+            let mut spec = NodeSpec::new(
+                NodeKind::Scroll(ScrollContent { offset: s.offset }),
+                s.style.clone(),
+            );
+            spec.preserve_scroll_offset = s.preserve_offset;
+            spec
+        }
         ElementKind::Canvas(c) => {
             let style = c.style.clone();
             NodeSpec::new(NodeKind::Canvas(CanvasContent { painter: None }), style)

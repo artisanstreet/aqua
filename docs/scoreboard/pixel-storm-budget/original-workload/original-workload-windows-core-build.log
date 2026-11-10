@@ -1,0 +1,4 @@
+warning: Git tree '/home/sander/projects/artisanstreet/editor' is dirty
+   Compiling aqua-core v0.1.0 (/home/sander/projects/artisanstreet/aqua-rebuild-allocs/crates/aqua-core)
+    Finished `release` profile [optimized] target(s) in 1.80s
+  Executable tests/color.rs (/home/sander/projects/artisanstreet/aqua-storm-budget/target/x86_64-pc-windows-gnu/release/deps/color-fae594723957856c.exe)

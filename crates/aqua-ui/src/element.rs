@@ -640,9 +640,6 @@ impl Box {
         self
     }
 
-    /// Append several children in call order (arrays, `Vec`s, and lazy
-    /// iterators all work). Repeated calls append; existing single-child
-    /// calls remain valid.
     pub fn children<I, E>(mut self, children: I) -> Self
     where
         I: IntoIterator<Item = E>,

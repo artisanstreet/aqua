@@ -1,5 +1,4 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use aqua_core::id::RawId;
 use aqua_core::{DisplayItem, NodeId, Oklch, Rect, Size};
@@ -60,6 +59,8 @@ struct Probe {
     inner: RefBackend,
     log: Log,
     fail_next_execute: bool,
+    hints: Vec<PresentHint>,
+    wait_hints: Vec<PresentHint>,
 }
 
 impl Probe {
@@ -68,6 +69,8 @@ impl Probe {
             inner: RefBackend::new(),
             log,
             fail_next_execute: false,
+            hints: Vec::new(),
+            wait_hints: Vec::new(),
         }
     }
 }
@@ -102,6 +105,7 @@ impl GpuBackend for Probe {
 
     fn present(&mut self, surface: SurfaceId, hint: PresentHint) -> Result<PresentTimes, GpuError> {
         self.log.push("present");
+        self.hints.push(hint);
         self.inner.present(surface, hint)
     }
 
@@ -110,12 +114,21 @@ impl GpuBackend for Probe {
         self.inner.recover()
     }
 
+    fn wait_for_frame_slot_with_hint(
+        &mut self,
+        surface: SurfaceId,
+        hint: PresentHint,
+    ) -> Result<(), GpuError> {
+        self.wait_hints.push(hint);
+        self.wait_for_frame_slot(surface)
+    }
+
     fn wait_for_frame_slot(&mut self, _surface: SurfaceId) -> Result<(), GpuError> {
         self.log.push("wait");
         Ok(())
     }
 
-    fn wait_for_present_slot(
+    fn wait_for_frame_slot_with_hint(
         &mut self,
         surface: SurfaceId,
         hint: PresentHint,
@@ -197,6 +210,8 @@ fn a_frame_waits_for_the_slot_once_then_executes_and_presents() {
     assert_eq!(log.take(), vec!["wait"]);
     host.execute(&mut side, 2);
     assert_eq!(log.take(), vec!["execute", "present"]);
+    assert_eq!(host.counters().plans_built, 1);
+    assert_eq!(host.counters().plans_reused, 1);
 }
 
 #[test]
@@ -222,15 +237,14 @@ fn slot_waits_follow_the_current_presentation_hint() {
 }
 
 #[test]
-fn present_time_is_the_clock_plus_one_frame() {
+fn uncapped_present_time_uses_the_current_clock() {
     let clock = SharedClock::default();
     let mut host = host(&Log::default(), clock.clone());
-    clock.set(Instant::from_nanos(1_000_000_000));
-    let target = host.present_time();
-    assert_eq!(
-        target.saturating_duration_since(Instant::from_nanos(1_000_000_000)),
-        Duration::from_nanos(16_666_667)
-    );
+    for nanos in [0, 1_000_000, 1_000_000_000] {
+        let now = Instant::from_nanos(nanos);
+        clock.set(now);
+        assert_eq!(host.present_time(), now);
+    }
 }
 
 #[test]
@@ -357,5 +371,26 @@ fn lowering_applies_translation_scale_and_balances_groups() {
         .iter()
         .map(std::mem::discriminant)
         .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn presentation_is_uncapped_until_monitor_sync_is_explicitly_selected() {
+    let mut host = host(&Log::default(), SharedClock::default());
+    let mut side = RenderSide::new();
+    setup(&mut side, vec![(node(0), rect_item(0.0, color("#ff0000")))]);
+    assert_eq!(host.execute(&mut side, 1), vec![Feedback::Presented(1)]);
+    host.set_present(PresentHint::Vsync);
+    assert_eq!(host.execute(&mut side, 2), vec![Feedback::Presented(2)]);
+    host.set_present(PresentHint::Immediate);
+    assert_eq!(host.execute(&mut side, 3), vec![Feedback::Presented(3)]);
+    assert_eq!(host.backend().wait_hints, host.backend().hints);
+    assert_eq!(
+        host.backend().hints,
+        [
+            PresentHint::Immediate,
+            PresentHint::Vsync,
+            PresentHint::Immediate
+        ]
     );
 }

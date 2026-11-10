@@ -1080,10 +1080,10 @@ impl GpuBackend for WindowBackend {
     }
 
     fn wait_for_frame_slot(&mut self, surface: SurfaceId) -> Result<(), GpuError> {
-        self.wait_for_present_slot(surface, PresentHint::Vsync)
+        self.wait_for_frame_slot_with_hint(surface, PresentHint::Vsync)
     }
 
-    fn wait_for_present_slot(
+    fn wait_for_frame_slot_with_hint(
         &mut self,
         surface: SurfaceId,
         hint: PresentHint,

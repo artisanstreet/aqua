@@ -1,5 +1,8 @@
 //! Style types for Flexbox layout
-use super::{AlignContent, AlignItems, AlignSelf, CoreStyle, Dimension, JustifyContent, LengthPercentage, Style};
+use super::{
+    AlignContent, AlignItems, AlignSelf, CoreStyle, Dimension, JustifyContent, LengthPercentage,
+    Style,
+};
 use crate::geometry::Size;
 
 /// The set of styles required for a Flexbox container
@@ -142,7 +145,9 @@ crate::util::parse::impl_parse_for_keyword_enum!(FlexWrap,
 
 #[cfg(all(feature = "parse", feature = "flexbox_balance"))]
 impl crate::util::parse::FromCss for FlexWrap {
-    fn from_css<'i>(input: &mut crate::util::parse::Parser<'i, '_>) -> crate::util::parse::CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        input: &mut crate::util::parse::Parser<'i, '_>,
+    ) -> crate::util::parse::CssParseResult<'i, Self> {
         let mut wrap: Option<Self> = None;
         let mut balance = false;
         let mut is_first = true;
@@ -168,7 +173,9 @@ impl crate::util::parse::FromCss for FlexWrap {
                 _ => false,
             };
             if !is_valid {
-                return Err(input.new_unexpected_token_error(crate::util::parse::Token::Ident(ident)));
+                return Err(
+                    input.new_unexpected_token_error(crate::util::parse::Token::Ident(ident))
+                );
             }
             is_first = false;
         }

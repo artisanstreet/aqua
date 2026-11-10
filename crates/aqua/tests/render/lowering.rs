@@ -653,3 +653,103 @@ fn leaves_outside_the_active_clip_are_not_lowered() {
     assert_eq!(unshifted, shifted);
     assert!(hidden < unshifted);
 }
+
+#[test]
+fn stable_outline_text_reuses_commands_and_moving_text_keeps_its_position() {
+    let (app, fonts, runs) = text_app();
+    let mut lowering = Lowering::new(fonts.clone(), runs.clone());
+    lowering.set_text_raster(TextRasterMode::Outline);
+    let view = Size::new(160.0, 64.0);
+    let mut covered = Scene::new();
+    covered.insert(DisplayItem::PushGpuiTextOpacity(Arc::from([
+        aqua_core::scene::GpuiTextOpacityRange {
+            bytes: 0..100,
+            opacity: 1.0,
+        },
+    ])));
+    for (_, item) in app.scene().ordered() {
+        covered.insert(item.clone());
+    }
+    covered.insert(DisplayItem::PopGpuiTextOpacity);
+    let (first, _, cold) = lowering.commands(&covered, view, 1.0, aqua_protocol::Instant::ZERO);
+    let (reused, _, warm) = lowering.commands(&covered, view, 1.0, aqua_protocol::Instant::ZERO);
+    assert!(warm.cached_text_runs > 0);
+    assert_eq!(first, reused);
+    assert_eq!(warm.glyphs, cold.glyphs);
+    assert_eq!(warm.curves, cold.curves);
+    let shifted = scene_of(
+        app.scene()
+            .ordered()
+            .map(|(_, item)| {
+                let mut item = item.clone();
+                if let DisplayItem::Text { at: origin, .. } = &mut item {
+                    origin[0] += 12.0;
+                    origin[1] += 4.0;
+                }
+                item
+            })
+            .collect(),
+    );
+    let (moved, _, _) = lowering.commands(&shifted, view, 1.0, aqua_protocol::Instant::ZERO);
+    let mut fresh = Lowering::new(fonts, runs);
+    fresh.set_text_raster(TextRasterMode::Outline);
+    let (expected, _, _) = fresh.commands(&shifted, view, 1.0, aqua_protocol::Instant::ZERO);
+    assert_eq!(moved, expected);
+    assert_ne!(moved, reused);
+    lowering.set_text_raster(TextRasterMode::PlatformDefault);
+    let (_, _, raster) = lowering.commands(&shifted, view, 1.0, aqua_protocol::Instant::ZERO);
+    assert_eq!(raster.curves, 0);
+}
+
+#[test]
+fn sharp_inset_borders_follow_all_rounded_corners() {
+    for mut painter in painters() {
+        for corners in [
+            CornerRadii::uniform(10.0),
+            CornerRadii {
+                top_left: 10.0,
+                top_right: 6.0,
+                bottom_right: 12.0,
+                bottom_left: 4.0,
+            },
+        ] {
+            let bounds = rect(8.0, 8.0, 48.0, 32.0);
+            let inset = paint(
+                &mut painter,
+                vec![DisplayItem::Shadow {
+                    bounds,
+                    corners,
+                    layer: ShadowLayer {
+                        dx: 0.0,
+                        dy: 0.0,
+                        blur: 0.0,
+                        spread: 1.0,
+                        inset: true,
+                        color: red(),
+                    },
+                }],
+            );
+            let border = paint(
+                &mut painter,
+                vec![DisplayItem::Quad {
+                    bounds,
+                    corners,
+                    fill: Oklch::TRANSPARENT,
+                    border_widths: Insets::uniform(1.0),
+                    border_color: red(),
+                    dashed: false,
+                }],
+            );
+            for y in 0..48 {
+                for x in 0..64 {
+                    assert_eq!(
+                        inset.pixel(x, y),
+                        border.pixel(x, y),
+                        "{}: corner mismatch at ({x}, {y})",
+                        painter.label
+                    );
+                }
+            }
+        }
+    }
+}

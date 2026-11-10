@@ -448,6 +448,50 @@ pub struct FramePlan {
 }
 
 impl FramePlan {
+    pub fn repaint_bounds(&self, region: Rect) -> Rect {
+        let frame = self.extent.bounds();
+        let sources: Vec<Rect> = self
+            .passes
+            .iter()
+            .filter(|pass| pass.reads.contains(&TextureRef::Surface))
+            .map(|pass| match &pass.kind {
+                PassKind::Filter { params, .. } => params.region,
+                PassKind::Copy {
+                    source_origin,
+                    size,
+                    ..
+                } => Rect {
+                    x: source_origin[0] as f32,
+                    y: source_origin[1] as f32,
+                    w: size.width as f32,
+                    h: size.height as f32,
+                },
+                _ => frame,
+            })
+            .map(|source| {
+                Rect::from_edges(
+                    source.x.floor(),
+                    source.y.floor(),
+                    source.right().ceil(),
+                    source.bottom().ceil(),
+                )
+                .intersect(frame)
+            })
+            .collect();
+        let mut region = region.intersect(frame);
+        loop {
+            let before = region;
+            for source in &sources {
+                if region.overlaps(*source) {
+                    region = region.union(*source);
+                }
+            }
+            if region == before {
+                return region;
+            }
+        }
+    }
+
     pub fn instance_count(&self) -> usize {
         self.passes.iter().map(|pass| pass.kind.draw_count()).sum()
     }

@@ -698,9 +698,27 @@ impl WindowBackend {
         let (repaint, current) = match damage {
             None => (None, None),
             Some(rects) => {
-                let current = Damage::from_rects(rects, extent);
+                let mut current = Damage::from_rects(rects, extent);
                 let region = entry.damage.repaint(index, &current);
-                (bounding_rect(&region), Some(current))
+                let repaint = bounding_rect(&region).map(|bounds| {
+                    let region = plan.repaint_bounds(Rect::from_edges(
+                        bounds.left as f32,
+                        bounds.top as f32,
+                        bounds.right as f32,
+                        bounds.bottom as f32,
+                    ));
+                    let expanded = RECT {
+                        left: region.x.floor() as i32,
+                        top: region.y.floor() as i32,
+                        right: region.right().ceil() as i32,
+                        bottom: region.bottom().ceil() as i32,
+                    };
+                    if expanded != bounds {
+                        current = Damage::from_rects(&[region], extent);
+                    }
+                    expanded
+                });
+                (repaint, Some(current))
             }
         };
         let context = core.context();

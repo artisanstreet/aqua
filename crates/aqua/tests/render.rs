@@ -27,3 +27,6 @@ mod vector;
 
 #[path = "render/shape-motion.rs"]
 mod shape_motion;
+
+#[path = "render/damage.rs"]
+mod damage;

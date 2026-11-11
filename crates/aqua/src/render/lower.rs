@@ -2022,6 +2022,7 @@ impl Lowering {
             DisplayItem::PopTextColorMap => self.pop_text(TextScope::LegacyMap, walk),
             DisplayItem::PushGpuiTextColorMap(map) => self.text.push_map(*map, None),
             DisplayItem::PushGpuiTextShimmer(shimmer) => {
+                self.shimmer.phase(shimmer, walk.now_secs);
                 self.text.push_map(shimmer.map, Some(*shimmer))
             }
             DisplayItem::PopGpuiTextColorMap => self.pop_text(TextScope::Map, walk),

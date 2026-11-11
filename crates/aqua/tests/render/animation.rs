@@ -1,7 +1,7 @@
 use aqua::render::lower::Lowering;
 use aqua_core::geometry::{CornerRadii, Insets, Rect};
-use aqua_core::scene::{DisplayItem, GpuiQuadPulse};
-use aqua_core::{Oklch, Size};
+use aqua_core::scene::{DisplayItem, GpuiQuadPulse, GpuiTextColorMap, GpuiTextShimmer};
+use aqua_core::{GpuiTextColor, Oklch, Size};
 use aqua_graph::PaintCommand;
 use aqua_protocol::Instant;
 use aqua_scene::Scene;
@@ -104,4 +104,57 @@ fn a_pulse_that_left_the_scene_restarts_from_full_opacity_when_it_returns() {
     assert!((alpha_at(&mut lowering, &scene, 0.8) - 0.4).abs() < 1e-4);
     lowering.commands(&Scene::new(), SIZE, 1.0, Instant::from_secs_f64(0.9));
     assert!((alpha_at(&mut lowering, &pulsing_scene(), 1.0) - 1.0).abs() < 1e-6);
+}
+
+fn shimmering_scene() -> Scene {
+    let mut scene = Scene::new();
+    [
+        DisplayItem::PushGpuiTextShimmer(GpuiTextShimmer {
+            map: GpuiTextColorMap {
+                bounds: Rect {
+                    x: 10.0,
+                    y: 10.0,
+                    w: 80.0,
+                    h: 20.0,
+                },
+                phase: 0.0,
+                spread: 30.0,
+                target: GpuiTextColor {
+                    hue_degrees: 0.0,
+                    saturation: 0.0,
+                    lightness: 1.0,
+                    alpha: 1.0,
+                },
+            },
+            key: 9,
+            duration: std::time::Duration::from_secs(1),
+            delay: std::time::Duration::from_secs(2),
+        }),
+        DisplayItem::PopGpuiTextColorMap,
+    ]
+    .into_iter()
+    .for_each(|item| {
+        scene.insert(item);
+    });
+    scene
+}
+
+#[test]
+fn a_shimmer_keeps_its_clock_while_another_region_repaints() {
+    let scene = shimmering_scene();
+    let mut lowering = lowering();
+    let (_, _, report) = lowering.commands(&scene, SIZE, 1.0, Instant::from_secs_f64(10.0));
+    assert!(report.shimmering);
+    lowering.set_cull(Some(Rect {
+        x: 150.0,
+        y: 60.0,
+        w: 20.0,
+        h: 20.0,
+    }));
+    let (_, _, report) = lowering.commands(&scene, SIZE, 1.0, Instant::from_secs_f64(11.0));
+    assert!(report.shimmering);
+    lowering.set_cull(None);
+    let (_, _, report) = lowering.commands(&scene, SIZE, 1.0, Instant::from_secs_f64(11.5));
+    let rest = report.still_micros.expect("the shimmer is still in its delay");
+    assert!((400_000..700_000).contains(&rest), "{rest}");
 }

@@ -4596,6 +4596,15 @@ impl UiTree {
         if let Some(shimmer) = paint.gpui_text_shimmer {
             out.push((id, DisplayItem::PushGpuiTextShimmer(shimmer)));
         }
+        let own_shimmer = paint.text_shimmer.filter(|_| rect.w > 0.0);
+        if let Some(shimmer) = own_shimmer {
+            out.push((
+                id,
+                DisplayItem::PushGpuiTextShimmer(
+                    shimmer.over(rect.translate(-scrolled.x, -scrolled.y)),
+                ),
+            ));
+        }
         if let Some(opacity) = group_opacity {
             out.push((id, DisplayItem::PushOpacity(opacity)));
         }
@@ -5117,6 +5126,9 @@ impl UiTree {
         }
         if paint.text_color_map.is_some() {
             out.push((id, DisplayItem::PopTextColorMap));
+        }
+        if own_shimmer.is_some() {
+            out.push((id, DisplayItem::PopGpuiTextColorMap));
         }
         if paint.gpui_text_shimmer.is_some() {
             out.push((id, DisplayItem::PopGpuiTextColorMap));

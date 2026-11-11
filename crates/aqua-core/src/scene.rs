@@ -151,6 +151,32 @@ pub struct GpuiTextShimmer {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextShimmer {
+    pub key: u64,
+    pub spread: f32,
+    pub target: crate::GpuiTextColor,
+    pub duration: std::time::Duration,
+    pub delay: std::time::Duration,
+}
+
+impl TextShimmer {
+    #[must_use]
+    pub const fn over(self, bounds: Rect) -> GpuiTextShimmer {
+        GpuiTextShimmer {
+            map: GpuiTextColorMap {
+                bounds,
+                phase: 0.0,
+                spread: self.spread,
+                target: self.target,
+            },
+            key: self.key,
+            duration: self.duration,
+            delay: self.delay,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadowLayer {
     pub dx: f32,
     pub dy: f32,

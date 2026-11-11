@@ -121,6 +121,7 @@ pub struct Paint {
     pub text_color_map: Option<aqua_core::scene::TextColorMap>,
     pub gpui_text_color_map: Option<aqua_core::scene::GpuiTextColorMap>,
     pub gpui_text_shimmer: Option<aqua_core::scene::GpuiTextShimmer>,
+    pub text_shimmer: Option<aqua_core::scene::TextShimmer>,
     pub fill: Option<Oklch>,
     pub gpui_background: Option<aqua_core::GpuiBackground>,
     pub radius: f32,
@@ -252,6 +253,7 @@ pub struct Style {
     text_color_map: Option<Option<aqua_core::scene::TextColorMap>>,
     gpui_text_color_map: Option<Option<aqua_core::scene::GpuiTextColorMap>>,
     gpui_text_shimmer: Option<Option<aqua_core::scene::GpuiTextShimmer>>,
+    text_shimmer: Option<Option<aqua_core::scene::TextShimmer>>,
     font_size: Option<f32>,
     text_style: Option<TextStyle>,
     text_color: Option<Oklch>,
@@ -305,6 +307,7 @@ impl Style {
             text_color_map: None,
             gpui_text_color_map: None,
             gpui_text_shimmer: None,
+            text_shimmer: None,
             font_size: None,
             text_style: None,
             text_color: None,
@@ -357,6 +360,7 @@ impl Style {
             && self.text_color_map.is_none()
             && self.gpui_text_color_map.is_none()
             && self.gpui_text_shimmer.is_none()
+            && self.text_shimmer.is_none()
             && self.text_style.is_none()
             && self.font_size.is_none()
             && self.text_color.is_none()
@@ -752,6 +756,7 @@ impl Style {
 
     pub const fn text_color_map(mut self, map: aqua_core::scene::TextColorMap) -> Self {
         self.gpui_text_shimmer = Some(None);
+        self.text_shimmer = Some(None);
         self.gpui_text_color_map = Some(None);
         self.text_color_map = Some(Some(map));
         self
@@ -760,6 +765,7 @@ impl Style {
     #[must_use]
     pub const fn gpui_text_color_map(mut self, map: aqua_core::scene::GpuiTextColorMap) -> Self {
         self.gpui_text_shimmer = Some(None);
+        self.text_shimmer = Some(None);
         self.text_color_map = Some(None);
         self.gpui_text_color_map = Some(Some(map));
         self
@@ -769,11 +775,22 @@ impl Style {
         self.text_color_map = Some(None);
         self.gpui_text_color_map = Some(None);
         self.gpui_text_shimmer = Some(Some(shimmer));
+        self.text_shimmer = Some(None);
+        self
+    }
+
+    #[must_use]
+    pub const fn text_shimmer(mut self, shimmer: aqua_core::scene::TextShimmer) -> Self {
+        self.text_color_map = Some(None);
+        self.gpui_text_color_map = Some(None);
+        self.gpui_text_shimmer = Some(None);
+        self.text_shimmer = Some(Some(shimmer));
         self
     }
 
     pub const fn clear_text_color_map(mut self) -> Self {
         self.gpui_text_shimmer = Some(None);
+        self.text_shimmer = Some(None);
         self.gpui_text_color_map = Some(None);
         self.text_color_map = Some(None);
         self
@@ -943,6 +960,7 @@ impl Style {
         take!(text_color_map);
         take!(gpui_text_color_map);
         take!(gpui_text_shimmer);
+        take!(text_shimmer);
         take!(font_size);
         take!(text_style);
         take!(text_color);
@@ -1091,6 +1109,9 @@ impl Style {
         }
         if let Some(v) = self.gpui_text_shimmer {
             paint.gpui_text_shimmer = v;
+        }
+        if let Some(v) = self.text_shimmer {
+            paint.text_shimmer = v;
         }
         if let Some(v) = self.opacity {
             paint.opacity = v;

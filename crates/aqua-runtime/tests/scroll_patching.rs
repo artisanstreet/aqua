@@ -143,3 +143,58 @@ fn observers_stay_quiet_when_nothing_changed() {
     rig.runtime.build_frame().unwrap();
     assert_eq!(rig.calls.get(), calls);
 }
+
+fn clipped_rows() -> Element {
+    let rows = (0..30).map(|_| {
+        UiBox::new()
+            .style(
+                Style::new()
+                    .width(px(200.0))
+                    .height(px(20.0))
+                    .flex_shrink(0.0),
+            )
+            .fill(Oklch::WHITE)
+            .build()
+    });
+    UiBox::new()
+        .style(Style::new().width(px(200.0)).height(px(100.0)).clip(true))
+        .child(
+            Scroll::new()
+                .style(Style::new().width(px(200.0)).height(px(100.0)))
+                .child(
+                    UiBox::new()
+                        .style(Style::new().axis(Axis::Column).width(px(200.0)).flex_shrink(0.0))
+                        .children(rows)
+                        .build(),
+                )
+                .build(),
+        )
+        .build()
+}
+
+#[test]
+fn a_patched_scroll_under_a_clipping_parent_still_paints_the_rows_it_reveals() {
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime.set_viewport(200.0, 100.0, 1.0);
+    runtime.mount(|_| clipped_rows()).unwrap();
+    runtime.build_frame().unwrap();
+    let scroll = runtime
+        .tree()
+        .traverse()
+        .into_iter()
+        .find(|node| matches!(runtime.tree().get(*node).unwrap().kind, NodeKind::Scroll(_)))
+        .unwrap();
+    let before = runtime.tree().scene_version();
+    runtime.tree_mut().scroll_to(scroll, Point::new(0.0, 60.0));
+    runtime.build_frame().unwrap();
+    assert_eq!(runtime.tree().scene_version(), before);
+    let painted: Vec<f32> = runtime
+        .scene()
+        .ordered()
+        .filter_map(|(_, item)| match item {
+            DisplayItem::Rect { bounds, fill, .. } if *fill == Oklch::WHITE => Some(bounds.y),
+            _ => None,
+        })
+        .collect();
+    assert!(painted.contains(&140.0), "{painted:?}");
+}

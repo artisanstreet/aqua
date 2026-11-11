@@ -3893,11 +3893,7 @@ impl UiTree {
                     );
                     window
                 };
-                let window_screen = window.transform(child_world);
-                (
-                    child_world,
-                    Some(cull.map_or(window_screen, |c| c.intersect(window_screen))),
-                )
+                (child_world, Some(window.transform(child_world)))
             }
             None => (
                 world,

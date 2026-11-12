@@ -2239,12 +2239,22 @@ impl Element {
         self
     }
 
-    pub fn tooltip(mut self, delay: f64, content: impl Fn() -> Element + 'static) -> Self {
+    pub fn tooltip(self, delay: f64, content: impl Fn() -> Element + 'static) -> Self {
+        self.tooltip_with(delay, crate::motion::Presence::new(), content)
+    }
+
+    pub fn tooltip_with(
+        mut self,
+        delay: f64,
+        presence: crate::motion::Presence,
+        content: impl Fn() -> Element + 'static,
+    ) -> Self {
         self.bindings
             .push(ElementBinding::Tooltip(crate::popup::Tooltip {
                 delay,
                 content: std::rc::Rc::new(content),
                 pointer_anchored: false,
+                presence,
             }));
         self
     }
@@ -2255,6 +2265,7 @@ impl Element {
                 delay: 0.5,
                 content: std::rc::Rc::new(content),
                 pointer_anchored: true,
+                presence: crate::motion::Presence::new(),
             }));
         self
     }

@@ -23,6 +23,27 @@ pub enum Easing {
     EaseIn,
     EaseOut,
     EaseInOut,
+    SmoothOut,
+}
+
+fn bezier_axis(t: f32, first: f32, second: f32) -> f32 {
+    let inverse = 1.0 - t;
+    3.0 * inverse * inverse * t * first + 3.0 * inverse * t * t * second + t * t * t
+}
+
+fn smooth_out(progress: f32) -> f32 {
+    const X: (f32, f32) = (0.22, 0.36);
+    const Y: (f32, f32) = (1.0, 1.0);
+    let (mut lower, mut upper) = (0.0_f32, 1.0_f32);
+    for _ in 0..20 {
+        let middle = (lower + upper) / 2.0;
+        if bezier_axis(middle, X.0, X.1) < progress {
+            lower = middle;
+        } else {
+            upper = middle;
+        }
+    }
+    bezier_axis((lower + upper) / 2.0, Y.0, Y.1)
 }
 
 impl Easing {
@@ -33,6 +54,9 @@ impl Easing {
             Easing::Linear => t,
             Easing::EaseIn => t * t * t,
             Easing::EaseOut => 1.0 - (1.0 - t).powi(3),
+            Easing::SmoothOut if t <= 0.0 => 0.0,
+            Easing::SmoothOut if t >= 1.0 => 1.0,
+            Easing::SmoothOut => smooth_out(t),
             Easing::EaseInOut => {
                 if t < 0.5 {
                     4.0 * t * t * t

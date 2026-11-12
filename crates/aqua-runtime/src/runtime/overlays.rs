@@ -504,13 +504,15 @@ impl Runtime {
                     self.open_popup_measured(
                         pending.owner,
                         (pending.tooltip.content)(),
-                        PopupOptions::tooltip().at(pointer),
+                        PopupOptions::tooltip()
+                            .presence(pending.tooltip.presence)
+                            .at(pointer),
                     )
                 } else {
                     self.open_popup_measured(
                         pending.owner,
                         (pending.tooltip.content)(),
-                        PopupOptions::tooltip(),
+                        PopupOptions::tooltip().presence(pending.tooltip.presence),
                     )
                 };
                 match result {

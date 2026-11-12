@@ -695,6 +695,10 @@ impl Runtime {
         self.paint_source_selection();
     }
 
+    pub fn select_text(&mut self, node: NodeId, range: Range<usize>) -> bool {
+        self.selection_from_access(node, Selection::new(range.start, range.end))
+    }
+
     pub(super) fn selection_from_access(&mut self, node: NodeId, selection: Selection) -> bool {
         if !self.selectable(node) || !self.text_node_allowed(node) {
             return false;

@@ -100,6 +100,7 @@ pub struct Tooltip {
     pub delay: f64,
     pub content: Rc<dyn Fn() -> Element>,
     pub pointer_anchored: bool,
+    pub presence: Presence,
 }
 
 impl fmt::Debug for Tooltip {

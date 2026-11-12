@@ -67,8 +67,22 @@ fn source_text_appearance_preserves_float_colors_and_metrics_in_scene() {
         l: 0.421,
         a,
     };
+    let gradient = GpuiBackground::LinearGradient {
+        angle: 180.0,
+        color_space: aqua_core::GpuiGradientColorSpace::Oklab,
+        stops: [
+            aqua_core::GpuiGradientStop {
+                percentage: 0.0,
+                color: color(0.123, 0.37),
+            },
+            aqua_core::GpuiGradientStop {
+                percentage: 1.0,
+                color: color(0.321, 0.73),
+            },
+        ],
+    };
     let appearance = GpuiTextAppearance {
-        selection: color(0.123, 0.37),
+        selection: gradient,
         caret: color(0.456, 1.0),
         caret_width: 2.0,
         ime_underline: color(0.789, 0.81),
@@ -97,7 +111,7 @@ fn source_text_appearance_preserves_float_colors_and_metrics_in_scene() {
         .tree_mut()
         .set_text_selection(node, Some(Selection::new(0, 3)));
     runtime.build_frame().unwrap();
-    assert!(runtime.scene().ordered().any(|(_, item)| matches!(item, DisplayItem::GpuiBackground { background: GpuiBackground::Solid(color), .. } if *color == appearance.selection)));
+    assert!(runtime.scene().ordered().any(|(_, item)| matches!(item, DisplayItem::GpuiBackground { background, .. } if *background == gradient)));
     assert!(runtime.scene().ordered().any(|(_, item)| matches!(item, DisplayItem::GpuiBackground { bounds, background: GpuiBackground::Solid(color), .. } if *color == appearance.caret && (bounds.w - 2.0).abs() < 0.001)));
     runtime.tree_mut().edit_text(node, |text| {
         if let TextBacking::Editable(editor) = &mut text.backing {
@@ -106,4 +120,121 @@ fn source_text_appearance_preserves_float_colors_and_metrics_in_scene() {
     });
     runtime.build_frame().unwrap();
     assert!(runtime.scene().ordered().any(|(_, item)| matches!(item, DisplayItem::GpuiBackground { bounds, background: GpuiBackground::Solid(color), .. } if *color == appearance.ime_underline && (bounds.h - 1.0).abs() < 0.001)));
+}
+
+#[test]
+fn text_without_an_appearance_paints_its_selection_with_the_runtime_background() {
+    use aqua_core::{GpuiBackground, GpuiHsla};
+    let background = GpuiBackground::Solid(GpuiHsla {
+        h: 0.6,
+        s: 0.5,
+        l: 0.4,
+        a: 1.0,
+    });
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime
+        .mount(|_| {
+            Text::builder()
+                .arg("hello")
+                .editable(true)
+                .style(Style::new().width(px(200.0)).height(px(40.0)))
+                .build()
+        })
+        .unwrap();
+    runtime.set_viewport(400.0, 100.0, 1.0);
+    let node = runtime
+        .tree()
+        .traverse()
+        .into_iter()
+        .find(|node| matches!(runtime.tree().get(*node).unwrap().kind, NodeKind::Text(_)))
+        .unwrap();
+    runtime.tree_mut().set_focused(Some(node));
+    runtime
+        .tree_mut()
+        .set_text_selection(node, Some(Selection::new(0, 3)));
+    runtime.build_frame().unwrap();
+    assert!(!runtime.scene().ordered().any(|(_, item)| matches!(item, DisplayItem::GpuiBackground { .. })));
+    runtime.set_selection_background(Some(background));
+    runtime.tree_mut().set_text_selection(node, Some(Selection::new(0, 4)));
+    runtime.build_frame().unwrap();
+    assert!(runtime.scene().ordered().any(|(_, item)| matches!(item, DisplayItem::GpuiBackground { background: painted, .. } if *painted == background)));
+    let rects = runtime.selection_rects();
+    assert_eq!(rects.len(), 1);
+    assert!(rects[0].w > 0.0 && rects[0].h > 0.0);
+}
+
+#[test]
+fn selection_rects_follow_the_text_when_its_container_scrolls() {
+    use aqua_ui::element::{Box as UiBox, Scroll};
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime
+        .mount(|_| {
+            Scroll::new()
+                .style(Style::new().width(px(200.0)).height(px(100.0)))
+                .child(
+                    UiBox::new()
+                        .style(Style::new().width(px(200.0)).height(px(1000.0)).flex_shrink(0.0))
+                        .child(
+                            Text::builder()
+                                .arg("hello")
+                                .editable(true)
+                                .style(Style::new().width(px(200.0)).height(px(40.0)))
+                                .build(),
+                        )
+                        .build(),
+                )
+                .build()
+        })
+        .unwrap();
+    runtime.set_viewport(200.0, 100.0, 1.0);
+    runtime.build_frame().unwrap();
+    let find = |runtime: &Runtime, wanted: fn(&NodeKind) -> bool| {
+        runtime
+            .tree()
+            .traverse()
+            .into_iter()
+            .find(|node| wanted(&runtime.tree().get(*node).unwrap().kind))
+            .unwrap()
+    };
+    let text = find(&runtime, |kind| matches!(kind, NodeKind::Text(_)));
+    let scroll = find(&runtime, |kind| matches!(kind, NodeKind::Scroll(_)));
+    runtime.tree_mut().set_focused(Some(text));
+    runtime
+        .tree_mut()
+        .set_text_selection(text, Some(Selection::new(0, 3)));
+    runtime.build_frame().unwrap();
+    let resting = runtime.selection_rects()[0];
+    runtime
+        .tree_mut()
+        .scroll_to(scroll, aqua_core::Point::new(0.0, 30.0));
+    runtime.build_frame().unwrap();
+    let scrolled = runtime.selection_rects()[0];
+    assert!((scrolled.y - (resting.y - 30.0)).abs() < 0.001);
+    assert!((scrolled.x - resting.x).abs() < 0.001);
+}
+
+#[test]
+fn an_app_can_select_a_range_of_selectable_text() {
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime
+        .mount(|_| {
+            Text::builder()
+                .arg("hello world")
+                .selectable(true)
+                .style(Style::new().width(px(200.0)).height(px(40.0)))
+                .build()
+        })
+        .unwrap();
+    runtime.set_viewport(400.0, 100.0, 1.0);
+    runtime.build_frame().unwrap();
+    let node = runtime
+        .tree()
+        .traverse()
+        .into_iter()
+        .find(|node| matches!(runtime.tree().get(*node).unwrap().kind, NodeKind::Text(_)))
+        .unwrap();
+    assert!(runtime.select_text(node, 6..11));
+    runtime.build_frame().unwrap();
+    assert_eq!(runtime.selected_text().as_deref(), Some("world"));
+    assert_eq!(runtime.selection_rects().len(), 1);
 }

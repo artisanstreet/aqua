@@ -22,7 +22,7 @@ fn wrapped_backgrounds_preserve_colors_and_exclude_selection() {
         a: 0.4,
     };
     let appearance = GpuiTextAppearance {
-        selection,
+        selection: aqua_core::GpuiBackground::Solid(selection),
         caret: GpuiHsla {
             h: 0.95,
             ..selection

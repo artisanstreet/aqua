@@ -315,6 +315,7 @@ pub struct Runtime {
     interaction: TextInteraction,
     glides: crate::render::scroll::ScrollGlides,
     motion_rt: aqua_ui::motion::runtime::MotionRuntime,
+    selection_background: Option<aqua_core::GpuiBackground>,
     motion_seen: Option<(u64, u64, u32, u32)>,
     motion_keys: render_motion::MotionKeys,
     motion_sent: HashMap<aqua_motion::TrackId, Vec<(NodeId, f32)>>,
@@ -459,6 +460,7 @@ impl Runtime {
             interaction: TextInteraction::default(),
             glides: crate::render::scroll::ScrollGlides::default(),
             motion_rt: aqua_ui::motion::runtime::MotionRuntime::default(),
+            selection_background: None,
             motion_seen: None,
             motion_keys: HashMap::new(),
             motion_sent: HashMap::new(),
@@ -2354,6 +2356,29 @@ impl Runtime {
         Ok(output)
     }
 
+    pub fn selection_rects(&self) -> Vec<Rect> {
+        self.caret_selection_items()
+            .into_iter()
+            .filter_map(|(key, item)| match (key, item) {
+                (
+                    SceneKey::Selection { node, .. },
+                    DisplayItem::GpuiBackground { bounds, .. } | DisplayItem::Rect { bounds, .. },
+                ) => {
+                    let laid = self.tree.rect(node)?;
+                    let shown = self.tree.visual_rect(node)?;
+                    let (dx, dy) = (shown.x - laid.x, shown.y - laid.y);
+                    Some(Rect::from_edges(
+                        bounds.x + dx,
+                        bounds.y + dy,
+                        bounds.x + bounds.w + dx,
+                        bounds.y + bounds.h + dy,
+                    ))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     fn caret_selection_items(&self) -> Vec<(SceneKey, DisplayItem)> {
         let mut nodes = self.interaction.selected_nodes.clone();
         if let Some(node) = self.tree.focused() {
@@ -2460,22 +2485,29 @@ impl Runtime {
                             alpha: 0.35,
                         })
                 });
+            let background = gpui_appearance
+                .map(|appearance| appearance.selection)
+                .or(self.selection_background);
             for (i, r) in layout.selection_rects(a..b).into_iter().enumerate() {
+                let bounds = Rect::from_edges(
+                    origin.x + r.x / self.scale,
+                    origin.y + r.y / self.scale,
+                    origin.x + (r.x + r.w) / self.scale,
+                    origin.y + (r.y + r.h) / self.scale,
+                );
                 out.push((
                     SceneKey::Selection {
                         node: focused,
                         index: i as u32,
                     },
-                    paint(
-                        Rect::from_edges(
-                            origin.x + r.x / self.scale,
-                            origin.y + r.y / self.scale,
-                            origin.x + (r.x + r.w) / self.scale,
-                            origin.y + (r.y + r.h) / self.scale,
-                        ),
-                        fill,
-                        gpui_appearance.map(|appearance| appearance.selection),
-                    ),
+                    match background {
+                        Some(background) => DisplayItem::GpuiBackground {
+                            bounds,
+                            corners: aqua_core::CornerRadii::uniform(0.0),
+                            background,
+                        },
+                        None => paint(bounds, fill, None),
+                    },
                 ));
             }
         }

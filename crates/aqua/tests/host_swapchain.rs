@@ -48,7 +48,7 @@ mod native {
     }
 
     #[link(name = "user32")]
-    extern "system" {
+    unsafe extern "system" {
         fn PrintWindow(hwnd: HWND, hdc: HDC, flags: u32) -> i32;
     }
 
@@ -545,8 +545,8 @@ mod native {
     }
 
     fn child(out: String) {
-        std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1");
-        std::env::set_var("AQUA_SMOKE_MS", "30000");
+        unsafe { std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1") };
+        unsafe { std::env::set_var("AQUA_SMOKE_MS", "30000") };
         let mut config = AquaConfig::default();
         config.window.title = "aqua host swapchain".into();
         config.window.inner_size = LogicalSize::new(f64::from(WIDTH), f64::from(HEIGHT));

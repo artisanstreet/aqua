@@ -265,7 +265,7 @@ mod native {
     }
 
     pub fn run() {
-        std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1");
+        unsafe { std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1") };
         let report = Rc::new(RefCell::new(Report::default()));
         let mut config = AquaConfig::default();
         config.window.title = "Aqua desktop contract".into();

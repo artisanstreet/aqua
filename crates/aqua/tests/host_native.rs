@@ -24,7 +24,7 @@ mod native {
 
     const TITLE: &str = "aqua host native test";
 
-    fn app(cx: &Context) -> impl IntoView {
+    fn app(cx: &Context) -> impl IntoView + use<> {
         let (read, write) = cx.scope().signal(String::from("draft"));
         let bump = write.clone();
         Aqua::Box()
@@ -207,9 +207,9 @@ mod native {
 
     pub fn run() {
         let port = free_port();
-        std::env::set_var("AQUA_INSPECTOR", port.to_string());
-        std::env::set_var("AQUA_SMOKE_MS", "60000");
-        std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1");
+        unsafe { std::env::set_var("AQUA_INSPECTOR", port.to_string()) };
+        unsafe { std::env::set_var("AQUA_SMOKE_MS", "60000") };
+        unsafe { std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1") };
         let (done, outcome) = mpsc::channel();
         thread::spawn(move || {
             let outcome = client(port);

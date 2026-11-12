@@ -11,7 +11,7 @@ fn validation_messages(preference: AdapterPreference, format: SurfaceFormat) -> 
     let _serial = SERIAL
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    std::env::set_var("AQUA_D3D11_DEBUG", "1");
+    unsafe { std::env::set_var("AQUA_D3D11_DEBUG", "1") };
     let mut backend = OffscreenBackend::with_format(preference, format)
         .unwrap_or_else(|error| panic!("adapter {preference:?} unavailable: {error}"));
     assert!(

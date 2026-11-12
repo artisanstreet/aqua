@@ -211,8 +211,8 @@ mod native {
     }
 
     fn child(name: &str, material: WindowMaterial, out: String) {
-        std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1");
-        std::env::set_var("AQUA_SMOKE_MS", "20000");
+        unsafe { std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1") };
+        unsafe { std::env::set_var("AQUA_SMOKE_MS", "20000") };
         let mut config = AquaConfig::default();
         config.window.title = format!("aqua host material {name}");
         config.window.inner_size = aqua_protocol::geometry::LogicalSize::new(400.0, 300.0);

@@ -280,8 +280,8 @@ mod native {
     }
 
     pub fn run() {
-        std::env::set_var("AQUA_SMOKE_MS", "40000");
-        std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1");
+        unsafe { std::env::set_var("AQUA_SMOKE_MS", "40000") };
+        unsafe { std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1") };
         let outcome = Arc::new(Mutex::new(Outcome::default()));
         let mut config = AquaConfig::default();
         config.window.title = "aqua shared a".into();

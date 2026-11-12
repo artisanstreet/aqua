@@ -46,7 +46,7 @@ fn retired_image_keeps_status_and_frees_decoded_bytes_until_revived() {
     );
     assert_eq!(handle.decoded_bytes(), Some(decoded));
 
-    assets.revive(handle.id());
+    assets.revive(handle.id(), aqua_media::decode::Detail::STANDARD);
     assert_eq!(
         handle.status(),
         ImageStatus::Ready {

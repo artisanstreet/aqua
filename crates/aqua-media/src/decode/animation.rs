@@ -169,19 +169,19 @@ pub fn decode_animation(
     if budget.max_frames == 0 || budget.max_bytes == 0 || budget.minimum_delay.is_zero() {
         return Err(MediaError::OverBudget);
     }
-    let format = image::guess_format(bytes).map_err(|_| MediaError::UnsupportedFormat)?;
+    let format = super::still::sniff(bytes).ok_or(MediaError::UnsupportedFormat)?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_IMAGE_DIM);
     limits.max_image_height = Some(MAX_IMAGE_DIM);
     limits.max_alloc = Some(budget.max_bytes);
     match format {
-        image::ImageFormat::Gif => {
+        super::StillFormat::Gif => {
             let mut decoder =
                 image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(decode_error)?;
             decoder.set_limits(limits).map_err(decode_error)?;
             collect_frames(decoder, budget)
         }
-        image::ImageFormat::WebP => {
+        super::StillFormat::WebP => {
             let mut decoder =
                 image::codecs::webp::WebPDecoder::new(Cursor::new(bytes)).map_err(decode_error)?;
             decoder.set_limits(limits).map_err(decode_error)?;
@@ -190,7 +190,7 @@ pub fn decode_animation(
                 false => still(bytes, budget),
             }
         }
-        image::ImageFormat::Png => {
+        super::StillFormat::Png => {
             let mut decoder =
                 image::codecs::png::PngDecoder::new(Cursor::new(bytes)).map_err(decode_error)?;
             decoder.set_limits(limits).map_err(decode_error)?;
@@ -204,11 +204,7 @@ pub fn decode_animation(
 }
 
 fn still(bytes: &[u8], budget: AnimationBudget) -> Result<DecodedAnimation, MediaError> {
-    let (width, height) = image::ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|_| MediaError::UnsupportedFormat)?
-        .into_dimensions()
-        .map_err(decode_error)?;
+    let (width, height) = super::still::dimensions(bytes)?;
     if u64::from(width) * u64::from(height) * 4 > budget.max_bytes {
         return Err(MediaError::OverBudget);
     }

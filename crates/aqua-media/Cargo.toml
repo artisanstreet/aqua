@@ -13,4 +13,6 @@ tiny-skia = "0.12"
 resvg = { version = "0.48.1", default-features = false, features = ["svgz", "raster-images"] }
 kurbo = "0.13"
 roxmltree = "0.21"
-image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif", "webp"] }
+image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif", "webp", "tiff", "ico"] }
+aqua-avif = { path = "../aqua-avif" }
+heic-rs = "0.1.4"

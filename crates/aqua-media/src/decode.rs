@@ -1,4 +1,7 @@
 pub mod animation;
+pub mod still;
+
+pub use still::{decode_still, Detail, Still, StillFormat};
 
 use std::collections::VecDeque;
 
@@ -15,6 +18,7 @@ pub enum MediaError {
     Decode(String),
     DimensionsTooLarge(u32, u32),
     TooManyPixels(u64),
+    SourceTooLarge(usize),
     OverBudget,
     UnknownImage,
     StaleHandle,
@@ -28,15 +32,20 @@ impl std::fmt::Display for MediaError {
             MediaError::UnsupportedFormat => {
                 write!(
                     f,
-                    "media: unsupported format (enabled: png, bmp, jpeg, gif, webp)"
+                    "media: unsupported format (enabled: png, jpeg, webp, gif, bmp, tiff, ico, avif, heic)"
                 )
             }
             MediaError::Decode(m) => write!(f, "media: decode failed: {m}"),
             MediaError::DimensionsTooLarge(w, h) => {
-                write!(f, "media: dimensions {w}x{h} exceed {MAX_IMAGE_DIM}px")
+                write!(f, "media: dimensions {w}x{h} exceed the cap")
             }
-            MediaError::TooManyPixels(n) => {
-                write!(f, "media: {n} pixels exceed {MAX_IMAGE_PIXELS} cap")
+            MediaError::TooManyPixels(n) => write!(f, "media: {n} pixels exceed the cap"),
+            MediaError::SourceTooLarge(n) => {
+                write!(
+                    f,
+                    "media: {n} source bytes exceed {}",
+                    still::MAX_SOURCE_BYTES
+                )
             }
             MediaError::OverBudget => write!(f, "media: cache budget exceeded"),
             MediaError::UnknownImage => write!(f, "media: unknown image handle"),
@@ -164,70 +173,8 @@ pub fn decode_svg(bytes: &[u8], max_bytes: u64) -> Result<DecodedImage, MediaErr
     DecodedImage::from_rgba(width, height, pixels)
 }
 
-pub fn decode_preview_still(bytes: &[u8], max_bytes: u64) -> Result<DecodedImage, MediaError> {
-    if bytes.len() > 32 * 1024 * 1024 {
-        return Err(MediaError::OverBudget);
-    }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|error| MediaError::Decode(error.to_string()))?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8192);
-    limits.max_image_height = Some(8192);
-    limits.max_alloc = Some(max_bytes.min(64 * 1024 * 1024));
-    reader.limits(limits);
-    let mut image = reader
-        .decode()
-        .map_err(|error| MediaError::Decode(error.to_string()))?;
-    if image.width() > 1920 || image.height() > 1440 {
-        image = image.resize(1920, 1440, image::imageops::FilterType::CatmullRom);
-    }
-    let image = image.into_rgba8();
-    if image.as_raw().len() as u64 > max_bytes.min(64 * 1024 * 1024) {
-        return Err(MediaError::OverBudget);
-    }
-    DecodedImage::from_rgba(image.width(), image.height(), image.into_raw())
-}
-
 pub fn decode_bytes(bytes: &[u8]) -> Result<DecodedImage, MediaError> {
-    if bytes.is_empty() {
-        return Err(MediaError::Empty);
-    }
-    let format = image::guess_format(bytes).map_err(|_| MediaError::UnsupportedFormat)?;
-    match format {
-        image::ImageFormat::Png
-        | image::ImageFormat::Bmp
-        | image::ImageFormat::Jpeg
-        | image::ImageFormat::Gif
-        | image::ImageFormat::WebP => {}
-        _ => return Err(MediaError::UnsupportedFormat),
-    }
-    let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|_| MediaError::UnsupportedFormat)?;
-    let (w, h) = reader
-        .into_dimensions()
-        .map_err(|e| MediaError::Decode(truncate(e.to_string())))?;
-    if w == 0 || h == 0 {
-        return Err(MediaError::Decode("zero-sized image".into()));
-    }
-    if w > MAX_IMAGE_DIM || h > MAX_IMAGE_DIM {
-        return Err(MediaError::DimensionsTooLarge(w, h));
-    }
-    let count = w as u64 * h as u64;
-    if count > MAX_IMAGE_PIXELS {
-        return Err(MediaError::TooManyPixels(count));
-    }
-    let img = image::load_from_memory_with_format(bytes, format)
-        .map_err(|e| MediaError::Decode(truncate(e.to_string())))?;
-    let rgba = img.to_rgba8();
-    let (w2, h2) = (rgba.width(), rgba.height());
-    debug_assert_eq!((w, h), (w2, h2), "header/body dimension mismatch");
-    Ok(DecodedImage {
-        width: w2,
-        height: h2,
-        pixels: rgba.into_raw(),
-    })
+    still::decode_whole(bytes)
 }
 
 fn truncate(mut s: String) -> String {

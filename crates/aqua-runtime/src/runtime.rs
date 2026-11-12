@@ -2356,6 +2356,19 @@ impl Runtime {
         Ok(output)
     }
 
+    pub fn selection_rects(&self) -> Vec<Rect> {
+        self.caret_selection_items()
+            .into_iter()
+            .filter_map(|(key, item)| match (key, item) {
+                (
+                    SceneKey::Selection { .. },
+                    DisplayItem::GpuiBackground { bounds, .. } | DisplayItem::Rect { bounds, .. },
+                ) => Some(bounds),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn caret_selection_items(&self) -> Vec<(SceneKey, DisplayItem)> {
         let mut nodes = self.interaction.selected_nodes.clone();
         if let Some(node) = self.tree.focused() {

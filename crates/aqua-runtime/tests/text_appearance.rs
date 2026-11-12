@@ -158,4 +158,7 @@ fn text_without_an_appearance_paints_its_selection_with_the_runtime_background()
     runtime.tree_mut().set_text_selection(node, Some(Selection::new(0, 4)));
     runtime.build_frame().unwrap();
     assert!(runtime.scene().ordered().any(|(_, item)| matches!(item, DisplayItem::GpuiBackground { background: painted, .. } if *painted == background)));
+    let rects = runtime.selection_rects();
+    assert_eq!(rects.len(), 1);
+    assert!(rects[0].w > 0.0 && rects[0].h > 0.0);
 }

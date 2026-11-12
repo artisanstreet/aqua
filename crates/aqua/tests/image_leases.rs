@@ -84,7 +84,7 @@ fn svg_decode_uses_supersampled_dimensions_and_enforces_budget() {
 }
 
 #[test]
-fn preview_resizes_still_images_and_rejects_more_than_120_gif_frames() {
+fn preview_keeps_stills_wider_than_1920_and_rejects_more_than_120_gif_frames() {
     let mut png = std::io::Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
         1921,
@@ -100,11 +100,11 @@ fn preview_resizes_still_images_and_rejects_more_than_120_gif_frames() {
     assert_eq!(
         wait(&image),
         ImageStatus::Ready {
-            width: 1920,
+            width: 1921,
             height: 1
         }
     );
-    assert_eq!(image.decoded_bytes(), Some(1920 * 4));
+    assert_eq!(image.decoded_bytes(), Some(1921 * 4));
 
     let mut gif = Vec::new();
     {

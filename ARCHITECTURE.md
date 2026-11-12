@@ -120,6 +120,7 @@ Adapters
   aqua-shaders       build-time HLSL compilation to DXIL (dxc) and DXBC SM 5.0 (fxc)
   aqua-transport     SPSC ring, render thread, GpuRenderHost, inspector socket
   aqua-oracle-dwrite DirectWrite, test-only, text pixel diffs
+  aqua-avif          still AVIF decode through rav1d (unsafe FFI, decoder threads); aqua-media is its only user
   aqua-verify        enforcement, heap gates, budgets, differential tests (test-only)
 Host
   aqua               public API, composition root, the only real event loop

@@ -164,6 +164,10 @@ impl Runtime {
         ));
     }
 
+    pub fn set_selection_background(&mut self, background: Option<aqua_core::GpuiBackground>) {
+        self.selection_background = background;
+    }
+
     pub fn set_motion_theme(&mut self, theme: aqua_ui::motion::MotionTheme) {
         let now = self.clock;
         self.motion_rt.set_theme(self.host.tracks_mut(), theme, now);

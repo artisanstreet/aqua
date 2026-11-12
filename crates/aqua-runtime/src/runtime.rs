@@ -315,6 +315,7 @@ pub struct Runtime {
     interaction: TextInteraction,
     glides: crate::render::scroll::ScrollGlides,
     motion_rt: aqua_ui::motion::runtime::MotionRuntime,
+    selection_background: Option<aqua_core::GpuiBackground>,
     motion_seen: Option<(u64, u64, u32, u32)>,
     motion_keys: render_motion::MotionKeys,
     motion_sent: HashMap<aqua_motion::TrackId, Vec<(NodeId, f32)>>,
@@ -459,6 +460,7 @@ impl Runtime {
             interaction: TextInteraction::default(),
             glides: crate::render::scroll::ScrollGlides::default(),
             motion_rt: aqua_ui::motion::runtime::MotionRuntime::default(),
+            selection_background: None,
             motion_seen: None,
             motion_keys: HashMap::new(),
             motion_sent: HashMap::new(),
@@ -2460,22 +2462,29 @@ impl Runtime {
                             alpha: 0.35,
                         })
                 });
+            let background = gpui_appearance
+                .map(|appearance| appearance.selection)
+                .or(self.selection_background);
             for (i, r) in layout.selection_rects(a..b).into_iter().enumerate() {
+                let bounds = Rect::from_edges(
+                    origin.x + r.x / self.scale,
+                    origin.y + r.y / self.scale,
+                    origin.x + (r.x + r.w) / self.scale,
+                    origin.y + (r.y + r.h) / self.scale,
+                );
                 out.push((
                     SceneKey::Selection {
                         node: focused,
                         index: i as u32,
                     },
-                    paint(
-                        Rect::from_edges(
-                            origin.x + r.x / self.scale,
-                            origin.y + r.y / self.scale,
-                            origin.x + (r.x + r.w) / self.scale,
-                            origin.y + (r.y + r.h) / self.scale,
-                        ),
-                        fill,
-                        gpui_appearance.map(|appearance| appearance.selection),
-                    ),
+                    match background {
+                        Some(background) => DisplayItem::GpuiBackground {
+                            bounds,
+                            corners: aqua_core::CornerRadii::uniform(0.0),
+                            background,
+                        },
+                        None => paint(bounds, fill, None),
+                    },
                 ));
             }
         }

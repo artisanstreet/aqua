@@ -127,7 +127,7 @@ pub struct TextAppearance {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GpuiTextAppearance {
-    pub selection: aqua_core::GpuiHsla,
+    pub selection: aqua_core::GpuiBackground,
     pub caret: aqua_core::GpuiHsla,
     pub caret_width: f32,
     pub ime_underline: aqua_core::GpuiHsla,

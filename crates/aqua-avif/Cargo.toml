@@ -1,0 +1,10 @@
+[package]
+name = "aqua-avif"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aqua AVIF: still AVIF images decoded to straight RGBA8 with rav1d"
+
+[dependencies]
+avif-parse = "2.1"
+rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }

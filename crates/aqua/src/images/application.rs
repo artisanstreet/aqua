@@ -14,7 +14,10 @@ use crate::{
     ui_app::UiApp,
 };
 
-use super::{Data, ImageAssetError, ImageAssets};
+use aqua_core::image::ImageFit;
+use aqua_media::decode::Detail;
+
+use super::{Data, Extent, ImageAssetError, ImageAssets};
 
 pub struct ImageFrame {
     pub layer: u64,
@@ -39,11 +42,62 @@ struct PreviewInstance {
     observed: Option<Instant>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Shown {
+    width: f32,
+    height: f32,
+    fit: ImageFit,
+    crop: (f32, f32),
+}
+
+impl Shown {
+    fn long_side(self, source: (u32, u32)) -> Option<f32> {
+        let (width, height) = (source.0.max(1) as f32, source.1.max(1) as f32);
+        let across = self.width / (width * self.crop.0);
+        let down = self.height / (height * self.crop.1);
+        let scale = match self.fit {
+            ImageFit::Contain => across.min(down),
+            ImageFit::Fill | ImageFit::Cover => across.max(down),
+            ImageFit::None | ImageFit::ScaleDown => return None,
+        };
+        Some(width.max(height) * scale)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Resident {
+    frame: usize,
+    width: u32,
+    height: u32,
+}
+
+impl Resident {
+    fn bytes(self) -> u64 {
+        u64::from(self.width) * u64::from(self.height) * 4
+    }
+}
+
+fn wanted_detail(shown: &[Shown], extent: Extent) -> Option<Detail> {
+    shown
+        .iter()
+        .map(|shown| shown.long_side(extent.source))
+        .try_fold(0.0f32, |longest, side| side.map(|side| longest.max(side)))
+        .map(|longest| Detail::covering(longest).max(Detail::STANDARD))
+}
+
+fn affordable_detail(wanted: Detail, source: (u32, u32), available: u64) -> Option<Detail> {
+    std::iter::successors(Some(wanted), |detail| detail.lower()).find(|detail| {
+        let (width, height) = detail.fit(source);
+        u64::from(width) * u64::from(height) * 4 <= available
+    })
+}
+
 #[derive(Default)]
 struct ImageState {
-    resident: HashMap<ImageId, (usize, u64)>,
-    visible: HashSet<ImageId>,
-    scene_revision: Option<(u64, aqua_core::Size)>,
+    resident: HashMap<ImageId, Resident>,
+    visible: HashMap<ImageId, Vec<Shown>>,
+    ceiling: HashMap<ImageId, Detail>,
+    scene_revision: Option<(u64, aqua_core::Size, f32)>,
     started: HashMap<ImageId, Instant>,
     preview_instances: HashMap<NodeId, PreviewInstance>,
     preview_layers: HashMap<ImageId, NodeId>,
@@ -61,7 +115,10 @@ impl ImageState {
     }
 
     fn gpu_image_bytes(&self) -> u64 {
-        self.resident.values().map(|(_, bytes)| *bytes).sum()
+        self.resident
+            .values()
+            .map(|resident| resident.bytes())
+            .sum()
     }
 
     fn prepare_preview_instances(&mut self, rt: &mut Runtime, images: &ImageAssets) {
@@ -145,12 +202,13 @@ impl ImageState {
     }
 
     fn collect_visible(&mut self, rt: &Runtime) {
-        let key = (rt.scene().revision(), rt.viewport());
+        let key = (rt.scene().revision(), rt.viewport(), rt.scale());
         if self.scene_revision == Some(key) {
             return;
         }
         self.visible.clear();
         let viewport = rt.viewport();
+        let density = rt.scale().max(f32::EPSILON);
         let viewport = Rect {
             x: 0.0,
             y: 0.0,
@@ -197,10 +255,30 @@ impl ImageState {
                 DisplayItem::Image {
                     bounds,
                     layer,
+                    fit,
+                    source,
                     opacity,
                     ..
+                } if *opacities.last().unwrap() > 0.0
+                    && *opacity > 0.0
+                    && !world(*bounds).intersect(*clips.last().unwrap()).is_empty() =>
+                {
+                    if let Some((aqua_core::scene::LayerKind::Media, raw)) =
+                        aqua_core::scene::decode_layer(*layer)
+                    {
+                        let placed = world(*bounds);
+                        self.visible
+                            .entry(ImageId::from_raw(raw))
+                            .or_default()
+                            .push(Shown {
+                                width: placed.w.abs() * density,
+                                height: placed.h.abs() * density,
+                                fit: *fit,
+                                crop: (source.w.max(f32::EPSILON), source.h.max(f32::EPSILON)),
+                            });
+                    }
                 }
-                | DisplayItem::External {
+                DisplayItem::External {
                     bounds,
                     layer,
                     opacity,
@@ -212,7 +290,7 @@ impl ImageState {
                     if let Some((aqua_core::scene::LayerKind::Media, raw)) =
                         aqua_core::scene::decode_layer(*layer)
                     {
-                        self.visible.insert(ImageId::from_raw(raw));
+                        self.visible.entry(ImageId::from_raw(raw)).or_default();
                     }
                 }
                 _ => {}
@@ -285,45 +363,82 @@ impl ImageState {
         let released: Vec<_> = self
             .resident
             .keys()
-            .filter(|id| !self.visible.contains(id) || !images.has_data(self.source_id(**id)))
+            .filter(|id| !self.visible.contains_key(id) || !images.has_data(self.source_id(**id)))
             .copied()
             .collect();
         for id in released {
             self.release_gpu(id);
         }
+        let sources: HashSet<_> = self.visible.keys().map(|id| self.source_id(*id)).collect();
+        self.ceiling.retain(|source, _| sources.contains(source));
         let mut frames = Vec::new();
         let mut failure = None;
-        let visible: Vec<_> = self.visible.iter().copied().collect();
+        let visible: Vec<_> = self.visible.keys().copied().collect();
         for id in visible {
             let source = self.source_id(id);
+            let extent = images.extent(source);
+            let wanted = extent
+                .and_then(|extent| wanted_detail(&self.visible[&id], extent))
+                .map(|wanted| match self.ceiling.get(&source) {
+                    Some(ceiling) => wanted.min(*ceiling),
+                    None => wanted,
+                });
             let Some(data) = images.ready(source) else {
                 if !self.resident.contains_key(&id) {
-                    images.revive(source);
+                    images.revive(source, wanted.unwrap_or(Detail::STANDARD));
+                } else if let Some(wanted) = wanted {
+                    images.redetail(source, wanted);
                 }
                 continue;
             };
             let (index, _) = self.selected_frame(id, &data, now);
-            if self.resident.get(&id).map(|(frame, _)| *frame) == Some(index) {
-                continue;
-            }
             let image = match &data {
                 Data::Still(image) => image.as_ref(),
                 Data::Animation(animation) => &animation.frames()[index].image,
             };
-            let bytes = u64::from(image.width()) * u64::from(image.height()) * 4;
-            let previous_bytes = self.resident.get(&id).map_or(0, |(_, bytes)| *bytes);
+            let shown = Resident {
+                frame: index,
+                width: image.width(),
+                height: image.height(),
+            };
+            if self.resident.get(&id) == Some(&shown) {
+                if let Some(wanted) = wanted {
+                    images.redetail(source, wanted);
+                }
+                continue;
+            }
+            let previous_bytes = self
+                .resident
+                .get(&id)
+                .map_or(0, |resident| resident.bytes());
             let new_count = self.resident.len() + usize::from(!self.resident.contains_key(&id));
-            if self
-                .gpu_image_bytes()
-                .saturating_add(other_bytes)
-                .saturating_sub(previous_bytes)
-                .saturating_add(bytes)
-                > budget.gpu_bytes
-                || new_count > budget.gpu_images
-            {
-                images.fail_upload(source, "visible image GPU budget exceeded".into());
-                self.release_gpu(id);
-                failure = Some(ImageAssetError::OverBudget);
+            let available = budget
+                .gpu_bytes
+                .saturating_sub(self.gpu_image_bytes().saturating_sub(previous_bytes))
+                .saturating_sub(other_bytes);
+            if shown.bytes() > available || new_count > budget.gpu_images {
+                let smaller =
+                    extent
+                        .filter(|_| new_count <= budget.gpu_images)
+                        .and_then(|extent| {
+                            affordable_detail(
+                                wanted.unwrap_or(Detail::STANDARD),
+                                extent.source,
+                                available,
+                            )
+                            .filter(|detail| detail.fit(extent.source) != extent.decoded)
+                        });
+                match smaller {
+                    Some(detail) => {
+                        self.ceiling.insert(source, detail);
+                        images.redetail(source, detail);
+                    }
+                    None => {
+                        images.fail_upload(source, "visible image GPU budget exceeded".into());
+                        self.release_gpu(id);
+                        failure = Some(ImageAssetError::OverBudget);
+                    }
+                }
                 continue;
             }
             frames.push(ImageFrame {
@@ -332,11 +447,16 @@ impl ImageState {
                 height: image.height(),
                 rgba: Arc::from(image.pixels()),
             });
-            self.resident.insert(id, (index, bytes));
-            images.retire(source);
+            self.resident.insert(id, shown);
+            match wanted.filter(|wanted| {
+                extent.is_some_and(|extent| wanted.fit(extent.source) != extent.decoded)
+            }) {
+                Some(wanted) => images.redetail(source, wanted),
+                None => images.retire(source),
+            }
         }
         self.started.retain(|id, _| images.has_data(*id));
-        keep.extend(self.visible.iter().map(|id| self.source_id(*id)));
+        keep.extend(self.visible.keys().map(|id| self.source_id(*id)));
         keep.extend(self.resident.keys().map(|id| self.source_id(*id)));
         match failure {
             Some(error) if frames.is_empty() => Err(error),
@@ -449,7 +569,7 @@ impl ManagedUiApp {
             .iter()
             .filter(|(other_key, _)| **other_key != key)
             .for_each(|(_, state)| {
-                keep.extend(state.visible.iter().map(|id| state.source_id(*id)));
+                keep.extend(state.visible.keys().map(|id| state.source_id(*id)));
                 keep.extend(state.resident.keys().map(|id| state.source_id(*id)));
             });
         images.retire_idle(&keep, super::RETIRE_IDLE);
@@ -629,7 +749,7 @@ impl Application for ManagedUiApp {
             return next;
         };
         state.collect_visible(rt);
-        let visible: Vec<_> = state.visible.iter().copied().collect();
+        let visible: Vec<_> = state.visible.keys().copied().collect();
         for id in visible {
             if let Some(data) = images.ready(state.source_id(id)) {
                 if let (_, Some(deadline)) = state.selected_frame(id, &data, now) {

@@ -11,6 +11,7 @@ static NEXT_IMAGE_INDEX: AtomicU32 = AtomicU32::new(0x8000_0000);
 
 mod application;
 pub use application::ManagedUiApp;
+use aqua_media::decode::Detail;
 pub use aqua_media::decode::{DecodedImage, MediaError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,11 +53,11 @@ impl Default for ImageAssetBudget {
 impl ImageAssetBudget {
     pub fn editor() -> Self {
         Self {
-            decoded_bytes: 32 * 1024 * 1024,
-            pending_bytes: 16 * 1024 * 1024,
+            decoded_bytes: 256 * 1024 * 1024,
+            pending_bytes: 256 * 1024 * 1024,
             images: 256,
             workers: 4,
-            gpu_bytes: 24 * 1024 * 1024,
+            gpu_bytes: 256 * 1024 * 1024,
             gpu_images: 64,
         }
     }
@@ -169,13 +170,19 @@ struct Retention {
     encoded: Arc<[u8]>,
     width: u32,
     height: u32,
+    source: Option<(u32, u32)>,
 }
 struct Slot {
     generation: u32,
     phase: Option<Phase>,
     preview: bool,
+    detail: Detail,
     retention: Option<Retention>,
     ready_at: Option<std::time::Instant>,
+}
+struct Decoded {
+    data: Data,
+    source: Option<(u32, u32)>,
 }
 const RETIRE_MIN_BYTES: u64 = 256 * 1024;
 pub(crate) const RETIRE_IDLE: std::time::Duration = std::time::Duration::from_secs(2);
@@ -183,6 +190,7 @@ struct DecodeJob {
     id: ImageId,
     encoded: Arc<[u8]>,
     preview: bool,
+    detail: Detail,
     _guard: Option<Box<dyn Send>>,
 }
 
@@ -203,6 +211,13 @@ struct State {
     revision: u64,
     wake: Option<crate::mailbox::Wake>,
     fonts: Option<aqua_text::SharedFonts>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Extent {
+    source: (u32, u32),
+    decoded: (u32, u32),
+    settled: bool,
 }
 
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
@@ -238,6 +253,7 @@ impl State {
                         generation: 0,
                         phase: None,
                         preview: false,
+                        detail: Detail::STANDARD,
                         retention: None,
                         ready_at: None,
                     },
@@ -248,6 +264,7 @@ impl State {
         let slot = self.slots.get_mut(&index).unwrap();
         slot.phase = Some(phase);
         slot.preview = preview;
+        slot.detail = Detail::STANDARD;
         slot.retention = None;
         self.stats.images += 1;
         self.revision = self.revision.wrapping_add(1);
@@ -424,6 +441,7 @@ impl ImageAssets {
                 id,
                 encoded,
                 preview,
+                detail: Detail::STANDARD,
                 _guard: guard,
             });
             let start = state.stats.workers < state.budget.workers;
@@ -494,23 +512,42 @@ impl ImageAssets {
         };
         candidates.into_iter().for_each(|id| self.retire(id));
     }
-    fn revive(&self, id: ImageId) {
+    fn revive(&self, id: ImageId, detail: Detail) {
+        self.redecode(id, detail, false);
+    }
+    fn redetail(&self, id: ImageId, detail: Detail) {
+        self.redecode(id, detail, true);
+    }
+    fn redecode(&self, id: ImageId, detail: Detail, replace_ready: bool) {
         let start = {
             let mut state = lock(&self.state);
             let Some(slot) = state.slot_mut(id) else {
                 return;
             };
-            let (Some(Phase::Retired), Some(retention)) = (&slot.phase, &slot.retention) else {
+            let Some(retention) = &slot.retention else {
                 return;
+            };
+            let unchanged = retention
+                .source
+                .is_none_or(|source| detail.fit(source) == (retention.width, retention.height));
+            let released = match &slot.phase {
+                Some(Phase::Retired) if !(replace_ready && unchanged) => 0,
+                Some(Phase::Ready(data)) if replace_ready && slot.preview && !unchanged => {
+                    data.bytes()
+                }
+                _ => return,
             };
             let encoded = retention.encoded.clone();
             let preview = slot.preview;
             slot.phase = Some(Phase::Pending);
+            slot.detail = detail;
+            state.stats.decoded_bytes -= released;
             state.stats.pending_bytes += encoded.len();
             state.queue.push_back(DecodeJob {
                 id,
                 encoded,
                 preview,
+                detail,
                 _guard: None,
             });
             let start = state.stats.workers < state.budget.workers;
@@ -522,6 +559,16 @@ impl ImageAssets {
         if start {
             spawn_worker(&self.state);
         }
+    }
+    fn extent(&self, id: ImageId) -> Option<Extent> {
+        let state = lock(&self.state);
+        let slot = state.slot(id)?;
+        let retention = slot.retention.as_ref().filter(|_| slot.preview)?;
+        Some(Extent {
+            source: retention.source?,
+            decoded: (retention.width, retention.height),
+            settled: !matches!(slot.phase, Some(Phase::Pending)),
+        })
     }
     fn is_preview(&self, id: ImageId) -> bool {
         lock(&self.state).slot(id).is_some_and(|slot| slot.preview)
@@ -590,21 +637,21 @@ fn spawn_worker(shared: &Arc<Mutex<State>>) {
             if let Some(callback) = callback {
                 callback(job.id);
             }
-            let result = if job.preview && job.encoded.len() > 32 * 1024 * 1024 {
-                Err(ImageAssetError::Decode(
-                    "image source exceeds 32 MiB".into(),
-                ))
-            } else if aqua_media::decode::is_svg(&job.encoded) {
+            let whole = |data| Decoded { data, source: None };
+            let result = if aqua_media::decode::is_svg(&job.encoded) {
                 let source = match &fonts {
                     Some(fonts) => aqua_text::svg::outline_text(&job.encoded, &mut fonts.lock()),
                     None => std::borrow::Cow::Borrowed(&job.encoded[..]),
                 };
                 aqua_media::decode::decode_svg(&source, budget)
-                    .map(|image| Data::Still(Arc::new(image)))
+                    .map(|image| whole(Data::Still(Arc::new(image))))
                     .map_err(|error| ImageAssetError::Decode(error.to_string()))
             } else if job.preview && !aqua_media::decode::is_gif(&job.encoded) {
-                aqua_media::decode::decode_preview_still(&job.encoded, budget)
-                    .map(|image| Data::Still(Arc::new(image)))
+                aqua_media::decode::decode_still(&job.encoded, job.detail, budget)
+                    .map(|still| Decoded {
+                        data: Data::Still(Arc::new(still.image)),
+                        source: Some(still.source),
+                    })
                     .map_err(|error| ImageAssetError::Decode(error.to_string()))
             } else {
                 let result = if job.preview {
@@ -620,11 +667,11 @@ fn spawn_worker(shared: &Arc<Mutex<State>>) {
                 };
                 result
                     .map(|animation| {
-                        if animation.frames().len() == 1 {
+                        whole(if animation.frames().len() == 1 {
                             Data::Still(Arc::new(animation.frames()[0].image.clone()))
                         } else {
                             Data::Animation(Arc::new(animation))
-                        }
+                        })
                     })
                     .map_err(|error| ImageAssetError::Decode(error.to_string()))
             };
@@ -654,32 +701,40 @@ fn complete(
     shared: &Mutex<State>,
     id: ImageId,
     encoded: Arc<[u8]>,
-    result: Result<Data, ImageAssetError>,
+    result: Result<Decoded, ImageAssetError>,
 ) {
     let wake = {
         let mut state = lock(shared);
         state.stats.pending_bytes -= encoded.len();
-        let result = result.and_then(|data| {
-            if state.stats.decoded_bytes.saturating_add(data.bytes()) <= state.budget.decoded_bytes
+        let result = result.and_then(|decoded| {
+            if state
+                .stats
+                .decoded_bytes
+                .saturating_add(decoded.data.bytes())
+                <= state.budget.decoded_bytes
             {
-                Ok(data)
+                Ok(decoded)
             } else {
                 Err(ImageAssetError::OverBudget)
             }
         });
         if state.slot(id).is_some() {
             let retention = match &result {
-                Ok(Data::Still(image)) => Some(Retention {
+                Ok(Decoded {
+                    data: Data::Still(image),
+                    source,
+                }) => Some(Retention {
                     encoded,
                     width: image.width(),
                     height: image.height(),
+                    source: *source,
                 }),
                 _ => None,
             };
             let phase = match result {
-                Ok(data) => {
-                    state.stats.decoded_bytes += data.bytes();
-                    Phase::Ready(data)
+                Ok(decoded) => {
+                    state.stats.decoded_bytes += decoded.data.bytes();
+                    Phase::Ready(decoded.data)
                 }
                 Err(error) => Phase::Failed(error),
             };
@@ -739,28 +794,27 @@ impl ImageHandle {
         let retention = state
             .slot(self.id())
             .and_then(|slot| slot.retention.as_ref());
-        match state.slot(self.id()).and_then(|slot| slot.phase.as_ref()) {
-            Some(Phase::Pending) => match retention {
-                Some(retention) => ImageStatus::Ready {
-                    width: retention.width,
-                    height: retention.height,
-                },
-                None => ImageStatus::Pending,
-            },
-            Some(Phase::Retired) => match retention {
-                Some(retention) => ImageStatus::Ready {
-                    width: retention.width,
-                    height: retention.height,
-                },
-                None => ImageStatus::Pending,
-            },
-            Some(Phase::Ready(data)) => {
-                let first = data.first();
-                ImageStatus::Ready {
-                    width: first.width(),
-                    height: first.height(),
-                }
+        let extent = |retention: Option<&Retention>| match retention {
+            Some(retention) => {
+                let (width, height) = retention
+                    .source
+                    .unwrap_or((retention.width, retention.height));
+                ImageStatus::Ready { width, height }
             }
+            None => ImageStatus::Pending,
+        };
+        match state.slot(self.id()).and_then(|slot| slot.phase.as_ref()) {
+            Some(Phase::Pending | Phase::Retired) => extent(retention),
+            Some(Phase::Ready(data)) => match retention {
+                Some(retention) => extent(Some(retention)),
+                None => {
+                    let first = data.first();
+                    ImageStatus::Ready {
+                        width: first.width(),
+                        height: first.height(),
+                    }
+                }
+            },
             Some(Phase::Failed(error)) => ImageStatus::Failed(error.clone()),
             None => ImageStatus::Cancelled,
         }

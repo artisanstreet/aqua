@@ -469,6 +469,34 @@ fn delayed_tooltip_uses_runtime_deadline_preserves_focus_and_cancels_on_leave() 
 }
 
 #[test]
+fn delayed_tooltip_sizes_content_that_wraps_to_its_own_height() {
+    use crate::support;
+
+    let mut runtime = mounted(
+        ui::Button::new()
+            .style(Style::new().width(px(120.0)).height(px(32.0)))
+            .child(ui::Text::builder().arg("usage").build())
+            .build()
+            .tooltip(0.5, || {
+                ui::Box::new()
+                    .style(Style::new().width(px(200.0)))
+                    .child(ui::Text::builder().arg("remaining quota").build())
+                    .build()
+            }),
+    );
+    runtime.advance_clock(1.0);
+    runtime.handle_input(&InputEvent::PointerMove(PointerEvent {
+        contact: 0,
+        kind: PointerKind::Mouse,
+        position: Point::new(5.0, 8.0),
+        buttons: 0,
+    }));
+    support::frame(&mut runtime, 1.1);
+    support::frame(&mut runtime, 1.6);
+    text_node(&runtime, "remaining quota");
+}
+
+#[test]
 fn captured_resize_drag_clamps_and_continues_across_refresh_without_accumulating_deltas() {
     let changes = Rc::new(RefCell::new(Vec::new()));
     let recorded = changes.clone();

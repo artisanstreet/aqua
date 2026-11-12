@@ -147,17 +147,11 @@ fn failed(error: image::ImageError) -> MediaError {
     }
 }
 
-fn threads() -> usize {
-    std::thread::available_parallelism()
-        .map_or(4, std::num::NonZero::get)
-        .min(DECODER_THREADS)
-}
-
 fn heic_options() -> heic_rs::DecodeOptions {
     heic_rs::DecodeOptions::default()
         .with_layout(heic_rs::PixelLayout::Rgba8)
         .with_max_pixels(Some(MAX_SOURCE_PIXELS))
-        .with_threads(Some(threads()))
+        .with_threads(Some(DECODER_THREADS))
 }
 
 fn extent(bytes: &[u8], format: StillFormat) -> Result<(u32, u32), MediaError> {

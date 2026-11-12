@@ -25,6 +25,7 @@ pub const ADAPTER_CRATES: &[&str] = &[
     "aqua-shaders",
     "aqua-transport",
     "aqua-oracle-dwrite",
+    "aqua-avif",
 ];
 
 pub const HOST_CRATES: &[&str] = &["aqua"];
@@ -61,6 +62,7 @@ pub const FORBIDDEN_ADAPTER_CRATES: &[&str] = &[
     "aqua-shaders",
     "aqua-transport",
     "aqua-oracle-dwrite",
+    "aqua-avif",
     "aqua-platform",
     "aqua-render",
     "aqua-verify",
@@ -93,7 +95,10 @@ pub const FORBIDDEN_SOURCE_TOKENS: &[&str] = &[
     "stderr()",
 ];
 
-pub const ALLOWED_ADAPTER_EDGES: &[(&str, &str)] = &[("aqua-text", "aqua-fonts-system")];
+pub const ALLOWED_ADAPTER_EDGES: &[(&str, &str)] = &[
+    ("aqua-text", "aqua-fonts-system"),
+    ("aqua-media", "aqua-avif"),
+];
 
 pub const KERNEL_CRATE: &str = "aqua-kernels";
 
@@ -111,6 +116,7 @@ pub const ADAPTER_PORT_IMPLS: &[(&str, &str)] = &[
 ];
 
 pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
+    ("aqua-avif", &["decode", "dimensions", "AvifError", "Rgba"]),
     (
         "aqua-gpu-d3d11",
         &[
@@ -163,6 +169,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "capability",
             "dialog_protocol",
             "hooks",
+            "icon",
             "input",
             "notifications",
             "occlusion",

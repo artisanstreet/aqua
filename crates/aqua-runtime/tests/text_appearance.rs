@@ -212,3 +212,29 @@ fn selection_rects_follow_the_text_when_its_container_scrolls() {
     assert!((scrolled.y - (resting.y - 30.0)).abs() < 0.001);
     assert!((scrolled.x - resting.x).abs() < 0.001);
 }
+
+#[test]
+fn an_app_can_select_a_range_of_selectable_text() {
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime
+        .mount(|_| {
+            Text::builder()
+                .arg("hello world")
+                .selectable(true)
+                .style(Style::new().width(px(200.0)).height(px(40.0)))
+                .build()
+        })
+        .unwrap();
+    runtime.set_viewport(400.0, 100.0, 1.0);
+    runtime.build_frame().unwrap();
+    let node = runtime
+        .tree()
+        .traverse()
+        .into_iter()
+        .find(|node| matches!(runtime.tree().get(*node).unwrap().kind, NodeKind::Text(_)))
+        .unwrap();
+    assert!(runtime.select_text(node, 6..11));
+    runtime.build_frame().unwrap();
+    assert_eq!(runtime.selected_text().as_deref(), Some("world"));
+    assert_eq!(runtime.selection_rects().len(), 1);
+}

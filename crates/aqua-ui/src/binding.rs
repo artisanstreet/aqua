@@ -1433,7 +1433,7 @@ impl View {
                         if let Some(node) = ret.node {
                             if let Some(live) = tree.get(node) {
                                 match (&mut shallow.kind, &live.kind) {
-                                    (NodeKind::Text(ref mut fresh_tc), NodeKind::Text(live_tc)) => {
+                                    (NodeKind::Text(fresh_tc), NodeKind::Text(live_tc)) => {
                                         if !live_tc.is_editable() {
                                             fresh_tc.set_text(live_tc.text());
                                             fresh_tc.text_style = live_tc.text_style.clone();
@@ -1449,10 +1449,7 @@ impl View {
                                             fresh_tc.placeholder = live_tc.placeholder.clone();
                                         }
                                     }
-                                    (
-                                        NodeKind::Canvas(ref mut fresh_c),
-                                        NodeKind::Canvas(live_c),
-                                    ) => {
+                                    (NodeKind::Canvas(fresh_c), NodeKind::Canvas(live_c)) => {
                                         fresh_c.painter = live_c.painter;
                                     }
                                     _ => {}

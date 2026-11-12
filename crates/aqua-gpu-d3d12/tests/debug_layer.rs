@@ -31,8 +31,8 @@ fn validation_errors(preference: AdapterPreference, format: SurfaceFormat) -> Ve
     let _serial = SERIAL
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    std::env::set_var("AQUA_D3D12_DEBUG", "1");
-    std::env::set_var("AQUA_D3D12_GBV", "1");
+    unsafe { std::env::set_var("AQUA_D3D12_DEBUG", "1") };
+    unsafe { std::env::set_var("AQUA_D3D12_GBV", "1") };
     let mut found = Vec::new();
     for (name, limit) in COMBINATIONS {
         let Ok(mut backend) = OffscreenBackend::with_tiers(preference, format, limit) else {

@@ -248,7 +248,7 @@ mod native {
     }
 
     pub fn run() {
-        std::env::set_var("AQUA_SMOKE_MS", "60000");
+        unsafe { std::env::set_var("AQUA_SMOKE_MS", "60000") };
         let verdict = std::rc::Rc::new(std::cell::RefCell::new(None));
         let progress = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
         let mut config = AquaConfig::default();

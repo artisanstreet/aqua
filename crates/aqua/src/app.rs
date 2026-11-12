@@ -2,7 +2,7 @@
 //!
 //! ```rust,no_run
 //! # use aqua::{App, Config, Window, Theme, Material, px};
-//! # fn todo_app(cx: &aqua::Context) -> impl aqua::IntoView {
+//! # fn todo_app(cx: &aqua::Context) -> impl aqua::IntoView + use<> {
 //! #     aqua::ui::Text::new("tasks").build()
 //! # }
 //! # fn main() -> Result<(), aqua::Error> {

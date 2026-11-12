@@ -162,8 +162,8 @@ mod native {
     }
 
     pub fn run() {
-        std::env::set_var("AQUA_SMOKE_MS", "90000");
-        std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1");
+        unsafe { std::env::set_var("AQUA_SMOKE_MS", "90000") };
+        unsafe { std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1") };
         let (done, outcome) = mpsc::channel();
         thread::spawn(move || {
             let _ = done.send(client());

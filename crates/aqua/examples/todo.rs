@@ -211,7 +211,7 @@ fn todo_view(
     scope: &Scope,
     initial: Vec<Todo>,
     glass: bool,
-) -> (TodoDeps, impl FnMut(TodoInput) -> Element + 'static) {
+) -> (TodoDeps, impl FnMut(TodoInput) -> Element + 'static + use<>) {
     let (todos_r, todos_w) = scope.signal(initial);
     let (draft_r, draft_w) = scope.signal(String::new());
     let (focused_r, focused_w) = scope.signal(false);
@@ -313,7 +313,7 @@ fn todo_view(
 /// Canonical setup: explicit dependencies via `Context::view`, glass chosen
 /// from the resolved material (framework-resolved, no manual
 /// capability/prefs polling in `main`).
-fn todo_app(cx: &Context) -> impl IntoView {
+fn todo_app(cx: &Context) -> impl IntoView + use<> {
     let glass = cx.material().is_glass();
     let (deps, render) = todo_view(cx.scope(), Vec::new(), glass);
     cx.view(deps, render)

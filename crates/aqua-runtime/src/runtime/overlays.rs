@@ -507,7 +507,7 @@ impl Runtime {
                         PopupOptions::tooltip().at(pointer),
                     )
                 } else {
-                    self.open_popup(
+                    self.open_popup_measured(
                         pending.owner,
                         (pending.tooltip.content)(),
                         PopupOptions::tooltip(),

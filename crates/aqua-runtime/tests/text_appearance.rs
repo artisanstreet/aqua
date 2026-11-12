@@ -162,3 +162,53 @@ fn text_without_an_appearance_paints_its_selection_with_the_runtime_background()
     assert_eq!(rects.len(), 1);
     assert!(rects[0].w > 0.0 && rects[0].h > 0.0);
 }
+
+#[test]
+fn selection_rects_follow_the_text_when_its_container_scrolls() {
+    use aqua_ui::element::{Box as UiBox, Scroll};
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime
+        .mount(|_| {
+            Scroll::new()
+                .style(Style::new().width(px(200.0)).height(px(100.0)))
+                .child(
+                    UiBox::new()
+                        .style(Style::new().width(px(200.0)).height(px(1000.0)).flex_shrink(0.0))
+                        .child(
+                            Text::builder()
+                                .arg("hello")
+                                .editable(true)
+                                .style(Style::new().width(px(200.0)).height(px(40.0)))
+                                .build(),
+                        )
+                        .build(),
+                )
+                .build()
+        })
+        .unwrap();
+    runtime.set_viewport(200.0, 100.0, 1.0);
+    runtime.build_frame().unwrap();
+    let find = |runtime: &Runtime, wanted: fn(&NodeKind) -> bool| {
+        runtime
+            .tree()
+            .traverse()
+            .into_iter()
+            .find(|node| wanted(&runtime.tree().get(*node).unwrap().kind))
+            .unwrap()
+    };
+    let text = find(&runtime, |kind| matches!(kind, NodeKind::Text(_)));
+    let scroll = find(&runtime, |kind| matches!(kind, NodeKind::Scroll(_)));
+    runtime.tree_mut().set_focused(Some(text));
+    runtime
+        .tree_mut()
+        .set_text_selection(text, Some(Selection::new(0, 3)));
+    runtime.build_frame().unwrap();
+    let resting = runtime.selection_rects()[0];
+    runtime
+        .tree_mut()
+        .scroll_to(scroll, aqua_core::Point::new(0.0, 30.0));
+    runtime.build_frame().unwrap();
+    let scrolled = runtime.selection_rects()[0];
+    assert!((scrolled.y - (resting.y - 30.0)).abs() < 0.001);
+    assert!((scrolled.x - resting.x).abs() < 0.001);
+}

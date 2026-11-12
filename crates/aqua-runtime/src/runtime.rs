@@ -2361,9 +2361,19 @@ impl Runtime {
             .into_iter()
             .filter_map(|(key, item)| match (key, item) {
                 (
-                    SceneKey::Selection { .. },
+                    SceneKey::Selection { node, .. },
                     DisplayItem::GpuiBackground { bounds, .. } | DisplayItem::Rect { bounds, .. },
-                ) => Some(bounds),
+                ) => {
+                    let laid = self.tree.rect(node)?;
+                    let shown = self.tree.visual_rect(node)?;
+                    let (dx, dy) = (shown.x - laid.x, shown.y - laid.y);
+                    Some(Rect::from_edges(
+                        bounds.x + dx,
+                        bounds.y + dy,
+                        bounds.x + bounds.w + dx,
+                        bounds.y + bounds.h + dy,
+                    ))
+                }
                 _ => None,
             })
             .collect()

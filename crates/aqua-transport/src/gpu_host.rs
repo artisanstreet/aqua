@@ -393,28 +393,28 @@ where
         }
         let plan_span = probe::span(Phase::Plan);
         if solids.is_none() {
-        let limits = self.backend.capabilities().plan_limits();
-        let reused = self
-            .retained
-            .reuse(
-                extent,
-                self.config.clear,
-                lowered.text_tone,
-                limits,
-                &lowered.commands,
-            )
-            .is_some();
-        match reused {
-            true => self.plans_reused += 1,
-            false => {
-                let plan = FramePlan {
-                    text_tone: lowered.text_tone,
-                    ..plan_paint_with(extent, self.config.clear, &lowered.commands, limits)?
-                };
-                self.retained.store(&lowered.commands, plan, limits);
-                self.plans_built += 1;
+            let limits = self.backend.capabilities().plan_limits();
+            let reused = self
+                .retained
+                .reuse(
+                    extent,
+                    self.config.clear,
+                    lowered.text_tone,
+                    limits,
+                    &lowered.commands,
+                )
+                .is_some();
+            match reused {
+                true => self.plans_reused += 1,
+                false => {
+                    let plan = FramePlan {
+                        text_tone: lowered.text_tone,
+                        ..plan_paint_with(extent, self.config.clear, &lowered.commands, limits)?
+                    };
+                    self.retained.store(&lowered.commands, plan, limits);
+                    self.plans_built += 1;
+                }
             }
-        }
         } else {
             self.retained.clear();
         }
@@ -425,7 +425,10 @@ where
         let record_span = probe::span(Phase::Record);
         let plan = match &solids {
             Some(cached) => &cached.plan,
-            None => self.retained.get().ok_or(GpuError::Unsupported("retained frame plan unavailable"))?,
+            None => self
+                .retained
+                .get()
+                .ok_or(GpuError::Unsupported("retained frame plan unavailable"))?,
         };
         let report = self.backend.execute(plan, &FrameInputs::new(surface))?;
         drop(record_span);

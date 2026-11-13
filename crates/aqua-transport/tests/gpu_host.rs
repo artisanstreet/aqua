@@ -127,8 +127,6 @@ impl GpuBackend for Probe {
         self.log.push("wait");
         Ok(())
     }
-
-
 }
 
 impl GpuReadback for Probe {
@@ -212,10 +210,7 @@ fn slot_waits_follow_the_current_presentation_hint() {
     setup(&mut side, vec![(node(0), rect_item(0.0, color("#ff0000")))]);
     host.set_present(PresentHint::Immediate);
     host.execute(&mut side, 1);
-    assert_eq!(
-        log.take(),
-        vec!["create", "wait", "execute", "present"]
-    );
+    assert_eq!(log.take(), vec!["create", "wait", "execute", "present"]);
     host.set_present(PresentHint::Vsync);
     host.wait_frame();
     assert_eq!(log.take(), vec!["wait"]);
@@ -224,7 +219,14 @@ fn slot_waits_follow_the_current_presentation_hint() {
     host.set_present(PresentHint::Immediate);
     host.wait_frame();
     assert_eq!(log.take(), vec!["wait"]);
-    assert_eq!(host.backend().wait_hints, vec![PresentHint::Immediate, PresentHint::Vsync, PresentHint::Immediate]);
+    assert_eq!(
+        host.backend().wait_hints,
+        vec![
+            PresentHint::Immediate,
+            PresentHint::Vsync,
+            PresentHint::Immediate
+        ]
+    );
 }
 
 #[test]

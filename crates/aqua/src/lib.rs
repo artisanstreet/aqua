@@ -85,6 +85,7 @@ pub mod prelude {
     pub use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
     pub use aqua_runtime::Scheduler;
     pub use aqua_scene::Scene;
+    pub use aqua_shell_win32::icon::{file_icon, FileIcon};
     #[cfg(windows)]
     pub use aqua_shell_win32::notifications::activation::{handle_launch, Activation, Launch};
     #[cfg(windows)]
@@ -92,7 +93,6 @@ pub mod prelude {
     pub use aqua_shell_win32::notifications::{
         AppIdentity, Notification, NotificationAction, NotificationError, NotificationResponse,
     };
-    pub use aqua_shell_win32::icon::{file_icon, FileIcon};
     pub use aqua_shell_win32::open::{OpenError, OpenTarget};
     pub use aqua_shell_win32::picker::{DialogCapability, DialogRequest, FileFilter};
     pub use aqua_shell_win32::services::{Clipboard, ClipboardBackend};

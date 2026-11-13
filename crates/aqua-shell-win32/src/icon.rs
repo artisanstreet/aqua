@@ -95,7 +95,8 @@ unsafe fn rendered(
                 )
                 .is_ok();
                 let _ = GdiFlush();
-                let bgra = std::slice::from_raw_parts(bits.cast::<u8>(), (edge * edge * 4) as usize);
+                let bgra =
+                    std::slice::from_raw_parts(bits.cast::<u8>(), (edge * edge * 4) as usize);
                 let rgba = straight_rgba(bgra);
                 SelectObject(memory, previous);
                 let _ = DeleteObject(bitmap.into());

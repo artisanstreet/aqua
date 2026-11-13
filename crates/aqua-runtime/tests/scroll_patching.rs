@@ -163,7 +163,12 @@ fn clipped_rows() -> Element {
                 .style(Style::new().width(px(200.0)).height(px(100.0)))
                 .child(
                     UiBox::new()
-                        .style(Style::new().axis(Axis::Column).width(px(200.0)).flex_shrink(0.0))
+                        .style(
+                            Style::new()
+                                .axis(Axis::Column)
+                                .width(px(200.0))
+                                .flex_shrink(0.0),
+                        )
                         .children(rows)
                         .build(),
                 )

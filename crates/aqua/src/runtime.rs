@@ -751,7 +751,9 @@ impl Aqua {
             match &request {
                 WindowRequest::BeginSnapshotTransition(window, _)
                 | WindowRequest::BeginGpuiSnapshotTransition(window, _)
-                | WindowRequest::BeginGpuiSourceSnapshotTransition(window, _) if *window == id => {
+                | WindowRequest::BeginGpuiSourceSnapshotTransition(window, _)
+                    if *window == id =>
+                {
                     if let Err(error) = self.apply_window_request(app, &request) {
                         app.on_window_request_error(&request, &error);
                     }
@@ -2001,7 +2003,10 @@ mod tests {
         }
     }
 
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/runtime/snapshot.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/runtime/snapshot.rs"
+    ));
 
     fn headless() -> (Aqua, Probe, AquaWindowId) {
         let mut aqua = Aqua::new(AquaConfig {

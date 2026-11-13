@@ -1,10 +1,10 @@
 pub mod capability;
 pub mod dialog_protocol;
 pub mod hooks;
+pub mod icon;
 pub mod input;
 pub mod notifications;
 pub mod occlusion;
-pub mod icon;
 pub mod open;
 pub mod picker;
 pub mod pointer;

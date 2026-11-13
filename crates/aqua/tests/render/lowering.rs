@@ -666,9 +666,10 @@ fn constant_color_paths_reuse_curve_geometry_without_raster_uploads() {
         let mut mask_lowering = Lowering::new(SharedFonts::new(), SharedRuns::new());
         let mask_scene = scene(path.clone());
         let mask = lowered(&mut mask_lowering, &mask_scene);
-        assert!(mask.commands.iter().any(|command| matches!(command,
-            aqua_graph::PaintCommand::Slug(_)
-        )));
+        assert!(mask
+            .commands
+            .iter()
+            .any(|command| matches!(command, aqua_graph::PaintCommand::Slug(_))));
         let repeated = lowered(&mut mask_lowering, &mask_scene);
         assert_eq!(repeated.commands, mask.commands);
         assert!(repeated.uploads.textures.is_empty());

@@ -2432,12 +2432,26 @@ mod tests {
         })
     }
 
-    fn wait_for_presented(aqua: &mut Aqua, app: &mut Probe, id: AquaWindowId, frames: u64) {
+    fn scene_presented(aqua: &Aqua, id: AquaWindowId) -> bool {
+        aqua.windows
+            .get(&id)
+            .and_then(|record| record.link.as_ref())
+            .is_some_and(|link| {
+                link.submitted() > 0
+                    && link
+                        .stats()
+                        .scenes_presented
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        >= link.submitted()
+            })
+    }
+
+    fn wait_for_scene_presented(aqua: &mut Aqua, app: &mut Probe, id: AquaWindowId) {
         let deadline = WallInstant::now() + Duration::from_secs(20);
-        while aqua.presented_frames(id).unwrap_or(0) < frames {
+        while !scene_presented(aqua, id) {
             assert!(
                 WallInstant::now() < deadline,
-                "render thread never presented"
+                "render thread never presented the scene"
             );
             aqua.drain_render_events(app, id);
             std::thread::sleep(Duration::from_millis(5));
@@ -2462,7 +2476,7 @@ mod tests {
         aqua.scheduler.request_frame(id, FrameReason::EXPLICIT);
         let now = aqua.clock();
         aqua.draw_ready(&mut app, now);
-        wait_for_presented(&mut aqua, &mut app, id, 1);
+        wait_for_scene_presented(&mut aqua, &mut app, id);
         let frame = pixels
             .lock()
             .unwrap()

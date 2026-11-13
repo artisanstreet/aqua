@@ -118,6 +118,11 @@ impl Runtime {
                 }
                 self.cached_scene.splice(range, replacement);
             }
+            let unwrapped = std::mem::take(&mut self.cached_scene)
+                .into_iter()
+                .filter(|(key, _)| !key.wraps_motion())
+                .collect();
+            self.cached_scene = self.wrap_motion_groups(unwrapped);
             self.index_fragments();
             self.cached_text_nodes = self
                 .cached_scene

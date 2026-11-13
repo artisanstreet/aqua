@@ -131,6 +131,16 @@ impl SceneKey {
             | Self::PortalEnd { node, .. } => node,
         }
     }
+
+    fn wraps_motion(self) -> bool {
+        matches!(
+            self,
+            Self::ScrollContentStart { .. }
+                | Self::ScrollContentEnd { .. }
+                | Self::PortalStart { .. }
+                | Self::PortalEnd { .. }
+        )
+    }
 }
 
 struct TextJob {

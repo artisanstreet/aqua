@@ -33,8 +33,8 @@ pub use runs::{ResolveError, RunHandle, RunId, RunRegistry, SharedRuns};
 pub use selection::Selection;
 pub use shape_cache::{ShapeCacheStats, SHAPE_CACHE_BUDGET_BYTES};
 pub use style::{
-    FontFamily, FontSlant, FontStretch, FontWeight, InlineCellError, LineMode, StyledSpan,
-    TextAlign, TextStyle, WrapMode,
+    FontFamily, FontSlant, FontStretch, FontWeight, InlineCellError, LineMode, SpanBackground,
+    StyledSpan, TextAlign, TextStyle, WrapMode,
 };
 
 pub const AQUA_TEXT_API_VERSION: u32 = 1;

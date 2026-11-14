@@ -22,18 +22,18 @@ fn source_backgrounds(shaped: &LaidOut, spans: &[StyledSpan]) -> Vec<TextBackgro
                 if let Some(run) = style {
                     if active
                         .as_ref()
-                        .is_some_and(|(_, color)| Some(*color) != run.background_hsla)
+                        .is_some_and(|(_, color)| Some(*color) != run.background)
                     {
                         finished = active.take();
                     }
-                    if let Some(color) = run.background_hsla {
+                    if let Some(color) = run.background {
                         active.get_or_insert((glyph.x, color));
                     }
                     run_end += run.text.len();
                 } else {
                     finished = active.take();
                 }
-                if let Some((mut x, color_hsla)) = finished {
+                if let Some((mut x, fill)) = finished {
                     let width = glyph.x - x;
                     if width == 0.0 {
                         x -= glyph.font_max_width.unwrap() / 2.0;
@@ -45,12 +45,12 @@ fn source_backgrounds(shaped: &LaidOut, spans: &[StyledSpan]) -> Vec<TextBackgro
                             w: width,
                             h: line.height,
                         },
-                        color_hsla,
+                        fill,
                     });
                 }
             }
         }
-        if let Some((mut x, color_hsla)) = active.take() {
+        if let Some((mut x, fill)) = active.take() {
             let next = shaped
                 .lines
                 .get(index + 1)
@@ -70,10 +70,10 @@ fn source_backgrounds(shaped: &LaidOut, spans: &[StyledSpan]) -> Vec<TextBackgro
                     w: width,
                     h: line.height,
                 },
-                color_hsla,
+                fill,
             });
             if next.is_some_and(|glyph| glyph.src_byte_start < run_end) {
-                active = Some((0.0, color_hsla));
+                active = Some((0.0, fill));
             }
         }
     }

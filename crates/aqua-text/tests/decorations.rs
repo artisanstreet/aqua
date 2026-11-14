@@ -1,5 +1,7 @@
 #![cfg_attr(not(windows), allow(unused))]
-use aqua_text::{DecorationKind, FontManager, StyledSpan, TextLayout, TextStyle, WrapMode};
+use aqua_text::{
+    DecorationKind, FontManager, SpanBackground, StyledSpan, TextLayout, TextStyle, WrapMode,
+};
 
 #[cfg(windows)]
 #[test]
@@ -151,8 +153,30 @@ fn gpui_backgrounds_follow_glyph_boundaries_and_preserve_float_colors() {
         .unwrap();
     assert_eq!(backgrounds[0].bounds.x, first.x);
     assert_eq!(backgrounds[0].bounds.w, last.x - first.x);
+    assert_eq!(backgrounds[0].fill, SpanBackground::Solid(color));
+}
+
+#[cfg(windows)]
+#[test]
+fn selection_backgrounds_split_from_adjacent_solid_runs() {
+    let mut fonts = FontManager::new();
+    let mut layout = TextLayout::new();
+    let color = [0.5, 0.3, 0.6, 0.4];
+    layout.set_spans(vec![
+        StyledSpan::plain("plain "),
+        StyledSpan::plain("marked").selection_background(),
+        StyledSpan::plain("solid").gpui_background(color),
+        StyledSpan::plain(" tail"),
+    ]);
+    layout.layout(&mut fonts);
+    let fills: Vec<_> = layout
+        .gpui_backgrounds()
+        .unwrap()
+        .into_iter()
+        .map(|background| background.fill)
+        .collect();
     assert_eq!(
-        backgrounds[0].color_hsla.map(f32::to_bits),
-        color.map(f32::to_bits)
+        fills,
+        vec![SpanBackground::Selection, SpanBackground::Solid(color)]
     );
 }

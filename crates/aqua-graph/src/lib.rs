@@ -15,14 +15,15 @@ pub use blur::{blur_chain, depth_for, BlurDepth, BlurOutput, BlurRequest};
 pub use graph::{PlanLimits, PlanStats, RenderGraph, ResourceDesc};
 pub use linear::Linear2;
 pub use paint::{
-    plan_paint, plan_paint_with, BackdropBlur, Glyph, GlyphList, GlyphRun, GradientQuad, Image,
-    PaintCommand, Quad, Shadow, SlugList, SlugRun,
+    plan_paint, plan_paint_with, BackdropBlur, BlurMask, Glyph, GlyphList, GlyphRun, GradientQuad,
+    Image, PaintCommand, Quad, Shadow, SlugList, SlugRun,
 };
 pub use plan::{
     Barrier, Blend, ColorMatrix, Coverage, CustomPassSpec, CustomShaderId, Extent, FilterParams,
-    FramePlan, GlyphInstance, Gradient, GradientStop, ImageInstance, LoadOp, Pass, PassKind,
-    QuadInstance, ResourceState, ShaderId, ShadowCast, ShadowInstance, SolidColor, SolidInstance,
-    SpecConstant, TextureFormat, TextureHandle, TextureRef, TransientId, TransientTexture,
+    FramePlan, GlyphInstance, Gradient, GradientStop, ImageInstance, ImageMask, LoadOp, Pass,
+    PassKind, QuadInstance, ResourceState, ShaderId, ShadowCast, ShadowInstance, SolidColor,
+    SolidInstance, SpecConstant, TextureFormat, TextureHandle, TextureRef, TransientId,
+    TransientTexture,
 };
 pub use slug::SlugInstance;
 pub use tone::ToneCurve;

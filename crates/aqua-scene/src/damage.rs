@@ -221,7 +221,9 @@ impl DamageTracker {
                 let _ = (to_phys, old_effect_bounds);
                 self.invalidate_full(reason_of(new_item));
             }
-            DisplayItem::BackdropBlur { .. } | DisplayItem::BackdropBlurRounded { .. } => {
+            DisplayItem::BackdropBlur { .. }
+            | DisplayItem::BackdropBlurRounded { .. }
+            | DisplayItem::BackdropBlurPath { .. } => {
                 self.invalidate_full(reason_of(new_item));
             }
             DisplayItem::Text { .. } => {
@@ -364,9 +366,9 @@ impl DamageTracker {
 
 fn reason_of(item: &DisplayItem) -> InvalidationReason {
     match item {
-        DisplayItem::BackdropBlur { .. } | DisplayItem::BackdropBlurRounded { .. } => {
-            InvalidationReason::EffectParamChanged
-        }
+        DisplayItem::BackdropBlur { .. }
+        | DisplayItem::BackdropBlurRounded { .. }
+        | DisplayItem::BackdropBlurPath { .. } => InvalidationReason::EffectParamChanged,
         DisplayItem::PushTextColorMap(_)
         | DisplayItem::PopTextColorMap
         | DisplayItem::PushGpuiTextColorMap(_)

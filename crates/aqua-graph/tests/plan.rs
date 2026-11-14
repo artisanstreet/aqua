@@ -23,6 +23,7 @@ fn repaint_closes_over_chained_backdrop_sources() {
             bounds,
             radius: 12.0,
             corner_radius: 0.0,
+            mask: None,
         })
     })
     .collect();

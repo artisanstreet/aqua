@@ -10,9 +10,20 @@ struct BoundPage
     }
 };
 
+struct BoundMask
+{
+    float Load(int3 location)
+    {
+        Texture2D<float> bound = ResourceDescriptorHeap[texture_index + 1];
+        return bound.Load(location);
+    }
+};
+
 static BoundPage page;
+static BoundMask mask_page;
 #else
 Texture2D<float4> page : register(t0);
+Texture2D<float> mask_page : register(t1);
 #endif
 
 struct ImageIn
@@ -33,15 +44,18 @@ struct ImageOut
     nointerpolation float4 clip : CLIP;
     nointerpolation float4 params : PARAMS;
     nointerpolation float4 xform : XFORM;
+    nointerpolation float4 mask : MASK;
 };
 
 ImageOut vs_image(ImageIn i)
 {
     ImageOut o;
+    bool masked = i.params.w > 0.5;
+    float4 xform = masked ? float4(1.0, 0.0, 0.0, 1.0) : i.xform;
     float2 corner = float2(i.vertex & 1, i.vertex >> 1);
     float2 half_size = i.bounds.zw * 0.5;
     float2 center = i.bounds.xy + half_size;
-    float2 reach = covered_reach(i.xform, half_size);
+    float2 reach = covered_reach(xform, half_size);
     float2 lo = max(center - reach - 1.0, i.clip.xy - 1.0);
     float2 hi = min(center + reach + 1.0, i.clip.xy + i.clip.zw + 1.0);
     hi = max(hi, lo);
@@ -50,8 +64,21 @@ ImageOut vs_image(ImageIn i)
     o.texels = i.texels;
     o.clip = i.clip;
     o.params = i.params;
-    o.xform = i.xform;
+    o.xform = xform;
+    o.mask = masked ? i.xform : float4(0.0, 0.0, 0.0, 0.0);
     return o;
+}
+
+float mask_cover(float2 p, float4 mask)
+{
+    float2 shifted = p * mask.zw + mask.xy - 0.5;
+    float2 base = floor(shifted);
+    float2 f = shifted - base;
+    float a = mask_page.Load(int3(int2(base), 0));
+    float b = mask_page.Load(int3(int2(base + float2(1.0, 0.0)), 0));
+    float c = mask_page.Load(int3(int2(base + float2(0.0, 1.0)), 0));
+    float d = mask_page.Load(int3(int2(base + float2(1.0, 1.0)), 0));
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
 }
 
 float4 fetch(float2 texel, float4 region)
@@ -86,6 +113,10 @@ float4 shade_image(ImageOut i, out float weight)
     float4 c = fetch(base + float2(0.0, 1.0), i.texels);
     float4 d = fetch(base + float2(1.0, 1.0), i.texels);
     float4 color = lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+    if (i.params.w > 0.5)
+    {
+        cover *= mask_cover(p, i.mask);
+    }
     weight = cover * opacity_factor;
     return color;
 }

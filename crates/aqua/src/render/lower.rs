@@ -225,7 +225,9 @@ fn kind_name(item: &DisplayItem) -> &'static str {
         DisplayItem::GpuiBackground { .. } => "GpuiBackground",
         DisplayItem::GpuiBorder { .. } => "GpuiBorder",
         DisplayItem::PushClip { .. } | DisplayItem::PushRoundedClip { .. } => "PushClip",
-        DisplayItem::BackdropBlur { .. } | DisplayItem::BackdropBlurRounded { .. } => "Backdrop",
+        DisplayItem::BackdropBlur { .. }
+        | DisplayItem::BackdropBlurRounded { .. }
+        | DisplayItem::BackdropBlurPath { .. } => "Backdrop",
         DisplayItem::PushContentBlur { .. } => "ContentBlur",
         _ => "scope",
     }
@@ -1825,6 +1827,7 @@ impl Lowering {
                     bounds: at.rect(*bounds),
                     radius: radius * s,
                     corner_radius: 0.0,
+                    mask: None,
                 }));
             }
             DisplayItem::BackdropBlurRounded {
@@ -1841,7 +1844,17 @@ impl Lowering {
                     bounds: at.rect(*bounds),
                     radius: radius * s,
                     corner_radius: radii.max(),
+                    mask: None,
                 }));
+            }
+            DisplayItem::BackdropBlurPath {
+                transformed_window_logical_bounds,
+                path,
+                radius,
+            } => {
+                if !walk.hidden(at.rect(*transformed_window_logical_bounds), 1.0) {
+                    self.emit_blur_path(path, radius * s, at, walk);
+                }
             }
             DisplayItem::PushTransform(local) => {
                 let next = snapped_nest(walk, at, local);
@@ -2500,6 +2513,47 @@ impl Lowering {
         }
     }
 
+    fn emit_blur_path(
+        &mut self,
+        path: &aqua_core::vector::GpuiPath,
+        radius: f32,
+        at: Affine,
+        walk: &mut Walk,
+    ) {
+        let Some(raster) = self.vectors.path(path, at.0) else {
+            walk.skip(Unsupported::PathFailed);
+            return;
+        };
+        for raster in self.vectors.tiles(raster) {
+            match self.residency.vector(
+                &raster.source,
+                raster.width,
+                raster.height,
+                VectorMode::Mask,
+            ) {
+                Ok(Slot::Resident(placement)) => {
+                    self.path_keys_now.push(Residency::vector_key(
+                        &raster.source,
+                        raster.width,
+                        raster.height,
+                    ));
+                    walk.out.push(PaintCommand::BackdropBlur(BackdropBlur {
+                        bounds: raster.placement,
+                        radius,
+                        corner_radius: 0.0,
+                        mask: Some(aqua_graph::BlurMask {
+                            source: texture_handle(placement.page),
+                            bounds: raster.placement,
+                            texels: texel_rect(&placement, full_source()),
+                        }),
+                    }));
+                }
+                Ok(Slot::Blank { .. }) => {}
+                Err(_) => walk.skip(Unsupported::PathFailed),
+            }
+        }
+    }
+
     fn emit_path(&mut self, path: &aqua_core::vector::GpuiPath, at: Affine, walk: &mut Walk) {
         let described = std::time::Instant::now();
         let Some(raster) = self.vectors.path(path, at.0) else {
@@ -3004,6 +3058,10 @@ fn lift_commands(commands: &mut [PaintCommand], lift: Transform2D) -> u32 {
                     bounds: Rect::transform(blur.bounds, lift),
                     radius: blur.radius * scale,
                     corner_radius: blur.corner_radius * scale,
+                    mask: blur.mask.map(|mask| aqua_graph::BlurMask {
+                        bounds: Rect::transform(mask.bounds, lift),
+                        ..mask
+                    }),
                 }))
             }
             _ => None,

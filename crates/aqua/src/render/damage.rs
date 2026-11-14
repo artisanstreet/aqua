@@ -130,6 +130,11 @@ fn traits_of(scene: &Scene, ink: &FastMap<u64, Rect>) -> SceneTraits {
             }
             DisplayItem::BackdropBlur { bounds, radius }
             | DisplayItem::BackdropBlurRounded { bounds, radius, .. }
+            | DisplayItem::BackdropBlurPath {
+                transformed_window_logical_bounds: bounds,
+                radius,
+                ..
+            }
             | DisplayItem::PushContentBlur { bounds, radius } => {
                 traits
                     .blurs

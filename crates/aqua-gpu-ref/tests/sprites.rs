@@ -5,7 +5,8 @@ use aqua_gpu_ref::sprites::{
     draw_glyphs, draw_images, sample_image, RefTexture, TextureError, Textures,
 };
 use aqua_graph::{
-    Extent, GlyphInstance, ImageInstance, TextureFormat, TextureHandle, TextureRef, ToneCurve,
+    Extent, GlyphInstance, ImageInstance, ImageMask, TextureFormat, TextureHandle, TextureRef,
+    ToneCurve,
 };
 
 fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
@@ -176,11 +177,110 @@ fn image_corners_are_rounded_and_opacity_applies() {
         clip_radius: 0.0,
         blend: aqua_graph::Blend::Over,
         linear: aqua_graph::Linear2::IDENTITY,
+        mask: None,
     };
     draw_images(&mut layer, &textures, &[image]);
     assert!((layer.pixels[12 * 24 + 12][3] - 0.5).abs() < 1e-6);
     assert!(layer.pixels[4 * 24 + 4][3] < 0.05);
     assert!(layer.pixels[3 * 24 + 12][3] < 0.3);
+}
+
+fn upload(textures: &mut Textures, handle: TextureHandle, texture: &RefTexture) {
+    textures
+        .create(handle, texture.extent, texture.format)
+        .unwrap();
+    textures
+        .write(handle, 0, 0, texture.extent, &texture.data)
+        .unwrap();
+}
+
+#[test]
+fn a_mask_cuts_the_image_to_its_shape() {
+    let mut textures = Textures::default();
+    upload(
+        &mut textures,
+        TextureHandle(3),
+        &color_texture(8, 8, |_, _| [255, 255, 255, 255]),
+    );
+    upload(
+        &mut textures,
+        TextureHandle(4),
+        &mask_texture(24, 12, |x, y| match (10..14).contains(&x) && y >= 2 {
+            true => 255,
+            false => 0,
+        }),
+    );
+    let mut layer = Layer::filled(8, 8, [0.0; 4]);
+    let image = ImageInstance {
+        source: TextureRef::Persistent(TextureHandle(3)),
+        bounds: rect(0.0, 0.0, 8.0, 8.0),
+        texels: rect(0.0, 0.0, 8.0, 8.0),
+        radius: 0.0,
+        opacity: 1.0,
+        clip: None,
+        clip_radius: 0.0,
+        blend: aqua_graph::Blend::Replace,
+        linear: aqua_graph::Linear2::IDENTITY,
+        mask: Some(ImageMask {
+            source: TextureRef::Persistent(TextureHandle(4)),
+            offset: [10.0, 2.0],
+            scale: [1.0, 1.0],
+        }),
+    };
+    draw_images(&mut layer, &textures, &[image]);
+    for y in 0..8usize {
+        for x in 0..8usize {
+            let expected = match x < 4 {
+                true => 1.0,
+                false => 0.0,
+            };
+            assert_eq!(layer.pixels[y * 8 + x][3], expected, "({x},{y})");
+        }
+    }
+}
+
+#[test]
+fn a_mask_rasterised_at_a_different_scale_is_stretched_over_the_image() {
+    let mut textures = Textures::default();
+    upload(
+        &mut textures,
+        TextureHandle(3),
+        &color_texture(16, 16, |_, _| [255, 255, 255, 255]),
+    );
+    upload(
+        &mut textures,
+        TextureHandle(4),
+        &mask_texture(8, 8, |x, _| match x < 4 {
+            true => 255,
+            false => 0,
+        }),
+    );
+    let mut layer = Layer::filled(16, 16, [0.0; 4]);
+    let image = ImageInstance {
+        source: TextureRef::Persistent(TextureHandle(3)),
+        bounds: rect(0.0, 0.0, 16.0, 16.0),
+        texels: rect(0.0, 0.0, 16.0, 16.0),
+        radius: 0.0,
+        opacity: 1.0,
+        clip: None,
+        clip_radius: 0.0,
+        blend: aqua_graph::Blend::Replace,
+        linear: aqua_graph::Linear2::IDENTITY,
+        mask: Some(ImageMask {
+            source: TextureRef::Persistent(TextureHandle(4)),
+            offset: [0.0, 0.0],
+            scale: [0.5, 0.5],
+        }),
+    };
+    draw_images(&mut layer, &textures, &[image]);
+    for y in 1..15usize {
+        for x in 1..6usize {
+            assert_eq!(layer.pixels[y * 16 + x][3], 1.0, "({x},{y})");
+        }
+        for x in 9..16usize {
+            assert_eq!(layer.pixels[y * 16 + x][3], 0.0, "({x},{y})");
+        }
+    }
 }
 
 #[test]

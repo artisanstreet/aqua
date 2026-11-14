@@ -395,6 +395,11 @@ pub enum DisplayItem {
         radius: f32,
         corners: crate::geometry::CornerRadii,
     },
+    BackdropBlurPath {
+        transformed_window_logical_bounds: Rect,
+        path: std::sync::Arc<crate::vector::GpuiPath>,
+        radius: f32,
+    },
     /// In-app backdrop blur of content behind this rect.
     BackdropBlur {
         /// Area to blur.
@@ -506,6 +511,10 @@ impl DisplayItem {
                 Some(r)
             }
             DisplayItem::GpuiPath {
+                transformed_window_logical_bounds,
+                ..
+            }
+            | DisplayItem::BackdropBlurPath {
                 transformed_window_logical_bounds,
                 ..
             } => Some(*transformed_window_logical_bounds),

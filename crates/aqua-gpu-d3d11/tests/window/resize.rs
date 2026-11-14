@@ -41,6 +41,7 @@ fn blurred(extent: Extent) -> FramePlan {
             },
             radius: 16.0,
             corner_radius: 12.0,
+            mask: None,
         }),
     ];
     plan_paint(extent, Oklch::from_hex("#20242c").unwrap(), &commands).unwrap()

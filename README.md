@@ -35,7 +35,7 @@ fn main() -> Result<(), aqua::Error> {
 }
 ```
 
-Add `aqua = "1"` to your `Cargo.toml` (Rust 1.93 or newer). Run `cargo run -p aqua --example showcase` for the full surface, or `todo` and `collections` with `-- --headless` to watch them run without a display. The guides live in [`docs/`](docs/GETTING_STARTED.md) and the design in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+Aqua isn't published on crates.io; pin it from GitHub instead, with `aqua = { git = "https://github.com/artisanstreet/aqua", rev = "<commit>" }` in your `Cargo.toml` (Rust 1.93 or newer). Run `cargo run -p aqua --example showcase` for the full surface, or `todo` and `collections` with `-- --headless` to watch them run without a display. The guides live in [`docs/`](docs/GETTING_STARTED.md) and the design in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ---
 
@@ -44,4 +44,4 @@ We welcome you to open issues for bugs and issues, or feature requests. Pull req
 accept them from anyone but Artisan Street staff. AI written or assisted issues are welcome.
 
 #### About licensing
-Aqua is licensed under [BSD-3](LICENSE). If your company builds on it, we'd appreciate you reaching out to us first; we're happy to work out an arrangement.
+Aqua is licensed under [BSD-3](LICENSE).

@@ -20,6 +20,7 @@ fn text_node(generation: u32) -> A11yNode {
             w: 100.0,
             h: 20.0,
         }),
+        scroll: aqua_core::Point::ZERO,
         children: vec![],
         text: Some(A11yText {
             selection_enabled: true,
@@ -172,4 +173,78 @@ fn changed_snapshots_only_publish_changed_nodes_and_keep_text_actions_live() {
         bridge.snapshot(&update).unwrap().nodes.len(),
         initial.nodes.len()
     );
+}
+
+fn region() -> NodeId {
+    NodeId::from_raw(RawId {
+        index: 3,
+        generation: 0,
+    })
+}
+
+fn scrolled_list(offset: f32, moved: f32) -> AccessTreeUpdate {
+    let mut row = text_node(0);
+    let mut shift = |rect: &mut Rect| rect.y -= moved;
+    row.bounds.iter_mut().for_each(&mut shift);
+    row.text
+        .iter_mut()
+        .flat_map(|text| text.runs.iter_mut())
+        .for_each(|run| shift(&mut run.bounds));
+    AccessTreeUpdate {
+        root: region(),
+        focus: region(),
+        nodes: vec![
+            A11yNode {
+                semantic: SemanticNode::new(region(), Role::ScrollRegion),
+                bounds: Some(Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 200.0,
+                    h: 100.0,
+                }),
+                scroll: aqua_core::Point::new(0.0, offset),
+                children: vec![owner(0)],
+                text: None,
+            },
+            row,
+        ],
+    }
+}
+
+fn published(bridge: &A11yBridge, update: &AccessTreeUpdate) -> Vec<AkNodeId> {
+    bridge
+        .snapshot(update)
+        .map(|snapshot| snapshot.nodes.iter().map(|(id, _)| *id).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn scrolling_republishes_only_the_scroll_region_and_keeps_window_bounds() {
+    let bridge = A11yBridge::new(std::sync::Arc::new(|| {}));
+    bridge.connect();
+    assert!(bridge.snapshot(&scrolled_list(0.0, 0.0)).is_some());
+    let scrolled = scrolled_list(30.0, 30.0);
+    assert_eq!(published(&bridge, &scrolled), vec![pack_node_id(region())]);
+    let root = aqua_a11y_uia::inspect(&scrolled).unwrap();
+    assert_eq!(root.bounds, Some([0.0, 0.0, 200.0, 100.0]));
+    let row = &root.children[0];
+    assert_eq!(row.bounds, Some([10.0, -10.0, 110.0, 10.0]));
+    assert_eq!(row.children[0].bounds, Some([10.0, -10.0, 70.0, 10.0]));
+}
+
+#[test]
+fn reanchoring_a_list_republishes_its_rows_but_not_their_contents() {
+    let bridge = A11yBridge::new(std::sync::Arc::new(|| {}));
+    bridge.connect();
+    let initial = bridge.snapshot(&scrolled_list(30.0, 30.0)).unwrap();
+    let run = initial.nodes[1].1.children()[0];
+    let reanchored = scrolled_list(430.0, 30.0);
+    let changed = published(&bridge, &reanchored);
+    assert_eq!(
+        changed,
+        vec![pack_node_id(region()), pack_node_id(owner(0))]
+    );
+    assert!(!changed.contains(&run));
+    let row = &aqua_a11y_uia::inspect(&reanchored).unwrap().children[0];
+    assert_eq!(row.bounds, Some([10.0, -10.0, 110.0, 10.0]));
 }

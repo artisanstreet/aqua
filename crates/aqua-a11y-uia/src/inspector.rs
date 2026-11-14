@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use accesskit::{Action, Node, NodeId as AkNodeId, Toggled};
+use accesskit::{Action, Affine, Node, NodeId as AkNodeId, Toggled};
 use aqua_protocol::AccessTreeUpdate;
 
 use crate::tree::build_tree_update;
@@ -39,6 +39,7 @@ fn convert(
     id: AkNodeId,
     nodes: &HashMap<AkNodeId, &Node>,
     focus: AkNodeId,
+    space: Affine,
     visited: &mut Vec<AkNodeId>,
 ) -> Option<InspectorNode> {
     let node = nodes.get(&id)?;
@@ -46,10 +47,13 @@ fn convert(
         return None;
     }
     visited.push(id);
+    let space = node
+        .transform()
+        .map_or(space, |transform| space * *transform);
     let children = node
         .children()
         .iter()
-        .filter_map(|child| convert(*child, nodes, focus, visited))
+        .filter_map(|child| convert(*child, nodes, focus, space, visited))
         .collect();
     Some(InspectorNode {
         id: id.0,
@@ -70,7 +74,10 @@ fn convert(
         disabled: node.is_disabled(),
         focused: id == focus,
         numeric: node.numeric_value(),
-        bounds: node.bounds().map(|r| [r.x0, r.y0, r.x1, r.y1]),
+        bounds: node.bounds().map(|bounds| {
+            let r = space.transform_rect_bbox(bounds);
+            [r.x0, r.y0, r.x1, r.y1]
+        }),
         actions: ACTIONS
             .iter()
             .filter(|(action, _)| node.supports_action(*action))
@@ -85,7 +92,7 @@ pub fn inspect(update: &AccessTreeUpdate) -> Option<InspectorNode> {
     let nodes: HashMap<AkNodeId, &Node> =
         built.nodes.iter().map(|(id, node)| (*id, node)).collect();
     let root = built.tree.as_ref()?.root;
-    convert(root, &nodes, built.focus, &mut Vec::new())
+    convert(root, &nodes, built.focus, Affine::IDENTITY, &mut Vec::new())
 }
 
 pub fn render_text(root: &InspectorNode) -> String {

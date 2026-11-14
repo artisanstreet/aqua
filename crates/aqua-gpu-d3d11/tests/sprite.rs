@@ -56,6 +56,7 @@ fn image_parameters_carry_radius_and_opacity() {
         clip_radius: 0.0,
         blend: aqua_graph::Blend::Over,
         linear: aqua_graph::Linear2::IDENTITY,
+        mask: None,
     };
     let packed = pack_image(&image);
     assert_eq!(&packed.tail[..2], &[4.0, 0.25]);

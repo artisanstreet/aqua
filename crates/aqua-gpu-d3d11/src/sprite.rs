@@ -94,9 +94,11 @@ pub fn pack_image(image: &ImageInstance) -> SpriteGpu {
             image.radius,
             image.opacity,
             image.clip.map_or(0.0, |_| image.clip_radius),
-            0.0,
+            f32::from(u8::from(image.mask.is_some())),
         ],
-        extra: image.linear.pack(),
+        extra: image.mask.map_or(image.linear.pack(), |mask| {
+            [mask.offset[0], mask.offset[1], mask.scale[0], mask.scale[1]]
+        }),
     }
 }
 

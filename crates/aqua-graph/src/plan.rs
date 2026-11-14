@@ -226,6 +226,13 @@ pub enum Blend {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageMask {
+    pub source: TextureRef,
+    pub offset: [f32; 2],
+    pub scale: [f32; 2],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImageInstance {
     pub source: TextureRef,
     pub bounds: Rect,
@@ -236,6 +243,7 @@ pub struct ImageInstance {
     pub clip_radius: f32,
     pub blend: Blend,
     pub linear: Linear2,
+    pub mask: Option<ImageMask>,
 }
 
 impl ImageInstance {

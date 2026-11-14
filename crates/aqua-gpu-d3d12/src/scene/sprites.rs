@@ -55,10 +55,11 @@ pub fn image_runs(
     std::iter::from_fn(move || {
         let first = instances.get(index)?;
         let start = index;
-        while instances
-            .get(index)
-            .is_some_and(|next| next.source == first.source && next.blend == first.blend)
-        {
+        while instances.get(index).is_some_and(|next| {
+            next.source == first.source
+                && next.blend == first.blend
+                && next.mask.map(|mask| mask.source) == first.mask.map(|mask| mask.source)
+        }) {
             index += 1;
         }
         Some((first.source, first.blend, start as u32..index as u32))

@@ -153,6 +153,7 @@ fn mix(
         clip_radius: 0.0,
         blend: Blend::Replace,
         linear: crate::linear::Linear2::IDENTITY,
+        mask: None,
     };
     graph.push(Pass::new(
         PassKind::Images {

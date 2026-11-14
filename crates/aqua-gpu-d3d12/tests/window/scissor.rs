@@ -291,6 +291,7 @@ fn blurred_scene(extent: Extent, step: u32) -> FramePlan {
             bounds: BLUR,
             radius: 6.0,
             corner_radius: 8.0,
+            mask: None,
         }),
         quad(60.0, 120.0, 40.0, 16.0, "#22c55e", 0.0),
     ];

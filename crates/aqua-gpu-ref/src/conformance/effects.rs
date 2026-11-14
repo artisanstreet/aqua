@@ -485,6 +485,7 @@ fn compute_case() -> Case {
                 clip_radius: 0.0,
                 blend: Blend::Over,
                 linear: aqua_graph::Linear2::IDENTITY,
+                mask: None,
             }],
         },
         vec![blurred],

@@ -149,6 +149,7 @@ pub fn backdrop_blur(bounds: Rect, radius: f32, corner_radius: f32) -> PaintComm
         bounds,
         radius,
         corner_radius,
+        mask: None,
     })
 }
 

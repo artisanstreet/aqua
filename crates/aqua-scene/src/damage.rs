@@ -240,6 +240,8 @@ impl DamageTracker {
             | DisplayItem::PopGpuiTextColor
             | DisplayItem::PushGpuiTextOpacity(_)
             | DisplayItem::PopGpuiTextOpacity
+            | DisplayItem::PushGpuiTextSelection(_)
+            | DisplayItem::PopGpuiTextSelection
             | DisplayItem::PushGpuiSourceTextColor(_)
             | DisplayItem::PopGpuiSourceTextColor
             | DisplayItem::PushGpuiQuadPulse(_)
@@ -378,6 +380,8 @@ fn reason_of(item: &DisplayItem) -> InvalidationReason {
         | DisplayItem::PopGpuiTextColor
         | DisplayItem::PushGpuiTextOpacity(_)
         | DisplayItem::PopGpuiTextOpacity
+        | DisplayItem::PushGpuiTextSelection(_)
+        | DisplayItem::PopGpuiTextSelection
         | DisplayItem::PushGpuiSourceTextColor(_)
         | DisplayItem::PopGpuiSourceTextColor
         | DisplayItem::PushGpuiQuadPulse(_)

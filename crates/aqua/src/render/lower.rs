@@ -2052,6 +2052,10 @@ impl Lowering {
             DisplayItem::PopGpuiTextColor => self.pop_text(TextScope::Color, walk),
             DisplayItem::PushGpuiTextOpacity(ranges) => self.text.push_opacity(ranges.clone()),
             DisplayItem::PopGpuiTextOpacity => self.pop_text(TextScope::Opacity, walk),
+            DisplayItem::PushGpuiTextSelection(selection) => {
+                self.text.push_selection(selection.clone())
+            }
+            DisplayItem::PopGpuiTextSelection => self.pop_text(TextScope::Selection, walk),
             DisplayItem::PushGpuiSourceTextColor(color) => self.text.push_source(*color),
             DisplayItem::PopGpuiSourceTextColor => self.pop_text(TextScope::SourceColor, walk),
         }
@@ -2381,6 +2385,9 @@ impl Lowering {
         (plain, phase, map_bounds, scale, center): (bool, f32, Rect, f32, f32),
         last_color: &mut Option<([f32; 4], Oklch)>,
     ) -> Oklch {
+        if let Some(ink) = self.text.selection_ink(glyph) {
+            return color::oklch(color::with_alpha(ink, factor));
+        }
         match plain && glyph_is_plain(glyph) {
             true => with_factor(scene_color, factor),
             false => {
@@ -2929,6 +2936,7 @@ fn scope_kind(item: &DisplayItem) -> ScopeKind {
         | DisplayItem::PushGpuiTextShimmer(_)
         | DisplayItem::PushGpuiTextColor(_)
         | DisplayItem::PushGpuiTextOpacity(_)
+        | DisplayItem::PushGpuiTextSelection(_)
         | DisplayItem::PushGpuiSourceTextColor(_)
         | DisplayItem::PushGpuiQuadPulse(_) => ScopeKind::Open(Nesting::Other),
         DisplayItem::PopOpacity
@@ -2937,6 +2945,7 @@ fn scope_kind(item: &DisplayItem) -> ScopeKind {
         | DisplayItem::PopGpuiTextColorMap
         | DisplayItem::PopGpuiTextColor
         | DisplayItem::PopGpuiTextOpacity
+        | DisplayItem::PopGpuiTextSelection
         | DisplayItem::PopGpuiSourceTextColor
         | DisplayItem::PopGpuiQuadPulse => ScopeKind::Close(Nesting::Other),
         _ => ScopeKind::Leaf,

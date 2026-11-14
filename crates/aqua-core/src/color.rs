@@ -346,9 +346,75 @@ pub enum GpuiBackground {
     },
 }
 
+impl GpuiBackground {
+    #[must_use]
+    pub fn slice(self, whole: crate::geometry::Rect, part: crate::geometry::Rect) -> Self {
+        let Self::LinearGradient {
+            angle,
+            color_space,
+            stops,
+        } = self
+        else {
+            return self;
+        };
+        let (sin, cos) = angle.to_radians().sin_cos();
+        let axis = |rect: crate::geometry::Rect| {
+            let center = rect.center();
+            let middle = center.x * sin - center.y * cos;
+            let half = ((rect.w * sin).abs() + (rect.h * cos).abs()) * 0.5;
+            (middle - half, 2.0 * half)
+        };
+        let (whole_start, whole_length) = axis(whole);
+        let (part_start, part_length) = axis(part);
+        match whole_length > f32::EPSILON && part_length > f32::EPSILON {
+            false => self,
+            true => Self::LinearGradient {
+                angle,
+                color_space,
+                stops: stops.map(|stop| GpuiGradientStop {
+                    percentage: (whole_start + stop.percentage * whole_length - part_start)
+                        / part_length,
+                    ..stop
+                }),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stacked_slices_meet_at_the_same_gradient_position() {
+        let gradient = GpuiBackground::LinearGradient {
+            angle: 180.0,
+            color_space: GpuiGradientColorSpace::Srgb,
+            stops: [0.0, 1.0].map(|percentage| GpuiGradientStop {
+                percentage,
+                color: GpuiHsla {
+                    h: 0.6,
+                    s: 0.5,
+                    l: percentage,
+                    a: 1.0,
+                },
+            }),
+        };
+        let rect = |x, y, w, h| crate::geometry::Rect { x, y, w, h };
+        let whole = rect(0.0, 0.0, 100.0, 40.0);
+        let position = |part: crate::geometry::Rect, t: f32| match gradient.slice(whole, part) {
+            GpuiBackground::LinearGradient { stops, .. } => {
+                (t - stops[0].percentage) / (stops[1].percentage - stops[0].percentage)
+            }
+            GpuiBackground::Solid(_) => f32::NAN,
+        };
+        let first = rect(20.0, 0.0, 80.0, 20.0);
+        let second = rect(0.0, 20.0, 50.0, 20.0);
+        assert!((position(first, 0.0) - 0.0).abs() < 1.0e-6);
+        assert!((position(first, 1.0) - 0.5).abs() < 1.0e-6);
+        assert!((position(second, 0.0) - 0.5).abs() < 1.0e-6);
+        assert!((position(second, 1.0) - 1.0).abs() < 1.0e-6);
+    }
 
     #[test]
     fn const_color_construction_normalizes_hue_and_alpha() {

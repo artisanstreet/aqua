@@ -5,13 +5,14 @@ Native where it counts (text, input, accessibility, windowing), and free to draw
 
 **Verbose, signal based reactivity system.** No implicit subscribes or changes, and every signal needs to declare its dependency array, and the cost of an update is localized.
 
-**A better alternative to keyframes.** <-->
+**A better alternative to keyframes.** Motion is spring curves evaluated on a dedicated render thread, so animations stay smooth even when your app is busy.
 
 **Native text rendering.** Aqua uses the direct text renderer the operating system uses, and ensures you get the best possible rasterized text.
 
 **Sensible defaults.** One way to represent text, one way to represent motion, and one way to represent structure.
 
-**Deterministic all the way down.** 
+**Deterministic all the way down.** The core has no clock, threads or I/O of its own, so any session can be recorded, replayed and compared pixel for pixel.
+
 ```rust
 use aqua::{Aqua, Context, IntoView, px};
 

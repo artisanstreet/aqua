@@ -9,7 +9,7 @@ use aqua_media::hash::FastHasher;
 
 use crate::shape::{scaled_line_height, shape_paragraph, ShapeContext, ShapedParagraph, SpanText};
 use crate::shape_cache::paragraph_key;
-use crate::style::{LineMode, StyledSpan, TextAlign, TextStyle, WrapMode};
+use crate::style::{LineMode, SpanBackground, StyledSpan, TextAlign, TextStyle, WrapMode};
 
 #[derive(Clone, Debug)]
 pub struct LaidGlyph {
@@ -112,7 +112,7 @@ pub struct TextDecoration {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextBackground {
     pub bounds: Rect,
-    pub color_hsla: [f32; 4],
+    pub fill: SpanBackground,
 }
 
 pub struct TextLayout {
@@ -777,7 +777,7 @@ impl TextLayout {
                     s.source_color_hsla
                         .map(|v| v.map(f32::to_bits))
                         .hash(hasher);
-                    s.background_hsla.map(|v| v.map(f32::to_bits)).hash(hasher);
+                    s.background.hash(hasher);
                     s.inline_cell_width().map(f32::to_bits).hash(hasher);
                     s.style.identity_hash(hasher);
                 }
@@ -888,7 +888,7 @@ impl TextLayout {
             .fold(0.0f32, f32::max);
         let container = width_px.unwrap_or(max_content);
         let colors = span_colors(&self.spans);
-        let needs_background_metrics = self.spans.iter().any(|span| span.background_hsla.is_some());
+        let needs_background_metrics = self.spans.iter().any(|span| span.background.is_some());
         let finish_key = |paragraph: &ShapedParagraph| FinishKey {
             container_bits: container.to_bits(),
             align: self.align,
@@ -1107,7 +1107,7 @@ impl TextLayout {
         let mut output = Vec::new();
         let mut span_index = 0;
         let mut run_end = 0;
-        let mut current: Option<(f32, [f32; 4])> = None;
+        let mut current: Option<(f32, SpanBackground)> = None;
         for (line_index, line) in laid.lines.iter().enumerate() {
             for glyph in &line.glyphs {
                 if glyph.src_byte_start < run_end {
@@ -1118,13 +1118,13 @@ impl TextLayout {
                     span_index += 1;
                     run_end += span.text.len();
                     if glyph.src_byte_start < run_end {
-                        style = Some(span.background_hsla);
+                        style = Some(span.background);
                         break;
                     }
                 }
                 let background = style.flatten();
                 if current.as_ref().map(|(_, color)| *color) != background {
-                    if let Some((mut x, color_hsla)) = current.take() {
+                    if let Some((mut x, fill)) = current.take() {
                         let width = glyph.x - x;
                         if width == 0.0 {
                             x -= glyph
@@ -1139,7 +1139,7 @@ impl TextLayout {
                                 w: width,
                                 h: line.height,
                             },
-                            color_hsla,
+                            fill,
                         });
                     }
                     if let Some(color) = background {
@@ -1147,7 +1147,7 @@ impl TextLayout {
                     }
                 }
             }
-            if let Some((mut x, color_hsla)) = current.take() {
+            if let Some((mut x, fill)) = current.take() {
                 let next = laid
                     .lines
                     .get(line_index + 1)
@@ -1172,10 +1172,10 @@ impl TextLayout {
                         w: width,
                         h: line.height,
                     },
-                    color_hsla,
+                    fill,
                 });
                 if next.is_some_and(|glyph| glyph.src_byte_start < run_end) {
-                    current = Some((0.0, color_hsla));
+                    current = Some((0.0, fill));
                 }
             }
         }

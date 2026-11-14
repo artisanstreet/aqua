@@ -43,6 +43,13 @@ use aqua_ui::{
     tree::{ActionEvent, ActionKind, NodeKind, TextBacking, TextContent, UiTree},
 };
 
+const SELECTION_FALLBACK: aqua_core::GpuiHsla = aqua_core::GpuiHsla {
+    h: 0.6056,
+    s: 0.83,
+    l: 0.55,
+    a: 0.35,
+};
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct InputDispatchOutcome {
     pub consumed: bool,
@@ -2246,11 +2253,7 @@ impl Runtime {
             let Some(entry) = self.text_runs.get(&node) else {
                 continue;
             };
-            if !entry
-                .spans
-                .iter()
-                .any(|span| span.background_hsla.is_some())
-            {
+            if !entry.spans.iter().any(|span| span.background.is_some()) {
                 continue;
             }
             let Some(origin) = self.text_origin(node) else {
@@ -2331,7 +2334,14 @@ impl Runtime {
                     }
                     remaining = next;
                 }
-                let [h, s, l, a] = background.color_hsla;
+                let fill = match background.fill {
+                    aqua_text::SpanBackground::Solid([h, s, l, a]) => {
+                        aqua_core::GpuiBackground::Solid(aqua_core::GpuiHsla { h, s, l, a })
+                    }
+                    aqua_text::SpanBackground::Selection => self
+                        .selection_background
+                        .unwrap_or(aqua_core::GpuiBackground::Solid(SELECTION_FALLBACK)),
+                };
                 for (part, bounds) in remaining.into_iter().enumerate() {
                     output.push((
                         SceneKey::TextBackground {
@@ -2342,12 +2352,7 @@ impl Runtime {
                         DisplayItem::GpuiBackground {
                             bounds,
                             corners: aqua_core::CornerRadii::uniform(0.0),
-                            background: aqua_core::GpuiBackground::Solid(aqua_core::GpuiHsla {
-                                h,
-                                s,
-                                l,
-                                a,
-                            }),
+                            background: fill,
                         },
                     ));
                 }

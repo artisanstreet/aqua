@@ -141,6 +141,24 @@ impl TextStyle {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SpanBackground {
+    Solid([f32; 4]),
+    Selection,
+}
+
+impl std::hash::Hash for SpanBackground {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Solid(hsla) => {
+                state.write_u8(0);
+                hsla.map(f32::to_bits).hash(state);
+            }
+            Self::Selection => state.write_u8(1),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct StyledSpan {
     inline_cell_width: Option<f32>,
@@ -148,7 +166,7 @@ pub struct StyledSpan {
     pub color_srgb: Option<[u8; 4]>,
     pub color_hsla: Option<[f32; 4]>,
     pub source_color_hsla: Option<[f32; 4]>,
-    pub background_hsla: Option<[f32; 4]>,
+    pub background: Option<SpanBackground>,
     pub text: String,
     pub style: TextStyle,
 }
@@ -198,7 +216,11 @@ impl StyledSpan {
         self
     }
     pub fn gpui_background(mut self, hsla: [f32; 4]) -> Self {
-        self.background_hsla = Some(hsla);
+        self.background = Some(SpanBackground::Solid(hsla));
+        self
+    }
+    pub fn selection_background(mut self) -> Self {
+        self.background = Some(SpanBackground::Selection);
         self
     }
     pub fn new(text: impl Into<String>, style: TextStyle) -> Self {
@@ -208,7 +230,7 @@ impl StyledSpan {
             color_srgb: None,
             color_hsla: None,
             source_color_hsla: None,
-            background_hsla: None,
+            background: None,
             text: text.into(),
             style,
         }
@@ -221,7 +243,7 @@ impl StyledSpan {
             color_srgb: None,
             color_hsla: None,
             source_color_hsla: None,
-            background_hsla: None,
+            background: None,
             text: text.into(),
             style: TextStyle::default(),
         }

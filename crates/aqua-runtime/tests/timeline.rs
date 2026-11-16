@@ -88,6 +88,42 @@ fn rebuilding_with_the_same_timeline_keeps_the_run_going() {
 }
 
 #[test]
+fn rebuilding_every_frame_only_to_change_paint_is_reported() {
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime.set_viewport(200.0, 100.0, 1.0);
+    let element = |opacity: f32| {
+        UiBox::new()
+            .style(
+                Style::new()
+                    .width(px(50.0))
+                    .height(px(20.0))
+                    .opacity(opacity),
+            )
+            .build()
+            .with_key("pulsing")
+    };
+    runtime
+        .mount(move |_| UiBox::new().child(element(0.0)).build())
+        .unwrap();
+    runtime.build_frame().unwrap();
+    let mut reports = Vec::new();
+    for frame in 1..=40 {
+        runtime.advance_clock(f64::from(frame) / 60.0);
+        runtime
+            .refresh_subtree("pulsing", element(frame as f32 / 40.0))
+            .unwrap();
+        runtime.build_frame().unwrap();
+        reports.extend(runtime.take_diagnostics());
+    }
+    let reported: Vec<_> = reports
+        .iter()
+        .filter(|line| line.contains("Timeline"))
+        .collect();
+    assert_eq!(reported.len(), 1);
+    assert!(reported[0].contains("pulsing"));
+}
+
+#[test]
 fn reduced_motion_shows_the_resting_paint_at_once() {
     let mut runtime = mounted(fade());
     runtime

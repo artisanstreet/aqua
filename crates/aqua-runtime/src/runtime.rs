@@ -368,6 +368,7 @@ pub struct Runtime {
     frame_work: FrameWork,
     frame_work_window: Option<FrameWorkWindow>,
     diagnostics: Vec<String>,
+    paint_rebuilds: PaintRebuilds,
     bridge: machine::Bridge,
 }
 
@@ -518,6 +519,7 @@ impl Runtime {
             frame_work: FrameWork::default(),
             frame_work_window: None,
             diagnostics: Vec::new(),
+            paint_rebuilds: PaintRebuilds::default(),
             bridge: machine::Bridge::new(),
         }
     }
@@ -895,9 +897,11 @@ impl Runtime {
         let Some(view) = self.view.as_mut() else {
             return Err(RuntimeError::NoViewMounted);
         };
+        let before = self.paint_rebuilds.before(&self.tree);
         view.set_content(&mut self.tree, elements)
             .map_err(RuntimeError::Mount)?;
         self.tree.drain_commands();
+        self.paint_rebuilds.after(&self.tree, before, "the root");
         Ok(())
     }
 
@@ -912,14 +916,18 @@ impl Runtime {
         let Some(view) = self.view.as_mut() else {
             return Err(RuntimeError::NoViewMounted);
         };
-        let hash = aqua_ui::tree::hash_key(key.into());
+        let key = key.into();
+        let label = format!("subtree {key:?}");
+        let hash = aqua_ui::tree::hash_key(key);
         let Some(node) = self.tree.sole_node_with_key(hash) else {
             return Ok(false);
         };
+        let before = self.paint_rebuilds.before(&self.tree);
         let refreshed = view
             .refresh_subtree(&mut self.tree, node, element)
             .map_err(RuntimeError::Mount)?;
         self.tree.drain_commands();
+        self.paint_rebuilds.after(&self.tree, before, &label);
         Ok(refreshed)
     }
 
@@ -1340,6 +1348,9 @@ impl Runtime {
         self.reconcile_motion();
         let reduced = self.host.motion().reduced_motion() == aqua_ui::motion::ReducedMotion::Reduce;
         let timelines = self.tree.advance_timelines(self.clock, reduced);
+        if let Some(line) = self.paint_rebuilds.frame() {
+            self.diagnostics.push(line);
+        }
         let version = (
             self.tree.scene_version(),
             self.scale.to_bits(),
@@ -3079,5 +3090,39 @@ mod style_decoration_tests {
             })
             .collect();
         assert_eq!(order, ["ink", "text", "end"]);
+    }
+}
+
+const PAINT_REBUILD_STREAK: u32 = 30;
+
+#[derive(Default)]
+struct PaintRebuilds {
+    pending: Option<String>,
+    streak: u32,
+}
+
+impl PaintRebuilds {
+    fn before(&self, tree: &aqua_ui::tree::UiTree) -> (u64, u64) {
+        (tree.layout_version(), tree.content_version())
+    }
+
+    fn after(&mut self, tree: &aqua_ui::tree::UiTree, (layout, content): (u64, u64), what: &str) {
+        if tree.layout_version() == layout && tree.content_version() != content {
+            self.pending.get_or_insert_with(|| what.to_owned());
+        }
+    }
+
+    fn frame(&mut self) -> Option<String> {
+        let Some(what) = self.pending.take() else {
+            self.streak = 0;
+            return None;
+        };
+        self.streak += 1;
+        (self.streak == PAINT_REBUILD_STREAK).then(|| {
+            format!(
+                "aqua: {what} was rebuilt on {PAINT_REBUILD_STREAK} frames in a row only to change paint; \
+                 animate it with a Timeline instead of rebuilding each frame"
+            )
+        })
     }
 }

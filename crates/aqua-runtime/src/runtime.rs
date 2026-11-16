@@ -1338,6 +1338,8 @@ impl Runtime {
         self.follow_external_text_carets();
         self.host.reanchor_all(&mut self.tree);
         self.reconcile_motion();
+        let reduced = self.host.motion().reduced_motion() == aqua_ui::motion::ReducedMotion::Reduce;
+        let timelines = self.tree.advance_timelines(self.clock, reduced);
         let version = (
             self.tree.scene_version(),
             self.scale.to_bits(),
@@ -1489,6 +1491,7 @@ impl Runtime {
             self.host.motion_deadline(now),
             self.selection_deadline(),
             self.tooltip_deadline(),
+            timelines.then_some(now),
         ]
         .into_iter()
         .flatten()

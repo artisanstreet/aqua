@@ -2539,21 +2539,13 @@ impl Runtime {
         };
         let layout = handle.layout;
         let mut out = Vec::new();
+        let mut inked = None;
         if let Some(sel @ Selection { .. }) = selection {
             let (a, b) = (sel.anchor.min(sel.caret), sel.anchor.max(sel.caret));
-            if let Some(ink) = self.selection_ink.filter(|_| a < b) {
-                out.push((
-                    SceneKey::SelectionInkStart { node: focused },
-                    DisplayItem::PushGpuiTextSelection(aqua_core::scene::GpuiTextSelection {
-                        bytes: a..b,
-                        ink,
-                    }),
-                ));
-                out.push((
-                    SceneKey::SelectionInkEnd { node: focused },
-                    DisplayItem::PopGpuiTextSelection,
-                ));
-            }
+            inked = self
+                .selection_ink
+                .filter(|_| a < b)
+                .map(|ink| aqua_core::scene::GpuiTextSelection { bytes: a..b, ink });
             let fill = appearance
                 .map(|appearance| appearance.selection)
                 .unwrap_or_else(|| {
@@ -2685,6 +2677,19 @@ impl Runtime {
             out.push((
                 SceneKey::CaretOpacityEnd { node: focused },
                 DisplayItem::PopOpacity,
+            ));
+        }
+        if let Some(selection) = inked {
+            out.insert(
+                0,
+                (
+                    SceneKey::SelectionInkStart { node: focused },
+                    DisplayItem::PushGpuiTextSelection(selection),
+                ),
+            );
+            out.push((
+                SceneKey::SelectionInkEnd { node: focused },
+                DisplayItem::PopGpuiTextSelection,
             ));
         }
         out
@@ -3090,6 +3095,21 @@ mod style_decoration_tests {
             })
             .collect();
         assert_eq!(order, ["ink", "text", "end"]);
+        let mut open = Vec::new();
+        for (_, item) in app.scene.ordered() {
+            match item {
+                DisplayItem::PushClip { .. } | DisplayItem::PushGpuiContentMask { .. } => {
+                    open.push("clip");
+                }
+                DisplayItem::PushGpuiTextSelection(_) => open.push("ink"),
+                DisplayItem::PushOpacity(_) => open.push("opacity"),
+                DisplayItem::PopClip => assert_eq!(open.pop(), Some("clip")),
+                DisplayItem::PopGpuiTextSelection => assert_eq!(open.pop(), Some("ink")),
+                DisplayItem::PopOpacity => assert_eq!(open.pop(), Some("opacity")),
+                _ => {}
+            }
+        }
+        assert!(open.is_empty());
     }
 }
 

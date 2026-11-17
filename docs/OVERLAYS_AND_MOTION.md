@@ -196,6 +196,11 @@ Style::new().timeline(
   timeline is built with `hold`, which keeps its last keys applied.
   Reduced motion ends every run at once.
 
+Rebuilding elements every frame to animate paint is the mistake this
+replaces. The runtime reports it: when the app re-sends elements on 30
+frames in a row and every one of them changed paint but no layout,
+`take_diagnostics` carries one line naming the subtree.
+
 ## 4. Review responses (applied)
 
 - **f64 seconds clock**: done (`Seconds` + `Duration` conveniences +

@@ -2524,12 +2524,9 @@ impl Lowering {
         };
         for raster in self.vectors.tiles(raster) {
             let resident = std::time::Instant::now();
-            let slot = self.residency.vector(
-                &raster.source,
-                raster.width,
-                raster.height,
-                mode,
-            );
+            let slot = self
+                .residency
+                .vector(&raster.source, raster.width, raster.height, mode);
             crate::profile::note(|| {
                 format!(
                     "path_raster={}x{} describe_us={} resident_us={} style={}",
@@ -2555,16 +2552,17 @@ impl Lowering {
                                 bounds: raster.placement,
                                 texels: texel_rect(&placement, full_source()),
                                 color,
-                            }].into(),
+                            }]
+                            .into(),
                         })),
                         None => push_image(
-                        &mut walk.out,
-                        &placement,
-                        raster.placement,
-                        full_source(),
-                        1.0,
-                        0.0,
-                    ),
+                            &mut walk.out,
+                            &placement,
+                            raster.placement,
+                            full_source(),
+                            1.0,
+                            0.0,
+                        ),
                     }
                 }
                 Ok(Slot::Blank { .. }) => {}

@@ -155,6 +155,8 @@ fn a_shimmer_keeps_its_clock_while_another_region_repaints() {
     assert!(report.shimmering);
     lowering.set_cull(None);
     let (_, _, report) = lowering.commands(&scene, SIZE, 1.0, Instant::from_secs_f64(11.5));
-    let rest = report.still_micros.expect("the shimmer is still in its delay");
+    let rest = report
+        .still_micros
+        .expect("the shimmer is still in its delay");
     assert!((400_000..700_000).contains(&rest), "{rest}");
 }

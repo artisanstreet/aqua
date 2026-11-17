@@ -1959,7 +1959,9 @@ fn bind_new(
         let has_interaction_signal = bindings.iter().any(|binding| {
             matches!(
                 binding,
-                ElementBinding::Install(_) | ElementBinding::InteractionBool { .. } | ElementBinding::InteractionValue(_)
+                ElementBinding::Install(_)
+                    | ElementBinding::InteractionBool { .. }
+                    | ElementBinding::InteractionValue(_)
             )
         });
         let same = !has_interaction_signal

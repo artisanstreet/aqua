@@ -212,24 +212,32 @@ fn isolated_custom_effects_keep_backdrop_blur_inside_their_own_frame() {
     for (isolate_backdrop, expected) in [(false, [0, 0, 255, 255]), (true, [255, 0, 0, 255])] {
         let mut backend = RefBackend::new();
         let bounds = EXTENT.bounds();
-        let pixels = render(&mut backend, Oklch::TRANSPARENT, &[
-            quad(0.0, 0.0, 48.0, 32.0, "#0000ff", 1.0, 0.0, 0.0),
-            PaintCommand::PushCustomEffect {
-                bounds,
-                spec: CustomPassSpec {
-                    isolate_backdrop,
-                    reference: None,
-                    name: INVERT.into(),
-                    hlsl: String::new(),
-                    entry: "main".into(),
+        let pixels = render(
+            &mut backend,
+            Oklch::TRANSPARENT,
+            &[
+                quad(0.0, 0.0, 48.0, 32.0, "#0000ff", 1.0, 0.0, 0.0),
+                PaintCommand::PushCustomEffect {
                     bounds,
-                    params: vec![0.0],
+                    spec: CustomPassSpec {
+                        isolate_backdrop,
+                        reference: None,
+                        name: INVERT.into(),
+                        hlsl: String::new(),
+                        entry: "main".into(),
+                        bounds,
+                        params: vec![0.0],
+                    },
                 },
-            },
-            quad(0.0, 0.0, 48.0, 32.0, "#ff0000", 1.0, 0.0, 0.0),
-            backdrop_blur(rect(8.0, 8.0, 32.0, 16.0), 3.0, 4.0),
-            PaintCommand::PopCustomEffect,
-        ]);
-        assert_eq!(at(&pixels, 24, 16), expected, "isolated: {isolate_backdrop}");
+                quad(0.0, 0.0, 48.0, 32.0, "#ff0000", 1.0, 0.0, 0.0),
+                backdrop_blur(rect(8.0, 8.0, 32.0, 16.0), 3.0, 4.0),
+                PaintCommand::PopCustomEffect,
+            ],
+        );
+        assert_eq!(
+            at(&pixels, 24, 16),
+            expected,
+            "isolated: {isolate_backdrop}"
+        );
     }
 }

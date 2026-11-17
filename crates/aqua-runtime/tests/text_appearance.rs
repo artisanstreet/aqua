@@ -153,9 +153,14 @@ fn text_without_an_appearance_paints_its_selection_with_the_runtime_background()
         .tree_mut()
         .set_text_selection(node, Some(Selection::new(0, 3)));
     runtime.build_frame().unwrap();
-    assert!(!runtime.scene().ordered().any(|(_, item)| matches!(item, DisplayItem::GpuiBackground { .. })));
+    assert!(!runtime
+        .scene()
+        .ordered()
+        .any(|(_, item)| matches!(item, DisplayItem::GpuiBackground { .. })));
     runtime.set_selection_background(Some(background));
-    runtime.tree_mut().set_text_selection(node, Some(Selection::new(0, 4)));
+    runtime
+        .tree_mut()
+        .set_text_selection(node, Some(Selection::new(0, 4)));
     runtime.build_frame().unwrap();
     assert!(runtime.scene().ordered().any(|(_, item)| matches!(item, DisplayItem::GpuiBackground { background: painted, .. } if *painted == background)));
     let rects = runtime.selection_rects();
@@ -173,7 +178,12 @@ fn selection_rects_follow_the_text_when_its_container_scrolls() {
                 .style(Style::new().width(px(200.0)).height(px(100.0)))
                 .child(
                     UiBox::new()
-                        .style(Style::new().width(px(200.0)).height(px(1000.0)).flex_shrink(0.0))
+                        .style(
+                            Style::new()
+                                .width(px(200.0))
+                                .height(px(1000.0))
+                                .flex_shrink(0.0),
+                        )
                         .child(
                             Text::builder()
                                 .arg("hello")

@@ -2,6 +2,7 @@
 
 pub mod motion;
 mod paint;
+pub mod timeline;
 
 pub use paint::PaintValue;
 
@@ -115,6 +116,7 @@ pub struct GpuiBorder {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Paint {
     pub motion: Option<std::rc::Rc<crate::motion::MotionSpec>>,
+    pub timeline: Option<std::rc::Rc<crate::timeline::Timeline>>,
     pub gpui_quad_pulse: Option<aqua_core::scene::GpuiQuadPulse>,
     pub transform: Option<Transform2D>,
     pub content_blur: Option<f32>,
@@ -250,6 +252,7 @@ pub struct Style {
     opacity: Option<Option<f32>>,
     transform: Option<Option<Transform2D>>,
     content_blur: Option<Option<f32>>,
+    timeline: Option<Option<std::rc::Rc<crate::timeline::Timeline>>>,
     text_color_map: Option<Option<aqua_core::scene::TextColorMap>>,
     gpui_text_color_map: Option<Option<aqua_core::scene::GpuiTextColorMap>>,
     gpui_text_shimmer: Option<Option<aqua_core::scene::GpuiTextShimmer>>,
@@ -304,6 +307,7 @@ impl Style {
             opacity: None,
             transform: None,
             content_blur: None,
+            timeline: None,
             text_color_map: None,
             gpui_text_color_map: None,
             gpui_text_shimmer: None,
@@ -357,6 +361,7 @@ impl Style {
             && self.opacity.is_none()
             && self.transform.is_none()
             && self.content_blur.is_none()
+            && self.timeline.is_none()
             && self.text_color_map.is_none()
             && self.gpui_text_color_map.is_none()
             && self.gpui_text_shimmer.is_none()
@@ -801,6 +806,19 @@ impl Style {
         self
     }
 
+    #[must_use]
+    pub fn timeline(mut self, timeline: crate::timeline::Timeline) -> Self {
+        self.timeline = Some(Some(std::rc::Rc::new(timeline)));
+        self
+    }
+
+    #[must_use]
+    pub fn clear_timeline(mut self) -> Self {
+        self.timeline = Some(None);
+        self
+    }
+
+    #[must_use]
     pub const fn clear_content_blur(mut self) -> Self {
         self.content_blur = Some(None);
         self
@@ -957,6 +975,7 @@ impl Style {
         take!(opacity);
         take!(transform);
         take!(content_blur);
+        take!(timeline);
         take!(text_color_map);
         take!(gpui_text_color_map);
         take!(gpui_text_shimmer);
@@ -1100,6 +1119,9 @@ impl Style {
         }
         if let Some(v) = self.content_blur {
             paint.content_blur = v;
+        }
+        if let Some(v) = &self.timeline {
+            paint.timeline = v.clone();
         }
         if let Some(v) = self.text_color_map {
             paint.text_color_map = v;

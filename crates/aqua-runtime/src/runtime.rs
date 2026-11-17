@@ -2706,10 +2706,12 @@ impl Runtime {
                     h: bounds.h * self.scale,
                 });
                 let children = semantic.children.clone();
+                let scroll = self.tree.scroll_offset(semantic.node).unwrap_or_default();
                 A11yNode {
                     text: self.text_accessibility(semantic.node),
                     semantic,
                     bounds,
+                    scroll: Point::new(scroll.x * self.scale, scroll.y * self.scale),
                     children,
                 }
             })

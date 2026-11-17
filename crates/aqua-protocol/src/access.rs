@@ -1,10 +1,11 @@
-use aqua_core::{NodeId, Rect, SemanticNode};
+use aqua_core::{NodeId, Point, Rect, SemanticNode};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct A11yNode {
     pub text: Option<A11yText>,
     pub semantic: SemanticNode,
     pub bounds: Option<Rect>,
+    pub scroll: Point,
     pub children: Vec<NodeId>,
 }
 

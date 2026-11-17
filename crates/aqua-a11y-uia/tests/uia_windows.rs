@@ -83,6 +83,7 @@ fn item(index: u32, role: Role, label: &str, children: Vec<NodeId>) -> A11yNode 
             w: 120.0,
             h: 24.0,
         }),
+        scroll: aqua_core::Point::ZERO,
         children,
         text: None,
     }

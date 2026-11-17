@@ -19,6 +19,7 @@ fn node(semantic: SemanticNode, children: Vec<NodeId>) -> A11yNode {
             h: 10.0,
         }),
         semantic,
+        scroll: aqua_core::Point::ZERO,
         children,
     }
 }

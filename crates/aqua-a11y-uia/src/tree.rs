@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use accesskit::{
-    Action, ActionData, Node, NodeId as AkNodeId, Rect as AkRect, Role as AkRole, TextDirection,
-    TextPosition, TextSelection, TreeId, TreeInfo, TreeUpdate,
+    Action, ActionData, Affine, Node, NodeId as AkNodeId, Rect as AkRect, Role as AkRole,
+    TextDirection, TextPosition, TextSelection, TreeId, TreeInfo, TreeUpdate,
 };
-use aqua_core::{NodeId, Rect, Role as CoreRole};
+use aqua_core::{NodeId, Point, Rect, Role as CoreRole};
 use aqua_protocol::{A11yActionData, A11yActionRequest, A11yNode};
 
 use crate::action::translate_action_request;
@@ -59,6 +59,11 @@ pub fn map_role(role: &CoreRole) -> AkRole {
     }
 }
 
+fn space_origin(item: &A11yNode) -> Point {
+    let corner = item.bounds.map_or(Point::ZERO, |bounds| bounds.origin());
+    Point::new(corner.x - item.scroll.x, corner.y - item.scroll.y)
+}
+
 pub fn build_tree_update(root: NodeId, focus: NodeId, items: &[A11yNode]) -> TreeUpdate {
     A11yTree::default().build(root, focus, items)
 }
@@ -70,6 +75,17 @@ pub(crate) fn build_base_tree_update(
 ) -> TreeUpdate {
     let mut nodes = Vec::with_capacity(items.len());
     let mut focus_id = pack_node_id(root);
+    let origins: HashMap<NodeId, Point> = items
+        .iter()
+        .map(|item| (item.semantic.node, space_origin(item)))
+        .collect();
+    let parents: HashMap<NodeId, Point> = items
+        .iter()
+        .flat_map(|item| {
+            let origin = origins[&item.semantic.node];
+            item.children.iter().map(move |child| (*child, origin))
+        })
+        .collect();
     for item in items {
         let id = pack_node_id(item.semantic.node);
         if item.semantic.focused || item.semantic.node == focus {
@@ -174,13 +190,28 @@ pub(crate) fn build_base_tree_update(
                 node.set_position_in_set(index);
             }
         }
-        let r = item.bounds.unwrap_or(Rect::ZERO);
+        let origin = origins[&item.semantic.node];
+        let r = item
+            .bounds
+            .unwrap_or(Rect::ZERO)
+            .translate(-origin.x, -origin.y);
         node.set_bounds(AkRect {
             x0: f64::from(r.x),
             y0: f64::from(r.y),
             x1: f64::from(r.right()),
             y1: f64::from(r.bottom()),
         });
+        let parent = parents
+            .get(&item.semantic.node)
+            .copied()
+            .unwrap_or_default();
+        let shift = (
+            f64::from(origin.x - parent.x),
+            f64::from(origin.y - parent.y),
+        );
+        if shift != (0.0, 0.0) {
+            node.set_transform(Affine::translate(shift));
+        }
         node.set_children(
             item.children
                 .iter()
@@ -259,11 +290,13 @@ impl A11yTree {
                 } else {
                     TextDirection::LeftToRight
                 });
+                let origin = space_origin(item);
+                let bounds = run.bounds.translate(-origin.x, -origin.y);
                 node.set_bounds(accesskit::Rect {
-                    x0: f64::from(run.bounds.x),
-                    y0: f64::from(run.bounds.y),
-                    x1: f64::from(run.bounds.right()),
-                    y1: f64::from(run.bounds.bottom()),
+                    x0: f64::from(bounds.x),
+                    y0: f64::from(bounds.y),
+                    x1: f64::from(bounds.right()),
+                    y1: f64::from(bounds.bottom()),
                 });
                 if run.character_positions.len() == run.character_lengths.len()
                     && run.character_widths.len() == run.character_lengths.len()

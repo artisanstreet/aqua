@@ -781,6 +781,7 @@ impl Application for Showcase {
                     self.width - 16.0,
                     ROW_Y0 + i as f32 * (ROW_H + ROW_GAP) + ROW_H,
                 )),
+                scroll: aqua_core::Point::ZERO,
                 children: vec![],
             });
         }
@@ -801,6 +802,7 @@ impl Application for Showcase {
                 self.width - 16.0,
                 INPUT_Y + INPUT_H,
             )),
+            scroll: aqua_core::Point::ZERO,
             children: vec![],
         });
         let mut button = SemanticNode::new(Self::sem_node(3), Role::Button);
@@ -809,6 +811,7 @@ impl Application for Showcase {
             text: None,
             semantic: button,
             bounds: Some(Self::menu_button_rect(self.width)),
+            scroll: aqua_core::Point::ZERO,
             children: vec![],
         });
         let mut root = SemanticNode::new(Self::sem_node(1), Role::Group);
@@ -818,6 +821,7 @@ impl Application for Showcase {
             text: None,
             semantic: root,
             bounds: Some(Rect::from_edges(0.0, 0.0, self.width, 640.0)),
+            scroll: aqua_core::Point::ZERO,
             children: child_ids,
         });
         Some((Self::sem_node(1), focus, items))

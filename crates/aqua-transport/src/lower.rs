@@ -242,6 +242,8 @@ impl State {
             | DisplayItem::PopGpuiTextColor
             | DisplayItem::PushGpuiTextOpacity(_)
             | DisplayItem::PopGpuiTextOpacity
+            | DisplayItem::PushGpuiTextSelection(_)
+            | DisplayItem::PopGpuiTextSelection
             | DisplayItem::PushGpuiSourceTextColor(_)
             | DisplayItem::PopGpuiSourceTextColor => {}
             _ => self.skip(),

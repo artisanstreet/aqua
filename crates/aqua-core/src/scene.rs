@@ -244,6 +244,12 @@ impl GpuiShadowLayer {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct GpuiTextSelection {
+    pub bytes: std::ops::Range<usize>,
+    pub ink: crate::GpuiHsla,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct GpuiTextOpacityRange {
     pub bytes: std::ops::Range<usize>,
     pub opacity: f32,
@@ -336,6 +342,8 @@ pub enum DisplayItem {
     PopGpuiTextColor,
     PushGpuiTextOpacity(std::sync::Arc<[GpuiTextOpacityRange]>),
     PopGpuiTextOpacity,
+    PushGpuiTextSelection(GpuiTextSelection),
+    PopGpuiTextSelection,
     PushGpuiSourceTextColor(crate::GpuiTextColor),
     PopGpuiSourceTextColor,
     PushContentBlur {
@@ -550,6 +558,8 @@ impl DisplayItem {
             | DisplayItem::PopGpuiTextColor
             | DisplayItem::PushGpuiTextOpacity(_)
             | DisplayItem::PopGpuiTextOpacity
+            | DisplayItem::PushGpuiTextSelection(_)
+            | DisplayItem::PopGpuiTextSelection
             | DisplayItem::PushGpuiSourceTextColor(_)
             | DisplayItem::PopGpuiSourceTextColor
             | DisplayItem::PushGpuiQuadPulse(_)

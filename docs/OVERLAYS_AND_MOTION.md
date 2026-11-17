@@ -14,8 +14,8 @@ by unrelated peer-owned `binding.rs`/`element.rs` compile errors — see §9).
   dismissal, modal input blocking, focus save/restore, owner disposal.
 - `motion.rs` — the ONE motion model: explicit targets, property
   ownership, playback state, retarget-from-current, cancellation /
-  completion, reduced-motion policy, and scheduler deadlines. There is no
-  second animation system in `aqua-ui`; do not add one.
+  completion, reduced-motion policy, and scheduler deadlines. Scripted,
+  play-once paint motion is a timeline (§3.6); there is no third system.
 
 Both modules are tree-agnostic and headless: no `winit`/`wgpu`/`taffy`
 dependency. Callers supply committed geometry, a two-method focus adapter,
@@ -162,6 +162,44 @@ next_deadline_duration/advance/advance_duration/sample_duration/
 set_target_duration/remove/dispose_owner`, `MotionHandle` (generational),
 `MotionValue/MotionKind/Easing/SpringParams/ReducedMotion/Completion/
 MotionError/Seconds/SPRING_MAX_DURATION_SECS`.
+
+### 3.6 Timelines (`aqua-style/src/timeline.rs`)
+
+Tracks retarget: they move a property toward whatever the app last
+declared. A timeline is the other shape of motion: a scripted effect that
+plays once, in several staged lanes, over a node's own paint. Entrances,
+stickers and pops are timelines; a hover fade or a sliding panel is a
+track.
+
+```rust
+Style::new().timeline(
+    Timeline::new(Duration::from_millis(650))
+        .opacity([Key::new(0.0, 0.0, Easing::Linear), Key::new(0.18, 1.0, Easing::EaseOut)])
+        .scale((1.0, 0.0), [Key::new(0.0, 1.04, Easing::Linear), Key::new(0.4, 1.0, Easing::SmoothOut)])
+        .shadow([Key::new(0.2, lift, Easing::Linear), Key::new(0.75, flat, Easing::EaseInOut)]),
+)
+```
+
+- Lanes: opacity (multiplies the resting opacity), translate, scale about
+  a fraction of the node's size, an extra shadow layer, a background that
+  replaces the resting one while the run lasts, and content blur. Keys sit
+  at fractions of the duration; each key's easing shapes the segment that
+  ends on it. Lanes end on their identity value.
+- The tree keeps each node's resting paint and writes the sampled paint
+  over it right after motion reconciliation, every frame the run lasts.
+  The app is not called and nothing is rebuilt; the build returns a
+  deadline of now so frames keep coming, and none once every run ends.
+- An app rebuild mid-run changes the resting paint and keeps the run when
+  the timeline is equal; a different timeline restarts it. A node that
+  remounts mid-run passes `elapsed` to pick up where it was.
+- When the run ends the resting paint is shown untouched, unless the
+  timeline is built with `hold`, which keeps its last keys applied.
+  Reduced motion ends every run at once.
+
+Rebuilding elements every frame to animate paint is the mistake this
+replaces. The runtime reports it: when the app re-sends elements on 30
+frames in a row and every one of them changed paint but no layout,
+`take_diagnostics` carries one line naming the subtree.
 
 ## 4. Review responses (applied)
 

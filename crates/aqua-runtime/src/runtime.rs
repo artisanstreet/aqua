@@ -100,6 +100,8 @@ enum SceneKey {
     TextInlinePaint { node: NodeId, index: u32, part: u8 },
     Caret { node: NodeId },
     Selection { node: NodeId, index: u32 },
+    SelectionInkStart { node: NodeId },
+    SelectionInkEnd { node: NodeId },
     ImeUnderline { node: NodeId, index: u32 },
     TextClipStart { node: NodeId },
     TextClipEnd { node: NodeId },
@@ -124,6 +126,8 @@ impl SceneKey {
             | Self::TextInlinePaint { node, .. }
             | Self::Caret { node }
             | Self::Selection { node, .. }
+            | Self::SelectionInkStart { node }
+            | Self::SelectionInkEnd { node }
             | Self::ImeUnderline { node, .. }
             | Self::TextClipStart { node }
             | Self::TextClipEnd { node }
@@ -333,6 +337,7 @@ pub struct Runtime {
     glides: crate::render::scroll::ScrollGlides,
     motion_rt: aqua_ui::motion::runtime::MotionRuntime,
     selection_background: Option<aqua_core::GpuiBackground>,
+    selection_ink: Option<aqua_core::GpuiHsla>,
     motion_seen: Option<(u64, u64, u32, u32)>,
     motion_keys: render_motion::MotionKeys,
     motion_sent: HashMap<aqua_motion::TrackId, Vec<(NodeId, f32)>>,
@@ -373,6 +378,7 @@ pub struct Runtime {
     frame_work: FrameWork,
     frame_work_window: Option<FrameWorkWindow>,
     diagnostics: Vec<String>,
+    paint_rebuilds: PaintRebuilds,
     bridge: machine::Bridge,
 }
 
@@ -478,6 +484,7 @@ impl Runtime {
             glides: crate::render::scroll::ScrollGlides::default(),
             motion_rt: aqua_ui::motion::runtime::MotionRuntime::default(),
             selection_background: None,
+            selection_ink: None,
             motion_seen: None,
             motion_keys: HashMap::new(),
             motion_sent: HashMap::new(),
@@ -522,6 +529,7 @@ impl Runtime {
             frame_work: FrameWork::default(),
             frame_work_window: None,
             diagnostics: Vec::new(),
+            paint_rebuilds: PaintRebuilds::default(),
             bridge: machine::Bridge::new(),
         }
     }
@@ -899,9 +907,11 @@ impl Runtime {
         let Some(view) = self.view.as_mut() else {
             return Err(RuntimeError::NoViewMounted);
         };
+        let before = self.paint_rebuilds.before(&self.tree);
         view.set_content(&mut self.tree, elements)
             .map_err(RuntimeError::Mount)?;
         self.tree.drain_commands();
+        self.paint_rebuilds.after(&self.tree, before, "the root");
         Ok(())
     }
 
@@ -916,14 +926,18 @@ impl Runtime {
         let Some(view) = self.view.as_mut() else {
             return Err(RuntimeError::NoViewMounted);
         };
-        let hash = aqua_ui::tree::hash_key(key.into());
+        let key = key.into();
+        let label = format!("subtree {key:?}");
+        let hash = aqua_ui::tree::hash_key(key);
         let Some(node) = self.tree.sole_node_with_key(hash) else {
             return Ok(false);
         };
+        let before = self.paint_rebuilds.before(&self.tree);
         let refreshed = view
             .refresh_subtree(&mut self.tree, node, element)
             .map_err(RuntimeError::Mount)?;
         self.tree.drain_commands();
+        self.paint_rebuilds.after(&self.tree, before, &label);
         Ok(refreshed)
     }
 
@@ -1342,6 +1356,11 @@ impl Runtime {
         self.follow_external_text_carets();
         self.host.reanchor_all(&mut self.tree);
         self.reconcile_motion();
+        let reduced = self.host.motion().reduced_motion() == aqua_ui::motion::ReducedMotion::Reduce;
+        let timelines = self.tree.advance_timelines(self.clock, reduced);
+        if let Some(line) = self.paint_rebuilds.frame() {
+            self.diagnostics.push(line);
+        }
         let version = (
             self.tree.scene_version(),
             self.scale.to_bits(),
@@ -1461,12 +1480,22 @@ impl Runtime {
             }
             let mut keyed = Vec::with_capacity(self.cached_scene.len() + dynamic_order.len());
             for (key, item) in self.cached_scene.iter().cloned() {
-                if matches!(item, DisplayItem::Text { .. }) {
-                    if let Some(items) = grouped.remove(&key.node()) {
-                        keyed.extend(items);
-                    }
-                }
+                let after = match matches!(item, DisplayItem::Text { .. }) {
+                    true => grouped
+                        .remove(&key.node())
+                        .map(|items| {
+                            let (after, before): (Vec<_>, Vec<_>) =
+                                items.into_iter().partition(|(key, _)| {
+                                    matches!(key, SceneKey::SelectionInkEnd { .. })
+                                });
+                            keyed.extend(before);
+                            after
+                        })
+                        .unwrap_or_default(),
+                    false => Vec::new(),
+                };
                 keyed.push((key, item));
+                keyed.extend(after);
             }
             self.frame_work.scene_items_reconciled = keyed.len();
             self.reconcile(keyed);
@@ -1483,6 +1512,7 @@ impl Runtime {
             self.host.motion_deadline(now),
             self.selection_deadline(),
             self.tooltip_deadline(),
+            timelines.then_some(now),
         ]
         .into_iter()
         .flatten()
@@ -2401,9 +2431,42 @@ impl Runtime {
                 nodes.push(node);
             }
         }
-        nodes
+        let items: Vec<_> = nodes
             .into_iter()
             .flat_map(|node| self.text_selection_items(node))
+            .collect();
+        let whole = items
+            .iter()
+            .filter_map(|(key, item)| match (key, item) {
+                (SceneKey::Selection { .. }, DisplayItem::GpuiBackground { bounds, .. }) => {
+                    Some(*bounds)
+                }
+                _ => None,
+            })
+            .reduce(Rect::union);
+        let Some(whole) = whole else {
+            return items;
+        };
+        items
+            .into_iter()
+            .map(|(key, item)| match (key, item) {
+                (
+                    SceneKey::Selection { .. },
+                    DisplayItem::GpuiBackground {
+                        bounds,
+                        corners,
+                        background,
+                    },
+                ) => (
+                    key,
+                    DisplayItem::GpuiBackground {
+                        bounds,
+                        corners,
+                        background: background.slice(whole, bounds),
+                    },
+                ),
+                other => other,
+            })
             .collect()
     }
 
@@ -2486,8 +2549,13 @@ impl Runtime {
         };
         let layout = handle.layout;
         let mut out = Vec::new();
+        let mut inked = None;
         if let Some(sel @ Selection { .. }) = selection {
             let (a, b) = (sel.anchor.min(sel.caret), sel.anchor.max(sel.caret));
+            inked = self
+                .selection_ink
+                .filter(|_| a < b)
+                .map(|ink| aqua_core::scene::GpuiTextSelection { bytes: a..b, ink });
             let fill = appearance
                 .map(|appearance| appearance.selection)
                 .unwrap_or_else(|| {
@@ -2621,6 +2689,19 @@ impl Runtime {
                 DisplayItem::PopOpacity,
             ));
         }
+        if let Some(selection) = inked {
+            out.insert(
+                0,
+                (
+                    SceneKey::SelectionInkStart { node: focused },
+                    DisplayItem::PushGpuiTextSelection(selection),
+                ),
+            );
+            out.push((
+                SceneKey::SelectionInkEnd { node: focused },
+                DisplayItem::PopGpuiTextSelection,
+            ));
+        }
         out
     }
 
@@ -2716,10 +2797,12 @@ impl Runtime {
                     h: bounds.h * self.scale,
                 });
                 let children = semantic.children.clone();
+                let scroll = self.tree.scroll_offset(semantic.node).unwrap_or_default();
                 A11yNode {
                     text: self.text_accessibility(semantic.node),
                     semantic,
                     bounds,
+                    scroll: Point::new(scroll.x * self.scale, scroll.y * self.scale),
                     children,
                 }
             })
@@ -2935,5 +3018,141 @@ mod style_decoration_tests {
         paint.opacity = Some(0.0);
         app.tree.set_paint(root, paint);
         assert!(app.caret_selection_items().is_empty());
+    }
+
+    #[test]
+    fn a_wrapped_selection_shares_one_gradient_and_inks_only_its_text() {
+        let text = "alpha beta gamma delta epsilon zeta";
+        let mut app = Runtime::new(SharedFonts::new(), SharedRuns::new());
+        app.mount(|_| {
+            UiBox::new()
+                .child(
+                    UiText::builder()
+                        .arg(text)
+                        .selectable(true)
+                        .wrap(true)
+                        .style(Style::new().width(px(60.0)))
+                        .build(),
+                )
+                .build()
+        })
+        .unwrap();
+        app.set_viewport(300.0, 200.0, 1.0);
+        let stop = |percentage, l| aqua_core::GpuiGradientStop {
+            percentage,
+            color: aqua_core::GpuiHsla {
+                h: 0.6,
+                s: 0.5,
+                l,
+                a: 1.0,
+            },
+        };
+        app.set_selection_background(Some(aqua_core::GpuiBackground::LinearGradient {
+            angle: 180.0,
+            color_space: aqua_core::GpuiGradientColorSpace::Srgb,
+            stops: [stop(0.0, 0.2), stop(1.0, 0.6)],
+        }));
+        let ink = aqua_core::GpuiHsla {
+            h: 0.0,
+            s: 0.0,
+            l: 1.0,
+            a: 1.0,
+        };
+        app.set_selection_ink(Some(ink));
+        app.build_frame().unwrap();
+        let root = app.tree.root().unwrap();
+        let label = app.tree.get(root).unwrap().children[0];
+        app.apply_access_selection(label, label, 0, text.chars().count());
+        app.build_frame().unwrap();
+        let lines: Vec<_> = app
+            .caret_selection_items()
+            .into_iter()
+            .filter_map(|(key, item)| match (key, item) {
+                (
+                    SceneKey::Selection { .. },
+                    DisplayItem::GpuiBackground {
+                        bounds,
+                        background: aqua_core::GpuiBackground::LinearGradient { stops, .. },
+                        ..
+                    },
+                ) => Some((bounds, stops)),
+                _ => None,
+            })
+            .collect();
+        assert!(lines.len() > 1);
+        let whole = lines
+            .iter()
+            .map(|(bounds, _)| *bounds)
+            .reduce(Rect::union)
+            .unwrap();
+        for (bounds, stops) in &lines {
+            let at = |y: f32| (y - bounds.y) / bounds.h;
+            assert!((stops[0].percentage - at(whole.y)).abs() < 1.0e-4);
+            assert!((stops[1].percentage - at(whole.bottom())).abs() < 1.0e-4);
+        }
+        let order: Vec<_> = app
+            .scene
+            .ordered()
+            .filter_map(|(_, item)| match item {
+                DisplayItem::PushGpuiTextSelection(selection) => {
+                    assert_eq!(selection.bytes, 0..text.len());
+                    assert_eq!(selection.ink, ink);
+                    Some("ink")
+                }
+                DisplayItem::Text { .. } => Some("text"),
+                DisplayItem::PopGpuiTextSelection => Some("end"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(order, ["ink", "text", "end"]);
+        let mut open = Vec::new();
+        for (_, item) in app.scene.ordered() {
+            match item {
+                DisplayItem::PushClip { .. } | DisplayItem::PushGpuiContentMask { .. } => {
+                    open.push("clip");
+                }
+                DisplayItem::PushGpuiTextSelection(_) => open.push("ink"),
+                DisplayItem::PushOpacity(_) => open.push("opacity"),
+                DisplayItem::PopClip => assert_eq!(open.pop(), Some("clip")),
+                DisplayItem::PopGpuiTextSelection => assert_eq!(open.pop(), Some("ink")),
+                DisplayItem::PopOpacity => assert_eq!(open.pop(), Some("opacity")),
+                _ => {}
+            }
+        }
+        assert!(open.is_empty());
+    }
+}
+
+const PAINT_REBUILD_STREAK: u32 = 30;
+
+#[derive(Default)]
+struct PaintRebuilds {
+    pending: Option<String>,
+    streak: u32,
+}
+
+impl PaintRebuilds {
+    fn before(&self, tree: &aqua_ui::tree::UiTree) -> (u64, u64) {
+        (tree.layout_version(), tree.content_version())
+    }
+
+    fn after(&mut self, tree: &aqua_ui::tree::UiTree, (layout, content): (u64, u64), what: &str) {
+        if tree.layout_version() == layout && tree.content_version() != content {
+            self.pending.get_or_insert_with(|| what.to_owned());
+        }
+    }
+
+    fn frame(&mut self) -> Option<String> {
+        let Some(what) = self.pending.take() else {
+            self.streak = 0;
+            return None;
+        };
+        self.streak += 1;
+        (self.streak == PAINT_REBUILD_STREAK).then(|| {
+            format!(
+                "aqua: {what} was rebuilt on {PAINT_REBUILD_STREAK} frames in a row only to change paint; \
+                 animate it with a Timeline instead of rebuilding each frame"
+            )
+        })
     }
 }

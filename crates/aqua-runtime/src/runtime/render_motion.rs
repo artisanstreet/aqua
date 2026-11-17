@@ -168,6 +168,10 @@ impl Runtime {
         self.selection_background = background;
     }
 
+    pub fn set_selection_ink(&mut self, ink: Option<aqua_core::GpuiHsla>) {
+        self.selection_ink = ink;
+    }
+
     pub fn set_motion_theme(&mut self, theme: aqua_ui::motion::MotionTheme) {
         let now = self.clock;
         self.motion_rt.set_theme(self.host.tracks_mut(), theme, now);

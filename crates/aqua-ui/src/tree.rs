@@ -1208,7 +1208,17 @@ fn rect_contains_rect(outer: Rect, inner: Rect) -> bool {
         && outer.bottom() >= inner.bottom()
 }
 
+struct TimelineRun {
+    timeline: Rc<aqua_style::timeline::Timeline>,
+    rest: Paint,
+    started: Option<f64>,
+    done: bool,
+}
+
 pub struct UiTree {
+    timelines: HashMap<NodeId, TimelineRun>,
+    timeline_clock: f64,
+    timelines_reduced: bool,
     pub(crate) fill_owner: Rc<()>,
     fill_changes: Vec<aqua_core::FillPatch>,
     srgba_changes: aqua_core::SrgbaFillBatch,
@@ -1374,6 +1384,9 @@ impl UiTree {
             motion_groups: HashMap::new(),
             hoist_guards: Vec::new(),
             motion_declared: false,
+            timelines: HashMap::new(),
+            timeline_clock: 0.0,
+            timelines_reduced: false,
             paint_changes: HashSet::new(),
             paint_coverage: crate::incremental::PaintCoverage::Sparse,
             own_paint_changes: HashSet::new(),
@@ -2831,6 +2844,9 @@ impl UiTree {
             let cid = self.build_detached(child);
             self.attach(id, cid);
         }
+        if let Some(paint) = self.paint(id).filter(|paint| paint.timeline.is_some()) {
+            self.set_paint(id, paint);
+        }
         id
     }
 
@@ -3109,6 +3125,77 @@ impl UiTree {
     }
 
     pub fn set_paint(&mut self, id: NodeId, paint: Paint) -> bool {
+        let Some(timeline) = paint.timeline.clone() else {
+            self.timelines.remove(&id);
+            return self.write_paint(id, paint);
+        };
+        match self.timelines.get_mut(&id) {
+            Some(run) if run.timeline == timeline => {
+                if run.rest == paint {
+                    return false;
+                }
+                run.rest = paint;
+            }
+            _ => {
+                self.timelines.insert(
+                    id,
+                    TimelineRun {
+                        timeline,
+                        rest: paint,
+                        started: None,
+                        done: false,
+                    },
+                );
+            }
+        }
+        let shown = self.timeline_paint(id);
+        shown.is_some_and(|shown| self.write_paint(id, shown))
+    }
+
+    fn timeline_paint(&self, id: NodeId) -> Option<Paint> {
+        let run = self.timelines.get(&id)?;
+        let elapsed = match (run.done || self.timelines_reduced, run.started) {
+            (true, _) => run.timeline.duration(),
+            (false, Some(started)) => (self.timeline_clock - started) as f32,
+            (false, None) => run.timeline.offset(),
+        };
+        let size = self.rect(id).map_or((0.0, 0.0), |rect| (rect.w, rect.h));
+        Some(run.timeline.sample(&run.rest, size, elapsed))
+    }
+
+    pub fn advance_timelines(&mut self, now: f64, reduced: bool) -> bool {
+        self.timeline_clock = now;
+        self.timelines_reduced = reduced;
+        let nodes = &self.nodes;
+        self.timelines.retain(|id, _| nodes.get(id.raw()).is_some());
+        let running: Vec<NodeId> = self
+            .timelines
+            .iter()
+            .filter(|(_, run)| !run.done)
+            .map(|(id, _)| *id)
+            .collect();
+        let mut animating = false;
+        for id in running {
+            let Some(run) = self.timelines.get_mut(&id) else {
+                continue;
+            };
+            let offset = f64::from(run.timeline.offset());
+            let started = *run.started.get_or_insert(now - offset);
+            run.done = reduced || run.timeline.finished((now - started) as f32);
+            animating |= !run.done;
+            if let Some(shown) = self.timeline_paint(id) {
+                self.write_paint(id, shown);
+            }
+        }
+        animating
+    }
+
+    #[must_use]
+    pub fn timelines_running(&self) -> bool {
+        self.timelines.values().any(|run| !run.done)
+    }
+
+    fn write_paint(&mut self, id: NodeId, paint: Paint) -> bool {
         self.motion_declared |= paint.motion.is_some();
         let Some(rec) = self.nodes.get_mut(id.raw()) else {
             return false;

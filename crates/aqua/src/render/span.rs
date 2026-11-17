@@ -304,6 +304,10 @@ pub fn replay(
             })),
             PaintCommand::BackdropBlur(blur) => Some(PaintCommand::BackdropBlur(BackdropBlur {
                 bounds: moved(blur.bounds, dx, dy),
+                mask: blur.mask.map(|mask| aqua_graph::BlurMask {
+                    bounds: moved(mask.bounds, dx, dy),
+                    ..mask
+                }),
                 ..*blur
             })),
             PaintCommand::PushClip(rect) => Some(PaintCommand::PushClip(moved(*rect, dx, dy))),

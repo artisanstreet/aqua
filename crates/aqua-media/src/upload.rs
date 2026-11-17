@@ -103,6 +103,7 @@ pub fn image_instance(
         clip_radius: 0.0,
         blend: aqua_graph::Blend::Over,
         linear: aqua_graph::Linear2::IDENTITY,
+        mask: None,
     }
 }
 

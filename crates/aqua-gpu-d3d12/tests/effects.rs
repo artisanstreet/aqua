@@ -119,6 +119,7 @@ fn registered_compute_shaders_write_their_output() {
                 clip_radius: 0.0,
                 blend: Blend::Over,
                 linear: aqua_graph::Linear2::IDENTITY,
+                mask: None,
             }],
         },
         vec![target],

@@ -73,6 +73,7 @@ fn scene(extent: Extent, step: usize, scenario: Scenario) -> FramePlan {
             bounds: glass(extent),
             radius: 12.0,
             corner_radius: 12.0,
+            mask: None,
         }),
         quad(
             glass(extent),

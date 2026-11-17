@@ -9,7 +9,7 @@ use crate::graph::{PlanLimits, RenderGraph};
 use crate::linear::Linear2;
 use crate::plan::{
     Blend, ColorMatrix, Coverage, CustomPassSpec, Extent, FilterParams, FramePlan, GlyphInstance,
-    Gradient, ImageInstance, LoadOp, Pass, PassKind, QuadInstance, ShaderId, ShadowCast,
+    Gradient, ImageInstance, ImageMask, LoadOp, Pass, PassKind, QuadInstance, ShaderId, ShadowCast,
     ShadowInstance, TextureFormat, TextureHandle, TextureRef,
 };
 use crate::slug::SlugInstance;
@@ -133,10 +133,18 @@ pub struct Image {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlurMask {
+    pub source: TextureHandle,
+    pub bounds: Rect,
+    pub texels: Rect,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BackdropBlur {
     pub bounds: Rect,
     pub radius: f32,
     pub corner_radius: f32,
+    pub mask: Option<BlurMask>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -739,6 +747,7 @@ impl Emitter {
                     clip_radius: 0.0,
                     blend,
                     linear: Linear2::IDENTITY,
+                    mask: None,
                 }],
             },
             vec![layer],
@@ -835,6 +844,7 @@ impl Emitter {
                         false => Blend::Over,
                     },
                     linear: Linear2::IDENTITY,
+                    mask: None,
                 }],
             },
             vec![layer],
@@ -887,6 +897,7 @@ impl Emitter {
                     context.local(region.rect),
                     *radius,
                     0.0,
+                    None,
                     Blend::Over,
                     context,
                 );
@@ -923,6 +934,7 @@ impl Emitter {
         placement: Rect,
         radius: f32,
         corner: f32,
+        mask: Option<BlurMask>,
         blend: Blend,
         context: Context,
     ) {
@@ -947,9 +959,26 @@ impl Emitter {
                     clip_radius: 0.0,
                     blend,
                     linear: Linear2::IDENTITY,
+                    mask: mask.map(|mask| {
+                        let at = context.local(mask.bounds);
+                        let scale = [
+                            mask.texels.w / at.w.max(1.0e-4),
+                            mask.texels.h / at.h.max(1.0e-4),
+                        ];
+                        ImageMask {
+                            source: TextureRef::Persistent(mask.source),
+                            offset: [
+                                mask.texels.x - at.x * scale[0],
+                                mask.texels.y - at.y * scale[1],
+                            ],
+                            scale,
+                        }
+                    }),
                 }],
             },
-            vec![output.texture],
+            std::iter::once(output.texture)
+                .chain(mask.map(|mask| TextureRef::Persistent(mask.source)))
+                .collect(),
             context.target,
         );
     }
@@ -1024,6 +1053,7 @@ impl Emitter {
                         clip_radius: 0.0,
                         blend: Blend::Over,
                         linear: *linear,
+                        mask: None,
                     }],
                 },
                 vec![TextureRef::Persistent(image.source)],
@@ -1053,6 +1083,7 @@ impl Emitter {
                     context.local(visible),
                     blur.radius,
                     blur.corner_radius,
+                    blur.mask,
                     Blend::Replace,
                     context,
                 );

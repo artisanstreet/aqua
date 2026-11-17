@@ -4,7 +4,8 @@ use aqua_core::geometry::Rect;
 use aqua_graph::slug::{self, texel_position};
 use aqua_graph::tone::{premultiplied_luminance, ToneCurve};
 use aqua_graph::{
-    Extent, GlyphInstance, ImageInstance, SlugInstance, TextureFormat, TextureHandle, TextureRef,
+    Extent, GlyphInstance, ImageInstance, ImageMask, SlugInstance, TextureFormat, TextureHandle,
+    TextureRef,
 };
 
 use crate::raster::{over, Layer, Pixel, Placement};
@@ -239,6 +240,31 @@ pub fn sample_image(texture: &RefTexture, region: Rect, u: f32, v: f32) -> Pixel
     lerp(lerp(a, b, f.0), lerp(c, d, f.0), f.1)
 }
 
+fn mask_texel(texture: &RefTexture, x: f32, y: f32) -> f32 {
+    let inside =
+        x >= 0.0 && y >= 0.0 && x < texture.extent.width as f32 && y < texture.extent.height as f32;
+    match inside {
+        true => texture.texel(x as i64, y as i64)[0],
+        false => 0.0,
+    }
+}
+
+fn mask_cover(texture: &RefTexture, mask: ImageMask, px: f32, py: f32) -> f32 {
+    let shifted = (
+        px * mask.scale[0] + mask.offset[0] - 0.5,
+        py * mask.scale[1] + mask.offset[1] - 0.5,
+    );
+    let base = (shifted.0.floor(), shifted.1.floor());
+    let f = (shifted.0 - base.0, shifted.1 - base.1);
+    let a = mask_texel(texture, base.0, base.1);
+    let b = mask_texel(texture, base.0 + 1.0, base.1);
+    let c = mask_texel(texture, base.0, base.1 + 1.0);
+    let d = mask_texel(texture, base.0 + 1.0, base.1 + 1.0);
+    let top = a + (b - a) * f.0;
+    let bottom = c + (d - c) * f.0;
+    top + (bottom - top) * f.1
+}
+
 pub fn draw_images(layer: &mut Layer, textures: &Textures, instances: &[ImageInstance]) {
     for image in instances {
         let TextureRef::Persistent(handle) = image.source else {
@@ -246,6 +272,19 @@ pub fn draw_images(layer: &mut Layer, textures: &Textures, instances: &[ImageIns
         };
         let Some(texture) = textures.get(handle) else {
             continue;
+        };
+        let mask = match image.mask {
+            Some(
+                mask @ ImageMask {
+                    source: TextureRef::Persistent(source),
+                    ..
+                },
+            ) => match textures.get(source) {
+                Some(texture) => Some((texture, mask)),
+                None => continue,
+            },
+            Some(_) => continue,
+            None => None,
         };
         let clip = image.clip.unwrap_or(NO_CLIP);
         let clip_radius = image.clip.map_or(0.0, |_| image.clip_radius);
@@ -266,7 +305,8 @@ pub fn draw_images(layer: &mut Layer, textures: &Textures, instances: &[ImageIns
                 let cover = (0.5
                     - rect_distance(lx, ly, image.bounds, image.radius) * placement.scale)
                     .clamp(0.0, 1.0)
-                    * (0.5 - rect_distance(px, py, clip, clip_radius)).clamp(0.0, 1.0);
+                    * (0.5 - rect_distance(px, py, clip, clip_radius)).clamp(0.0, 1.0)
+                    * mask.map_or(1.0, |(texture, mask)| mask_cover(texture, mask, px, py));
                 let u = (lx - image.bounds.x) / image.bounds.w.max(1.0e-4);
                 let v = (ly - image.bounds.y) / image.bounds.h.max(1.0e-4);
                 let color = sample_image(texture, image.texels, u, v);

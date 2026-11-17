@@ -1150,7 +1150,10 @@ impl SceneRenderer {
                         let end = instances[start..]
                             .iter()
                             .position(|next| {
-                                next.source != first.source || next.blend != first.blend
+                                next.source != first.source
+                                    || next.blend != first.blend
+                                    || next.mask.map(|mask| mask.source)
+                                        != first.mask.map(|mask| mask.source)
                             })
                             .map_or(instances.len(), |run| start + run);
                         let kind = match first.blend {
@@ -1164,7 +1167,13 @@ impl SceneRenderer {
                             context,
                             constants(extent, 1.0, [0.0; 4], [0.0; 4], source.extent, None),
                         )?;
-                        unsafe { context.PSSetShaderResources(0, Some(&[source.srv])) };
+                        let mask = match first.mask {
+                            Some(mask) => {
+                                self.bind(mask.source, target, target.extent, textures)?.srv
+                            }
+                            None => None,
+                        };
+                        unsafe { context.PSSetShaderResources(0, Some(&[source.srv, mask])) };
                         self.instances_at(
                             context,
                             offset + start as u64 * SPRITE_STRIDE as u64,

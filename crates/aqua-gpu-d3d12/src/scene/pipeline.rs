@@ -210,7 +210,7 @@ fn bytecode(binding: Binding, name: &'static str) -> Result<D3D12_SHADER_BYTECOD
 fn root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, Error> {
     let range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
+        NumDescriptors: 2,
         BaseShaderRegister: 0,
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: 0,

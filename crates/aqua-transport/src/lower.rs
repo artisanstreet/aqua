@@ -221,6 +221,7 @@ impl State {
                     bounds: rect,
                     radius: radius * self.scale,
                     corner_radius: corners.top_left * self.scale,
+                    mask: None,
                 }));
             }
             DisplayItem::BackdropBlur { bounds, radius, .. } => {
@@ -229,6 +230,7 @@ impl State {
                     bounds: rect,
                     radius: radius * self.scale,
                     corner_radius: 0.0,
+                    mask: None,
                 }));
             }
             DisplayItem::PushTextColorMap(_)

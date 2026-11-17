@@ -443,6 +443,7 @@ fn backdrop(radius: f32) -> PaintCommand {
         bounds: rect(8.0, 8.0, 40.0, 40.0),
         radius,
         corner_radius: 6.0,
+        mask: None,
     })
 }
 
@@ -576,6 +577,7 @@ fn mixed_depth_blends_two_pyramids_with_replace_instances() {
             bounds: rect(8.0, 8.0, 40.0, 40.0),
             radius: 7.5,
             corner_radius: 0.0,
+            mask: None,
         }),
     ]);
     assert_eq!(validate(&plan), Ok(()));

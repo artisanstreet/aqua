@@ -264,7 +264,12 @@ fn check_kind(plan: &FramePlan, index: usize) -> Result<(), PlanError> {
             if !single_target {
                 return Err(bad_bindings);
             }
-            if !same_textures(instances.iter().map(|image| image.source), &pass.reads) {
+            if !same_textures(
+                instances.iter().flat_map(|image| {
+                    std::iter::once(image.source).chain(image.mask.map(|mask| mask.source))
+                }),
+                &pass.reads,
+            ) {
                 return Err(bad_bindings);
             }
             instances

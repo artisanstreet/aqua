@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use aqua_core::geometry::Rect;
-use aqua_core::scene::{GpuiTextColorMap, GpuiTextOpacityRange, GpuiTextShimmer, TextColorMap};
+use aqua_core::scene::{
+    GpuiTextColorMap, GpuiTextOpacityRange, GpuiTextSelection, GpuiTextShimmer, TextColorMap,
+};
 use aqua_core::{GpuiHsla, GpuiTextColor, Oklch};
 use aqua_motion::{Cycle, CycleSet};
 use aqua_text::layout::LaidGlyph;
@@ -20,6 +22,7 @@ pub enum TextScope {
     Color,
     SourceColor,
     Opacity,
+    Selection,
     Map,
     LegacyMap,
 }
@@ -65,6 +68,7 @@ impl OpacityRanges {
 pub struct TextStack {
     bases: Vec<TextBase>,
     opacities: Vec<OpacityRanges>,
+    selections: Vec<GpuiTextSelection>,
     maps: Vec<(GpuiTextColorMap, Option<GpuiTextShimmer>)>,
     legacy: Vec<TextColorMap>,
 }
@@ -80,6 +84,10 @@ impl TextStack {
 
     pub fn push_opacity(&mut self, ranges: Arc<[GpuiTextOpacityRange]>) {
         self.opacities.push(OpacityRanges::new(ranges));
+    }
+
+    pub fn push_selection(&mut self, selection: GpuiTextSelection) {
+        self.selections.push(selection);
     }
 
     pub fn push_map(&mut self, map: GpuiTextColorMap, shimmer: Option<GpuiTextShimmer>) {
@@ -99,6 +107,7 @@ impl TextStack {
                 .then(|| self.bases.pop())
                 .is_some(),
             TextScope::Opacity => self.opacities.pop().is_some(),
+            TextScope::Selection => self.selections.pop().is_some(),
             TextScope::Map => self.maps.pop().is_some(),
             TextScope::LegacyMap => self.legacy.pop().is_some(),
         }
@@ -108,6 +117,7 @@ impl TextStack {
     pub fn is_balanced(&self) -> bool {
         self.bases.is_empty()
             && self.opacities.is_empty()
+            && self.selections.is_empty()
             && self.maps.is_empty()
             && self.legacy.is_empty()
     }
@@ -115,6 +125,7 @@ impl TextStack {
     pub fn clear(&mut self) {
         self.bases.clear();
         self.opacities.clear();
+        self.selections.clear();
         self.maps.clear();
         self.legacy.clear();
     }
@@ -142,6 +153,14 @@ impl TextStack {
                 TextBase::Normalized(color) | TextBase::Source(color) => *color,
             }))
             .unwrap_or_else(|| color::srgb(scene))
+    }
+
+    #[must_use]
+    pub fn selection_ink(&self, glyph: &LaidGlyph) -> Option<Srgba> {
+        self.selections
+            .last()
+            .filter(|selection| selection.bytes.contains(&glyph.src_byte_start))
+            .map(|selection| color::hsla(selection.ink))
     }
 
     #[must_use]
@@ -194,6 +213,7 @@ impl TextStack {
     #[must_use]
     pub fn cache_signature(&self) -> Option<[u32; 5]> {
         match self.has_map()
+            || !self.selections.is_empty()
             || self
                 .opacities
                 .last()

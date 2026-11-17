@@ -74,6 +74,7 @@ fn is_group_open(item: &DisplayItem) -> bool {
             | DisplayItem::PushGpuiTextShimmer(_)
             | DisplayItem::PushGpuiTextColor(_)
             | DisplayItem::PushGpuiTextOpacity(_)
+            | DisplayItem::PushGpuiTextSelection(_)
             | DisplayItem::PushGpuiSourceTextColor(_)
             | DisplayItem::PushGpuiQuadPulse(_)
     )
@@ -88,6 +89,7 @@ fn is_group_close(item: &DisplayItem) -> bool {
             | DisplayItem::PopGpuiTextColorMap
             | DisplayItem::PopGpuiTextColor
             | DisplayItem::PopGpuiTextOpacity
+            | DisplayItem::PopGpuiTextSelection
             | DisplayItem::PopGpuiSourceTextColor
             | DisplayItem::PopGpuiQuadPulse
     )

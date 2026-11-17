@@ -100,6 +100,8 @@ enum SceneKey {
     TextInlinePaint { node: NodeId, index: u32, part: u8 },
     Caret { node: NodeId },
     Selection { node: NodeId, index: u32 },
+    SelectionInkStart { node: NodeId },
+    SelectionInkEnd { node: NodeId },
     ImeUnderline { node: NodeId, index: u32 },
     TextClipStart { node: NodeId },
     TextClipEnd { node: NodeId },
@@ -124,6 +126,8 @@ impl SceneKey {
             | Self::TextInlinePaint { node, .. }
             | Self::Caret { node }
             | Self::Selection { node, .. }
+            | Self::SelectionInkStart { node }
+            | Self::SelectionInkEnd { node }
             | Self::ImeUnderline { node, .. }
             | Self::TextClipStart { node }
             | Self::TextClipEnd { node }
@@ -323,6 +327,7 @@ pub struct Runtime {
     glides: crate::render::scroll::ScrollGlides,
     motion_rt: aqua_ui::motion::runtime::MotionRuntime,
     selection_background: Option<aqua_core::GpuiBackground>,
+    selection_ink: Option<aqua_core::GpuiHsla>,
     motion_seen: Option<(u64, u64, u32, u32)>,
     motion_keys: render_motion::MotionKeys,
     motion_sent: HashMap<aqua_motion::TrackId, Vec<(NodeId, f32)>>,
@@ -468,6 +473,7 @@ impl Runtime {
             glides: crate::render::scroll::ScrollGlides::default(),
             motion_rt: aqua_ui::motion::runtime::MotionRuntime::default(),
             selection_background: None,
+            selection_ink: None,
             motion_seen: None,
             motion_keys: HashMap::new(),
             motion_sent: HashMap::new(),
@@ -1451,12 +1457,22 @@ impl Runtime {
             }
             let mut keyed = Vec::with_capacity(self.cached_scene.len() + dynamic_order.len());
             for (key, item) in self.cached_scene.iter().cloned() {
-                if matches!(item, DisplayItem::Text { .. }) {
-                    if let Some(items) = grouped.remove(&key.node()) {
-                        keyed.extend(items);
-                    }
-                }
+                let after = match matches!(item, DisplayItem::Text { .. }) {
+                    true => grouped
+                        .remove(&key.node())
+                        .map(|items| {
+                            let (after, before): (Vec<_>, Vec<_>) =
+                                items.into_iter().partition(|(key, _)| {
+                                    matches!(key, SceneKey::SelectionInkEnd { .. })
+                                });
+                            keyed.extend(before);
+                            after
+                        })
+                        .unwrap_or_default(),
+                    false => Vec::new(),
+                };
                 keyed.push((key, item));
+                keyed.extend(after);
             }
             self.frame_work.scene_items_reconciled = keyed.len();
             self.reconcile(keyed);
@@ -2391,9 +2407,42 @@ impl Runtime {
                 nodes.push(node);
             }
         }
-        nodes
+        let items: Vec<_> = nodes
             .into_iter()
             .flat_map(|node| self.text_selection_items(node))
+            .collect();
+        let whole = items
+            .iter()
+            .filter_map(|(key, item)| match (key, item) {
+                (SceneKey::Selection { .. }, DisplayItem::GpuiBackground { bounds, .. }) => {
+                    Some(*bounds)
+                }
+                _ => None,
+            })
+            .reduce(Rect::union);
+        let Some(whole) = whole else {
+            return items;
+        };
+        items
+            .into_iter()
+            .map(|(key, item)| match (key, item) {
+                (
+                    SceneKey::Selection { .. },
+                    DisplayItem::GpuiBackground {
+                        bounds,
+                        corners,
+                        background,
+                    },
+                ) => (
+                    key,
+                    DisplayItem::GpuiBackground {
+                        bounds,
+                        corners,
+                        background: background.slice(whole, bounds),
+                    },
+                ),
+                other => other,
+            })
             .collect()
     }
 
@@ -2478,6 +2527,19 @@ impl Runtime {
         let mut out = Vec::new();
         if let Some(sel @ Selection { .. }) = selection {
             let (a, b) = (sel.anchor.min(sel.caret), sel.anchor.max(sel.caret));
+            if let Some(ink) = self.selection_ink.filter(|_| a < b) {
+                out.push((
+                    SceneKey::SelectionInkStart { node: focused },
+                    DisplayItem::PushGpuiTextSelection(aqua_core::scene::GpuiTextSelection {
+                        bytes: a..b,
+                        ink,
+                    }),
+                ));
+                out.push((
+                    SceneKey::SelectionInkEnd { node: focused },
+                    DisplayItem::PopGpuiTextSelection,
+                ));
+            }
             let fill = appearance
                 .map(|appearance| appearance.selection)
                 .unwrap_or_else(|| {
@@ -2927,5 +2989,92 @@ mod style_decoration_tests {
         paint.opacity = Some(0.0);
         app.tree.set_paint(root, paint);
         assert!(app.caret_selection_items().is_empty());
+    }
+
+    #[test]
+    fn a_wrapped_selection_shares_one_gradient_and_inks_only_its_text() {
+        let text = "alpha beta gamma delta epsilon zeta";
+        let mut app = Runtime::new(SharedFonts::new(), SharedRuns::new());
+        app.mount(|_| {
+            UiBox::new()
+                .child(
+                    UiText::builder()
+                        .arg(text)
+                        .selectable(true)
+                        .wrap(true)
+                        .style(Style::new().width(px(60.0)))
+                        .build(),
+                )
+                .build()
+        })
+        .unwrap();
+        app.set_viewport(300.0, 200.0, 1.0);
+        let stop = |percentage, l| aqua_core::GpuiGradientStop {
+            percentage,
+            color: aqua_core::GpuiHsla {
+                h: 0.6,
+                s: 0.5,
+                l,
+                a: 1.0,
+            },
+        };
+        app.set_selection_background(Some(aqua_core::GpuiBackground::LinearGradient {
+            angle: 180.0,
+            color_space: aqua_core::GpuiGradientColorSpace::Srgb,
+            stops: [stop(0.0, 0.2), stop(1.0, 0.6)],
+        }));
+        let ink = aqua_core::GpuiHsla {
+            h: 0.0,
+            s: 0.0,
+            l: 1.0,
+            a: 1.0,
+        };
+        app.set_selection_ink(Some(ink));
+        app.build_frame().unwrap();
+        let root = app.tree.root().unwrap();
+        let label = app.tree.get(root).unwrap().children[0];
+        app.apply_access_selection(label, label, 0, text.chars().count());
+        app.build_frame().unwrap();
+        let lines: Vec<_> = app
+            .caret_selection_items()
+            .into_iter()
+            .filter_map(|(key, item)| match (key, item) {
+                (
+                    SceneKey::Selection { .. },
+                    DisplayItem::GpuiBackground {
+                        bounds,
+                        background: aqua_core::GpuiBackground::LinearGradient { stops, .. },
+                        ..
+                    },
+                ) => Some((bounds, stops)),
+                _ => None,
+            })
+            .collect();
+        assert!(lines.len() > 1);
+        let whole = lines
+            .iter()
+            .map(|(bounds, _)| *bounds)
+            .reduce(Rect::union)
+            .unwrap();
+        for (bounds, stops) in &lines {
+            let at = |y: f32| (y - bounds.y) / bounds.h;
+            assert!((stops[0].percentage - at(whole.y)).abs() < 1.0e-4);
+            assert!((stops[1].percentage - at(whole.bottom())).abs() < 1.0e-4);
+        }
+        let order: Vec<_> = app
+            .scene
+            .ordered()
+            .filter_map(|(_, item)| match item {
+                DisplayItem::PushGpuiTextSelection(selection) => {
+                    assert_eq!(selection.bytes, 0..text.len());
+                    assert_eq!(selection.ink, ink);
+                    Some("ink")
+                }
+                DisplayItem::Text { .. } => Some("text"),
+                DisplayItem::PopGpuiTextSelection => Some("end"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(order, ["ink", "text", "end"]);
     }
 }

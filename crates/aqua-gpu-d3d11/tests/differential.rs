@@ -109,6 +109,7 @@ fn hardware_matches_the_oracle_on_every_plan_variant() {
 }
 
 #[test]
+#[ignore = "needs an integrated GPU beside a discrete GPU; run with --ignored on such a machine"]
 fn integrated_matches_the_oracle_on_every_plan_variant() {
     against_reference(support::integrated());
 }
@@ -124,6 +125,7 @@ fn hardware_and_warp_agree_with_each_other() {
 }
 
 #[test]
+#[ignore = "needs an integrated GPU beside a discrete GPU; run with --ignored on such a machine"]
 fn integrated_and_hardware_agree_with_each_other() {
     agree(
         support::integrated(),

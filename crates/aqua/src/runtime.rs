@@ -2218,10 +2218,29 @@ mod tests {
 
     #[test]
     fn prefs_and_a11y_defaults_are_honest() {
-        let (aqua, _, _) = headless();
-        assert!(!aqua_protocol::prefs::should_reduce_motion(
-            aqua.preferences()
-        ));
+        use aqua_protocol::prefs::{should_reduce_motion, PrefState};
+        let headless_with = |prefs: OsPreferences| {
+            Aqua::new_with_preferences(
+                AquaConfig {
+                    headless: true,
+                    ..Default::default()
+                },
+                prefs,
+            )
+            .unwrap()
+        };
+        let unknown = headless_with(OsPreferences::fallback());
+        assert_eq!(unknown.preferences(), &OsPreferences::fallback());
+        assert!(!should_reduce_motion(unknown.preferences()));
+        assert!(!unknown.motion_reduced());
+        let reduced = OsPreferences {
+            reduce_motion: PrefState::On,
+            ..OsPreferences::fallback()
+        };
+        let calm = headless_with(reduced.clone());
+        assert_eq!(calm.preferences(), &reduced);
+        assert!(should_reduce_motion(calm.preferences()));
+        assert!(calm.motion_reduced());
         struct Bare;
         impl Application for Bare {
             fn on_window_event(&mut self, _c: &mut AppCtx, _: AquaWindowId, _: &WindowEvent) {}

@@ -172,9 +172,14 @@ pub struct AppCtx<'a> {
     window_requests: &'a mut VecDeque<WindowRequest>,
     dialogs: &'a mut VecDeque<(AquaWindowId, RequestId, DialogSpec)>,
     next_request: &'a mut u64,
+    prefs: &'a OsPreferences,
 }
 
 impl AppCtx<'_> {
+    pub fn system_preferences(&self) -> &OsPreferences {
+        self.prefs
+    }
+
     pub fn window_state(&self, id: AquaWindowId) -> Option<&ObservedWindowState> {
         self.windows.get(&id).map(|record| &record.observed)
     }
@@ -1135,6 +1140,7 @@ impl Aqua {
             window_requests: &mut self.window_requests,
             dialogs: &mut self.dialogs,
             next_request: &mut self.next_request,
+            prefs: &self.prefs,
         };
         f(&mut ctx)
     }

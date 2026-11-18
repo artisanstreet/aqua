@@ -136,6 +136,7 @@ pub(crate) struct WindowRecord {
     pub(crate) presented: u64,
     pub(crate) access_connected: bool,
     pub(crate) access_epoch: u64,
+    pub(crate) access_published: Option<(u64, u64)>,
 }
 
 impl WindowRecord {
@@ -154,6 +155,7 @@ impl WindowRecord {
             presented: 0,
             access_connected: false,
             access_epoch: 0,
+            access_published: None,
         }
     }
 }
@@ -405,6 +407,10 @@ pub trait Application {
         _id: AquaWindowId,
     ) -> Option<(aqua_core::NodeId, aqua_core::NodeId, Vec<A11yNode>)> {
         self.a11y_nodes()
+    }
+
+    fn a11y_revision_for(&self, _id: AquaWindowId) -> Option<u64> {
+        None
     }
     fn chrome_regions(&self, _window: &ObservedWindowState) -> Option<DragRegions> {
         None
@@ -1831,15 +1837,23 @@ impl Aqua {
         if !needed {
             return;
         }
+        let Some(record) = self.windows.get(&id) else {
+            return;
+        };
+        let published = app
+            .a11y_revision_for(id)
+            .map(|revision| (revision, record.access_epoch));
+        if published.is_some() && published == record.access_published {
+            return;
+        }
         let Some((root, focus, nodes)) = app.a11y_nodes_for(id) else {
             return;
         };
-        if let Some(sink) = self
-            .windows
-            .get_mut(&id)
-            .and_then(|record| record.access.as_mut())
-        {
-            sink.apply(&AccessTreeUpdate { root, focus, nodes });
+        if let Some(record) = self.windows.get_mut(&id) {
+            record.access_published = published;
+            if let Some(sink) = record.access.as_mut() {
+                sink.apply(&AccessTreeUpdate { root, focus, nodes });
+            }
         }
     }
 
@@ -2012,6 +2026,11 @@ mod tests {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/runtime/snapshot.rs"
+    ));
+
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/runtime/access.rs"
     ));
 
     fn headless() -> (Aqua, Probe, AquaWindowId) {

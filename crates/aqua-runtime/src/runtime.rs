@@ -2817,6 +2817,15 @@ impl Runtime {
     }
 
     #[must_use]
+    pub fn access_revision(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        self.tree.access_revision().hash(&mut hasher);
+        self.scale.to_bits().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[must_use]
     pub fn a11y_nodes(&self) -> Option<(NodeId, NodeId, Vec<A11yNode>)> {
         let root = self.tree.root()?;
         let focused = self.tree.focused().unwrap_or(root);

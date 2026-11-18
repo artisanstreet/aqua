@@ -53,6 +53,7 @@ struct Capture {
     hash: u64,
     column: Vec<[u8; 4]>,
     pixels: Option<SurfacePixels>,
+    at: WallInstant,
 }
 
 struct Tap<B: GpuBackend<Error = GpuError> + GpuReadback + 'static> {
@@ -89,6 +90,7 @@ impl<B: GpuBackend<Error = GpuError> + GpuReadback + 'static> FrameTarget for Ta
                 hash: fingerprint::of_bytes(&read.rgba8),
                 column,
                 pixels: Some(read),
+                at: WallInstant::now(),
             });
         }
         feedback
@@ -375,15 +377,28 @@ fn transition(column: &[[u8; 4]]) -> Option<usize> {
     column.iter().position(|pixel| pixel != first)
 }
 
-fn glide_steps(frames: &[Capture]) -> Vec<f32> {
-    let positions: Vec<f32> = frames
+struct GlideStep {
+    pixels: f32,
+    since_wheel_secs: f32,
+}
+
+fn glide_steps(frames: &[Capture], wheeled: WallInstant) -> Vec<GlideStep> {
+    let positions: Vec<(f32, WallInstant)> = frames
         .iter()
-        .filter_map(|frame| transition(&frame.column).map(|y| y as f32))
+        .filter_map(|frame| transition(&frame.column).map(|y| (y as f32, frame.at)))
         .collect();
     positions
         .windows(2)
-        .map(|pair| (pair[0] - pair[1]).rem_euclid(ROW))
+        .map(|pair| GlideStep {
+            pixels: (pair[0].0 - pair[1].0).rem_euclid(ROW),
+            since_wheel_secs: pair[1].1.saturating_duration_since(wheeled).as_secs_f32(),
+        })
         .collect()
+}
+
+fn glide_fraction(secs: f32) -> f32 {
+    let omega_t = std::f32::consts::TAU / aqua_runtime::glide::GLIDE_SECS * secs.max(0.0);
+    1.0 - (1.0 + omega_t) * (-omega_t).exp()
 }
 
 fn row_distance(a: f32, b: f32) -> f32 {
@@ -409,6 +424,7 @@ fn scroll_glide_on_the_full_host_advances_monotonically_without_jumps() {
             .unwrap()
             .frames
             .load(Ordering::Relaxed);
+        let wheeled = WallInstant::now();
         host.wheel(NOTCH_UNITS);
         assert!(host.settle(Duration::from_secs(20)));
         let frames = host.since(from);
@@ -432,10 +448,11 @@ fn scroll_glide_on_the_full_host_advances_monotonically_without_jumps() {
             frames.len()
         );
         eprintln!("after transition {:?}", transition(&host.last().column));
-        let steps: Vec<f32> = glide_steps(&measured)
+        let moves: Vec<GlideStep> = glide_steps(&measured, wheeled)
             .into_iter()
-            .filter(|step| step.abs() > 0.0)
+            .filter(|step| step.pixels.abs() > 0.0)
             .collect();
+        let steps: Vec<f32> = moves.iter().map(|step| step.pixels).collect();
         let total: f32 = steps.iter().sum();
         let miss = match paced {
             true => (total - aqua_runtime::glide::NOTCH_PIXELS).abs(),
@@ -454,10 +471,24 @@ fn scroll_glide_on_the_full_host_advances_monotonically_without_jumps() {
             !paced || steps.len() >= 4,
             "{kind:?}: the glide was not animated: {steps:?}"
         );
-        let largest = steps.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        let lead = FRAME_INTERVAL.as_secs_f32();
+        let progress: Vec<(f32, f32)> = moves
+            .iter()
+            .scan(0.0f32, |moved, step| {
+                *moved += step.pixels;
+                let reachable = total.abs() * glide_fraction(step.since_wheel_secs + lead) + 3.0;
+                Some((*moved, reachable))
+            })
+            .collect();
+        eprintln!("glide {kind:?}: (moved, reachable px) per frame {progress:?}");
+        let ahead: Vec<(f32, f32)> = progress
+            .iter()
+            .copied()
+            .filter(|(moved, reachable)| moved > reachable)
+            .collect();
         assert!(
-            !paced || largest <= total.abs() * 0.6,
-            "{kind:?}: a single frame jumped {largest} of {total}: {steps:?}"
+            !paced || ahead.is_empty(),
+            "{kind:?}: the scroll ran ahead of the glide curve, so a frame jumped (moved, reachable px): {ahead:?}; steps {steps:?}"
         );
     }
 }

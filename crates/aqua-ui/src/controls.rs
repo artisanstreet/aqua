@@ -760,6 +760,7 @@ pub fn dispatch(tree: &mut UiTree, event: &InputEvent) -> bool {
                     kind: ActionKind::Activate,
                     text: None,
                     focused: None,
+                    request: None,
                 });
             }
             true

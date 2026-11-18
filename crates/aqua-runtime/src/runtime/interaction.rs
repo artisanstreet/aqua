@@ -380,10 +380,18 @@ impl Runtime {
                     press.node,
                     press.range.id,
                     press.range.range,
-                    *pointer,
+                    Some(*pointer),
                     |tree, node| host.input_allowed(tree, node),
                 );
                 return true;
+            }
+            InputEvent::KeyDown(key)
+                if !key.repeat
+                    && matches!(key.key, Key::Named(NamedKey::Enter) | Key::Char(' ')) =>
+            {
+                if let Some((node, index)) = self.tree.link_focus() {
+                    return self.activate_link(node, index);
+                }
             }
             InputEvent::Scroll { .. }
             | InputEvent::PointerCancel { .. }
@@ -391,6 +399,25 @@ impl Runtime {
             _ => {}
         }
         false
+    }
+
+    pub(super) fn activate_link(&mut self, node: NodeId, index: usize) -> bool {
+        let Some(NodeKind::Text(text)) = self.tree.get(node).map(|record| &record.kind) else {
+            return false;
+        };
+        let Some(range) = text.interaction_ranges.get(index).cloned() else {
+            return false;
+        };
+        let host = &self.host;
+        aqua_ui::input::route_text_range(
+            &mut self.tree,
+            node,
+            range.id,
+            range.range,
+            None,
+            |tree, node| host.input_allowed(tree, node),
+        );
+        true
     }
 
     pub fn selected_text(&self) -> Option<String> {
@@ -1047,6 +1074,7 @@ impl Runtime {
             kind: ActionKind::TextChanged,
             text,
             focused: None,
+            request: None,
         });
     }
 

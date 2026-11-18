@@ -270,6 +270,9 @@ impl OverlayHost {
         if request.focus_root {
             tree.set_focusable(popup_root, true);
         }
+        if request.modality == Modality::Modal {
+            tree.set_modal_scope(popup_root, true);
+        }
         let saved_before = tree.focused();
         let target = match request.autofocus {
             Some(n) => Some(n),

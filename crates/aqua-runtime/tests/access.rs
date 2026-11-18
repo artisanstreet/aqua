@@ -402,3 +402,380 @@ fn cached_accessible_text_tracks_edits_reflow_and_scale() {
     assert!(scaled.runs[0].bounds.h > wrapped.runs[0].bounds.h * 1.5);
     assert_eq!(text(&runtime), scaled);
 }
+
+mod semantics {
+    use super::support;
+    use aqua_core::{NodeId, NumericRangeSemantics, Point, Role};
+    use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest, A11yNode, A11yScroll};
+    use aqua_runtime::{PopupOptions, Runtime};
+    use aqua_text::{SharedFonts, SharedRuns};
+    use aqua_ui::element::ui::{Box as UiBox, Scroll, Text};
+    use aqua_ui::style::{px, Axis, Style};
+    use aqua_ui::tree::AccessibilityRequest;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn nodes(runtime: &Runtime) -> Vec<A11yNode> {
+        runtime.a11y_nodes().unwrap().2
+    }
+
+    fn labelled(runtime: &Runtime, label: &str) -> Option<NodeId> {
+        nodes(runtime)
+            .into_iter()
+            .find(|node| node.semantic.label == label)
+            .map(|node| node.semantic.node)
+    }
+
+    fn request(node: NodeId, action: A11yAction, data: A11yActionData) -> A11yActionRequest {
+        A11yActionRequest { node, action, data }
+    }
+
+    #[test]
+    fn an_open_dialog_hides_the_page_behind_it_from_assistive_tech() {
+        let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+        runtime.set_viewport(300.0, 200.0, 1.0);
+        runtime
+            .mount(|_| {
+                UiBox::new()
+                    .child(
+                        UiBox::new()
+                            .style(Style::new().width(px(60.0)).height(px(20.0)))
+                            .build()
+                            .role(Role::Button)
+                            .aria_label("Background action")
+                            .focusable(true),
+                    )
+                    .build()
+            })
+            .unwrap();
+        support::resize(&mut runtime, 300.0, 200.0, 1.0);
+        runtime.build_frame().unwrap();
+        assert!(labelled(&runtime, "Background action").is_some());
+        let owner = runtime.tree().root().unwrap();
+        let dialog = runtime
+            .open_popup(
+                owner,
+                UiBox::new()
+                    .style(Style::new().width(px(120.0)).height(px(80.0)))
+                    .child(Text::builder().arg("Delete this thread?").build())
+                    .build()
+                    .role(Role::Dialog)
+                    .aria_label("Confirm"),
+                PopupOptions::dialog(),
+            )
+            .unwrap();
+        runtime.build_frame().unwrap();
+        assert!(labelled(&runtime, "Background action").is_none());
+        assert!(labelled(&runtime, "Delete this thread?").is_some());
+        let root = runtime.host().popup_root(dialog).unwrap();
+        assert!(nodes(&runtime)
+            .iter()
+            .any(|node| node.semantic.node == root && node.semantic.modal));
+    }
+
+    #[test]
+    fn custom_ranges_and_context_menus_accept_assistive_requests() {
+        let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+        runtime.set_viewport(300.0, 200.0, 1.0);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        runtime
+            .mount(move |_| {
+                UiBox::new()
+                    .style(Style::new().width(px(100.0)).height(px(20.0)))
+                    .build()
+                    .role(Role::Slider)
+                    .aria_label("Position")
+                    .aria_range(NumericRangeSemantics {
+                        min: 0.0,
+                        max: 60.0,
+                        value: 10.0,
+                        step: 5.0,
+                    })
+                    .focusable(true)
+                    .on_accessibility_request(move |request| sink.borrow_mut().push(request))
+            })
+            .unwrap();
+        runtime.build_frame().unwrap();
+        let slider = labelled(&runtime, "Position").unwrap();
+        for (action, data) in [
+            (A11yAction::Increment, A11yActionData::None),
+            (A11yAction::Decrement, A11yActionData::None),
+            (A11yAction::SetValue, A11yActionData::Numeric(42.0)),
+            (A11yAction::SetValue, A11yActionData::Value(" 12.5 ".into())),
+            (A11yAction::SetValue, A11yActionData::Value("half".into())),
+            (A11yAction::ShowContextMenu, A11yActionData::None),
+        ] {
+            support::access(&mut runtime, request(slider, action, data));
+        }
+        assert_eq!(
+            *seen.borrow(),
+            vec![
+                AccessibilityRequest::Increment,
+                AccessibilityRequest::Decrement,
+                AccessibilityRequest::SetValue(42.0),
+                AccessibilityRequest::SetValue(12.5),
+                AccessibilityRequest::ShowContextMenu,
+            ]
+        );
+    }
+
+    fn scroller() -> Runtime {
+        let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+        runtime.set_viewport(200.0, 150.0, 1.0);
+        runtime
+            .mount(|_| {
+                Scroll::new()
+                    .style(Style::new().width(px(200.0)).height(px(100.0)))
+                    .child(
+                        UiBox::new()
+                            .style(
+                                Style::new()
+                                    .axis(Axis::Column)
+                                    .width(px(200.0))
+                                    .height(px(800.0))
+                                    .flex_shrink(0.0),
+                            )
+                            .children((0..20).map(|row| {
+                                UiBox::new()
+                                    .style(
+                                        Style::new()
+                                            .width(px(200.0))
+                                            .height(px(40.0))
+                                            .flex_shrink(0.0),
+                                    )
+                                    .build()
+                                    .role(Role::Button)
+                                    .aria_label(format!("Row {row}"))
+                                    .focusable(true)
+                            }))
+                            .build(),
+                    )
+                    .build()
+                    .role(Role::ScrollRegion)
+                    .aria_label("Results")
+            })
+            .unwrap();
+        support::resize(&mut runtime, 200.0, 150.0, 1.0);
+        runtime.build_frame().unwrap();
+        runtime
+    }
+
+    fn scroll_y(runtime: &Runtime) -> (f64, f64) {
+        let region = nodes(runtime)
+            .into_iter()
+            .find(|node| node.semantic.label == "Results")
+            .unwrap();
+        let scroll = region.semantic.scroll.unwrap();
+        (scroll.y, scroll.y_max)
+    }
+
+    #[test]
+    fn assistive_tech_can_read_and_move_scroll_positions() {
+        let mut runtime = scroller();
+        let region = labelled(&runtime, "Results").unwrap();
+        assert_eq!(scroll_y(&runtime), (0.0, 700.0));
+        let last = labelled(&runtime, "Row 19").unwrap();
+        support::access(
+            &mut runtime,
+            request(last, A11yAction::ScrollIntoView, A11yActionData::None),
+        );
+        runtime.build_frame().unwrap();
+        assert_eq!(scroll_y(&runtime).0, 700.0);
+        support::access(
+            &mut runtime,
+            request(
+                region,
+                A11yAction::SetScrollOffset,
+                A11yActionData::ScrollOffset { x: 0.0, y: 120.0 },
+            ),
+        );
+        runtime.build_frame().unwrap();
+        assert_eq!(scroll_y(&runtime).0, 120.0);
+        support::access(
+            &mut runtime,
+            request(
+                region,
+                A11yAction::Scroll(A11yScroll::Up),
+                A11yActionData::None,
+            ),
+        );
+        runtime.build_frame().unwrap();
+        assert_eq!(scroll_y(&runtime).0, 32.5);
+        let first = labelled(&runtime, "Row 0").unwrap();
+        support::access(
+            &mut runtime,
+            request(first, A11yAction::ScrollIntoView, A11yActionData::None),
+        );
+        runtime.build_frame().unwrap();
+        assert_eq!(scroll_y(&runtime).0, 0.0);
+        assert_eq!(runtime.tree().scroll_offset(region), Some(Point::ZERO));
+    }
+
+}
+
+mod links {
+    use super::support;
+    use aqua_core::{InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId};
+    use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest};
+    use aqua_runtime::Runtime;
+    use aqua_text::{SharedFonts, SharedRuns};
+    use aqua_ui::element::ui::{Box as UiBox, Text};
+    use aqua_ui::input::{EventPhase, InputKind, InputResponse, RoutedInput};
+    use aqua_ui::style::{px, Style};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn key(runtime: &mut Runtime, key: Key, modifiers: Modifiers) {
+        let event = KeyEvent {
+            key,
+            modifiers,
+            repeat: false,
+        };
+        runtime.handle_input(&InputEvent::KeyDown(event));
+        runtime.handle_input(&InputEvent::KeyUp(event));
+    }
+
+    fn tab(runtime: &mut Runtime, reverse: bool) {
+        let modifiers = match reverse {
+            true => Modifiers::SHIFT,
+            false => Modifiers::NONE,
+        };
+        key(runtime, Key::Named(NamedKey::Tab), modifiers);
+    }
+
+    fn page(activated: Rc<RefCell<Vec<(u64, bool)>>>) -> Runtime {
+        let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+        runtime.set_viewport(400.0, 200.0, 1.0);
+        runtime
+            .mount(move |_| {
+                UiBox::new()
+                    .child(
+                        UiBox::new()
+                            .style(Style::new().width(px(40.0)).height(px(20.0)))
+                            .build()
+                            .aria_label("Before")
+                            .focusable(true),
+                    )
+                    .child(
+                        Text::builder()
+                            .arg("Read the docs or the guide today")
+                            .interaction_range(11, 9..13)
+                            .interaction_range(12, 21..26)
+                            .style(Style::new().width(px(300.0)).height(px(40.0)))
+                            .build()
+                            .focusable(true)
+                            .on_input(
+                                InputKind::TextRangeActivated,
+                                EventPhase::Bubble,
+                                move |event| {
+                                    if let RoutedInput::TextRangeActivated { id, pointer, .. } =
+                                        &event.input
+                                    {
+                                        activated.borrow_mut().push((*id, pointer.is_some()));
+                                    }
+                                    InputResponse::handled()
+                                },
+                            ),
+                    )
+                    .child(
+                        UiBox::new()
+                            .style(Style::new().width(px(40.0)).height(px(20.0)))
+                            .build()
+                            .aria_label("After")
+                            .focusable(true),
+                    )
+                    .build()
+            })
+            .unwrap();
+        support::resize(&mut runtime, 400.0, 200.0, 1.0);
+        runtime.build_frame().unwrap();
+        runtime
+    }
+
+    fn labelled(runtime: &Runtime, label: &str) -> NodeId {
+        runtime
+            .a11y_nodes()
+            .unwrap()
+            .2
+            .into_iter()
+            .find(|node| node.semantic.label == label)
+            .unwrap()
+            .semantic
+            .node
+    }
+
+    fn links(runtime: &Runtime) -> Vec<(String, bool)> {
+        runtime
+            .a11y_nodes()
+            .unwrap()
+            .2
+            .into_iter()
+            .find_map(|node| node.text.filter(|text| !text.links.is_empty()))
+            .unwrap()
+            .links
+            .into_iter()
+            .map(|link| (link.label, link.focused))
+            .collect()
+    }
+
+    #[test]
+    fn tab_walks_the_links_inside_a_paragraph_and_enter_opens_one() {
+        let activated = Rc::new(RefCell::new(Vec::new()));
+        let mut runtime = page(Rc::clone(&activated));
+        let before = labelled(&runtime, "Before");
+        let after = labelled(&runtime, "After");
+        assert!(runtime.tree_mut().set_focused(Some(before)));
+        tab(&mut runtime, false);
+        assert_eq!(
+            links(&runtime),
+            vec![("docs".to_owned(), true), ("guide".to_owned(), false)]
+        );
+        tab(&mut runtime, false);
+        assert_eq!(
+            links(&runtime),
+            vec![("docs".to_owned(), false), ("guide".to_owned(), true)]
+        );
+        key(&mut runtime, Key::Named(NamedKey::Enter), Modifiers::NONE);
+        assert_eq!(*activated.borrow(), vec![(12, false)]);
+        tab(&mut runtime, false);
+        assert_eq!(runtime.tree().focused(), Some(after));
+        tab(&mut runtime, true);
+        assert_eq!(
+            links(&runtime),
+            vec![("docs".to_owned(), false), ("guide".to_owned(), true)]
+        );
+        tab(&mut runtime, true);
+        tab(&mut runtime, true);
+        assert_eq!(runtime.tree().focused(), Some(before));
+    }
+
+    #[test]
+    fn assistive_tech_activates_a_link_by_its_index() {
+        let activated = Rc::new(RefCell::new(Vec::new()));
+        let mut runtime = page(Rc::clone(&activated));
+        let paragraph = runtime
+            .a11y_nodes()
+            .unwrap()
+            .2
+            .into_iter()
+            .find(|node| {
+                node.text
+                    .as_ref()
+                    .is_some_and(|text| !text.links.is_empty())
+            })
+            .unwrap()
+            .semantic
+            .node;
+        support::access(
+            &mut runtime,
+            A11yActionRequest {
+                node: paragraph,
+                action: A11yAction::Press,
+                data: A11yActionData::Custom(0),
+            },
+        );
+        assert_eq!(*activated.borrow(), vec![(11, false)]);
+        assert_eq!(runtime.tree().link_focus(), Some((paragraph, 0)));
+    }
+}

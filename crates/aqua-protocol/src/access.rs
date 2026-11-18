@@ -26,7 +26,19 @@ pub enum A11yAction {
     Collapse,
     Increment,
     Decrement,
+    ScrollIntoView,
+    Scroll(A11yScroll),
+    SetScrollOffset,
+    ShowContextMenu,
     Other(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum A11yScroll {
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,6 +74,14 @@ pub struct A11yText {
     pub runs: Vec<A11yTextRun>,
     pub selection: Option<(usize, usize)>,
     pub selection_enabled: bool,
+    pub links: Vec<A11yLink>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct A11yLink {
+    pub label: String,
+    pub bounds: Rect,
+    pub focused: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

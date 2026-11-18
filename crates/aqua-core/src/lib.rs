@@ -39,7 +39,9 @@ pub use scene::{
     decode_layer, media_layer, viewport_layer, DisplayItem, FillPatch, LayerKind, TextRun,
     LAYER_MAX_GENERATION, LAYER_TAG_MASK, LAYER_TAG_MEDIA, LAYER_TAG_VIEWPORT,
 };
-pub use semantic::{CollectionSemantics, NumericRangeSemantics, Role, SemanticNode};
+pub use semantic::{
+    CollectionSemantics, LiveRegion, NumericRangeSemantics, Role, ScrollSemantics, SemanticNode,
+};
 
 pub use image::ImageRef;
 

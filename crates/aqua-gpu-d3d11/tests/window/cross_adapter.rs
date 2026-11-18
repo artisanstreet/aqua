@@ -84,6 +84,7 @@ fn present_on(info: &AdapterInfo) -> (bool, u64, u64) {
 }
 
 #[test]
+#[ignore = "needs an integrated GPU beside a discrete GPU; run with --ignored on such a machine"]
 fn every_hardware_adapter_presents_to_a_window_native_or_across_adapters() {
     let adapters = hardware_adapters();
     assert!(!adapters.is_empty(), "no hardware adapter on this machine");
@@ -112,6 +113,7 @@ fn every_hardware_adapter_presents_to_a_window_native_or_across_adapters() {
 }
 
 #[test]
+#[ignore = "needs an integrated GPU beside a discrete GPU; run with --ignored on such a machine"]
 fn the_integrated_adapter_presents_and_matches_the_reference() {
     let adapters = hardware_adapters();
     let Some(integrated) = adapters

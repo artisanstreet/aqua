@@ -332,6 +332,7 @@ fn drives_monitor(info: &AdapterInfo, window: &Window) -> bool {
 }
 
 #[test]
+#[ignore = "needs an integrated GPU beside a discrete GPU; run with --ignored on such a machine"]
 fn every_hardware_adapter_presents_the_full_host_native_or_across_adapters() {
     exclusive::hold_exclusive();
     let adapters = hardware_adapters();

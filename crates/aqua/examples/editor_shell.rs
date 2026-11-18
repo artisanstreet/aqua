@@ -350,6 +350,7 @@ fn shell(
         .build()
 }
 
+#[expect(deprecated)]
 fn editor_shell(cx: &Context) -> impl IntoView + use<> {
     let (read, write) = cx.scope().signal(Model {
         tab: 0,

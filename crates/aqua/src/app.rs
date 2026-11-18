@@ -367,6 +367,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn reactive_view_mounts_and_updates_on_explicit_deps() {
         let prefs = OsPreferences::fallback();
         let slot: Rc<RefCell<Option<WriteSignal<bool>>>> = Rc::new(RefCell::new(None));
@@ -472,6 +473,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn dispose_runs_scope_cleanups_and_releases_text_runs() {
         let prefs = OsPreferences::fallback();
         let cleanups = Rc::new(Cell::new(0u32));

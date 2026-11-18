@@ -73,6 +73,7 @@ fn static_headless_run_mounts_and_disposes_scope() {
 }
 
 #[test]
+#[expect(deprecated)]
 fn reactive_headless_run_executes_explicit_deps() {
     use aqua::ui::Text as UiText;
     let renders = Arc::new(AtomicUsize::new(0));

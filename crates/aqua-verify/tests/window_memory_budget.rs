@@ -194,6 +194,9 @@ fn run(preference: AdapterPreference, high_performance: bool, budget: Option<Mem
         warm.vram,
         steady_end.vram
     );
+    backend.destroy_surface(surface).unwrap();
+    drop(backend);
+    drop(window);
 }
 
 #[test]

@@ -41,6 +41,12 @@ fn native_text_service_uses_live_selection_and_rejects_stale_paint() {
             model.revision += 1;
             model.edits += 1;
         }
+        fn replace_all(&self, text: &str) {
+            let mut model = self.0.borrow_mut();
+            model.text = text.to_owned();
+            model.revision += 1;
+            model.edits += 1;
+        }
     }
 
     let model = Rc::new(RefCell::new(Model {
@@ -84,6 +90,74 @@ fn native_text_service_uses_live_selection_and_rejects_stale_paint() {
         .unwrap()
         .selected_bounds()
         .is_none());
+}
+
+#[test]
+fn accessibility_text_edits_go_to_the_external_model() {
+    use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest};
+    use aqua_ui::tree::NativeTextModel;
+    use std::cell::RefCell;
+    use std::ops::Range;
+    use std::rc::Rc;
+
+    #[derive(Default)]
+    struct Owner {
+        text: String,
+        replaced: Vec<String>,
+    }
+    struct Model(Rc<RefCell<Owner>>);
+    impl NativeTextModel for Model {
+        fn paint_revision(&self) -> Option<u64> {
+            Some(0)
+        }
+        fn matches_text(&self, text: &str) -> bool {
+            self.0.borrow().text == text
+        }
+        fn selected_bytes(&self) -> Option<Range<usize>> {
+            Some(0..0)
+        }
+        fn replace_utf16(&self, text: &str, _: Option<Range<usize>>) {
+            self.0.borrow_mut().replaced.push(text.to_owned());
+        }
+        fn replace_all(&self, text: &str) {
+            self.0.borrow_mut().text = text.to_owned();
+        }
+    }
+
+    let owner = Rc::new(RefCell::new(Owner {
+        text: "draft".into(),
+        replaced: Vec::new(),
+    }));
+    let model = Rc::new(Model(owner.clone()));
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime
+        .mount(|_| {
+            UiText::new("draft")
+                .editable(true)
+                .external_text_input(true)
+                .native_text_model(model)
+                .build()
+        })
+        .unwrap();
+    runtime.set_viewport(300.0, 100.0, 1.0);
+    runtime.build_frame().unwrap();
+    let node = runtime.tree().root().unwrap();
+    for (action, value) in [
+        (A11yAction::SetValue, "spoken\r\nline"),
+        (A11yAction::ReplaceSelectedText, "more"),
+    ] {
+        support::access(
+            &mut runtime,
+            A11yActionRequest {
+                node,
+                action,
+                data: A11yActionData::Value(value.into()),
+            },
+        );
+    }
+    assert_eq!(owner.borrow().text, "spoken\nline");
+    assert_eq!(owner.borrow().replaced, ["more"]);
+    assert_eq!(runtime.tree().editor_snapshot(node).unwrap().text, "draft");
 }
 
 #[test]

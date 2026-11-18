@@ -417,10 +417,10 @@ fn state_before(
 fn check_states(plan: &FramePlan) -> Result<(), PlanError> {
     for (index, pass) in plan.passes.iter().enumerate() {
         for (position, barrier) in pass.barriers.iter().enumerate() {
-            if let Barrier::Transition { resource, from, .. } = barrier {
-                if state_before(plan, index, position, *resource) != *from {
-                    return Err(PlanError::BarrierMismatch { pass: index });
-                }
+            if let Barrier::Transition { resource, from, .. } = barrier
+                && state_before(plan, index, position, *resource) != *from
+            {
+                return Err(PlanError::BarrierMismatch { pass: index });
             }
         }
         let wanted = pass
@@ -444,10 +444,10 @@ fn check_states(plan: &FramePlan) -> Result<(), PlanError> {
     }
     let end = plan.passes.len();
     for (position, barrier) in plan.final_barriers.iter().enumerate() {
-        if let Barrier::Transition { resource, from, .. } = barrier {
-            if state_before(plan, end, position, *resource) != *from {
-                return Err(PlanError::BarrierMismatch { pass: end });
-            }
+        if let Barrier::Transition { resource, from, .. } = barrier
+            && state_before(plan, end, position, *resource) != *from
+        {
+            return Err(PlanError::BarrierMismatch { pass: end });
         }
     }
     (state_before(plan, end, plan.final_barriers.len(), TextureRef::Surface)

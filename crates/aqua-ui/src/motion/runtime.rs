@@ -206,11 +206,11 @@ impl MotionRuntime {
                     let _ = tracks.set_target_with(prop.track, prop.target, kind, at);
                 }
             }
-            if let Some(frame) = state.frame {
-                if changed(frame, &self.theme) {
-                    let kind = self.theme.resolve(frame).kind();
-                    self.edges.retime(tracks, *node, kind, at);
-                }
+            if let Some(frame) = state.frame
+                && changed(frame, &self.theme)
+            {
+                let kind = self.theme.resolve(frame).kind();
+                self.edges.retime(tracks, *node, kind, at);
             }
         }
     }
@@ -434,47 +434,48 @@ impl MotionRuntime {
                 );
             }
         }
-        if entered && self.seeded {
-            if let Some(enter) = spec.presence.enter_motion() {
-                if spec.presence.fades() {
-                    self.ensure_prop(
-                        tracks,
-                        &mut state,
-                        node,
-                        AnimatedProperty::Opacity,
-                        MotionValue::Scalar(0.0),
-                        enter,
-                        at,
-                    );
-                    self.retarget(
-                        tracks,
-                        &mut state,
-                        AnimatedProperty::Opacity,
-                        opacity,
-                        enter,
-                        at,
-                    );
-                }
-                if let Some((dx, dy)) = spec.presence.slide_offset() {
-                    let rest = Self::resting_translate(tree, node);
-                    self.ensure_prop(
-                        tracks,
-                        &mut state,
-                        node,
-                        AnimatedProperty::Translate,
-                        MotionValue::Pair(rest.0 + dx, rest.1 + dy),
-                        enter,
-                        at,
-                    );
-                    self.retarget(
-                        tracks,
-                        &mut state,
-                        AnimatedProperty::Translate,
-                        MotionValue::Pair(rest.0, rest.1),
-                        enter,
-                        at,
-                    );
-                }
+        if entered
+            && self.seeded
+            && let Some(enter) = spec.presence.enter_motion()
+        {
+            if spec.presence.fades() {
+                self.ensure_prop(
+                    tracks,
+                    &mut state,
+                    node,
+                    AnimatedProperty::Opacity,
+                    MotionValue::Scalar(0.0),
+                    enter,
+                    at,
+                );
+                self.retarget(
+                    tracks,
+                    &mut state,
+                    AnimatedProperty::Opacity,
+                    opacity,
+                    enter,
+                    at,
+                );
+            }
+            if let Some((dx, dy)) = spec.presence.slide_offset() {
+                let rest = Self::resting_translate(tree, node);
+                self.ensure_prop(
+                    tracks,
+                    &mut state,
+                    node,
+                    AnimatedProperty::Translate,
+                    MotionValue::Pair(rest.0 + dx, rest.1 + dy),
+                    enter,
+                    at,
+                );
+                self.retarget(
+                    tracks,
+                    &mut state,
+                    AnimatedProperty::Translate,
+                    MotionValue::Pair(rest.0, rest.1),
+                    enter,
+                    at,
+                );
             }
         }
         for (property, motion) in spec.animate.properties() {

@@ -190,8 +190,7 @@ impl Rig {
             "edit session {hr:?} at {}",
             std::panic::Location::caller()
         );
-        let result = slot.borrow_mut().take().expect("session ran");
-        result
+        slot.borrow_mut().take().expect("session ran")
     }
 }
 

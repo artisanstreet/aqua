@@ -281,17 +281,17 @@ impl OverlayHost {
             self.saved_focus.insert(id.raw(), saved_before);
         }
 
-        if let Some(bounds) = self.service.bounds(id) {
-            if let Some(rec) = tree.get(popup_root) {
-                let mut style = rec.style.clone();
-                style.absolute = Some(Absolute {
-                    left: Some(bounds.x),
-                    top: Some(bounds.y),
-                    right: None,
-                    bottom: None,
-                });
-                tree.set_style(popup_root, style);
-            }
+        if let Some(bounds) = self.service.bounds(id)
+            && let Some(rec) = tree.get(popup_root)
+        {
+            let mut style = rec.style.clone();
+            style.absolute = Some(Absolute {
+                left: Some(bounds.x),
+                top: Some(bounds.y),
+                right: None,
+                bottom: None,
+            });
+            tree.set_style(popup_root, style);
         }
         tree.mark_portal(popup_root);
         self.mounts.insert(id.raw(), popup_root);
@@ -321,10 +321,11 @@ impl OverlayHost {
         let mut closed = Vec::new();
         let mut dead_owners = Vec::new();
         for id in self.service.stack() {
-            if let Some(owner) = self.service.owner_of(id) {
-                if tree.get(owner).is_none() && !dead_owners.contains(&owner) {
-                    dead_owners.push(owner);
-                }
+            if let Some(owner) = self.service.owner_of(id)
+                && tree.get(owner).is_none()
+                && !dead_owners.contains(&owner)
+            {
+                dead_owners.push(owner);
             }
         }
         for owner in dead_owners {
@@ -359,15 +360,14 @@ impl OverlayHost {
             .get(&overlay.raw())
             .map(|point| Rect::from_origin_size(*point, Size::ZERO))
             .or_else(|| visible_rect(tree, owner))?;
-        if self.measured.contains(&overlay.raw()) {
-            if let Some(size) = self
+        if self.measured.contains(&overlay.raw())
+            && let Some(size) = self
                 .mounts
                 .get(&overlay.raw())
                 .and_then(|root| tree.rect(*root))
                 .map(|bounds| bounds.size())
-            {
-                self.service.set_size(overlay, size);
-            }
+        {
+            self.service.set_size(overlay, size);
         }
         let bounds = if self.pointer_tooltips.contains(&overlay.raw()) {
             let size = self
@@ -401,18 +401,18 @@ impl OverlayHost {
         } else {
             self.service.reposition(overlay, anchor)?
         };
-        if let Some(root) = self.mounts.get(&overlay.raw()).copied() {
-            if let Some(rec) = tree.get(root) {
-                let mut style = rec.style.clone();
-                style.absolute = Some(Absolute {
-                    left: Some(bounds.x),
-                    top: Some(bounds.y),
-                    right: None,
-                    bottom: None,
-                });
-                tree.set_interaction_base_absolute(root, style.absolute);
-                tree.set_style(root, style);
-            }
+        if let Some(root) = self.mounts.get(&overlay.raw()).copied()
+            && let Some(rec) = tree.get(root)
+        {
+            let mut style = rec.style.clone();
+            style.absolute = Some(Absolute {
+                left: Some(bounds.x),
+                top: Some(bounds.y),
+                right: None,
+                bottom: None,
+            });
+            tree.set_interaction_base_absolute(root, style.absolute);
+            tree.set_style(root, style);
         }
         Some(bounds)
     }
@@ -478,17 +478,17 @@ impl OverlayHost {
         self.viewport = viewport;
         let moved = self.service.set_viewport(viewport);
         for id in &moved {
-            if let Some(root) = self.mounts.get(&id.raw()).copied() {
-                if let (Some(bounds), Some(rec)) = (self.service.bounds(*id), tree.get(root)) {
-                    let mut style = rec.style.clone();
-                    style.absolute = Some(Absolute {
-                        left: Some(bounds.x),
-                        top: Some(bounds.y),
-                        right: None,
-                        bottom: None,
-                    });
-                    tree.set_style(root, style);
-                }
+            if let Some(root) = self.mounts.get(&id.raw()).copied()
+                && let (Some(bounds), Some(rec)) = (self.service.bounds(*id), tree.get(root))
+            {
+                let mut style = rec.style.clone();
+                style.absolute = Some(Absolute {
+                    left: Some(bounds.x),
+                    top: Some(bounds.y),
+                    right: None,
+                    bottom: None,
+                });
+                tree.set_style(root, style);
             }
         }
         moved
@@ -542,12 +542,13 @@ impl OverlayHost {
         if events::text_is_composing(tree) && self.focused_in_modal_domain(tree) {
             return (KeyOutcome::Ignored, true);
         }
-        if key.key == Key::Named(NamedKey::Tab) && !key.repeat {
-            if let Some(modal) = self.service.modal_blocker() {
-                let reverse = key.modifiers.contains(Modifiers::SHIFT);
-                self.trap_tab(tree, modal, reverse);
-                return (KeyOutcome::CapturedByModal { overlay: modal }, true);
-            }
+        if key.key == Key::Named(NamedKey::Tab)
+            && !key.repeat
+            && let Some(modal) = self.service.modal_blocker()
+        {
+            let reverse = key.modifiers.contains(Modifiers::SHIFT);
+            self.trap_tab(tree, modal, reverse);
+            return (KeyOutcome::CapturedByModal { overlay: modal }, true);
         }
         let outcome = self
             .service
@@ -992,10 +993,10 @@ impl OverlayHost {
             return;
         }
         for entry in closed.iter().rev() {
-            if let Some(saved) = self.saved_focus.remove(&entry.id.raw()) {
-                if tree.set_focused(saved) {
-                    break;
-                }
+            if let Some(saved) = self.saved_focus.remove(&entry.id.raw())
+                && tree.set_focused(saved)
+            {
+                break;
             }
         }
     }

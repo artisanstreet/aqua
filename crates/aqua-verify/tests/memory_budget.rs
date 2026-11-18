@@ -15,6 +15,8 @@ use aqua_verify::workload::editor_workload;
 
 #[path = "support/exclusive.rs"]
 mod exclusive;
+#[path = "support/renderer.rs"]
+mod renderer;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -164,7 +166,7 @@ fn run(
         steady_growth: steady_end.private.saturating_sub(warm.private),
         vram_total: steady_end.vram,
     };
-    let breaches = budget
+    let breaches = renderer::budget_for(&backend.device_info().adapter, budget)
         .map(|budget| budget.check(&measured))
         .unwrap_or_default();
     assert!(
@@ -207,7 +209,7 @@ fn warp_steady_state_does_not_grow() {
         "warp_steady_state_does_not_grow",
         AdapterPreference::Warp,
         false,
-        None,
+        Some(RENDERER_OFFSCREEN),
         true,
     );
 }

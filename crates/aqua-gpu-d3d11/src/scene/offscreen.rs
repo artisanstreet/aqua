@@ -57,6 +57,7 @@ struct Gpu {
     renderer: SceneRenderer,
     textures: PersistentTextures,
     pending_uploads: Vec<UploadBatch>,
+    fence: super::latency::FrameFence,
 }
 
 pub struct OffscreenBackend {
@@ -193,6 +194,7 @@ impl Gpu {
         renderer.warm()?;
         Ok(Self {
             textures: PersistentTextures::new(&selected.device),
+            fence: super::latency::FrameFence::new(&selected.device)?,
             device: selected.device,
             context: selected.context,
             info: selected.info,
@@ -334,6 +336,7 @@ impl OffscreenBackend {
         }
         self.gpu.check_removed()?;
         let gpu = &mut self.gpu;
+        gpu.fence.wait_for_slot(&gpu.context)?;
         gpu.textures.apply(&gpu.context, &gpu.pending_uploads)?;
         gpu.pending_uploads.clear();
         let target = SceneTarget {
@@ -346,6 +349,7 @@ impl OffscreenBackend {
         let stats = gpu
             .renderer
             .record(&gpu.context, plan, &target, &gpu.textures, None)?;
+        gpu.fence.signal(&gpu.context);
         self.last_scene_stats = stats;
         entry.executed = true;
         Ok(FrameReport {

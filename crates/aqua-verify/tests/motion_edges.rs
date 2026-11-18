@@ -223,10 +223,10 @@ fn edge_trace(seed: u64, scrolled: bool, rate: f64, end: f64) -> Vec<(f64, f32)>
             rig.app_frame(change.at);
         }
         rig.render_only(time);
-        if time >= 1.0 {
-            if let Some((top, _)) = rig.block() {
-                trace.push((time, top));
-            }
+        if time >= 1.0
+            && let Some((top, _)) = rig.block()
+        {
+            trace.push((time, top));
         }
     }
     trace
@@ -337,12 +337,12 @@ fn presence_trace(seed: u64, rate: f64) -> (Vec<(f64, f32)>, f64) {
             popup = Some(open(&mut rig));
             rig.app_frame(open_at);
         }
-        if let (Some(id), false) = (popup, closed) {
-            if time >= close_at {
-                assert!(rig.runtime.close_popup(id));
-                closed = true;
-                rig.app_frame(close_at);
-            }
+        if let (Some(id), false) = (popup, closed)
+            && time >= close_at
+        {
+            assert!(rig.runtime.close_popup(id));
+            closed = true;
+            rig.app_frame(close_at);
         }
         rig.render_only(time);
         if time > open_at {

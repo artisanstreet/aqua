@@ -53,7 +53,7 @@ fn scene(extent: Extent, step: usize, scenario: Scenario) -> FramePlan {
     let dark = Oklch::from_hex("#101010").unwrap();
     let color = |step| Oklch::from_hex(if step % 2 == 0 { "#224466" } else { "#663322" }).unwrap();
     let (first_step, second_step) = match scenario {
-        Scenario::Alternating => ((step + 1) / 2, step / 2),
+        Scenario::Alternating => (step.div_ceil(2), step / 2),
         _ => (step, step),
     };
     let [first, second] = patches(extent);
@@ -120,8 +120,10 @@ fn stable_backdrop(preference: AdapterPreference, scenario: Scenario) {
             .unwrap();
         let actual = backend.read_surface(surface).unwrap().rgba8;
         let worst = actual
-            .chunks_exact(4)
-            .zip(expected.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(expected.as_chunks::<4>().0)
             .enumerate()
             .filter(|(index, _)| {
                 let x = (index % extent.width as usize) as f32;

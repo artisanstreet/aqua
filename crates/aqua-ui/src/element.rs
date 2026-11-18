@@ -2845,10 +2845,10 @@ impl Element {
             }
         }
         let rec_style = rec.style.clone();
-        if let Some(style) = self.style_opt() {
-            if rec.style != *style {
-                tree.set_style(id, style.clone());
-            }
+        if let Some(style) = self.style_opt()
+            && rec.style != *style
+        {
+            tree.set_style(id, style.clone());
         }
         let paint = self.resolved_paint();
         check_paint(&paint)?;
@@ -2872,18 +2872,17 @@ impl Element {
                     if !Self::switch_text_backing(tree, id, t) {
                         return Ok(false);
                     }
-                } else if live_editable && live_multiline != t.multiline {
-                    if let Some(rec) = tree.get_mut(id) {
-                        if let NodeKind::Text(ref mut tc) = rec.kind {
-                            if let TextBacking::Editable(ref mut ed) = tc.backing {
-                                ed.set_line_mode(if t.multiline {
-                                    LineMode::Multi
-                                } else {
-                                    LineMode::Single
-                                });
-                            }
-                        }
-                    }
+                } else if live_editable
+                    && live_multiline != t.multiline
+                    && let Some(rec) = tree.get_mut(id)
+                    && let NodeKind::Text(ref mut tc) = rec.kind
+                    && let TextBacking::Editable(ref mut ed) = tc.backing
+                {
+                    ed.set_line_mode(if t.multiline {
+                        LineMode::Multi
+                    } else {
+                        LineMode::Single
+                    });
                 }
                 let uncontrolled = t.editable
                     && !self.bindings.iter().any(|b| {
@@ -2901,24 +2900,24 @@ impl Element {
                     let text = source.try_get().unwrap_or_default();
                     tree.set_text(id, text);
                 }
-                if let Some(rec) = tree.get_mut(id) {
-                    if let NodeKind::Text(ref mut tc) = rec.kind {
-                        tc.text_style = eff.text_style.clone();
-                        tc.font_size = eff.font_size;
-                        tc.color = eff.color;
-                        tc.wrap = eff.wrap;
-                    }
+                if let Some(rec) = tree.get_mut(id)
+                    && let NodeKind::Text(ref mut tc) = rec.kind
+                {
+                    tc.text_style = eff.text_style.clone();
+                    tc.font_size = eff.font_size;
+                    tc.color = eff.color;
+                    tc.wrap = eff.wrap;
                 }
             }
             ElementKind::Media(m) => {
-                if let Some(rec) = tree.get_mut(id) {
-                    if let NodeKind::Media(ref mut cur) = rec.kind {
-                        cur.image = m.image.clone();
-                        cur.opacity = m.opacity;
-                        cur.fit = m.fit;
-                        cur.position = m.position;
-                        cur.source = m.source;
-                    }
+                if let Some(rec) = tree.get_mut(id)
+                    && let NodeKind::Media(ref mut cur) = rec.kind
+                {
+                    cur.image = m.image.clone();
+                    cur.opacity = m.opacity;
+                    cur.fit = m.fit;
+                    cur.position = m.position;
+                    cur.source = m.source;
                 }
             }
             ElementKind::Scroll(s) => {
@@ -2928,11 +2927,11 @@ impl Element {
             }
             ElementKind::Canvas(_) => {}
             ElementKind::Viewport3D(v) => {
-                if let Some(rec) = tree.get_mut(id) {
-                    if let NodeKind::Viewport3D(ref mut cur) = rec.kind {
-                        cur.viewport = v.viewport;
-                        cur.layer = v.layer;
-                    }
+                if let Some(rec) = tree.get_mut(id)
+                    && let NodeKind::Viewport3D(ref mut cur) = rec.kind
+                {
+                    cur.viewport = v.viewport;
+                    cur.layer = v.layer;
                 }
             }
             ElementKind::Collection(d) => {
@@ -3013,32 +3012,32 @@ impl Element {
         preserve_editing: bool,
         eff: &Typography,
     ) {
-        if let Some(rec) = tree.get_mut(id) {
-            if let NodeKind::Text(ref mut tc) = rec.kind {
-                tc.text_style = eff.text_style.clone();
-                tc.spans = t.spans.clone();
-                tc.inline_glyphs = t.inline_glyphs.clone();
-                tc.inline_paints = t.inline_paints.clone();
-                tc.gpui_text_opacity = t.gpui_text_opacity.clone();
-                tc.selection_source = t.selection_source.clone();
-                tc.interaction_ranges = t.interaction_ranges.clone();
-                tc.selection_auto_scroll = t.selection_auto_scroll;
-                tc.text_appearance = t.text_appearance;
-                tc.gpui_text_appearance = t.gpui_text_appearance;
-                tc.external_text_input = t.external_text_input;
-                tc.native_text_model = t.native_text_model.clone();
-                tc.viewport_scroll_max = t.viewport_scroll_max;
-                tc.font_size = eff.font_size;
-                tc.color = eff.color;
-                tc.selectable = t.selectable;
-                tc.wrap = eff.wrap || t.multiline;
-                tc.password = t.password;
-                tc.placeholder = t.placeholder.clone();
-                tc.overflow = t.overflow;
-                tc.placeholder_color = t.placeholder_color;
-                tc.gpui_placeholder_color = t.gpui_placeholder_color;
-                tc.gpui_source_placeholder_color = t.gpui_source_placeholder_color;
-            }
+        if let Some(rec) = tree.get_mut(id)
+            && let NodeKind::Text(ref mut tc) = rec.kind
+        {
+            tc.text_style = eff.text_style.clone();
+            tc.spans = t.spans.clone();
+            tc.inline_glyphs = t.inline_glyphs.clone();
+            tc.inline_paints = t.inline_paints.clone();
+            tc.gpui_text_opacity = t.gpui_text_opacity.clone();
+            tc.selection_source = t.selection_source.clone();
+            tc.interaction_ranges = t.interaction_ranges.clone();
+            tc.selection_auto_scroll = t.selection_auto_scroll;
+            tc.text_appearance = t.text_appearance;
+            tc.gpui_text_appearance = t.gpui_text_appearance;
+            tc.external_text_input = t.external_text_input;
+            tc.native_text_model = t.native_text_model.clone();
+            tc.viewport_scroll_max = t.viewport_scroll_max;
+            tc.font_size = eff.font_size;
+            tc.color = eff.color;
+            tc.selectable = t.selectable;
+            tc.wrap = eff.wrap || t.multiline;
+            tc.password = t.password;
+            tc.placeholder = t.placeholder.clone();
+            tc.overflow = t.overflow;
+            tc.placeholder_color = t.placeholder_color;
+            tc.gpui_placeholder_color = t.gpui_placeholder_color;
+            tc.gpui_source_placeholder_color = t.gpui_source_placeholder_color;
         }
         // `set_text` no-ops on equality and preserves editor state; in-flight
         // edits already committed through `TextChanged` before any re-sync.
@@ -3227,8 +3226,8 @@ impl std::error::Error for LowerError {
 /// the emitter; direct [`UiTree::set_paint`] applies without validation
 /// (authored values are validated here, at lowering/refresh).
 fn check_paint(paint: &Paint) -> Result<(), LowerError> {
-    if let Some(transform) = paint.transform {
-        if ![
+    if let Some(transform) = paint.transform
+        && (![
             transform.a,
             transform.b,
             transform.c,
@@ -3238,10 +3237,9 @@ fn check_paint(paint: &Paint) -> Result<(), LowerError> {
         ]
         .into_iter()
         .all(f32::is_finite)
-            || (transform.a * transform.d - transform.b * transform.c).abs() <= f32::EPSILON
-        {
-            return Err(LowerError::InvalidTransform);
-        }
+            || (transform.a * transform.d - transform.b * transform.c).abs() <= f32::EPSILON)
+    {
+        return Err(LowerError::InvalidTransform);
     }
     if paint
         .focus_ring
@@ -3567,12 +3565,11 @@ fn text_content(t: &Text, eff: &Typography) -> TextContent {
     tc.placeholder_color = t.placeholder_color;
     tc.gpui_placeholder_color = t.gpui_placeholder_color;
     tc.gpui_source_placeholder_color = t.gpui_source_placeholder_color;
-    if t.external_text_input {
-        if let (Some((selection, marked)), TextBacking::Editable(editor)) =
+    if t.external_text_input
+        && let (Some((selection, marked)), TextBacking::Editable(editor)) =
             (&t.initial_external_selection, &mut tc.backing)
-        {
-            editor.set_external_projection(&t.initial, *selection, marked.clone());
-        }
+    {
+        editor.set_external_projection(&t.initial, *selection, marked.clone());
     }
     tc
 }

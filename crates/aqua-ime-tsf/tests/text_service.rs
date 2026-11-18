@@ -152,8 +152,7 @@ impl Rig {
         }
         .expect("request");
         assert!(hr.is_ok(), "{hr:?}");
-        let result = slot.borrow_mut().take().expect("session ran");
-        result
+        slot.borrow_mut().take().expect("session ran")
     }
 
     fn begin(&self) {

@@ -6,6 +6,7 @@ use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Threading::WaitForSingleObjectEx;
 
 use super::error::Error;
+use super::timeline::Timeline;
 use crate::ledger::{record, Kind, Token};
 
 pub const RENDER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -47,6 +48,8 @@ pub struct Swapchain {
     tearing: bool,
     width: u32,
     height: u32,
+    queue: ID3D12CommandQueue,
+    retirement: Timeline,
 }
 
 fn flags(tearing: bool) -> u32 {
@@ -174,6 +177,8 @@ impl Swapchain {
             tearing,
             width,
             height,
+            queue: queue.clone(),
+            retirement: Timeline::new(device)?,
         };
         created.acquire(device)?;
         Ok(created)
@@ -323,6 +328,7 @@ impl Swapchain {
 
 impl Drop for Swapchain {
     fn drop(&mut self) {
+        let _ = self.retirement.wait_idle(&self.queue);
         unsafe {
             let _ = CloseHandle(self.waitable);
         }

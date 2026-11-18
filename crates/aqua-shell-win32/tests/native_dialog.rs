@@ -23,10 +23,10 @@ mod scripted {
         let title = wide(title);
         let started = Instant::now();
         while started.elapsed() < within {
-            if let Ok(found) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
-                if !found.0.is_null() {
-                    return Some(found);
-                }
+            if let Ok(found) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) }
+                && !found.0.is_null()
+            {
+                return Some(found);
             }
             std::thread::sleep(Duration::from_millis(25));
         }

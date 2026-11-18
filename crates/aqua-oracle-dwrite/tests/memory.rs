@@ -20,6 +20,10 @@ fn private_bytes() -> usize {
     counters.PrivateUsage
 }
 
+fn megabytes_between(from: usize, to: usize) -> f64 {
+    (to as f64 - from as f64) / 1e6
+}
+
 #[test]
 fn text_stack_private_memory_stays_inside_its_budget() {
     let baseline = private_bytes();
@@ -53,10 +57,10 @@ fn text_stack_private_memory_stays_inside_its_budget() {
     let uploaded = residency.finish_frame().upload_bytes() as usize;
     let after_raster = private_bytes();
     println!(
-        "memory discovery={:.2}MB layout={:.2}MB raster={:.2}MB atlas_uploads={:.2}MB glyphs={} lines={} resident={}",
-        (after_discovery - baseline) as f64 / 1e6,
-        (after_layout - after_discovery) as f64 / 1e6,
-        (after_raster - after_layout) as f64 / 1e6,
+        "memory discovery={:+.2}MB layout={:+.2}MB raster={:+.2}MB atlas_uploads={:.2}MB glyphs={} lines={} resident={}",
+        megabytes_between(baseline, after_discovery),
+        megabytes_between(after_discovery, after_layout),
+        megabytes_between(after_layout, after_raster),
         uploaded as f64 / 1e6,
         laid.lines
             .iter()
@@ -65,5 +69,5 @@ fn text_stack_private_memory_stays_inside_its_budget() {
         laid.lines.len(),
         residency.stats().masks.entries + residency.stats().colors.entries,
     );
-    assert!(after_raster - baseline < 20 * 1024 * 1024);
+    assert!(after_raster.saturating_sub(baseline) < 20 * 1024 * 1024);
 }

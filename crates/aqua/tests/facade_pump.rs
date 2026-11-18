@@ -59,10 +59,10 @@ impl Application for Probe {
     }
     fn on_input(&mut self, ctx: &mut AppCtx, _id: AquaWindowId, event: &InputEvent) {
         self.inputs.push(format!("{event:?}"));
-        if let Some(n) = self.quit_after {
-            if self.inputs.len() as u64 >= n {
-                ctx.quit();
-            }
+        if let Some(n) = self.quit_after
+            && self.inputs.len() as u64 >= n
+        {
+            ctx.quit();
         }
     }
     fn build_scene(&mut self, _window: &ObservedWindowState, _now: Instant) -> Option<Instant> {

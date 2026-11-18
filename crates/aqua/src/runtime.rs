@@ -592,6 +592,7 @@ pub struct Aqua {
     pub(crate) frames_presented: u64,
     frame_stats: Option<FrameStats>,
     input_latency: Option<crate::latency::InputLatency>,
+    #[cfg(windows)]
     pub(crate) smoke_deadline: Option<WallInstant>,
     epoch: WallInstant,
     pub(crate) wakeups: u64,
@@ -643,11 +644,13 @@ impl Aqua {
         if let Some(n) = smoke_frames {
             eprintln!("aqua: smoke mode — exiting after {n} presented frames");
         }
+        #[cfg(windows)]
         let smoke_deadline = std::env::var("AQUA_SMOKE_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|&ms| ms > 0)
             .map(|ms| WallInstant::now() + Duration::from_millis(ms));
+        #[cfg(windows)]
         if let Some(deadline) = smoke_deadline {
             eprintln!("aqua: time-bounded smoke — exiting at {deadline:?}");
         }
@@ -670,6 +673,7 @@ impl Aqua {
             window_requests: VecDeque::new(),
             dialogs: VecDeque::new(),
             next_request: 1,
+            #[cfg(windows)]
             smoke_deadline,
             epoch: WallInstant::now(),
             wakeups: 0,
@@ -708,12 +712,14 @@ impl Aqua {
         })
     }
 
+    #[cfg(windows)]
     pub(crate) fn align_clock(&mut self, shell_now: Instant) {
         self.epoch = WallInstant::now()
             .checked_sub(shell_now.since_origin())
             .unwrap_or_else(WallInstant::now);
     }
 
+    #[cfg(windows)]
     pub(crate) fn mark_native_loop(&mut self) {
         self.native_loop = true;
     }
@@ -1135,6 +1141,7 @@ impl Aqua {
         id
     }
 
+    #[cfg(any(windows, test))]
     pub(crate) fn add_native_window(
         &mut self,
         observed: ObservedWindowState,
@@ -1581,24 +1588,23 @@ impl Aqua {
                         record.presented += 1;
                     }
                     self.frames_presented += 1;
-                    if let Some(probe) = self.input_latency.as_mut() {
-                        if let Some(stats) = self
+                    if let Some(probe) = self.input_latency.as_mut()
+                        && let Some(stats) = self
                             .windows
                             .get(&id)
                             .and_then(|r| r.link.as_ref())
                             .map(|link| link.stats().clone())
-                        {
-                            probe.presented(&stats);
-                        }
+                    {
+                        probe.presented(&stats);
                     }
-                    if let Some(budget) = self.smoke_frames {
-                        if self.frames_presented >= budget {
-                            eprintln!(
-                                "aqua: smoke budget reached ({} frames) — exiting",
-                                self.frames_presented
-                            );
-                            self.quit_requested = true;
-                        }
+                    if let Some(budget) = self.smoke_frames
+                        && self.frames_presented >= budget
+                    {
+                        eprintln!(
+                            "aqua: smoke budget reached ({} frames) — exiting",
+                            self.frames_presented
+                        );
+                        self.quit_requested = true;
                     }
                     app.step_input(id, RuntimeInput::Gpu(GpuEvent::Presented(frame)));
                     self.dispatch_frame_completed(app, id, frame);
@@ -1745,10 +1751,10 @@ impl Aqua {
             link.push_commands(motion.into_iter().map(RenderCommand::Motion));
         }
         aqua_core::checkpoint::reach();
-        if let Some(scene) = app.scene_mut(id) {
-            if link.push_scene(scene) {
-                self.scheduler.await_present(id);
-            }
+        if let Some(scene) = app.scene_mut(id)
+            && link.push_scene(scene)
+        {
+            self.scheduler.await_present(id);
         }
         aqua_core::checkpoint::reach();
         if let Some(probe) = self.input_latency.as_mut() {
@@ -2218,10 +2224,29 @@ mod tests {
 
     #[test]
     fn prefs_and_a11y_defaults_are_honest() {
-        let (aqua, _, _) = headless();
-        assert!(!aqua_protocol::prefs::should_reduce_motion(
-            aqua.preferences()
-        ));
+        use aqua_protocol::prefs::{should_reduce_motion, PrefState};
+        let headless_with = |prefs: OsPreferences| {
+            Aqua::new_with_preferences(
+                AquaConfig {
+                    headless: true,
+                    ..Default::default()
+                },
+                prefs,
+            )
+            .unwrap()
+        };
+        let unknown = headless_with(OsPreferences::fallback());
+        assert_eq!(unknown.preferences(), &OsPreferences::fallback());
+        assert!(!should_reduce_motion(unknown.preferences()));
+        assert!(!unknown.motion_reduced());
+        let reduced = OsPreferences {
+            reduce_motion: PrefState::On,
+            ..OsPreferences::fallback()
+        };
+        let calm = headless_with(reduced.clone());
+        assert_eq!(calm.preferences(), &reduced);
+        assert!(should_reduce_motion(calm.preferences()));
+        assert!(calm.motion_reduced());
         struct Bare;
         impl Application for Bare {
             fn on_window_event(&mut self, _c: &mut AppCtx, _: AquaWindowId, _: &WindowEvent) {}

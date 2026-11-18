@@ -429,10 +429,10 @@ impl Scene {
         let positions = self.positions.borrow();
         let start = self.log.partition_point(|&(at, _)| at <= revision);
         for &(_, index) in &self.log[start..] {
-            if let Some(&position) = positions.get(index as usize) {
-                if self.order.get(position as usize) == Some(&index) {
-                    visit(position as usize);
-                }
+            if let Some(&position) = positions.get(index as usize)
+                && self.order.get(position as usize) == Some(&index)
+            {
+                visit(position as usize);
             }
         }
         true

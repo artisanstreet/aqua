@@ -129,11 +129,11 @@ impl EdgeAnimator {
             return;
         };
         for edge in EDGES {
-            if let Some(track) = entry.tracks[slot(edge)] {
-                if !motion.is_settled(track) {
-                    let to = MotionValue::Scalar(edge_value(entry.target, edge));
-                    let _ = motion.set_target_with(track, to, kind, at);
-                }
+            if let Some(track) = entry.tracks[slot(edge)]
+                && !motion.is_settled(track)
+            {
+                let to = MotionValue::Scalar(edge_value(entry.target, edge));
+                let _ = motion.set_target_with(track, to, kind, at);
             }
         }
     }

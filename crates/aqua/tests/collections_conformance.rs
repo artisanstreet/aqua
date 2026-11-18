@@ -120,10 +120,11 @@ fn descendant_texts(app: &UiApp, id: aqua_core::NodeId) -> Vec<String> {
         let Some(rec) = app.tree().get(n) else {
             continue;
         };
-        if let NodeKind::Text(t) = &rec.kind {
-            if !t.is_editable() && !t.text().is_empty() {
-                out.push(t.text().to_string());
-            }
+        if let NodeKind::Text(t) = &rec.kind
+            && !t.is_editable()
+            && !t.text().is_empty()
+        {
+            out.push(t.text().to_string());
         }
         stack.extend(rec.children.iter().copied());
     }

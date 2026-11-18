@@ -534,10 +534,10 @@ impl OverlayService {
         focus: &mut dyn FocusControl,
         request: OverlayRequest,
     ) -> Result<OverlayId, OverlayError> {
-        if let Some(parent) = request.parent {
-            if self.arena.get(parent.0).is_none() {
-                return Err(OverlayError::UnknownParent);
-            }
+        if let Some(parent) = request.parent
+            && self.arena.get(parent.0).is_none()
+        {
+            return Err(OverlayError::UnknownParent);
         }
         let placed = place_overlay(
             self.viewport,
@@ -951,10 +951,10 @@ impl OverlayService {
         pairs: &[(Option<NodeId>, Option<NodeId>)],
     ) {
         for (autofocus, saved) in pairs.iter().rev() {
-            if let Some(target) = autofocus {
-                if focus.focused() == Some(*target) {
-                    focus.set_focused(*saved);
-                }
+            if let Some(target) = autofocus
+                && focus.focused() == Some(*target)
+            {
+                focus.set_focused(*saved);
             }
         }
     }

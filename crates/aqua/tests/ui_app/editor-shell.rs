@@ -184,9 +184,8 @@ fn shell(state: &ShellState) -> Element {
             ..Default::default()
         })
         .on_input(InputKind::Drop, EventPhase::Bubble, move |event| {
-            if let RoutedInput::Drop { payload, .. } = &event.input {
-                if let Some(reference) = payload.get::<ThreadReference>() { attached.borrow_mut().push(reference.clone()); }
-            }
+            if let RoutedInput::Drop { payload, .. } = &event.input
+                && let Some(reference) = payload.get::<ThreadReference>() { attached.borrow_mut().push(reference.clone()); }
             InputResponse::handled()
         });
     let inspected = state.inspected.get();

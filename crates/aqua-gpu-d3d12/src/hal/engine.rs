@@ -313,7 +313,8 @@ impl Core {
         swapchain.resize(&self.device, width, height)
     }
 
-    pub fn inject_device_removal(&self) -> Result<(), Error> {
+    pub fn inject_device_removal(&mut self) -> Result<(), Error> {
+        self.wait_idle()?;
         let device5: ID3D12Device5 = self.device.cast()?;
         unsafe { device5.RemoveDevice() };
         Ok(())

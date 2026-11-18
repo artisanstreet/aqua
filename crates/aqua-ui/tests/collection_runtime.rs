@@ -532,10 +532,11 @@ fn descendant_texts(tree: &UiTree, id: NodeId) -> Vec<String> {
     let mut stack = vec![id];
     while let Some(n) = stack.pop() {
         if let Some(rec) = tree.get(n) {
-            if let NodeKind::Text(t) = &rec.kind {
-                if !t.is_editable() && !t.text().is_empty() {
-                    out.push(t.text().to_string());
-                }
+            if let NodeKind::Text(t) = &rec.kind
+                && !t.is_editable()
+                && !t.text().is_empty()
+            {
+                out.push(t.text().to_string());
             }
             stack.extend(rec.children.iter().copied());
         }

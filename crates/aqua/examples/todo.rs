@@ -310,9 +310,7 @@ fn todo_view(
     ((todos_r, focused_r), render)
 }
 
-/// Canonical setup: explicit dependencies via `Context::view`, glass chosen
-/// from the resolved material (framework-resolved, no manual
-/// capability/prefs polling in `main`).
+#[expect(deprecated)]
 fn todo_app(cx: &Context) -> impl IntoView + use<> {
     let glass = cx.material().is_glass();
     let (deps, render) = todo_view(cx.scope(), Vec::new(), glass);

@@ -5,14 +5,14 @@ pub const MIB: u64 = 1024 * 1024;
 pub const RENDERER_OFFSCREEN: MemoryBudget = MemoryBudget {
     private_total: 96 * MIB,
     framework_heap: 4 * MIB,
-    steady_growth: MIB,
+    steady_growth: Some(MIB),
     vram_total: 56 * MIB,
 };
 
 pub const RENDERER_WINDOWED: MemoryBudget = MemoryBudget {
     private_total: 140 * MIB,
     framework_heap: 4 * MIB,
-    steady_growth: MIB,
+    steady_growth: Some(MIB),
     vram_total: 64 * MIB,
 };
 
@@ -25,7 +25,7 @@ pub const HOST_WINDOWED: MemoryBudget = MemoryBudget {
 pub struct MemoryBudget {
     pub private_total: u64,
     pub framework_heap: u64,
-    pub steady_growth: u64,
+    pub steady_growth: Option<u64>,
     pub vram_total: u64,
 }
 
@@ -63,6 +63,13 @@ impl fmt::Display for Breach {
 }
 
 impl MemoryBudget {
+    pub fn without_steady_growth(self) -> MemoryBudget {
+        MemoryBudget {
+            steady_growth: None,
+            ..self
+        }
+    }
+
     pub fn check(&self, measured: &Measured) -> Vec<Breach> {
         [
             (measured.private_total > self.private_total).then_some(Breach::PrivateTotal {
@@ -73,10 +80,12 @@ impl MemoryBudget {
                 measured: measured.framework_heap,
                 limit: self.framework_heap,
             }),
-            (measured.steady_growth > self.steady_growth).then_some(Breach::SteadyGrowth {
-                measured: measured.steady_growth,
-                limit: self.steady_growth,
-            }),
+            self.steady_growth
+                .filter(|limit| measured.steady_growth > *limit)
+                .map(|limit| Breach::SteadyGrowth {
+                    measured: measured.steady_growth,
+                    limit,
+                }),
             (measured.vram_total > self.vram_total).then_some(Breach::VramTotal {
                 measured: measured.vram_total,
                 limit: self.vram_total,

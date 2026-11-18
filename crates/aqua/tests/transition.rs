@@ -213,6 +213,68 @@ fn outline_text_mode_draws_every_glyph_from_curves_and_platform_default_uses_the
 }
 
 #[test]
+fn a_snapshot_transition_waits_for_the_changed_frame_before_sweeping() {
+    let red = solid("#ff0000");
+    let blue = solid("#0000ff");
+    for mut painter in painters() {
+        let label = painter.label.clone();
+        painter.paint_at(&red, SIZE, 1.0, at(9.0));
+        painter.begin_transition(settings(Sweep::Soft, 0.0));
+
+        let unchanged = painter.paint_at(&red, SIZE, 1.0, at(10.0));
+        assert!(!painter.report.shimmering, "{label}");
+        assert!(is(unchanged.pixel(4, 4), [255, 0, 0]), "{label}");
+
+        let first = painter.paint_at(&blue, SIZE, 1.0, at(10.9));
+        assert!(painter.report.shimmering, "{label}");
+        assert!(is(first.pixel(4, 4), [255, 0, 0]), "{label}");
+
+        let mid = painter.paint_at(&blue, SIZE, 1.0, at(11.4));
+        assert!(is(mid.pixel(4, 4), [0, 0, 255]), "{label}");
+        assert!(is(mid.pixel(124, 124), [255, 0, 0]), "{label}");
+
+        let done = painter.paint_at(&blue, SIZE, 1.0, at(11.9));
+        assert!(!painter.report.shimmering, "{label}");
+        assert!(is(done.pixel(124, 124), [0, 0, 255]), "{label}");
+    }
+}
+
+#[test]
+fn an_unchanged_snapshot_request_never_sweeps_a_later_change() {
+    let red = solid("#ff0000");
+    let blue = solid("#0000ff");
+    for mut painter in painters() {
+        let label = painter.label.clone();
+        painter.paint_at(&red, SIZE, 1.0, at(9.0));
+        painter.begin_transition(settings(Sweep::Soft, 0.0));
+        painter.paint_at(&red, SIZE, 1.0, at(10.0));
+        painter.paint_at(&red, SIZE, 1.0, at(10.5));
+        assert!(!painter.report.shimmering, "{label}");
+
+        let later = painter.paint_at(&blue, SIZE, 1.0, at(11.0));
+        assert!(!painter.report.shimmering, "{label}");
+        assert!(is(later.pixel(4, 4), [0, 0, 255]), "{label}");
+        assert!(is(later.pixel(124, 124), [0, 0, 255]), "{label}");
+    }
+}
+
+#[test]
+fn an_idle_snapshot_request_expires_before_the_next_change() {
+    let red = solid("#ff0000");
+    let blue = solid("#0000ff");
+    for mut painter in painters() {
+        let label = painter.label.clone();
+        painter.paint_at(&red, SIZE, 1.0, at(9.0));
+        painter.begin_transition(settings(Sweep::Soft, 0.0));
+        painter.paint_at(&red, SIZE, 1.0, at(10.0));
+
+        let later = painter.paint_at(&blue, SIZE, 1.0, at(60.0));
+        assert!(!painter.report.shimmering, "{label}");
+        assert!(is(later.pixel(124, 124), [0, 0, 255]), "{label}");
+    }
+}
+
+#[test]
 fn a_queued_snapshot_is_observed_before_lowering_the_changed_frame() {
     let (sender, receiver) = std::sync::mpsc::channel();
     let mut lowering = aqua::render::lower::Lowering::new(SharedFonts::new(), SharedRuns::new())

@@ -164,10 +164,10 @@ pub fn page_of(handle: aqua_graph::plan::TextureHandle) -> Option<PageId> {
 pub fn pages_of(commands: &[PaintCommand]) -> Vec<PageId> {
     let mut pages: Vec<PageId> = Vec::new();
     let mut note = |handle| {
-        if let Some(page) = page_of(handle) {
-            if !pages.contains(&page) {
-                pages.push(page);
-            }
+        if let Some(page) = page_of(handle)
+            && !pages.contains(&page)
+        {
+            pages.push(page);
         }
     };
     for command in commands {

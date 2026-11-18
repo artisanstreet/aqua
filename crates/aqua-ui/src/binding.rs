@@ -242,10 +242,8 @@ fn carry_rows(
         let matches = candidates
             .get(&key)
             .is_some_and(|(revision, _)| next.row_revision(index) == Some(*revision));
-        if matches {
-            if let Some((_, row)) = candidates.remove(&key) {
-                carried.insert(index, row);
-            }
+        if matches && let Some((_, row)) = candidates.remove(&key) {
+            carried.insert(index, row);
         }
     }
     carried
@@ -1229,12 +1227,12 @@ impl View {
             Some(m) => Rc::clone(&m.state.descriptor().source),
             None => return Ok(false),
         };
-        if let PlanAction::Adopt(p) = plan_action {
-            if let Some(m) = self.collections.get_mut(&raw) {
-                m.built_plan = p;
-                m.rows.clear();
-                m.header = None;
-            }
+        if let PlanAction::Adopt(p) = plan_action
+            && let Some(m) = self.collections.get_mut(&raw)
+        {
+            m.built_plan = p;
+            m.rows.clear();
+            m.header = None;
         }
         // Desired runs (pin included in isolation) versus residents.
         let (window, runs): (RowRange, Vec<RowRange>) = {
@@ -1299,10 +1297,8 @@ impl View {
         let mut fresh_header: Option<Element> = None;
         if role == CollectionRole::Table {
             let has_header = matches!(self.collections.get(&raw), Some(m) if m.header.is_some());
-            if !has_header {
-                if let Some(h_el) = source.header(&built_plan) {
-                    fresh_header = Some(h_el);
-                }
+            if !has_header && let Some(h_el) = source.header(&built_plan) {
+                fresh_header = Some(h_el);
             }
         }
         let mut dropped = false;
@@ -1348,17 +1344,17 @@ impl View {
         // (changed-only; plain Boxes need no offset and stay at zero).
         if role == CollectionRole::Table {
             let body_x = tree.scroll_offset(body).map(|p| p.x).unwrap_or(0.0);
-            if let Some(m) = self.collections.get(&raw) {
-                if let Some(h) = m.header.as_ref() {
-                    for node in h.nodes.iter().copied() {
-                        let cur = tree.get(node).map(|r| r.style.margin.left).unwrap_or(0.0);
-                        if cur != -body_x {
-                            if let Some(rec) = tree.get(node) {
-                                let mut style = rec.style.clone();
-                                style.margin.left = -body_x;
-                                tree.set_style(node, style);
-                            }
-                        }
+            if let Some(m) = self.collections.get(&raw)
+                && let Some(h) = m.header.as_ref()
+            {
+                for node in h.nodes.iter().copied() {
+                    let cur = tree.get(node).map(|r| r.style.margin.left).unwrap_or(0.0);
+                    if cur != -body_x
+                        && let Some(rec) = tree.get(node)
+                    {
+                        let mut style = rec.style.clone();
+                        style.margin.left = -body_x;
+                        tree.set_style(node, style);
                     }
                 }
             }
@@ -1430,30 +1426,30 @@ impl View {
                             ),
                         );
                         let mut shallow = rs.into_iter().next().unwrap();
-                        if let Some(node) = ret.node {
-                            if let Some(live) = tree.get(node) {
-                                match (&mut shallow.kind, &live.kind) {
-                                    (NodeKind::Text(fresh_tc), NodeKind::Text(live_tc)) => {
-                                        if !live_tc.is_editable() {
-                                            fresh_tc.set_text(live_tc.text());
-                                            fresh_tc.text_style = live_tc.text_style.clone();
-                                            fresh_tc.spans = live_tc.spans.clone();
-                                            fresh_tc.font_size = live_tc.font_size;
-                                            fresh_tc.color = live_tc.color;
-                                            fresh_tc.selectable = live_tc.selectable;
-                                            fresh_tc.selection = live_tc.selection;
-                                            fresh_tc.selection_source =
-                                                live_tc.selection_source.clone();
-                                            fresh_tc.wrap = live_tc.wrap;
-                                            fresh_tc.password = live_tc.password;
-                                            fresh_tc.placeholder = live_tc.placeholder.clone();
-                                        }
+                        if let Some(node) = ret.node
+                            && let Some(live) = tree.get(node)
+                        {
+                            match (&mut shallow.kind, &live.kind) {
+                                (NodeKind::Text(fresh_tc), NodeKind::Text(live_tc)) => {
+                                    if !live_tc.is_editable() {
+                                        fresh_tc.set_text(live_tc.text());
+                                        fresh_tc.text_style = live_tc.text_style.clone();
+                                        fresh_tc.spans = live_tc.spans.clone();
+                                        fresh_tc.font_size = live_tc.font_size;
+                                        fresh_tc.color = live_tc.color;
+                                        fresh_tc.selectable = live_tc.selectable;
+                                        fresh_tc.selection = live_tc.selection;
+                                        fresh_tc.selection_source =
+                                            live_tc.selection_source.clone();
+                                        fresh_tc.wrap = live_tc.wrap;
+                                        fresh_tc.password = live_tc.password;
+                                        fresh_tc.placeholder = live_tc.placeholder.clone();
                                     }
-                                    (NodeKind::Canvas(fresh_c), NodeKind::Canvas(live_c)) => {
-                                        fresh_c.painter = live_c.painter;
-                                    }
-                                    _ => {}
                                 }
+                                (NodeKind::Canvas(fresh_c), NodeKind::Canvas(live_c)) => {
+                                    fresh_c.painter = live_c.painter;
+                                }
+                                _ => {}
                             }
                         }
                         shallow.children.clear();
@@ -1544,11 +1540,11 @@ impl View {
                                 },
                             );
                         }
-                    } else if let Some(m) = collections.get_mut(&raw) {
-                        if let Some(ret) = m.rows.get_mut(&idx) {
-                            ret.node = Some(node);
-                            ret.margins = margins;
-                        }
+                    } else if let Some(m) = collections.get_mut(&raw)
+                        && let Some(ret) = m.rows.get_mut(&idx)
+                    {
+                        ret.node = Some(node);
+                        ret.margins = margins;
                     }
                 }
             }
@@ -1563,45 +1559,45 @@ impl View {
                     .get(*node)
                     .map(|r| r.style.margin.bottom)
                     .unwrap_or(f32::NAN);
-                if cur != want {
-                    if let Some(rec) = tree.get(*node) {
-                        let mut style = rec.style.clone();
-                        style.margin.bottom = want;
-                        tree.set_style(*node, style);
-                    }
+                if cur != want
+                    && let Some(rec) = tree.get(*node)
+                {
+                    let mut style = rec.style.clone();
+                    style.margin.bottom = want;
+                    tree.set_style(*node, style);
                 }
             }
         }
         // Header lives in the clip sibling (tables): sync + bind + record.
         // The header factory runs at initial/width/source changes only;
         // retained headers are never rebuilt on scroll.
-        if role == CollectionRole::Table {
-            if let (Some(clip_id), Some(h_el)) = (clip, fresh_header) {
-                let hs = lower_specs_in(&h_el, &typo).map_err(|e| e.to_string())?;
-                let hids = tree.sync_children(clip_id, hs);
-                // Tables lower one bar Box per the module contract; bind it
-                // directly so header actions and signals attach. (Multi-node
-                // custom headers still mount; only the bar binds today.)
-                let mut el = h_el;
-                if hids.len() == 1 {
-                    bind_new(
-                        scope,
-                        sink,
-                        bound,
-                        collections,
-                        tree,
-                        hids[0],
-                        &mut el,
-                        &typo,
-                    )
-                    .map_err(|e| e.to_string())?;
-                }
-                if let Some(m) = collections.get_mut(&raw) {
-                    m.header = Some(RetainedHeader {
-                        element: el,
-                        nodes: hids,
-                    });
-                }
+        if role == CollectionRole::Table
+            && let (Some(clip_id), Some(h_el)) = (clip, fresh_header)
+        {
+            let hs = lower_specs_in(&h_el, &typo).map_err(|e| e.to_string())?;
+            let hids = tree.sync_children(clip_id, hs);
+            // Tables lower one bar Box per the module contract; bind it
+            // directly so header actions and signals attach. (Multi-node
+            // custom headers still mount; only the bar binds today.)
+            let mut el = h_el;
+            if hids.len() == 1 {
+                bind_new(
+                    scope,
+                    sink,
+                    bound,
+                    collections,
+                    tree,
+                    hids[0],
+                    &mut el,
+                    &typo,
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            if let Some(m) = collections.get_mut(&raw) {
+                m.header = Some(RetainedHeader {
+                    element: el,
+                    nodes: hids,
+                });
             }
         }
         // Semantics + bookkeeping.
@@ -1716,13 +1712,11 @@ fn ensure_stack_gap_zero(tree: &mut UiTree, stack: NodeId) {
         .get(stack)
         .map(|r| r.style.gap != 0.0 || r.style.row_gap.is_some_and(|g| g != 0.0))
         .unwrap_or(false);
-    if dirty {
-        if let Some(rec) = tree.get(stack) {
-            let mut style = rec.style.clone();
-            style.gap = 0.0;
-            style.row_gap = None;
-            tree.set_style(stack, style);
-        }
+    if dirty && let Some(rec) = tree.get(stack) {
+        let mut style = rec.style.clone();
+        style.gap = 0.0;
+        style.row_gap = None;
+        tree.set_style(stack, style);
     }
 }
 
@@ -2007,17 +2001,17 @@ fn bind_new(
         local_typography.explicit_gpui_color(),
         local_typography.explicit_gpui_source_color(),
     );
-    if el.role_opt().is_some() || el.collection_semantics_opt().is_some() {
-        if let Some(rec) = tree.get(id) {
-            let mut sem = rec.semantics.clone();
-            if let Some(role) = el.role_opt() {
-                sem.role = role;
-            }
-            if let Some(cs) = el.collection_semantics_opt() {
-                sem.collection = Some(Box::new(cs));
-            }
-            tree.set_semantics(id, sem);
+    if (el.role_opt().is_some() || el.collection_semantics_opt().is_some())
+        && let Some(rec) = tree.get(id)
+    {
+        let mut sem = rec.semantics.clone();
+        if let Some(role) = el.role_opt() {
+            sem.role = role;
         }
+        if let Some(cs) = el.collection_semantics_opt() {
+            sem.collection = Some(Box::new(cs));
+        }
+        tree.set_semantics(id, sem);
     }
     if owns_children {
         crate::controls::initialize_node(tree, id);

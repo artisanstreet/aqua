@@ -268,10 +268,10 @@ impl RenderSide {
                 if let Some(id) = self.local.remove(&node) {
                     self.scene.remove(id);
                 }
-                if let Some(slot) = self.local_slots.get_mut(node.raw().index as usize) {
-                    if slot.is_some_and(|(generation, _)| generation == node.raw().generation) {
-                        *slot = None;
-                    }
+                if let Some(slot) = self.local_slots.get_mut(node.raw().index as usize)
+                    && slot.is_some_and(|(generation, _)| generation == node.raw().generation)
+                {
+                    *slot = None;
                 }
                 self.base.remove(&node);
                 self.overrides.remove(&node);
@@ -327,10 +327,10 @@ impl RenderSide {
             Some(entry) => entry.1 = shift,
             None => list.push((binding, shift)),
         }
-        if !self.base.contains_key(&binding.node) {
-            if let Some(item) = self.presented(binding.node).cloned() {
-                self.base.insert(binding.node, item);
-            }
+        if !self.base.contains_key(&binding.node)
+            && let Some(item) = self.presented(binding.node).cloned()
+        {
+            self.base.insert(binding.node, item);
         }
         if let Some(value) = self.tracks.value(track) {
             self.set_override(binding, shifted(binding.property, value, shift));

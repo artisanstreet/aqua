@@ -1068,6 +1068,12 @@ pub fn select_cluster(
     }
 }
 
+#[cfg(all(test, windows))]
+pub(crate) const TEST_FONT_FILE: &str = r"C:\Windows\Fonts\arial.ttf";
+
+#[cfg(all(test, not(windows)))]
+pub(crate) const TEST_FONT_FILE: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1101,12 +1107,11 @@ mod tests {
         let mut mgr = FontManager::new_without_system_fonts();
         assert_eq!(mgr.font_revision(), 0);
         let r0 = mgr.font_revision();
-        mgr.load_font_file("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
-            .expect("test host needs DejaVuSans");
+        mgr.load_font_file(TEST_FONT_FILE)
+            .expect("test host needs its platform test font");
         assert_eq!(mgr.font_revision(), r0.wrapping_add(1));
         assert_eq!(mgr.face_count(), 1);
-        let data = std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
-            .expect("test host needs DejaVuSans");
+        let data = std::fs::read(TEST_FONT_FILE).expect("test host needs its platform test font");
         mgr.load_font_bytes(data);
         assert_eq!(mgr.font_revision(), r0.wrapping_add(2));
     }

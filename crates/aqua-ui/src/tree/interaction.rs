@@ -91,20 +91,20 @@ impl InteractionStyles {
 
     pub fn refinement(&self, state: InteractionState) -> Style {
         let mut style = Style::new();
-        if state.focus_visible() {
-            if let Some(focus) = &self.focus_visible {
-                style.merge(focus);
-            }
+        if state.focus_visible()
+            && let Some(focus) = &self.focus_visible
+        {
+            style.merge(focus);
         }
-        if state.hover_visible() {
-            if let Some(hover) = &self.hover {
-                style.merge(hover);
-            }
+        if state.hover_visible()
+            && let Some(hover) = &self.hover
+        {
+            style.merge(hover);
         }
-        if state.press_visible() {
-            if let Some(pressed) = &self.pressed {
-                style.merge(pressed);
-            }
+        if state.press_visible()
+            && let Some(pressed) = &self.pressed
+        {
+            style.merge(pressed);
         }
         style
     }
@@ -561,16 +561,16 @@ impl super::UiTree {
                     store.modality = modality;
                     color_root = self.root();
                     for (node, entry) in &mut store.nodes {
-                        if entry.state.transition(InteractionEvent::Modality(modality)) {
-                            if let Some(base) = &entry.base {
-                                self.apply_interaction_style(
-                                    *node,
-                                    &base.styles,
-                                    entry.state,
-                                    &base.layout,
-                                    &base.paint,
-                                );
-                            }
+                        if entry.state.transition(InteractionEvent::Modality(modality))
+                            && let Some(base) = &entry.base
+                        {
+                            self.apply_interaction_style(
+                                *node,
+                                &base.styles,
+                                entry.state,
+                                &base.layout,
+                                &base.paint,
+                            );
                         }
                     }
                 }
@@ -727,27 +727,27 @@ impl super::UiTree {
                             }
                         }
                         InteractionSemantic::Expanded(value) => {
-                            if let Some(entry) = store.nodes.get_mut(&node) {
-                                if entry.semantics.expanded != value {
-                                    entry.semantics.expanded = value;
-                                    self.touch_paint(node);
-                                }
+                            if let Some(entry) = store.nodes.get_mut(&node)
+                                && entry.semantics.expanded != value
+                            {
+                                entry.semantics.expanded = value;
+                                self.touch_paint(node);
                             }
                         }
                         InteractionSemantic::Level(value) => {
-                            if let Some(entry) = store.nodes.get_mut(&node) {
-                                if entry.semantics.level != value {
-                                    entry.semantics.level = value;
-                                    self.touch_paint(node);
-                                }
+                            if let Some(entry) = store.nodes.get_mut(&node)
+                                && entry.semantics.level != value
+                            {
+                                entry.semantics.level = value;
+                                self.touch_paint(node);
                             }
                         }
                         InteractionSemantic::Checked(value) => {
-                            if let Some(entry) = store.nodes.get_mut(&node) {
-                                if entry.semantics.checked != value {
-                                    entry.semantics.checked = value;
-                                    self.touch_paint(node);
-                                }
+                            if let Some(entry) = store.nodes.get_mut(&node)
+                                && entry.semantics.checked != value
+                            {
+                                entry.semantics.checked = value;
+                                self.touch_paint(node);
                             }
                         }
                     }

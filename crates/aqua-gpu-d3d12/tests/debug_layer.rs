@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use aqua_gpu_d3d12::hal::tier::Tier;
 use aqua_gpu_d3d12::scene::{AdapterPreference, OffscreenBackend, SurfaceFormat, TierLimit};
 use aqua_gpu_ref::conformance::{cases, Session};
+use aqua_protocol::GpuBackend;
 
 static SERIAL: Mutex<()> = Mutex::new(());
 
@@ -56,7 +57,14 @@ fn validation_errors(preference: AdapterPreference, format: SurfaceFormat) -> Ve
                     .map(|error| format!("{preference:?} {name} [{}]: {error}", case.name)),
             );
         }
-        eprintln!("{preference:?} {format:?} {name}: {total} validation errors");
+        let validation = match backend.gpu_validation() {
+            true => "GPU-based validation on".to_string(),
+            false => format!(
+                "GPU-based validation skipped: {} is a software adapter",
+                backend.capabilities().adapter
+            ),
+        };
+        eprintln!("{preference:?} {format:?} {name}: {total} validation errors ({validation})");
     }
     found
 }

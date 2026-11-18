@@ -73,6 +73,7 @@ pub struct OffscreenBackend {
     capabilities: GpuCapabilities,
     software: bool,
     unified_memory: bool,
+    gpu_validation: bool,
     options: SceneOptions,
     gpu: Gpu,
     surfaces: HashMap<SurfaceId, SurfaceResources>,
@@ -293,6 +294,7 @@ impl OffscreenBackend {
             capabilities,
             software: selected.software,
             unified_memory: selected.unified_memory,
+            gpu_validation: selected.gpu_validation,
             options,
             gpu,
             surfaces: HashMap::new(),
@@ -345,6 +347,10 @@ impl OffscreenBackend {
 
     pub fn is_software(&self) -> bool {
         self.software
+    }
+
+    pub fn gpu_validation(&self) -> bool {
+        self.gpu_validation
     }
 
     pub fn is_unified_memory(&self) -> bool {
@@ -501,6 +507,7 @@ impl GpuBackend for OffscreenBackend {
         self.surfaces.clear();
         self.gpu = Gpu::new(&selected, self.format, None, self.options)?;
         self.software = selected.software;
+        self.gpu_validation = selected.gpu_validation;
         for (id, extent) in &extents {
             self.surfaces.insert(
                 *id,

@@ -505,7 +505,7 @@ pub struct Lowering {
     cull: Option<Rect>,
     last_commands: Vec<PaintCommand>,
     spare_commands: Vec<PaintCommand>,
-    begun: Option<Settings>,
+    begun: Option<Pending>,
     transition: Option<Transition>,
     outline_text: bool,
     spans: SpanCache,
@@ -930,13 +930,12 @@ impl Lowering {
             };
             let mut segment_start =
                 transform.is_none() && position >= hold_until && self.at_baseline(&walk);
-            if segment_start {
-                if let Some((seen, len)) = self.volatile_spans.get(&id).copied() {
-                    if self.span_frame - seen < VOLATILE_FRAMES {
-                        hold_until = position + len + 1;
-                        segment_start = false;
-                    }
-                }
+            if segment_start
+                && let Some((seen, len)) = self.volatile_spans.get(&id).copied()
+                && self.span_frame - seen < VOLATILE_FRAMES
+            {
+                hold_until = position + len + 1;
+                segment_start = false;
             }
             if transform.is_some() || segment_start {
                 let before = walk.out.len() as u32;
@@ -1013,7 +1012,7 @@ impl Lowering {
         self.shimmer.end_frame();
         self.pulse_cycles.end_frame();
         self.shapes.end_frame();
-        self.adopt_previous(&previous);
+        self.adopt_previous(&previous, &walk.out, now);
         if self.transition.is_some() {
             self.last_commands.clone_from(&walk.out);
         }
@@ -1510,10 +1509,10 @@ impl Lowering {
             clip: walk.clips.last().copied(),
             stamp: self.span_stamp(),
         });
-        if local.is_some() {
-            if let Some(top) = walk.clips.last_mut() {
-                *top = top.inflate(span::SLACK);
-            }
+        if local.is_some()
+            && let Some(top) = walk.clips.last_mut()
+        {
+            *top = top.inflate(span::SLACK);
         }
         true
     }
@@ -2167,35 +2166,35 @@ impl Lowering {
                 ]
             });
         let stamp = self.span_stamp();
-        if let Some(signature) = signature {
-            if let Some(entry) = self.run_cache.entries.get(&run_id).filter(|entry| {
+        if let Some(signature) = signature
+            && let Some(entry) = self.run_cache.entries.get(&run_id).filter(|entry| {
                 entry.signature == signature
                     && entry.stamp == stamp
                     && (entry.curves == 0 || entry.base == (base_x, base_y))
                     && Arc::ptr_eq(&entry.laid, &laid)
                     && touch_curves(&entry.commands, &mut self.slug_store, &mut self.path_store)
-            }) {
-                match entry.base == (base_x, base_y) {
-                    true => walk.out.extend(entry.commands.iter().cloned()),
-                    false => {
-                        let dx = base_x.floor() - entry.base.0.floor();
-                        walk.out.extend(
-                            entry
-                                .commands
-                                .iter()
-                                .zip(&entry.pens)
-                                .map(|(command, pens)| replaced(command, pens, dx, base_y)),
-                        );
-                    }
+            })
+        {
+            match entry.base == (base_x, base_y) {
+                true => walk.out.extend(entry.commands.iter().cloned()),
+                false => {
+                    let dx = base_x.floor() - entry.base.0.floor();
+                    walk.out.extend(
+                        entry
+                            .commands
+                            .iter()
+                            .zip(&entry.pens)
+                            .map(|(command, pens)| replaced(command, pens, dx, base_y)),
+                    );
                 }
-                walk.report.glyphs += entry.glyphs;
-                walk.report.curves += entry.curves;
-                walk.report.cached_text_runs += 1;
-                for page in &entry.pages {
-                    self.residency.touch_page(*page);
-                }
-                return;
             }
+            walk.report.glyphs += entry.glyphs;
+            walk.report.curves += entry.curves;
+            walk.report.cached_text_runs += 1;
+            for page in &entry.pages {
+                self.residency.touch_page(*page);
+            }
+            return;
         }
         let started = walk.out.len();
         let glyphs_before = walk.report.glyphs;
@@ -2496,10 +2495,10 @@ impl Lowering {
         opacity: f32,
         walk: &mut Walk,
     ) {
-        if let Some((key, scene)) = self.vectors.curves(&source) {
-            if self.emit_curve_scene(key, &scene, physical, opacity, walk) {
-                return;
-            }
+        if let Some((key, scene)) = self.vectors.curves(&source)
+            && self.emit_curve_scene(key, &scene, physical, opacity, walk)
+        {
+            return;
         }
         let width = physical.w.round().max(1.0) as u32;
         let height = physical.h.round().max(1.0) as u32;
@@ -2832,7 +2831,10 @@ impl Lowering {
     }
 
     pub fn begin_transition(&mut self, settings: Settings) {
-        self.begun = Some(settings);
+        self.begun = Some(Pending {
+            settings,
+            seen: None,
+        });
     }
 
     pub fn set_text_raster(&mut self, mode: TextRasterMode) {
@@ -2857,9 +2859,21 @@ impl Lowering {
         }
     }
 
-    fn adopt_previous(&mut self, previous: &[PaintCommand]) {
-        if let Some(settings) = self.begun.take() {
-            self.transition = Some(Transition::begin(previous.to_vec(), settings));
+    fn adopt_previous(
+        &mut self,
+        previous: &[PaintCommand],
+        current: &[PaintCommand],
+        now: Instant,
+    ) {
+        let Some(pending) = self.begun.take() else {
+            return;
+        };
+        match pending.resolve(previous != current, now) {
+            Resolution::Start(settings) => {
+                self.transition = Some(Transition::begin(previous.to_vec(), settings));
+            }
+            Resolution::Wait(pending) => self.begun = Some(pending),
+            Resolution::Expire => {}
         }
     }
 
@@ -2883,6 +2897,35 @@ impl Lowering {
                 false
             }
             _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Pending {
+    settings: Settings,
+    seen: Option<Instant>,
+}
+
+enum Resolution {
+    Start(Settings),
+    Wait(Pending),
+    Expire,
+}
+
+impl Pending {
+    fn resolve(self, changed: bool, now: Instant) -> Resolution {
+        let seen = self.seen.unwrap_or(now);
+        match (
+            now.saturating_duration_since(seen) >= self.settings.duration,
+            changed,
+        ) {
+            (true, _) => Resolution::Expire,
+            (false, true) => Resolution::Start(self.settings),
+            (false, false) => Resolution::Wait(Pending {
+                seen: Some(seen),
+                ..self
+            }),
         }
     }
 }

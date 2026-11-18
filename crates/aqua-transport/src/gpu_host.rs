@@ -95,7 +95,9 @@ impl HostConfig {
     pub fn native(window: aqua_protocol::WindowId, hwnd: u64, clear: Oklch) -> Self {
         Self {
             surface: SurfaceKind::Native { window, hwnd },
-            ..Self::offscreen(clear)
+            clear,
+            present: PresentHint::Vsync,
+            frame_interval: Duration::from_nanos(16_666_667),
         }
     }
 
@@ -544,10 +546,10 @@ where
         if self.lost {
             return;
         }
-        if let Some(surface) = self.surface() {
-            if self.acquire_slot(surface).is_err() {
-                self.slot_acquired = false;
-            }
+        if let Some(surface) = self.surface()
+            && self.acquire_slot(surface).is_err()
+        {
+            self.slot_acquired = false;
         }
     }
 

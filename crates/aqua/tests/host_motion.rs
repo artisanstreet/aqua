@@ -32,7 +32,7 @@ const SLIDE: f32 = 80.0;
 const ROW_Y: usize = 140;
 const WIDE_Y: usize = 220;
 const POPUP_X: usize = 340;
-const MOTION: Motion = Motion::tween(0.4, Easing::Linear);
+const MOTION: Motion = Motion::tween(1.0, Easing::Linear);
 
 const SHAPE_POINTS: [(usize, usize); 20] = [
     (20, 312),
@@ -580,7 +580,7 @@ fn a_snapshot_transition_crossfades_from_the_old_frame_to_the_new_one_through_th
             .send_external(
                 host.id,
                 ExternalUpdate::Transition(Settings {
-                    duration: Duration::from_millis(400),
+                    duration: Duration::from_secs(1),
                     band: 0.4,
                     tint: [1.0, 1.0, 1.0, 0.0],
                     sweep: Sweep::Soft,

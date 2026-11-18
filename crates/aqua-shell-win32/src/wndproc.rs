@@ -350,10 +350,10 @@ pub(crate) fn refresh_cursor(hwnd: HWND) {
                 Some(LPARAM(coordinates as isize)),
             )
         };
-        if hit.0 == ht::CLIENT as isize {
-            if let Some(icon) = state::window(raw, |w| w.cursor) {
-                apply_cursor(icon);
-            }
+        if hit.0 == ht::CLIENT as isize
+            && let Some(icon) = state::window(raw, |w| w.cursor)
+        {
+            apply_cursor(icon);
         }
     }
 }

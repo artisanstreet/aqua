@@ -294,6 +294,7 @@ fn preview(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[expect(deprecated)]
 fn collections_app(cx: &Context) -> impl IntoView + use<> {
     let (asc_r, asc_w) = cx.scope().signal(true);
     let rows = make_rows(TOTAL_ROWS);

@@ -95,6 +95,7 @@ pub struct PhaseTimes {
     pub record: Duration,
     pub submit: Duration,
     pub present: Duration,
+    pub resize_drain: Duration,
     pub resize: Duration,
     pub reserve_created: bool,
 }
@@ -752,8 +753,8 @@ impl WindowBackend {
         outcome
     }
 
-    pub fn inject_device_removal(&self) -> Result<(), GpuError> {
-        let core = self.core.as_ref().ok_or(no_device())?;
+    pub fn inject_device_removal(&mut self) -> Result<(), GpuError> {
+        let core = self.core.as_mut().ok_or(no_device())?;
         Ok(core.inject_device_removal()?)
     }
 
@@ -881,6 +882,7 @@ impl WindowBackend {
             record: recorded_in,
             submit: submit_started.elapsed(),
             present: self.phases.present,
+            resize_drain: self.phases.resize_drain,
             resize: self.phases.resize,
             reserve_created: created,
         };
@@ -1155,8 +1157,13 @@ impl GpuBackend for WindowBackend {
             .surfaces
             .get_mut(&surface)
             .ok_or(GpuError::UnknownSurface(surface))?;
+        let drain_started = Instant::now();
+        let drained = core.wait_idle();
+        self.phases.resize_drain = drain_started.elapsed();
         let resize_started = Instant::now();
-        let outcome = core.resize_swapchain(&mut entry.swapchain, extent.width, extent.height);
+        let outcome = drained.and_then(|()| {
+            core.resize_swapchain(&mut entry.swapchain, extent.width, extent.height)
+        });
         self.phases.resize = resize_started.elapsed();
         match outcome {
             Ok(changed) => {

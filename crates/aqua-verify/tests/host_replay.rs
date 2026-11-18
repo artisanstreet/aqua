@@ -111,8 +111,7 @@ fn offline_final_frame(kind: Kind, fonts: &SharedFonts, log: &Log) -> Option<u64
             break;
         }
     }
-    let hash = captured.lock().unwrap().hashes.last().copied();
-    hash
+    captured.lock().unwrap().hashes.last().copied()
 }
 
 #[test]

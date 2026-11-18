@@ -31,10 +31,10 @@ fn repaint_closes_over_chained_backdrop_sources() {
     let damage = rect(210.0, 110.0, 10.0, 10.0);
     let expanded = plan.repaint_bounds(damage);
     for pass in &plan.passes {
-        if let PassKind::Filter { params, .. } = &pass.kind {
-            if pass.reads.contains(&TextureRef::Surface) {
-                assert_eq!(expanded.union(params.region), expanded);
-            }
+        if let PassKind::Filter { params, .. } = &pass.kind
+            && pass.reads.contains(&TextureRef::Surface)
+        {
+            assert_eq!(expanded.union(params.region), expanded);
         }
     }
     assert!(expanded.right() >= 500.0);

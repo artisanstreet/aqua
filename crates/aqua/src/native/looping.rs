@@ -407,15 +407,14 @@ impl<A: Application + 'static> Host<A> {
     }
 
     fn input(&mut self, id: AquaWindowId, input: InputEvent) {
-        if matches!(input, InputEvent::PointerDown(..)) {
-            if let Some(native) = self
+        if matches!(input, InputEvent::PointerDown(..))
+            && let Some(native) = self
                 .aqua
                 .windows
                 .get(&id)
                 .and_then(|record| record.native.clone())
-            {
-                self.app.on_click_settings(native.click_settings());
-            }
+        {
+            self.app.on_click_settings(native.click_settings());
         }
         self.aqua.dispatch_input(&mut self.app, id, &input);
     }
@@ -427,11 +426,11 @@ impl<A: Application + 'static> Handler for Host<A> {
             return;
         }
         let scale = self.shell.get(&id).map_or(1.0, |window| window.scale());
-        if let ShellEvent::Input(input) = &event {
-            if let Some(input) = Coalescible::classify(input) {
-                self.queue(Held { window: id, input });
-                return;
-            }
+        if let ShellEvent::Input(input) = &event
+            && let Some(input) = Coalescible::classify(input)
+        {
+            self.queue(Held { window: id, input });
+            return;
         }
         self.flush_pending();
         if let Some(ledger) = &mut self.wakes {

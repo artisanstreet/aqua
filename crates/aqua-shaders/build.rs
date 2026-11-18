@@ -294,6 +294,37 @@ fn table(generated: &mut String, name: &str, jobs: &[Job], wanted: impl Fn(Bytec
     generated.push_str("];\n");
 }
 
+enum Mode {
+    Compile,
+    Skip,
+}
+
+fn mode() -> Mode {
+    let targets_windows = env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "windows");
+    let skip_requested = env::var_os("AQUA_SHADERS_SKIP").is_some_and(|value| value == "1");
+    match (targets_windows, skip_requested) {
+        (false, _) => Mode::Skip,
+        (true, true) => {
+            println!(
+                "cargo:warning=AQUA_SHADERS_SKIP=1: shader tables are empty, D3D backends will fail at runtime"
+            );
+            Mode::Skip
+        }
+        (true, false) => Mode::Compile,
+    }
+}
+
+fn write_tables(out: &Path, jobs: &[Job]) {
+    let mut generated = String::new();
+    table(&mut generated, "BLOBS", jobs, |bytecode| {
+        matches!(bytecode, Bytecode::Dxil { .. })
+    });
+    table(&mut generated, "DXBC", jobs, |bytecode| {
+        bytecode == Bytecode::Dxbc
+    });
+    fs::write(out.join("blobs.rs"), generated).unwrap();
+}
+
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let hlsl = manifest.join("hlsl");
@@ -302,6 +333,11 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=AQUA_DXC");
     println!("cargo:rerun-if-env-changed=AQUA_FXC");
+    println!("cargo:rerun-if-env-changed=AQUA_SHADERS_SKIP");
+    if let Mode::Skip = mode() {
+        write_tables(&out, &[]);
+        return;
+    }
     let dxc = locate("AQUA_DXC", "dxc")
         .expect("dxc not found: set AQUA_DXC to dxc or dxc.exe from the Windows SDK");
     let fxc = locate("AQUA_FXC", "fxc").expect(
@@ -343,12 +379,5 @@ fn main() {
         let _ = fs::remove_file(&job.output);
     });
     run_all(&jobs, &hlsl, &dxc, &fxc);
-    let mut generated = String::new();
-    table(&mut generated, "BLOBS", &jobs, |bytecode| {
-        matches!(bytecode, Bytecode::Dxil { .. })
-    });
-    table(&mut generated, "DXBC", &jobs, |bytecode| {
-        bytecode == Bytecode::Dxbc
-    });
-    fs::write(out.join("blobs.rs"), generated).unwrap();
+    write_tables(&out, &jobs);
 }

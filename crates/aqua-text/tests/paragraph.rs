@@ -46,8 +46,9 @@ fn alignment_moves_lines_inside_the_constraint() {
     let (_, right) = layout(text, Some(300.0), TextAlign::Right);
     let first_x = |laid: &aqua_text::LaidOut, line: usize| laid.lines[line].glyphs[0].x;
     assert_eq!(first_x(&start, 0), 0.0);
-    for line in 0..2 {
-        let width = start.lines[line].width;
+    assert!(start.lines.len() >= 2);
+    for (line, laid) in start.lines.iter().enumerate().take(2) {
+        let width = laid.width;
         assert!((first_x(&center, line) - (300.0 - width) / 2.0).abs() < 0.01);
         assert!((first_x(&right, line) - (300.0 - width)).abs() < 0.01);
     }

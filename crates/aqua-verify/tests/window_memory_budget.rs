@@ -18,6 +18,8 @@ use aqua_verify::workload::editor_workload;
 
 #[path = "support/exclusive.rs"]
 mod exclusive;
+#[path = "support/renderer.rs"]
+mod renderer;
 #[path = "support/window.rs"]
 mod window;
 
@@ -167,7 +169,8 @@ fn run(preference: AdapterPreference, high_performance: bool, budget: Option<Mem
         steady_growth: steady_end.private.saturating_sub(warm.private),
         vram_total: steady_end.vram,
     };
-    let breaches = budget
+    let adapter = &backend.core().expect("device").info().adapter;
+    let breaches = renderer::budget_for(adapter, budget)
         .map(|budget| budget.check(&measured))
         .unwrap_or_default();
     assert!(
@@ -191,6 +194,9 @@ fn run(preference: AdapterPreference, high_performance: bool, budget: Option<Mem
         warm.vram,
         steady_end.vram
     );
+    backend.destroy_surface(surface).unwrap();
+    drop(backend);
+    drop(window);
 }
 
 #[test]

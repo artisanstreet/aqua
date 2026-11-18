@@ -126,7 +126,7 @@ fn ambiguous_duplicate_programs_and_changed_shader_contracts_are_replanned() {
     let PaintCommand::PushCustomEffect { spec, .. } = &mut changed[0] else {
         unreachable!()
     };
-    spec.hlsl.push_str("\n");
+    spec.hlsl.push('\n');
     assert!(reuse(&mut cache, &changed).is_none());
 }
 

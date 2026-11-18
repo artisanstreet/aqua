@@ -184,11 +184,19 @@ mod native {
 
     thread_local! {
         static DIRTY: Cell<bool> = const { Cell::new(true) };
-        static HOOKS: RefCell<Vec<(HookKey, HWINEVENTHOOK)>> = const { RefCell::new(Vec::new()) };
+        static HOOKS: RefCell<Vec<(HookKey, Installed)>> = const { RefCell::new(Vec::new()) };
         static LEVEL: Cell<super::Level> = const { Cell::new(super::Level::Off) };
     }
 
     type HookKey = (u32, u32, u32, u32);
+
+    struct Installed(HWINEVENTHOOK);
+
+    impl Drop for Installed {
+        fn drop(&mut self) {
+            let _ = unsafe { UnhookWinEvent(self.0) };
+        }
+    }
 
     const FULL: [(u32, u32); 5] = [
         (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
@@ -237,7 +245,7 @@ mod native {
         }
     }
 
-    fn hook(first: u32, last: u32, process: u32, thread: u32) -> Option<HWINEVENTHOOK> {
+    fn hook(first: u32, last: u32, process: u32, thread: u32) -> Option<Installed> {
         let hook = unsafe {
             SetWinEventHook(
                 first,
@@ -249,7 +257,7 @@ mod native {
                 WINEVENT_OUTOFCONTEXT,
             )
         };
-        (!hook.is_invalid()).then_some(hook)
+        (!hook.is_invalid()).then_some(Installed(hook))
     }
 
     fn occluder_threads() -> Vec<(u32, u32)> {
@@ -325,15 +333,7 @@ mod native {
             let mut hooks = hooks.borrow_mut();
             let installed: Vec<HookKey> = hooks.iter().map(|(key, _)| *key).collect();
             let (stale, missing) = super::reconcile(&installed, &desired);
-            crate::wake_trace::timed("unhook", || {
-                hooks.retain(|(key, hook)| {
-                    let keep = !stale.contains(key);
-                    if !keep {
-                        let _ = unsafe { UnhookWinEvent(*hook) };
-                    }
-                    keep
-                })
-            });
+            crate::wake_trace::timed("unhook", || hooks.retain(|(key, _)| !stale.contains(key)));
             crate::wake_trace::timed("hook", || {
                 hooks.extend(missing.into_iter().filter_map(|key| {
                     hook(key.0, key.1, key.2, key.3).map(|installed| (key, installed))

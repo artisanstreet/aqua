@@ -65,6 +65,7 @@ fn hardware_float_surface_matches_reference() {
 }
 
 #[test]
+#[ignore = "needs an integrated GPU beside a discrete GPU; run with --ignored on such a machine"]
 fn integrated_float_surface_matches_reference() {
     let _software = support::software();
     run(
@@ -95,6 +96,7 @@ fn hardware_unorm_surface_matches_reference() {
 }
 
 #[test]
+#[ignore = "needs an integrated GPU beside a discrete GPU; run with --ignored on such a machine"]
 fn integrated_unorm_surface_matches_reference() {
     let _software = support::software();
     run(support::integrated(), SurfaceFormat::Bgra8Unorm, EIGHT_BIT);

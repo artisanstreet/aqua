@@ -110,12 +110,12 @@ impl TrackSet {
                 kind,
                 at,
             } => {
-                if let Some(slot) = self.slots.get_mut(&track.key()) {
-                    if slot.track.retarget(to, kind, at).is_ok() {
-                        slot.generation = generation;
-                        slot.dirty = true;
-                        self.active.insert(track.key());
-                    }
+                if let Some(slot) = self.slots.get_mut(&track.key())
+                    && slot.track.retarget(to, kind, at).is_ok()
+                {
+                    slot.generation = generation;
+                    slot.dirty = true;
+                    self.active.insert(track.key());
                 }
                 Vec::new()
             }
@@ -127,12 +127,12 @@ impl TrackSet {
                 kind,
                 at,
             } => {
-                if let Some(slot) = self.slots.get_mut(&track.key()) {
-                    if slot.track.shift(delta, to, kind, at).is_ok() {
-                        slot.generation = generation;
-                        slot.dirty = true;
-                        self.active.insert(track.key());
-                    }
+                if let Some(slot) = self.slots.get_mut(&track.key())
+                    && slot.track.shift(delta, to, kind, at).is_ok()
+                {
+                    slot.generation = generation;
+                    slot.dirty = true;
+                    self.active.insert(track.key());
                 }
                 Vec::new()
             }

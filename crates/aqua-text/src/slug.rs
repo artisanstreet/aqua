@@ -354,15 +354,15 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
             },
         );
         self.free = merged;
-        if let Some(&(from, size)) = self.free.last() {
-            if (from + size) as usize == self.texels.len() {
-                self.free.pop();
-                self.texels.truncate(from as usize);
-                self.dirty = self
-                    .dirty
-                    .map(|(low, high)| (low.min(from as usize), high.min(from as usize)))
-                    .filter(|(low, high)| low < high);
-            }
+        if let Some(&(from, size)) = self.free.last()
+            && (from + size) as usize == self.texels.len()
+        {
+            self.free.pop();
+            self.texels.truncate(from as usize);
+            self.dirty = self
+                .dirty
+                .map(|(low, high)| (low.min(from as usize), high.min(from as usize)))
+                .filter(|(low, high)| low < high);
         }
     }
 
@@ -393,12 +393,12 @@ impl<K: Copy + Eq + std::hash::Hash> SlugStore<K> {
             .collect();
         candidates.sort_unstable_by_key(|(used, start, _)| (*used, *start));
         for (_, _, key) in candidates {
-            if let Some(entry) = self.entries.remove(&key) {
-                if let Some((start, size)) = entry.block {
-                    self.indices.remove(&start);
-                    self.evictions += 1;
-                    self.release(start, size);
-                }
+            if let Some(entry) = self.entries.remove(&key)
+                && let Some((start, size)) = entry.block
+            {
+                self.indices.remove(&start);
+                self.evictions += 1;
+                self.release(start, size);
             }
             if let Some(start) = self.take_free(len) {
                 return Some(start);

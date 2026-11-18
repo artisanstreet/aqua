@@ -139,19 +139,19 @@ impl Oracle {
                     DWRITE_FONT_SIMULATIONS_NONE,
                 )
                 .map_err(failure)?;
-            if let Ok(variable) = face.cast::<IDWriteFontFace5>() {
-                if variable.HasVariations().as_bool() {
-                    let resource = variable.GetFontResource().map_err(failure)?;
-                    let axis = DWRITE_FONT_AXIS_VALUE {
-                        axisTag: DWRITE_FONT_AXIS_TAG_WEIGHT,
-                        value: f32::from(font.weight),
-                    };
-                    face = resource
-                        .CreateFontFace(DWRITE_FONT_SIMULATIONS_NONE, &[axis])
-                        .map_err(failure)?
-                        .cast()
-                        .map_err(failure)?;
-                }
+            if let Ok(variable) = face.cast::<IDWriteFontFace5>()
+                && variable.HasVariations().as_bool()
+            {
+                let resource = variable.GetFontResource().map_err(failure)?;
+                let axis = DWRITE_FONT_AXIS_VALUE {
+                    axisTag: DWRITE_FONT_AXIS_TAG_WEIGHT,
+                    value: f32::from(font.weight),
+                };
+                face = resource
+                    .CreateFontFace(DWRITE_FONT_SIMULATIONS_NONE, &[axis])
+                    .map_err(failure)?
+                    .cast()
+                    .map_err(failure)?;
             }
             self.faces.insert(
                 key,

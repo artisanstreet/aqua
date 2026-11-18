@@ -229,10 +229,10 @@ pub fn record(source: Source) {
 
 pub fn record_sent(message: u32) {
     TRACE.with(|trace| {
-        if let Some(trace) = trace.borrow_mut().as_mut() {
-            if !trace.dispatching {
-                trace.tally.record(Source::Sent(message));
-            }
+        if let Some(trace) = trace.borrow_mut().as_mut()
+            && !trace.dispatching
+        {
+            trace.tally.record(Source::Sent(message));
         }
     });
 }

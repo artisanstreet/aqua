@@ -592,6 +592,7 @@ pub struct Aqua {
     pub(crate) frames_presented: u64,
     frame_stats: Option<FrameStats>,
     input_latency: Option<crate::latency::InputLatency>,
+    #[cfg(windows)]
     pub(crate) smoke_deadline: Option<WallInstant>,
     epoch: WallInstant,
     pub(crate) wakeups: u64,
@@ -643,11 +644,13 @@ impl Aqua {
         if let Some(n) = smoke_frames {
             eprintln!("aqua: smoke mode — exiting after {n} presented frames");
         }
+        #[cfg(windows)]
         let smoke_deadline = std::env::var("AQUA_SMOKE_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|&ms| ms > 0)
             .map(|ms| WallInstant::now() + Duration::from_millis(ms));
+        #[cfg(windows)]
         if let Some(deadline) = smoke_deadline {
             eprintln!("aqua: time-bounded smoke — exiting at {deadline:?}");
         }
@@ -670,6 +673,7 @@ impl Aqua {
             window_requests: VecDeque::new(),
             dialogs: VecDeque::new(),
             next_request: 1,
+            #[cfg(windows)]
             smoke_deadline,
             epoch: WallInstant::now(),
             wakeups: 0,
@@ -708,12 +712,14 @@ impl Aqua {
         })
     }
 
+    #[cfg(windows)]
     pub(crate) fn align_clock(&mut self, shell_now: Instant) {
         self.epoch = WallInstant::now()
             .checked_sub(shell_now.since_origin())
             .unwrap_or_else(WallInstant::now);
     }
 
+    #[cfg(windows)]
     pub(crate) fn mark_native_loop(&mut self) {
         self.native_loop = true;
     }
@@ -1135,6 +1141,7 @@ impl Aqua {
         id
     }
 
+    #[cfg(any(windows, test))]
     pub(crate) fn add_native_window(
         &mut self,
         observed: ObservedWindowState,

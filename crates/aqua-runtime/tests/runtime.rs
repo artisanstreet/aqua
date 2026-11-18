@@ -320,6 +320,28 @@ fn ime_follows_the_focused_editor() {
 }
 
 #[test]
+fn ime_document_locates_each_character_rather_than_the_caret() {
+    let mut runtime = mounted();
+    runtime.step(resized_input());
+    runtime.step(frame_input(0.0));
+    let focused = runtime.step(shell_input(press(Point::new(190.0, 10.0))));
+    let Some(ImeCommand::Enable(document)) = focused.ime.first() else {
+        panic!("focus enables the ime");
+    };
+    let geometry = &document.geometry;
+    let first = geometry.range_bounds(Utf16Range::new(0, 1)).unwrap();
+    let second = geometry.range_bounds(Utf16Range::new(1, 2)).unwrap();
+    assert!(first.rect.w > 0.0);
+    assert!(second.rect.x >= first.rect.right() - 0.01);
+    assert!(second.rect.right() < document.area.x);
+    let middle = Point::new(
+        second.rect.x + second.rect.w / 2.0,
+        second.rect.y + second.rect.h / 2.0,
+    );
+    assert_eq!(geometry.hit(middle).unwrap().inside, Some(1));
+}
+
+#[test]
 fn access_tree_is_sent_once_attached_and_only_when_it_changes() {
     let mut runtime = mounted();
     runtime.step(resized_input());

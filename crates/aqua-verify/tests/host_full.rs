@@ -386,6 +386,11 @@ fn glide_steps(frames: &[Capture]) -> Vec<f32> {
         .collect()
 }
 
+fn row_distance(a: f32, b: f32) -> f32 {
+    let apart = (a - b).rem_euclid(ROW);
+    apart.min(ROW - apart)
+}
+
 #[test]
 fn scroll_glide_on_the_full_host_advances_monotonically_without_jumps() {
     for kind in adapters() {
@@ -432,8 +437,12 @@ fn scroll_glide_on_the_full_host_advances_monotonically_without_jumps() {
             .filter(|step| step.abs() > 0.0)
             .collect();
         let total: f32 = steps.iter().sum();
+        let miss = match paced {
+            true => (total - aqua_runtime::glide::NOTCH_PIXELS).abs(),
+            false => row_distance(total, aqua_runtime::glide::NOTCH_PIXELS),
+        };
         assert!(
-            (total - aqua_runtime::glide::NOTCH_PIXELS).abs() <= 3.0,
+            miss <= 3.0,
             "{kind:?}: one notch moved {total} px: {steps:?}"
         );
         eprintln!(

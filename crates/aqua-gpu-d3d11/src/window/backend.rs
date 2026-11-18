@@ -973,6 +973,9 @@ impl WindowBackend {
 
 impl Drop for WindowBackend {
     fn drop(&mut self) {
+        if let Some(core) = self.core.as_ref() {
+            core.drain();
+        }
         self.surfaces.clear();
         self.gpu = None;
         if let Some(core) = self.core.as_ref() {
@@ -1092,6 +1095,9 @@ impl GpuBackend for WindowBackend {
     }
 
     fn destroy_surface(&mut self, surface: SurfaceId) -> Result<(), GpuError> {
+        if let Some(core) = self.core.as_ref() {
+            core.drain();
+        }
         let found = self.surfaces.remove(&surface).is_some();
         if let Some(core) = self.core.as_ref() {
             core.release_deferred();

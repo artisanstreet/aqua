@@ -202,6 +202,36 @@ impl Core {
         }
     }
 
+    pub fn drain(&self) {
+        let mut query = None;
+        let created = unsafe {
+            self.device.CreateQuery(
+                &D3D11_QUERY_DESC {
+                    Query: D3D11_QUERY_EVENT,
+                    MiscFlags: 0,
+                },
+                Some(&mut query),
+            )
+        };
+        let Some(query) = created.ok().and(query) else {
+            return;
+        };
+        unsafe { self.context.End(&query) };
+        let mut done = windows::core::BOOL::default();
+        while unsafe {
+            (Interface::vtable(&self.context).base__.GetData)(
+                Interface::as_raw(&self.context),
+                Interface::as_raw(&query),
+                &mut done as *mut windows::core::BOOL as *mut _,
+                std::mem::size_of::<windows::core::BOOL>() as u32,
+                0,
+            )
+        } == windows::Win32::Foundation::S_FALSE
+        {
+            std::thread::yield_now();
+        }
+    }
+
     pub fn release_deferred(&self) {
         unsafe {
             self.context.ClearState();

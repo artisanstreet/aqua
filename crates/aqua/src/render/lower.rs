@@ -1012,7 +1012,7 @@ impl Lowering {
         self.shimmer.end_frame();
         self.pulse_cycles.end_frame();
         self.shapes.end_frame();
-        self.adopt_previous(&previous);
+        self.adopt_previous(&previous, &walk.out);
         if self.transition.is_some() {
             self.last_commands.clone_from(&walk.out);
         }
@@ -2856,8 +2856,10 @@ impl Lowering {
         }
     }
 
-    fn adopt_previous(&mut self, previous: &[PaintCommand]) {
-        if let Some(settings) = self.begun.take() {
+    fn adopt_previous(&mut self, previous: &[PaintCommand], current: &[PaintCommand]) {
+        if previous != current
+            && let Some(settings) = self.begun.take()
+        {
             self.transition = Some(Transition::begin(previous.to_vec(), settings));
         }
     }

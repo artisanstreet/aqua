@@ -144,16 +144,17 @@ impl UiTree {
                 editor.revision() != before
             })
             .unwrap_or(false);
-        if let Some(after) = self.editor_snapshot(node) {
-            if !external_projection && after.revision != snapshot.revision {
-                self.fire_action(ActionEvent {
-                    source: None,
-                    node,
-                    kind: ActionKind::TextChanged,
-                    text: Some(after.text),
-                    focused: None,
-                });
-            }
+        if let Some(after) = self.editor_snapshot(node)
+            && !external_projection
+            && after.revision != snapshot.revision
+        {
+            self.fire_action(ActionEvent {
+                source: None,
+                node,
+                kind: ActionKind::TextChanged,
+                text: Some(after.text),
+                focused: None,
+            });
         }
         changed
     }
@@ -529,21 +530,20 @@ impl UiTree {
             .drag
             .as_ref()
             .is_some_and(|drag| drag.target == Some(node))
+            && let Some(mut drag) = self.input.drag.take()
         {
-            if let Some(mut drag) = self.input.drag.take() {
-                route(
-                    self,
-                    node,
-                    RoutedInput::DragLeave {
-                        payload: drag.payload.clone(),
-                        pointer: drag.pointer,
-                    },
-                    &|_, _| true,
-                );
-                drag.target = None;
-                drag.accepted = false;
-                self.input.drag = Some(drag);
-            }
+            route(
+                self,
+                node,
+                RoutedInput::DragLeave {
+                    payload: drag.payload.clone(),
+                    pointer: drag.pointer,
+                },
+                &|_, _| true,
+            );
+            drag.target = None;
+            drag.accepted = false;
+            self.input.drag = Some(drag);
         }
         let contacts: Vec<_> = self
             .input
@@ -969,10 +969,10 @@ fn route(
                 }
             }
             for command in response.commands {
-                if let UiCommand::EditText { node, .. } = &command {
-                    if tree.is_disabled(*node) || !allowed(tree, *node) {
-                        continue;
-                    }
+                if let UiCommand::EditText { node, .. } = &command
+                    && (tree.is_disabled(*node) || !allowed(tree, *node))
+                {
+                    continue;
                 }
                 tree.command_sink().push(command);
             }
@@ -1596,51 +1596,49 @@ pub fn route_input(
         .filter(|node| !tree.is_disabled(*node) && allowed(tree, *node))
         .map(|node| route(tree, node, RoutedInput::Native(event.clone()), &allowed))
         .unwrap_or_default();
-    if !outcome.default_prevented {
-        if let InputEvent::KeyDown(key) = event {
-            if !crate::events::text_is_composing(tree) {
-                if let Some(target) = target {
-                    let shortcut = event_path(tree, target)
-                        .into_iter()
-                        .filter(|node| allowed(tree, *node) && !tree.is_disabled(*node))
-                        .find_map(|node| {
-                            tree.input
-                                .shortcuts
-                                .get(&node)?
-                                .iter()
-                                .find(|binding| {
-                                    keys_match(binding.key, key.key)
-                                        && binding.modifiers == key.modifiers
-                                        && (!key.repeat || binding.repeat)
-                                })
-                                .copied()
-                                .map(|binding| (node, binding))
-                        });
-                    if let Some((node, shortcut)) = shortcut {
-                        if dispatch_action_allowed(
-                            tree,
-                            node,
-                            shortcut.action,
-                            Some(crate::tree::ActivationSource::Keyboard(*key)),
-                            &allowed,
-                        ) {
-                            outcome.handled = true;
-                            outcome.default_prevented = true;
-                        }
-                    }
-                }
-            }
+    if !outcome.default_prevented
+        && let InputEvent::KeyDown(key) = event
+        && !crate::events::text_is_composing(tree)
+        && let Some(target) = target
+    {
+        let shortcut = event_path(tree, target)
+            .into_iter()
+            .filter(|node| allowed(tree, *node) && !tree.is_disabled(*node))
+            .find_map(|node| {
+                tree.input
+                    .shortcuts
+                    .get(&node)?
+                    .iter()
+                    .find(|binding| {
+                        keys_match(binding.key, key.key)
+                            && binding.modifiers == key.modifiers
+                            && (!key.repeat || binding.repeat)
+                    })
+                    .copied()
+                    .map(|binding| (node, binding))
+            });
+        if let Some((node, shortcut)) = shortcut
+            && dispatch_action_allowed(
+                tree,
+                node,
+                shortcut.action,
+                Some(crate::tree::ActivationSource::Keyboard(*key)),
+                &allowed,
+            )
+        {
+            outcome.handled = true;
+            outcome.default_prevented = true;
         }
     }
     match event {
         InputEvent::PointerUp(_, _) | InputEvent::PointerCancel { .. } => {
-            if let Some(contact) = contact {
-                if let Some(node) = tree.input.captures.remove(&contact) {
-                    tree.queue_interaction_event(
-                        node,
-                        crate::tree::interaction::InteractionEvent::Capture(false),
-                    );
-                }
+            if let Some(contact) = contact
+                && let Some(node) = tree.input.captures.remove(&contact)
+            {
+                tree.queue_interaction_event(
+                    node,
+                    crate::tree::interaction::InteractionEvent::Capture(false),
+                );
             }
         }
         InputEvent::Focused(false) => {

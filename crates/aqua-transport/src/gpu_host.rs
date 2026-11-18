@@ -544,10 +544,10 @@ where
         if self.lost {
             return;
         }
-        if let Some(surface) = self.surface() {
-            if self.acquire_slot(surface).is_err() {
-                self.slot_acquired = false;
-            }
+        if let Some(surface) = self.surface()
+            && self.acquire_slot(surface).is_err()
+        {
+            self.slot_acquired = false;
         }
     }
 

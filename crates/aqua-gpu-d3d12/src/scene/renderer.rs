@@ -686,16 +686,16 @@ impl SceneRenderer {
                     tracked.get(write) == Some(&D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
                 });
             for reference in pass.reads.iter().chain(&pass.writes) {
-                if let TextureRef::Transient(id) = reference {
-                    if activated.insert(*id) {
-                        let bound = bind(*reference, self)?;
-                        let current = tracked
-                            .get(reference)
-                            .copied()
-                            .unwrap_or(D3D12_RESOURCE_STATE_COMMON);
-                        if let Some(after) = barriers.activate(&bound.resource, current) {
-                            tracked.insert(*reference, after);
-                        }
+                if let TextureRef::Transient(id) = reference
+                    && activated.insert(*id)
+                {
+                    let bound = bind(*reference, self)?;
+                    let current = tracked
+                        .get(reference)
+                        .copied()
+                        .unwrap_or(D3D12_RESOURCE_STATE_COMMON);
+                    if let Some(after) = barriers.activate(&bound.resource, current) {
+                        tracked.insert(*reference, after);
                     }
                 }
             }
@@ -1189,22 +1189,22 @@ impl SceneRenderer {
         }
         let mut closing = emitter.batch();
         for barrier in &plan.final_barriers {
-            if let Barrier::Transition { resource, to, .. } = barrier {
-                if let Some(after) = state_for(resource, *to) {
-                    let bound = bind(*resource, self)?;
-                    let before = tracked
-                        .get(resource)
-                        .copied()
-                        .unwrap_or(D3D12_RESOURCE_STATE_COMMON);
-                    if before != after {
-                        match resource {
-                            TextureRef::Persistent(_) => {
-                                closing.transition_legacy(&bound.resource, before, after)
-                            }
-                            _ => closing.transition(&bound.resource, before, after),
+            if let Barrier::Transition { resource, to, .. } = barrier
+                && let Some(after) = state_for(resource, *to)
+            {
+                let bound = bind(*resource, self)?;
+                let before = tracked
+                    .get(resource)
+                    .copied()
+                    .unwrap_or(D3D12_RESOURCE_STATE_COMMON);
+                if before != after {
+                    match resource {
+                        TextureRef::Persistent(_) => {
+                            closing.transition_legacy(&bound.resource, before, after)
                         }
-                        tracked.insert(*resource, after);
+                        _ => closing.transition(&bound.resource, before, after),
                     }
+                    tracked.insert(*resource, after);
                 }
             }
         }
@@ -1219,10 +1219,10 @@ impl SceneRenderer {
         stats.barriers += emitter.submit(list, closing);
         reads.clear();
         for (reference, final_state) in tracked.iter() {
-            if let TextureRef::Transient(id) = reference {
-                if let Some(index) = self.transients.position(*id) {
-                    self.transients.entries_mut()[index].state = *final_state;
-                }
+            if let TextureRef::Transient(id) = reference
+                && let Some(index) = self.transients.position(*id)
+            {
+                self.transients.entries_mut()[index].state = *final_state;
             }
         }
         if let Some(timestamps) = &mut self.timestamps {

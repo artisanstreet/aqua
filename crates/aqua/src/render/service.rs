@@ -344,10 +344,10 @@ impl Slot {
             .store(thread_token(), Ordering::Relaxed);
         if self.start() {
             let hidden = self.stats.hidden.load(Ordering::Acquire);
-            if let Stage::Running(target) = &mut self.stage {
-                if hidden != self.hidden_seen {
-                    target.visibility(hidden);
-                }
+            if let Stage::Running(target) = &mut self.stage
+                && hidden != self.hidden_seen
+            {
+                target.visibility(hidden);
             }
             self.hidden_seen = hidden;
         }

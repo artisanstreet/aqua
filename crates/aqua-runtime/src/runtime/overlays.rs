@@ -329,10 +329,11 @@ impl Runtime {
                     content,
                     options,
                 } => {
-                    if self.host.input_allowed(&self.tree, owner) && !self.tree.is_disabled(owner) {
-                        if let Err(error) = self.open_popup(owner, *content, options) {
-                            self.last_build_error = Some(error.to_string());
-                        }
+                    if self.host.input_allowed(&self.tree, owner)
+                        && !self.tree.is_disabled(owner)
+                        && let Err(error) = self.open_popup(owner, *content, options)
+                    {
+                        self.last_build_error = Some(error.to_string());
                     }
                 }
                 ControlRequest::ArmTooltip { owner, tooltip } => {

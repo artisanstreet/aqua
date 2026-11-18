@@ -205,10 +205,10 @@ impl<K: Clone + Eq + Hash> Atlas<K> {
         let entry = self.entries.get_mut(key)?;
         entry.last_used = frame;
         let slot = entry.slot;
-        if let Slot::Resident(placement) = slot {
-            if let Some(Some(page)) = self.pages.get_mut(placement.page.index as usize) {
-                page.last_used = frame;
-            }
+        if let Slot::Resident(placement) = slot
+            && let Some(Some(page)) = self.pages.get_mut(placement.page.index as usize)
+        {
+            page.last_used = frame;
         }
         self.stats.hits += 1;
         Some(slot)

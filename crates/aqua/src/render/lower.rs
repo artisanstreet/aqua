@@ -930,13 +930,12 @@ impl Lowering {
             };
             let mut segment_start =
                 transform.is_none() && position >= hold_until && self.at_baseline(&walk);
-            if segment_start {
-                if let Some((seen, len)) = self.volatile_spans.get(&id).copied() {
-                    if self.span_frame - seen < VOLATILE_FRAMES {
-                        hold_until = position + len + 1;
-                        segment_start = false;
-                    }
-                }
+            if segment_start
+                && let Some((seen, len)) = self.volatile_spans.get(&id).copied()
+                && self.span_frame - seen < VOLATILE_FRAMES
+            {
+                hold_until = position + len + 1;
+                segment_start = false;
             }
             if transform.is_some() || segment_start {
                 let before = walk.out.len() as u32;
@@ -1510,10 +1509,10 @@ impl Lowering {
             clip: walk.clips.last().copied(),
             stamp: self.span_stamp(),
         });
-        if local.is_some() {
-            if let Some(top) = walk.clips.last_mut() {
-                *top = top.inflate(span::SLACK);
-            }
+        if local.is_some()
+            && let Some(top) = walk.clips.last_mut()
+        {
+            *top = top.inflate(span::SLACK);
         }
         true
     }
@@ -2167,35 +2166,35 @@ impl Lowering {
                 ]
             });
         let stamp = self.span_stamp();
-        if let Some(signature) = signature {
-            if let Some(entry) = self.run_cache.entries.get(&run_id).filter(|entry| {
+        if let Some(signature) = signature
+            && let Some(entry) = self.run_cache.entries.get(&run_id).filter(|entry| {
                 entry.signature == signature
                     && entry.stamp == stamp
                     && (entry.curves == 0 || entry.base == (base_x, base_y))
                     && Arc::ptr_eq(&entry.laid, &laid)
                     && touch_curves(&entry.commands, &mut self.slug_store, &mut self.path_store)
-            }) {
-                match entry.base == (base_x, base_y) {
-                    true => walk.out.extend(entry.commands.iter().cloned()),
-                    false => {
-                        let dx = base_x.floor() - entry.base.0.floor();
-                        walk.out.extend(
-                            entry
-                                .commands
-                                .iter()
-                                .zip(&entry.pens)
-                                .map(|(command, pens)| replaced(command, pens, dx, base_y)),
-                        );
-                    }
+            })
+        {
+            match entry.base == (base_x, base_y) {
+                true => walk.out.extend(entry.commands.iter().cloned()),
+                false => {
+                    let dx = base_x.floor() - entry.base.0.floor();
+                    walk.out.extend(
+                        entry
+                            .commands
+                            .iter()
+                            .zip(&entry.pens)
+                            .map(|(command, pens)| replaced(command, pens, dx, base_y)),
+                    );
                 }
-                walk.report.glyphs += entry.glyphs;
-                walk.report.curves += entry.curves;
-                walk.report.cached_text_runs += 1;
-                for page in &entry.pages {
-                    self.residency.touch_page(*page);
-                }
-                return;
             }
+            walk.report.glyphs += entry.glyphs;
+            walk.report.curves += entry.curves;
+            walk.report.cached_text_runs += 1;
+            for page in &entry.pages {
+                self.residency.touch_page(*page);
+            }
+            return;
         }
         let started = walk.out.len();
         let glyphs_before = walk.report.glyphs;
@@ -2496,10 +2495,10 @@ impl Lowering {
         opacity: f32,
         walk: &mut Walk,
     ) {
-        if let Some((key, scene)) = self.vectors.curves(&source) {
-            if self.emit_curve_scene(key, &scene, physical, opacity, walk) {
-                return;
-            }
+        if let Some((key, scene)) = self.vectors.curves(&source)
+            && self.emit_curve_scene(key, &scene, physical, opacity, walk)
+        {
+            return;
         }
         let width = physical.w.round().max(1.0) as u32;
         let height = physical.h.round().max(1.0) as u32;

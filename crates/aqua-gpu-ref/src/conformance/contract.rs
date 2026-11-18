@@ -59,11 +59,11 @@ fn standard_cases(features: &Features) -> Vec<Case> {
 fn poisoned(plan: &FramePlan) -> FramePlan {
     let mut plan = plan.clone();
     for pass in &mut plan.passes {
-        if let PassKind::Instanced { instances, .. } = &mut pass.kind {
-            if let Some(instance) = instances.first_mut() {
-                instance.bounds.x = f32::NAN;
-                return plan;
-            }
+        if let PassKind::Instanced { instances, .. } = &mut pass.kind
+            && let Some(instance) = instances.first_mut()
+        {
+            instance.bounds.x = f32::NAN;
+            return plan;
         }
     }
     plan.passes.clear();

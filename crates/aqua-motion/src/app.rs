@@ -267,10 +267,9 @@ impl AppMotion {
             .pending
             .as_ref()
             .is_some_and(|p| p.bound == Some(generation))
+            && let Some(mut pending) = slot.pending.take()
         {
-            if let Some(mut pending) = slot.pending.take() {
-                (pending.callback)(Completion::Completed);
-            }
+            (pending.callback)(Completion::Completed);
         }
     }
 

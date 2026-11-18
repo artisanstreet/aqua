@@ -204,7 +204,7 @@ fn shell(
     let compose = ui_builders::Text::builder().bind(composer).multiline(true).placeholder("Write a message…")
         .style(Style::new().width(pct(100.0)).height(px(100.0)).padding(px(12.0)).background(CONTROL).focus_ring(1.5, ACCENT).radius(px(8.0)).text_color(TEXT)).build().aria_label("Composer")
         .on_input(InputKind::DragOver, EventPhase::Bubble, |event| InputResponse { accept_drop: matches!(&event.input, RoutedInput::DragOver { payload, .. } if payload.get::<ThreadReference>().is_some()), ..Default::default() })
-        .on_input(InputKind::Drop, EventPhase::Bubble, move |event| { if let RoutedInput::Drop { payload, .. } = &event.input { if let Some(reference) = payload.get::<ThreadReference>() { attach.update(|state| { state.attached.push(reference.0); state.status = format!("Attached thread {}", reference.0); }); } } InputResponse::handled() });
+        .on_input(InputKind::Drop, EventPhase::Bubble, move |event| { if let RoutedInput::Drop { payload, .. } = &event.input && let Some(reference) = payload.get::<ThreadReference>() { attach.update(|state| { state.attached.push(reference.0); state.status = format!("Attached thread {}", reference.0); }); } InputResponse::handled() });
     let main = ui_builders::Box::new().style(Style::new().column().width(px(0.0)).min_width(px(260.0)).flex_grow(1.0).height(pct(100.0)).padding(px(24.0)).gap(18.0))
         .child(heading("Aqua workspace"))
         .child(ui_builders::Text::builder().arg("Review the conversation, adjust settings, and attach a thread to your next message.").multiline(true).style(Style::new().width(pct(100.0)).text_color(MUTED)).build())

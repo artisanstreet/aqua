@@ -511,11 +511,11 @@ mod demo {
 
         fn selftest_tick(&mut self, at: Instant) -> Option<Instant> {
             let mut test = self.selftest.take()?;
-            if let Some(job) = test.dialog.as_ref() {
-                if let Some(result) = job.poll() {
-                    self.main.line(format!("dialog-result {result:?}"));
-                    test.dialog = None;
-                }
+            if let Some(job) = test.dialog.as_ref()
+                && let Some(result) = job.poll()
+            {
+                self.main.line(format!("dialog-result {result:?}"));
+                test.dialog = None;
             }
             if at < test.next {
                 let next = test.next;

@@ -1835,14 +1835,14 @@ impl UiTree {
                     _ => {}
                 }
             }
-            if let NodeKind::Text(text) = &rec.kind {
-                if text.is_editable() {
-                    value_text = Some(if text.password {
-                        "•".repeat(text.text().chars().count())
-                    } else {
-                        text.text().to_owned()
-                    });
-                }
+            if let NodeKind::Text(text) = &rec.kind
+                && text.is_editable()
+            {
+                value_text = Some(if text.password {
+                    "•".repeat(text.text().chars().count())
+                } else {
+                    text.text().to_owned()
+                });
             }
             let bounds = self.visual_rect(id);
             let numeric_range = match rec.control.as_deref() {
@@ -2145,13 +2145,12 @@ impl UiTree {
                         self.set_control_value(node, value);
                     }
                     UiCommand::FollowTextCaret { node } => {
-                        if let Some(record) = self.get_mut(node) {
-                            if let NodeKind::Text(text) = &mut record.kind {
-                                if text.external_text_input {
-                                    text.follow_text_caret = true;
-                                    self.follow_caret_queue.push(node);
-                                }
-                            }
+                        if let Some(record) = self.get_mut(node)
+                            && let NodeKind::Text(text) = &mut record.kind
+                            && text.external_text_input
+                        {
+                            text.follow_text_caret = true;
+                            self.follow_caret_queue.push(node);
                         }
                     }
                     UiCommand::SetTextPresentation {
@@ -2371,11 +2370,11 @@ impl UiTree {
                     .then(Transform2D::translate(rect.x, rect.y));
                 world = anchored.then(world);
             }
-            if id != node {
-                if let NodeKind::Scroll(scroll) = &record.kind {
-                    offset.x -= scroll.offset.x;
-                    offset.y -= scroll.offset.y;
-                }
+            if id != node
+                && let NodeKind::Scroll(scroll) = &record.kind
+            {
+                offset.x -= scroll.offset.x;
+                offset.y -= scroll.offset.y;
             }
         }
         Some(Transform2D::translate(origin.x, origin.y).then(world))
@@ -2513,10 +2512,10 @@ impl UiTree {
                     if let Some(&i) = old_index.get(&id.raw()) {
                         reused[i] = true;
                     }
-                    if self.exiting.remove(&id) {
-                        if let Some(record) = self.nodes.get_mut(id.raw()) {
-                            record.hit_test_excluded = false;
-                        }
+                    if self.exiting.remove(&id)
+                        && let Some(record) = self.nodes.get_mut(id.raw())
+                    {
+                        record.hit_test_excluded = false;
                     }
                     self.update_spec(id, spec);
                     out.push(Some(id));
@@ -2684,31 +2683,31 @@ impl UiTree {
                     self.set_text(id, t.text());
                     // A static label can be restyled without changing its
                     // string. Reconciliation must retain typography too.
-                    if let Some(rec) = self.nodes.get_mut(id.raw()) {
-                        if let NodeKind::Text(ref mut cur) = rec.kind {
-                            cur.text_style = t.text_style;
-                            cur.spans = t.spans;
-                            cur.inline_glyphs = t.inline_glyphs;
-                            cur.inline_paints = t.inline_paints;
-                            cur.gpui_text_opacity = t.gpui_text_opacity;
-                            cur.selection_source = t.selection_source;
-                            cur.interaction_ranges = t.interaction_ranges;
-                            cur.selection_auto_scroll = t.selection_auto_scroll;
-                            cur.text_appearance = t.text_appearance;
-                            cur.gpui_text_appearance = t.gpui_text_appearance;
-                            cur.external_text_input = t.external_text_input;
-                            cur.native_text_model = t.native_text_model;
-                            cur.viewport_scroll_max = t.viewport_scroll_max;
-                            cur.font_size = t.font_size;
-                            cur.color = t.color;
-                            cur.selectable = t.selectable;
-                            cur.wrap = t.wrap;
-                            cur.placeholder = t.placeholder;
-                            cur.overflow = t.overflow;
-                            cur.placeholder_color = t.placeholder_color;
-                            cur.gpui_placeholder_color = t.gpui_placeholder_color;
-                            cur.gpui_source_placeholder_color = t.gpui_source_placeholder_color;
-                        }
+                    if let Some(rec) = self.nodes.get_mut(id.raw())
+                        && let NodeKind::Text(ref mut cur) = rec.kind
+                    {
+                        cur.text_style = t.text_style;
+                        cur.spans = t.spans;
+                        cur.inline_glyphs = t.inline_glyphs;
+                        cur.inline_paints = t.inline_paints;
+                        cur.gpui_text_opacity = t.gpui_text_opacity;
+                        cur.selection_source = t.selection_source;
+                        cur.interaction_ranges = t.interaction_ranges;
+                        cur.selection_auto_scroll = t.selection_auto_scroll;
+                        cur.text_appearance = t.text_appearance;
+                        cur.gpui_text_appearance = t.gpui_text_appearance;
+                        cur.external_text_input = t.external_text_input;
+                        cur.native_text_model = t.native_text_model;
+                        cur.viewport_scroll_max = t.viewport_scroll_max;
+                        cur.font_size = t.font_size;
+                        cur.color = t.color;
+                        cur.selectable = t.selectable;
+                        cur.wrap = t.wrap;
+                        cur.placeholder = t.placeholder;
+                        cur.overflow = t.overflow;
+                        cur.placeholder_color = t.placeholder_color;
+                        cur.gpui_placeholder_color = t.gpui_placeholder_color;
+                        cur.gpui_source_placeholder_color = t.gpui_source_placeholder_color;
                     }
                     self.sync_text_leaf_if_changed(id);
                     self.touch_paint(id);
@@ -2731,12 +2730,12 @@ impl UiTree {
                 self.touch_paint(id);
             }
             NodeKind::Scroll(s) => {
-                if !managed && !spec.preserve_scroll_offset {
-                    if let Some(rec) = self.nodes.get_mut(id.raw()) {
-                        if let NodeKind::Scroll(ref mut cur) = rec.kind {
-                            cur.offset = s.offset;
-                        }
-                    }
+                if !managed
+                    && !spec.preserve_scroll_offset
+                    && let Some(rec) = self.nodes.get_mut(id.raw())
+                    && let NodeKind::Scroll(ref mut cur) = rec.kind
+                {
+                    cur.offset = s.offset;
                 }
                 self.touch_paint(id);
             }
@@ -3106,10 +3105,10 @@ impl UiTree {
         }
         let mut used = std::collections::HashSet::new();
         for (_, rec) in self.nodes.iter() {
-            if let NodeKind::Canvas(c) = &rec.kind {
-                if let Some(p) = c.painter {
-                    used.insert(p);
-                }
+            if let NodeKind::Canvas(c) = &rec.kind
+                && let Some(p) = c.painter
+            {
+                used.insert(p);
             }
         }
         self.painters.retain(|k, _| used.contains(k));
@@ -3512,10 +3511,8 @@ impl UiTree {
             let clips = matches!(&record.kind, NodeKind::Box(b) if b.paint_ref().clip)
                 || matches!(record.kind, NodeKind::Scroll(_))
                 || (!matches!(&record.kind, NodeKind::Box(_)) && record.paint().clip);
-            if clips {
-                if let Some(rect) = self.visual_rect(id) {
-                    clip = clip.intersect(rect);
-                }
+            if clips && let Some(rect) = self.visual_rect(id) {
+                clip = clip.intersect(rect);
             }
             if self.is_portal(id) {
                 break;
@@ -3574,11 +3571,11 @@ impl UiTree {
         style.flex_shrink = 0.0;
         self.set_style(id, style);
         self.layout_boundaries.insert(id);
-        if let Some(mut paint) = self.paint(id) {
-            if paint.opacity.is_none() {
-                paint.opacity = Some(1.0);
-                self.set_paint(id, paint);
-            }
+        if let Some(mut paint) = self.paint(id)
+            && paint.opacity.is_none()
+        {
+            paint.opacity = Some(1.0);
+            self.set_paint(id, paint);
         }
         self.full_layout = true;
         true
@@ -4063,11 +4060,11 @@ impl UiTree {
             if is_scroll {
                 let mut extent = Size::ZERO;
                 for c in &children {
-                    if let Some(&ct) = self.tmap.get(&c.raw()) {
-                        if let Ok(cl) = self.taffy.layout(ct) {
-                            extent.w = extent.w.max(cl.location.x + cl.size.width);
-                            extent.h = extent.h.max(cl.location.y + cl.size.height);
-                        }
+                    if let Some(&ct) = self.tmap.get(&c.raw())
+                        && let Ok(cl) = self.taffy.layout(ct)
+                    {
+                        extent.w = extent.w.max(cl.location.x + cl.size.width);
+                        extent.h = extent.h.max(cl.location.y + cl.size.height);
                     }
                 }
                 let extent = Size::new(extent.w / device_scale, extent.h / device_scale);
@@ -5167,46 +5164,47 @@ impl UiTree {
                     },
                 ));
             }
-        } else if !paint.shadows.is_empty() {
-            if let Some(border) = paint.border {
-                out.push((
-                    id,
+        } else if !paint.shadows.is_empty()
+            && let Some(border) = paint.border
+        {
+            out.push((
+                id,
+                DisplayItem::Rect {
+                    bounds: rect,
+                    radius: paint.corners.map_or(paint.radius, |r| r.top_left),
+                    fill: Oklch::TRANSPARENT,
+                    border_width: border.width,
+                    border_color: border.color,
+                    shadow: None,
+                },
+            ));
+        }
+        if self.focused == Some(id)
+            && !self.is_disabled(id)
+            && let Some(ring) = paint.focus_ring
+        {
+            out.push((
+                id,
+                if self.gpui_paint {
+                    DisplayItem::Quad {
+                        bounds: rect,
+                        corners,
+                        fill: Oklch::TRANSPARENT,
+                        border_widths: aqua_core::Insets::uniform(ring.width),
+                        border_color: ring.color,
+                        dashed: false,
+                    }
+                } else {
                     DisplayItem::Rect {
                         bounds: rect,
-                        radius: paint.corners.map_or(paint.radius, |r| r.top_left),
+                        radius: paint.radius,
                         fill: Oklch::TRANSPARENT,
-                        border_width: border.width,
-                        border_color: border.color,
+                        border_width: ring.width,
+                        border_color: ring.color,
                         shadow: None,
-                    },
-                ));
-            }
-        }
-        if self.focused == Some(id) && !self.is_disabled(id) {
-            if let Some(ring) = paint.focus_ring {
-                out.push((
-                    id,
-                    if self.gpui_paint {
-                        DisplayItem::Quad {
-                            bounds: rect,
-                            corners,
-                            fill: Oklch::TRANSPARENT,
-                            border_widths: aqua_core::Insets::uniform(ring.width),
-                            border_color: ring.color,
-                            dashed: false,
-                        }
-                    } else {
-                        DisplayItem::Rect {
-                            bounds: rect,
-                            radius: paint.radius,
-                            fill: Oklch::TRANSPARENT,
-                            border_width: ring.width,
-                            border_color: ring.color,
-                            shadow: None,
-                        }
-                    },
-                ));
-            }
+                    }
+                },
+            ));
         }
         if group_opacity.is_some() {
             out.push((id, DisplayItem::PopOpacity));

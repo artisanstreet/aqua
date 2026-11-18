@@ -53,20 +53,20 @@ impl MeshData {
             return Err(MeshError::Invalid("no positions".into()));
         }
         let n = self.positions.len();
-        if let Some(v) = &self.normals {
-            if v.len() != n {
-                return Err(MeshError::Invalid("normals length".into()));
-            }
+        if let Some(v) = &self.normals
+            && v.len() != n
+        {
+            return Err(MeshError::Invalid("normals length".into()));
         }
-        if let Some(v) = &self.uvs {
-            if v.len() != n {
-                return Err(MeshError::Invalid("uv length".into()));
-            }
+        if let Some(v) = &self.uvs
+            && v.len() != n
+        {
+            return Err(MeshError::Invalid("uv length".into()));
         }
-        if let Some(v) = &self.colors {
-            if v.len() != n {
-                return Err(MeshError::Invalid("colors length".into()));
-            }
+        if let Some(v) = &self.colors
+            && v.len() != n
+        {
+            return Err(MeshError::Invalid("colors length".into()));
         }
         for i in &self.indices {
             if (*i as usize) >= n {

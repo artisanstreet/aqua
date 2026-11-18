@@ -187,10 +187,10 @@ pub fn create_factory(debug: bool) -> Result<IDXGIFactory6, Error> {
 
 pub fn enable_debug_layer() {
     let mut debug: Option<ID3D12Debug> = None;
-    if unsafe { D3D12GetDebugInterface(&mut debug) }.is_ok() {
-        if let Some(debug) = debug {
-            unsafe { debug.EnableDebugLayer() };
-        }
+    if unsafe { D3D12GetDebugInterface(&mut debug) }.is_ok()
+        && let Some(debug) = debug
+    {
+        unsafe { debug.EnableDebugLayer() };
     }
 }
 

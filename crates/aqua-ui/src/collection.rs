@@ -1373,10 +1373,10 @@ impl<T> TableSource<T> {
             0.0
         };
         let bits = available.to_bits();
-        if let Some((cached, widths)) = self.plan_cache.borrow().as_ref() {
-            if *cached == bits {
-                return widths.clone();
-            }
+        if let Some((cached, widths)) = self.plan_cache.borrow().as_ref()
+            && *cached == bits
+        {
+            return widths.clone();
         }
         let (pad_l, pad_r, gap) = table_chrome(&self.row_styles, &self.header_styles);
         let inset = chrome_inset(pad_l, pad_r, gap, self.columns.len());

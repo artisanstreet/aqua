@@ -412,14 +412,14 @@ impl Application for UiApp {
         match event {
             WindowEvent::Destroyed(_) => self.retire(id),
             _ => {
-                if let Some(slot) = self.claim(id) {
-                    if let Some((size, scale)) = resized(slot) {
-                        slot.drive(RuntimeInput::Shell(ShellEvent::Resized {
-                            window: id,
-                            size: physical(size, scale),
-                            scale,
-                        }));
-                    }
+                if let Some(slot) = self.claim(id)
+                    && let Some((size, scale)) = resized(slot)
+                {
+                    slot.drive(RuntimeInput::Shell(ShellEvent::Resized {
+                        window: id,
+                        size: physical(size, scale),
+                        scale,
+                    }));
                 }
             }
         }

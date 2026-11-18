@@ -75,13 +75,13 @@ fn site_key() -> u32 {
         return 0;
     }
     let (frames, key) = capture();
-    if let Some((slot, fresh)) = slot_for(key) {
-        if fresh {
-            frames
-                .iter()
-                .zip(slot.frames.iter())
-                .for_each(|(frame, cell)| cell.store(*frame, Ordering::Relaxed));
-        }
+    if let Some((slot, fresh)) = slot_for(key)
+        && fresh
+    {
+        frames
+            .iter()
+            .zip(slot.frames.iter())
+            .for_each(|(frame, cell)| cell.store(*frame, Ordering::Relaxed));
     }
     IN_PROBE.with(|flag| flag.set(false));
     key

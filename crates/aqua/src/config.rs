@@ -407,29 +407,29 @@ impl Config {
             .max_size
             .map(|pair| px_pair("max_size", pair))
             .transpose()?;
-        if let (Some(lo), Some(hi)) = (min, max) {
-            if lo.width > hi.width || lo.height > hi.height {
-                return Err(ConfigError::BoundsOrder {
-                    what: "min_size must not exceed max_size per axis",
-                });
-            }
+        if let (Some(lo), Some(hi)) = (min, max)
+            && (lo.width > hi.width || lo.height > hi.height)
+        {
+            return Err(ConfigError::BoundsOrder {
+                what: "min_size must not exceed max_size per axis",
+            });
         }
         // Initial-size constraint behavior (explicit): the requested inner
         // size must already sit inside [min, max]; resolve errors rather
         // than silently clamping or resizing.
-        if let Some(lo) = min {
-            if inner.width < lo.width || inner.height < lo.height {
-                return Err(ConfigError::InitialOutOfBounds {
-                    what: "size must not be smaller than min_size per axis",
-                });
-            }
+        if let Some(lo) = min
+            && (inner.width < lo.width || inner.height < lo.height)
+        {
+            return Err(ConfigError::InitialOutOfBounds {
+                what: "size must not be smaller than min_size per axis",
+            });
         }
-        if let Some(hi) = max {
-            if inner.width > hi.width || inner.height > hi.height {
-                return Err(ConfigError::InitialOutOfBounds {
-                    what: "size must not be larger than max_size per axis",
-                });
-            }
+        if let Some(hi) = max
+            && (inner.width > hi.width || inner.height > hi.height)
+        {
+            return Err(ConfigError::InitialOutOfBounds {
+                what: "size must not be larger than max_size per axis",
+            });
         }
         let fps_target = match self.fps {
             None => None,

@@ -347,13 +347,13 @@ impl Runtime {
                     });
             }
             InputEvent::PointerMove(pointer) => {
-                if let Some(press) = &mut self.interaction.range_press {
-                    if press.pointer.contact == pointer.contact {
-                        press.dragged |= (press.pointer.position.x - pointer.position.x)
-                            .abs()
-                            .max((press.pointer.position.y - pointer.position.y).abs())
-                            >= 3.0;
-                    }
+                if let Some(press) = &mut self.interaction.range_press
+                    && press.pointer.contact == pointer.contact
+                {
+                    press.dragged |= (press.pointer.position.x - pointer.position.x)
+                        .abs()
+                        .max((press.pointer.position.y - pointer.position.y).abs())
+                        >= 3.0;
                 }
             }
             InputEvent::PointerUp(pointer, PointerButton::Primary) => {
@@ -394,16 +394,16 @@ impl Runtime {
     }
 
     pub fn selected_text(&self) -> Option<String> {
-        if let Some(node) = self.tree.focused() {
-            if self.text_node_allowed(node) && !self.tree.is_disabled(node) {
-                if let Some(NodeKind::Text(text)) = self.tree.get(node).map(|node| &node.kind) {
-                    if text.password {
-                        return None;
-                    }
-                    if let TextBacking::Editable(editor) = &text.backing {
-                        return editor.selected_text().map(str::to_owned);
-                    }
-                }
+        if let Some(node) = self.tree.focused()
+            && self.text_node_allowed(node)
+            && !self.tree.is_disabled(node)
+            && let Some(NodeKind::Text(text)) = self.tree.get(node).map(|node| &node.kind)
+        {
+            if text.password {
+                return None;
+            }
+            if let TextBacking::Editable(editor) = &text.backing {
+                return editor.selected_text().map(str::to_owned);
             }
         }
         if self.interaction.source_document.selection().is_some() {
@@ -426,10 +426,10 @@ impl Runtime {
             if text.password || !self.text_node_allowed(node) {
                 continue;
             }
-            if let Some(range) = self.document_range(&index, selection, node) {
-                if let Some(chunk) = text.text().get(range) {
-                    chunks.push(chunk);
-                }
+            if let Some(range) = self.document_range(&index, selection, node)
+                && let Some(chunk) = text.text().get(range)
+            {
+                chunks.push(chunk);
             }
         }
         let text = chunks.join("\n");
@@ -681,14 +681,14 @@ impl Runtime {
                 NodeKind::Text(text) => text.selection_source.clone(),
                 _ => None,
             });
-            if let Some(binding) = binding {
-                if self.valid_source_binding(binding.document, node, &binding.slice) {
-                    self.interaction.source_slices.insert(node, binding.slice);
-                    self.interaction
-                        .source_scopes
-                        .insert(node, binding.document);
-                    self.interaction.descriptor_bindings.insert(node);
-                }
+            if let Some(binding) = binding
+                && self.valid_source_binding(binding.document, node, &binding.slice)
+            {
+                self.interaction.source_slices.insert(node, binding.slice);
+                self.interaction
+                    .source_scopes
+                    .insert(node, binding.document);
+                self.interaction.descriptor_bindings.insert(node);
             }
         }
         self.interaction.binding_version = Some(self.tree.descriptor_version());
@@ -791,12 +791,10 @@ impl Runtime {
             let valid = self.interaction.source_document.validate_slice(slice) && self.tree.get(node).is_some_and(|record| {
                 matches!(&record.kind, NodeKind::Text(text) if !text.password && !text.is_editable() && source.text.get(slice.range.clone()) == Some(text.text()))
             });
-            if valid {
-                if let Some(range) = slice.selected_range(&self.interaction.source_document) {
-                    self.tree
-                        .set_text_selection(node, Some(Selection::new(range.start, range.end)));
-                    self.interaction.selected_nodes.push(node);
-                }
+            if valid && let Some(range) = slice.selected_range(&self.interaction.source_document) {
+                self.tree
+                    .set_text_selection(node, Some(Selection::new(range.start, range.end)));
+                self.interaction.selected_nodes.push(node);
             }
         }
     }
@@ -858,10 +856,10 @@ impl Runtime {
             }
         }
         for (node, scroll, byte) in pending {
-            if let Some(record) = self.tree.get_mut(node) {
-                if let NodeKind::Text(text) = &mut record.kind {
-                    text.follow_text_caret = false;
-                }
+            if let Some(record) = self.tree.get_mut(node)
+                && let NodeKind::Text(text) = &mut record.kind
+            {
+                text.follow_text_caret = false;
             }
             let Some(caret) = self.text_position_rect(node, byte) else {
                 continue;
@@ -1058,10 +1056,9 @@ impl Runtime {
             .gesture
             .as_ref()
             .is_some_and(|gesture| !self.gesture_allowed(gesture))
+            && let Some(gesture) = self.interaction.gesture.take()
         {
-            if let Some(gesture) = self.interaction.gesture.take() {
-                self.tree.take_press(gesture.contact);
-            }
+            self.tree.take_press(gesture.contact);
         }
         match event {
             InputEvent::PointerDown(pointer, PointerButton::Secondary) => {
@@ -1485,10 +1482,11 @@ impl Runtime {
 
     fn document_index(&mut self, node: NodeId) -> Option<Rc<DocumentIndex>> {
         let root = self.document_root(node)?;
-        if let Some(index) = &self.interaction.document {
-            if index.root == root && index.version == self.tree.content_version() {
-                return Some(Rc::clone(index));
-            }
+        if let Some(index) = &self.interaction.document
+            && index.root == root
+            && index.version == self.tree.content_version()
+        {
+            return Some(Rc::clone(index));
         }
         let index = Rc::new(self.make_document_index(node)?);
         self.interaction.document = Some(Rc::clone(&index));
@@ -1556,12 +1554,12 @@ impl Runtime {
             if self.interaction.source_slices.contains_key(&node) {
                 continue;
             }
-            if let Some(range) = self.document_range(&index, selection, node) {
-                if !range.is_empty() {
-                    self.tree
-                        .set_text_selection(node, Some(Selection::new(range.start, range.end)));
-                    self.interaction.selected_nodes.push(node);
-                }
+            if let Some(range) = self.document_range(&index, selection, node)
+                && !range.is_empty()
+            {
+                self.tree
+                    .set_text_selection(node, Some(Selection::new(range.start, range.end)));
+                self.interaction.selected_nodes.push(node);
             }
         }
     }
@@ -1791,10 +1789,11 @@ impl Runtime {
     }
 
     pub(super) fn extend_selection_after_scroll(&mut self) {
-        if let Some(gesture) = self.interaction.gesture.clone() {
-            if gesture.dragged && self.gesture_allowed(&gesture) {
-                self.extend_pointer_selection(&gesture, gesture.pointer);
-            }
+        if let Some(gesture) = self.interaction.gesture.clone()
+            && gesture.dragged
+            && self.gesture_allowed(&gesture)
+        {
+            self.extend_pointer_selection(&gesture, gesture.pointer);
         }
     }
 

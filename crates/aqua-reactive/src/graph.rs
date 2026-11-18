@@ -156,10 +156,10 @@ impl Inner {
 
     /// Set an effect slot's queued flag.
     pub fn set_queued(&mut self, slot: Slot, queued: bool) {
-        if let Some(rec) = self.record_mut(slot) {
-            if matches!(rec.kind, NodeKind::Effect { .. }) {
-                rec.kind = NodeKind::Effect { queued };
-            }
+        if let Some(rec) = self.record_mut(slot)
+            && matches!(rec.kind, NodeKind::Effect { .. })
+        {
+            rec.kind = NodeKind::Effect { queued };
         }
     }
 
@@ -508,14 +508,13 @@ impl Inner {
     /// their queued flags so a later queueing works normally.
     pub fn truncate_queue(&mut self, mark: usize) {
         while self.queue.len() > mark {
-            if let Some(id) = self.queue.pop_back() {
-                if let Some(s) = self.slot_of(id) {
-                    if let Some(rec) = self.record_mut(s) {
-                        if rec.id == id && matches!(rec.kind, NodeKind::Effect { .. }) {
-                            rec.kind = NodeKind::Effect { queued: false };
-                        }
-                    }
-                }
+            if let Some(id) = self.queue.pop_back()
+                && let Some(s) = self.slot_of(id)
+                && let Some(rec) = self.record_mut(s)
+                && rec.id == id
+                && matches!(rec.kind, NodeKind::Effect { .. })
+            {
+                rec.kind = NodeKind::Effect { queued: false };
             }
         }
     }

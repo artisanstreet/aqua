@@ -1581,24 +1581,23 @@ impl Aqua {
                         record.presented += 1;
                     }
                     self.frames_presented += 1;
-                    if let Some(probe) = self.input_latency.as_mut() {
-                        if let Some(stats) = self
+                    if let Some(probe) = self.input_latency.as_mut()
+                        && let Some(stats) = self
                             .windows
                             .get(&id)
                             .and_then(|r| r.link.as_ref())
                             .map(|link| link.stats().clone())
-                        {
-                            probe.presented(&stats);
-                        }
+                    {
+                        probe.presented(&stats);
                     }
-                    if let Some(budget) = self.smoke_frames {
-                        if self.frames_presented >= budget {
-                            eprintln!(
-                                "aqua: smoke budget reached ({} frames) — exiting",
-                                self.frames_presented
-                            );
-                            self.quit_requested = true;
-                        }
+                    if let Some(budget) = self.smoke_frames
+                        && self.frames_presented >= budget
+                    {
+                        eprintln!(
+                            "aqua: smoke budget reached ({} frames) — exiting",
+                            self.frames_presented
+                        );
+                        self.quit_requested = true;
                     }
                     app.step_input(id, RuntimeInput::Gpu(GpuEvent::Presented(frame)));
                     self.dispatch_frame_completed(app, id, frame);
@@ -1745,10 +1744,10 @@ impl Aqua {
             link.push_commands(motion.into_iter().map(RenderCommand::Motion));
         }
         aqua_core::checkpoint::reach();
-        if let Some(scene) = app.scene_mut(id) {
-            if link.push_scene(scene) {
-                self.scheduler.await_present(id);
-            }
+        if let Some(scene) = app.scene_mut(id)
+            && link.push_scene(scene)
+        {
+            self.scheduler.await_present(id);
         }
         aqua_core::checkpoint::reach();
         if let Some(probe) = self.input_latency.as_mut() {

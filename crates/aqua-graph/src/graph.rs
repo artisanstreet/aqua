@@ -713,10 +713,10 @@ fn derive_barriers(
     };
     let mut starting: Vec<Vec<&TransientTexture>> = vec![Vec::new(); passes.len()];
     for texture in textures {
-        if let Some(life) = lives.get(&texture.id) {
-            if let Some(slot) = starting.get_mut(life.first) {
-                slot.push(texture);
-            }
+        if let Some(life) = lives.get(&texture.id)
+            && let Some(slot) = starting.get_mut(life.first)
+        {
+            slot.push(texture);
         }
     }
     for (index, pass) in passes.iter_mut().enumerate() {

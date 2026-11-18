@@ -436,10 +436,10 @@ fn units(nodes: &[Node], clip: Option<Rect>, out: &mut Vec<Rect>) {
             } => {
                 let mut inner = Vec::new();
                 units(children, clip, &mut inner);
-                if !inner.is_empty() {
-                    if let Some(rect) = clipped(*bounds, clip) {
-                        out.push(rect);
-                    }
+                if !inner.is_empty()
+                    && let Some(rect) = clipped(*bounds, clip)
+                {
+                    out.push(rect);
                 }
             }
         }

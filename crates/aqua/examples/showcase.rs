@@ -573,19 +573,17 @@ impl Application for Showcase {
                 return;
             }
             InputOutcome::Captured { overlay } => {
-                if Some(overlay) == self.menu {
-                    if let InputEvent::PointerDown(p, _) = event {
-                        if let Some(bounds) = self.overlays.bounds(overlay) {
-                            if let Some(choice) = self.option_at(bounds, p.position.y) {
-                                self.filter_w.set(choice);
-                                self.menu_runs.clear();
-                                let menu = self.menu.take();
-                                if let Some(m) = menu {
-                                    self.overlays
-                                        .close(&mut self.focus, m, CloseReason::Requested);
-                                }
-                            }
-                        }
+                if Some(overlay) == self.menu
+                    && let InputEvent::PointerDown(p, _) = event
+                    && let Some(bounds) = self.overlays.bounds(overlay)
+                    && let Some(choice) = self.option_at(bounds, p.position.y)
+                {
+                    self.filter_w.set(choice);
+                    self.menu_runs.clear();
+                    let menu = self.menu.take();
+                    if let Some(m) = menu {
+                        self.overlays
+                            .close(&mut self.focus, m, CloseReason::Requested);
                     }
                 }
                 return;
@@ -891,22 +889,22 @@ impl Application for Showcase {
                 .editor
                 .ime_caret()
                 .min(self.editor.display_text().len());
-            if let Some(caret) = self.input_layout.caret(caret_byte) {
-                if self.focus_zone == FocusZone::Input {
-                    items.push(DisplayItem::Rect {
-                        bounds: Rect::from_edges(
-                            24.0 + caret.x,
-                            INPUT_Y + 8.0 + caret.y_top,
-                            26.0 + caret.x,
-                            INPUT_Y + 8.0 + caret.y_top + caret.height,
-                        ),
-                        radius: 1.0,
-                        fill: Oklch::from_hex("#ffffff").unwrap(),
-                        border_width: 0.0,
-                        border_color: border,
-                        shadow: None,
-                    });
-                }
+            if let Some(caret) = self.input_layout.caret(caret_byte)
+                && self.focus_zone == FocusZone::Input
+            {
+                items.push(DisplayItem::Rect {
+                    bounds: Rect::from_edges(
+                        24.0 + caret.x,
+                        INPUT_Y + 8.0 + caret.y_top,
+                        26.0 + caret.x,
+                        INPUT_Y + 8.0 + caret.y_top + caret.height,
+                    ),
+                    radius: 1.0,
+                    fill: Oklch::from_hex("#ffffff").unwrap(),
+                    border_width: 0.0,
+                    border_color: border,
+                    shadow: None,
+                });
             }
             let sel = self.editor.selection();
             let (a, b) = (sel.anchor.min(sel.caret), sel.anchor.max(sel.caret));
@@ -1012,16 +1010,15 @@ impl Application for Showcase {
                 self.menu_runs.push(run);
             }
         }
-        if !self.menu_runs.is_empty() {
-            if let Some(menu_id) = self.menu {
-                if let Some(bounds) = self.overlays.bounds(menu_id) {
-                    for (i, run) in self.menu_runs.iter().enumerate() {
-                        items.push(self.text_item(
-                            [bounds.x + 16.0, bounds.y + 8.0 + i as f32 * (MENU_H / 3.0)],
-                            *run,
-                        ));
-                    }
-                }
+        if !self.menu_runs.is_empty()
+            && let Some(menu_id) = self.menu
+            && let Some(bounds) = self.overlays.bounds(menu_id)
+        {
+            for (i, run) in self.menu_runs.iter().enumerate() {
+                items.push(self.text_item(
+                    [bounds.x + 16.0, bounds.y + 8.0 + i as f32 * (MENU_H / 3.0)],
+                    *run,
+                ));
             }
         }
 

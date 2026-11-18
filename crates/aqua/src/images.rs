@@ -595,14 +595,13 @@ impl ImageAssets {
     fn fail_upload(&self, id: ImageId, error: String) {
         let wake = {
             let mut state = lock(&self.state);
-            if let Some(slot) = state.slot_mut(id) {
-                if let Some(Phase::Ready(data)) = slot
+            if let Some(slot) = state.slot_mut(id)
+                && let Some(Phase::Ready(data)) = slot
                     .phase
                     .replace(Phase::Failed(ImageAssetError::Upload(error)))
-                {
-                    state.stats.decoded_bytes -= data.bytes();
-                    state.revision = state.revision.wrapping_add(1);
-                }
+            {
+                state.stats.decoded_bytes -= data.bytes();
+                state.revision = state.revision.wrapping_add(1);
             }
             state.wake.clone()
         };

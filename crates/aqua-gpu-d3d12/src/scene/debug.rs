@@ -21,10 +21,10 @@ pub fn enable() {
         return;
     };
     unsafe { debug.EnableDebugLayer() };
-    if gpu_validation_requested() {
-        if let Ok(debug1) = debug.cast::<ID3D12Debug1>() {
-            unsafe { debug1.SetEnableGPUBasedValidation(true) };
-        }
+    if gpu_validation_requested()
+        && let Ok(debug1) = debug.cast::<ID3D12Debug1>()
+    {
+        unsafe { debug1.SetEnableGPUBasedValidation(true) };
     }
 }
 

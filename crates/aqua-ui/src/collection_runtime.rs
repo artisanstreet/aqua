@@ -823,10 +823,10 @@ impl CollectionState {
         }
         // A reordered/rekeyed snapshot invalidates the old pin when the key
         // is gone; otherwise the pin follows the key, not the position.
-        if let Some(p) = self.pinned {
-            if !self.index_by_key.contains_key(&p) {
-                self.pinned = None;
-            }
+        if let Some(p) = self.pinned
+            && !self.index_by_key.contains_key(&p)
+        {
+            self.pinned = None;
         }
         self.dirty_heights = true;
         Ok(())
@@ -850,10 +850,9 @@ impl CollectionState {
         self.index_by_key.clear();
         if self.sparse.is_some() {
             if let Some((key, index)) = pinned.filter(|(_, index)| *index < self.desc.source.len())
+                && self.key_at(index) == Some(key)
             {
-                if self.key_at(index) == Some(key) {
-                    self.index_by_key.insert(key, index);
-                }
+                self.index_by_key.insert(key, index);
             }
             for i in self.mounted.start..self.mounted.end.min(self.desc.source.len()) {
                 self.index_by_key
@@ -1247,26 +1246,27 @@ impl CollectionState {
         if !self.desc.virtualized {
             return RowRange { start: 0, end: len };
         }
-        if let Some(pixels) = self.desc.overscan_pixels {
-            if self.viewport_h.is_finite() && self.viewport_h > 0.0 {
-                let needed = self.pixel_window(pixels, len);
-                let held = self.mounted;
-                if held.start == held.end || held.end > len {
-                    return needed;
-                }
-                let hysteresis = pixels * REALIZED_WINDOW_HYSTERESIS;
-                let ceiling = self.pixel_window(pixels + 2.0 * hysteresis, len);
-                let expanded = self.pixel_window(pixels + hysteresis, len);
-                let start = match held.start >= ceiling.start && held.start <= needed.start {
-                    true => held.start,
-                    false => expanded.start,
-                };
-                let end = match held.end <= ceiling.end && held.end >= needed.end {
-                    true => held.end,
-                    false => expanded.end,
-                };
-                return RowRange { start, end };
+        if let Some(pixels) = self.desc.overscan_pixels
+            && self.viewport_h.is_finite()
+            && self.viewport_h > 0.0
+        {
+            let needed = self.pixel_window(pixels, len);
+            let held = self.mounted;
+            if held.start == held.end || held.end > len {
+                return needed;
             }
+            let hysteresis = pixels * REALIZED_WINDOW_HYSTERESIS;
+            let ceiling = self.pixel_window(pixels + 2.0 * hysteresis, len);
+            let expanded = self.pixel_window(pixels + hysteresis, len);
+            let start = match held.start >= ceiling.start && held.start <= needed.start {
+                true => held.start,
+                false => expanded.start,
+            };
+            let end = match held.end <= ceiling.end && held.end >= needed.end {
+                true => held.end,
+                false => expanded.end,
+            };
+            return RowRange { start, end };
         }
         if self.sparse.is_some() {
             if self.viewport_h <= 0.0 {
@@ -1326,15 +1326,14 @@ impl CollectionState {
         {
             runs.push(RowRange { start: 0, end: 1 });
         }
-        if let Some(p) = self.pinned {
-            if let Some(idx) = self.index_of(p) {
-                if !runs.iter().any(|range| range.contains(idx)) {
-                    runs.push(RowRange {
-                        start: idx,
-                        end: idx + 1,
-                    });
-                }
-            }
+        if let Some(p) = self.pinned
+            && let Some(idx) = self.index_of(p)
+            && !runs.iter().any(|range| range.contains(idx))
+        {
+            runs.push(RowRange {
+                start: idx,
+                end: idx + 1,
+            });
         }
         runs.sort_by_key(|r| r.start);
         runs

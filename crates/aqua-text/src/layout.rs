@@ -590,10 +590,10 @@ impl TextLayout {
             build_display(&self.spans, self.mask, self.line_mode);
         let key = self.input_key(fonts_rev, &display);
 
-        if self.last_key.as_ref() == Some(&key) {
-            if let Some(cached) = &self.cached {
-                return Arc::clone(cached);
-            }
+        if self.last_key.as_ref() == Some(&key)
+            && let Some(cached) = &self.cached
+        {
+            return Arc::clone(cached);
         }
 
         self.shape(fonts, key, display, cluster_map, source_len, fonts_rev)
@@ -731,10 +731,10 @@ impl TextLayout {
             build_display(&self.spans, self.mask, self.line_mode);
         let key = self.input_key(fonts_rev, &display);
 
-        if self.last_key.as_ref() == Some(&key) {
-            if let Some(cached) = &self.cached {
-                return Arc::clone(cached);
-            }
+        if self.last_key.as_ref() == Some(&key)
+            && let Some(cached) = &self.cached
+        {
+            return Arc::clone(cached);
         }
         if let Some(hit) = cache.map.get(&key) {
             cache.hits += 1;
@@ -951,12 +951,14 @@ impl TextLayout {
         };
 
         let mut lines = lines_out;
-        if self.gpui_wrap && self.line_mode == LineMode::Multi && self.wrap != WrapMode::None {
-            if let Some(width) = width_px {
-                lines = gpui_wrapped_lines(lines, &display, width);
-                max_w = lines.iter().map(|line| line.width).fold(0.0, f32::max);
-                total_h = lines.last().map_or(0.0, |line| line.y_top + line.height);
-            }
+        if self.gpui_wrap
+            && self.line_mode == LineMode::Multi
+            && self.wrap != WrapMode::None
+            && let Some(width) = width_px
+        {
+            lines = gpui_wrapped_lines(lines, &display, width);
+            max_w = lines.iter().map(|line| line.width).fold(0.0, f32::max);
+            total_h = lines.last().map_or(0.0, |line| line.y_top + line.height);
         }
         let mut para_starts: Vec<usize> = paragraphs.iter().map(|p| p.start).collect();
         para_starts.push(display.len());

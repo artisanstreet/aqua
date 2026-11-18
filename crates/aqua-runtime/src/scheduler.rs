@@ -306,10 +306,10 @@ impl Scheduler {
                 match p.deadline {
                     Some(d) if d > now => {
                         let mut t = d;
-                        if let Some(g) = self.pacing_gate.get(id) {
-                            if *g > t {
-                                t = *g;
-                            }
+                        if let Some(g) = self.pacing_gate.get(id)
+                            && *g > t
+                        {
+                            t = *g;
                         }
                         consider(t);
                         continue;

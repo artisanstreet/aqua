@@ -2426,10 +2426,10 @@ impl Runtime {
 
     fn caret_selection_items(&self) -> Vec<(SceneKey, DisplayItem)> {
         let mut nodes = self.interaction.selected_nodes.clone();
-        if let Some(node) = self.tree.focused() {
-            if !nodes.contains(&node) {
-                nodes.push(node);
-            }
+        if let Some(node) = self.tree.focused()
+            && !nodes.contains(&node)
+        {
+            nodes.push(node);
         }
         let items: Vec<_> = nodes
             .into_iter()
@@ -2625,56 +2625,55 @@ impl Runtime {
                 ));
             }
         }
-        if editable {
-            if let Some(position) = caret_byte {
-                if let Some(c) = layout.caret_position(position) {
-                    out.push((
-                        SceneKey::Caret { node: focused },
-                        paint(
-                            Rect::from_edges(
-                                origin.x + c.x / self.scale,
-                                origin.y + c.y_top / self.scale,
-                                origin.x
-                                    + (c.x
-                                        + gpui_appearance.map_or_else(
-                                            || {
-                                                appearance.map_or(1.5, |appearance| {
-                                                    appearance.caret_width * self.scale
-                                                })
-                                            },
-                                            |appearance| appearance.caret_width * self.scale,
-                                        ))
-                                        / self.scale,
-                                origin.y + (c.y_top + c.height) / self.scale,
-                            ),
-                            appearance.map_or(Oklch::WHITE, |appearance| appearance.caret),
-                            gpui_appearance.map(|appearance| appearance.caret),
-                        ),
-                    ));
-                }
-            }
-        }
-        if !out.is_empty() {
-            if let Some(bounds) = self.text_rect(focused) {
-                out.insert(
-                    0,
-                    (
-                        SceneKey::CaretClipStart { node: focused },
-                        if gpui_appearance.is_some() {
-                            DisplayItem::PushGpuiContentMask { bounds }
-                        } else {
-                            DisplayItem::PushClip {
-                                bounds,
-                                radius: 0.0,
-                            }
-                        },
+        if editable
+            && let Some(position) = caret_byte
+            && let Some(c) = layout.caret_position(position)
+        {
+            out.push((
+                SceneKey::Caret { node: focused },
+                paint(
+                    Rect::from_edges(
+                        origin.x + c.x / self.scale,
+                        origin.y + c.y_top / self.scale,
+                        origin.x
+                            + (c.x
+                                + gpui_appearance.map_or_else(
+                                    || {
+                                        appearance.map_or(1.5, |appearance| {
+                                            appearance.caret_width * self.scale
+                                        })
+                                    },
+                                    |appearance| appearance.caret_width * self.scale,
+                                ))
+                                / self.scale,
+                        origin.y + (c.y_top + c.height) / self.scale,
                     ),
-                );
-                out.push((
-                    SceneKey::CaretClipEnd { node: focused },
-                    DisplayItem::PopClip,
-                ));
-            }
+                    appearance.map_or(Oklch::WHITE, |appearance| appearance.caret),
+                    gpui_appearance.map(|appearance| appearance.caret),
+                ),
+            ));
+        }
+        if !out.is_empty()
+            && let Some(bounds) = self.text_rect(focused)
+        {
+            out.insert(
+                0,
+                (
+                    SceneKey::CaretClipStart { node: focused },
+                    if gpui_appearance.is_some() {
+                        DisplayItem::PushGpuiContentMask { bounds }
+                    } else {
+                        DisplayItem::PushClip {
+                            bounds,
+                            radius: 0.0,
+                        }
+                    },
+                ),
+            );
+            out.push((
+                SceneKey::CaretClipEnd { node: focused },
+                DisplayItem::PopClip,
+            ));
         }
         if !out.is_empty() && opacity != 1.0 {
             out.insert(
@@ -2940,10 +2939,9 @@ impl Runtime {
             focus_node,
             focus_byte,
         } = request.data
+            && request.node == anchor_node
         {
-            if request.node == anchor_node {
-                self.apply_access_byte_selection(anchor_node, focus_node, anchor_byte, focus_byte);
-            }
+            self.apply_access_byte_selection(anchor_node, focus_node, anchor_byte, focus_byte);
         }
     }
 

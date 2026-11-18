@@ -328,10 +328,10 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
             _ => None,
         };
         let expanded = region.map(|region| stage.planner.repaint_bounds(region));
-        if expanded != region {
-            if let Some(expanded) = expanded {
-                plan = Plan::Regions(vec![expanded]);
-            }
+        if expanded != region
+            && let Some(expanded) = expanded
+        {
+            plan = Plan::Regions(vec![expanded]);
         }
         let region = expanded;
         let stats = &self.stats;
@@ -390,11 +390,11 @@ impl<B: GpuBackend<Error = GpuError> + 'static> GpuFrames<B> {
         if let Some(maintenance) = self.maintenance.as_mut() {
             maintenance(self.host.backend_mut());
         }
-        if let Some(pressure) = self.pressure.as_mut() {
-            if pressure(self.host.backend_mut()) {
-                self.host.trim_handle().request();
-                self.stats.trims.fetch_add(1, Ordering::Relaxed);
-            }
+        if let Some(pressure) = self.pressure.as_mut()
+            && pressure(self.host.backend_mut())
+        {
+            self.host.trim_handle().request();
+            self.stats.trims.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -488,10 +488,8 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
         self.stage_damage(side);
         crate::profile::note(|| format!("damage_us={}", staging.elapsed().as_micros()));
         let feedback = self.host.execute(side, frame);
-        if idle {
-            if let Some(release) = self.idle_release.as_mut() {
-                release(self.host.backend_mut());
-            }
+        if idle && let Some(release) = self.idle_release.as_mut() {
+            release(self.host.backend_mut());
         }
         self.settle_damage(&feedback);
         self.account();
@@ -510,11 +508,11 @@ impl<B: GpuBackend<Error = GpuError> + 'static> FrameTarget for GpuFrames<B> {
     }
 
     fn visibility(&mut self, hidden: bool) {
-        if let Some(visibility) = self.visibility.as_mut() {
-            if visibility(self.host.backend_mut(), hidden) {
-                self.host.trim_handle().request();
-                self.stats.trims.fetch_add(1, Ordering::Relaxed);
-            }
+        if let Some(visibility) = self.visibility.as_mut()
+            && visibility(self.host.backend_mut(), hidden)
+        {
+            self.host.trim_handle().request();
+            self.stats.trims.fetch_add(1, Ordering::Relaxed);
         }
     }
 

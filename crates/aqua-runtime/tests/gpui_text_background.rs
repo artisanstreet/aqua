@@ -102,12 +102,11 @@ fn wrapped_backgrounds_preserve_colors_and_exclude_selection() {
             background: GpuiBackground::Solid(color),
             ..
         } = item
+            && *color == background
         {
-            if *color == background {
-                assert!(selected
-                    .iter()
-                    .all(|selection| bounds.intersect(*selection).is_empty()));
-            }
+            assert!(selected
+                .iter()
+                .all(|selection| bounds.intersect(*selection).is_empty()));
         }
     }
     let text = items

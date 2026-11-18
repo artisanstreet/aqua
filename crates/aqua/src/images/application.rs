@@ -162,11 +162,9 @@ impl ImageState {
                 .preview_instances
                 .get(&node)
                 .is_some_and(|instance| instance.source != source);
-            if replaced {
-                if let Some(instance) = self.preview_instances.remove(&node) {
-                    self.preview_layers.remove(&instance.layer);
-                    self.release_gpu(instance.layer);
-                }
+            if replaced && let Some(instance) = self.preview_instances.remove(&node) {
+                self.preview_layers.remove(&instance.layer);
+                self.release_gpu(instance.layer);
             }
             if !self.preview_instances.contains_key(&node) {
                 let Ok(index) = super::NEXT_IMAGE_INDEX.fetch_update(
@@ -721,10 +719,9 @@ impl Application for ManagedUiApp {
             .states
             .get_mut(&key)
             .and_then(|state| state.prepared.take())
+            && prepared == now
         {
-            if prepared == now {
-                return deadline;
-            }
+            return deadline;
         }
         self.images.flush_notifications();
         let mut next = self.ui.build_scene(window, now);
@@ -751,10 +748,10 @@ impl Application for ManagedUiApp {
         state.collect_visible(rt);
         let visible: Vec<_> = state.visible.keys().copied().collect();
         for id in visible {
-            if let Some(data) = images.ready(state.source_id(id)) {
-                if let (_, Some(deadline)) = state.selected_frame(id, &data, now) {
-                    next = Some(next.map_or(deadline, |old| old.min(deadline)));
-                }
+            if let Some(data) = images.ready(state.source_id(id))
+                && let (_, Some(deadline)) = state.selected_frame(id, &data, now)
+            {
+                next = Some(next.map_or(deadline, |old| old.min(deadline)));
             }
         }
         next

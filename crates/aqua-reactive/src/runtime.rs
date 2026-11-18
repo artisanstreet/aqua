@@ -749,10 +749,10 @@ impl Scope {
     pub fn set_invalidation_counter(&self, counter: Rc<std::cell::Cell<u64>>) {
         self.graph
             .ensure_scope(self.id, "Scope::set_invalidation_counter");
-        if let Some(inner) = self.graph.upgraded() {
-            if let Some(scope) = inner.borrow_mut().scopes.get_mut(&self.id) {
-                scope.invalidation_counter = Some(counter);
-            }
+        if let Some(inner) = self.graph.upgraded()
+            && let Some(scope) = inner.borrow_mut().scopes.get_mut(&self.id)
+        {
+            scope.invalidation_counter = Some(counter);
         }
     }
 
@@ -793,10 +793,10 @@ impl Scope {
     /// they run, member nodes are already detached.
     pub fn on_cleanup(&self, f: impl FnOnce() + 'static) {
         self.graph.ensure_scope(self.id, "Scope::on_cleanup");
-        if let Some(inner) = self.graph.upgraded() {
-            if let Some(s) = inner.borrow_mut().scopes.get_mut(&self.id) {
-                s.cleanups.push(Box::new(f));
-            }
+        if let Some(inner) = self.graph.upgraded()
+            && let Some(s) = inner.borrow_mut().scopes.get_mut(&self.id)
+        {
+            s.cleanups.push(Box::new(f));
         }
     }
 
@@ -845,10 +845,10 @@ impl Scope {
             let mut guard = inner.borrow_mut();
             // Detach from parent.
             let parent = guard.scopes.get(&self.id).and_then(|s| s.parent);
-            if let Some(p) = parent {
-                if let Some(ps) = guard.scopes.get_mut(&p) {
-                    ps.children.retain(|c| *c != self.id);
-                }
+            if let Some(p) = parent
+                && let Some(ps) = guard.scopes.get_mut(&p)
+            {
+                ps.children.retain(|c| *c != self.id);
             }
             guard.scopes.remove(&self.id);
         }
@@ -1279,14 +1279,14 @@ impl Scope {
                 // Commit the key version only after resolve succeeded.
                 key_seen = key_version;
                 if next.same_graph(&graph_check) && next.node != cur_node {
-                    if let Some(this) = *self_id_writer.borrow() {
-                        if let Some((_, _, edge_ops, _)) = graph.upgrade_all() {
-                            edge_ops.borrow_mut().push(EdgeOp::Relink {
-                                node: this,
-                                remove: vec![cur_node],
-                                add: vec![next.node],
-                            });
-                        }
+                    if let Some(this) = *self_id_writer.borrow()
+                        && let Some((_, _, edge_ops, _)) = graph.upgrade_all()
+                    {
+                        edge_ops.borrow_mut().push(EdgeOp::Relink {
+                            node: this,
+                            remove: vec![cur_node],
+                            add: vec![next.node],
+                        });
                     }
                     cur_node = next.node;
                     cur_cell = next.cell.clone();

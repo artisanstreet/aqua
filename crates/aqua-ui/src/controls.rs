@@ -191,13 +191,13 @@ impl fmt::Debug for Control {
 
 impl Control {
     pub(crate) fn preserve(&mut self, previous: &Self) {
-        if let (Self::Select(next), Self::Select(previous)) = (self, previous) {
-            if next.options == previous.options {
-                next.open = previous.open;
-                next.highlighted = previous.highlighted;
-                next.prefix.clone_from(&previous.prefix);
-                next.typed_at = previous.typed_at;
-            }
+        if let (Self::Select(next), Self::Select(previous)) = (self, previous)
+            && next.options == previous.options
+        {
+            next.open = previous.open;
+            next.highlighted = previous.highlighted;
+            next.prefix.clone_from(&previous.prefix);
+            next.typed_at = previous.typed_at;
         }
     }
 }
@@ -323,16 +323,15 @@ impl UiTree {
         };
         self.get_mut(node).unwrap().control = Some(control);
         if changed {
-            if let Some(fraction) = fraction {
-                if let Some(fill) = self
+            if let Some(fraction) = fraction
+                && let Some(fill) = self
                     .get(node)
                     .and_then(|record| record.children.first())
                     .copied()
-                {
-                    let mut style = self.get(fill).unwrap().style.clone();
-                    style.width = Length::Pct(fraction * 100.0);
-                    self.set_style(fill, style);
-                }
+            {
+                let mut style = self.get(fill).unwrap().style.clone();
+                style.width = Length::Pct(fraction * 100.0);
+                self.set_style(fill, style);
             }
             let mut semantics = self.get(node).unwrap().semantics.clone();
             semantics.value_text = Some(value.to_string());
@@ -382,10 +381,8 @@ impl UiTree {
                 .requests
                 .push(ControlRequest::CloseSelect { owner });
         }
-        if changed {
-            if let Some(callback) = callback {
-                callback(index);
-            }
+        if changed && let Some(callback) = callback {
+            callback(index);
         }
         true
     }
@@ -421,11 +418,11 @@ impl UiTree {
     }
 
     pub fn close_control_select(&mut self, owner: NodeId) {
-        if let Some(record) = self.get_mut(owner) {
-            if let Some(Control::Select(control)) = record.control.as_deref_mut() {
-                control.open = false;
-                control.prefix.clear();
-            }
+        if let Some(record) = self.get_mut(owner)
+            && let Some(Control::Select(control)) = record.control.as_deref_mut()
+        {
+            control.open = false;
+            control.prefix.clear();
         }
     }
 }
@@ -914,15 +911,14 @@ pub(crate) fn initialize_node(tree: &mut UiTree, node: NodeId) {
         Control::Tabs(tabs) => (None, Some((tabs.count, tabs.selected))),
         Control::SelectPopup(_) => (None, None),
     };
-    if let Some(value) = value {
-        if tree
+    if let Some(value) = value
+        && tree
             .get(node)
             .is_some_and(|record| record.semantics.value_text.as_ref() != Some(&value))
-        {
-            let mut semantics = tree.get(node).unwrap().semantics.clone();
-            semantics.value_text = Some(value);
-            tree.set_semantics(node, semantics);
-        }
+    {
+        let mut semantics = tree.get(node).unwrap().semantics.clone();
+        semantics.value_text = Some(value);
+        tree.set_semantics(node, semantics);
     }
     if let Some((count, selected)) = tabs {
         let children = tree
@@ -941,13 +937,11 @@ pub(crate) fn initialize_node(tree: &mut UiTree, node: NodeId) {
                     || record.semantics.role != Role::Tab
                     || record.semantics.selected != (index == selected)
             });
-            if changed {
-                if let Some(record) = tree.get_mut(child) {
-                    record.focusable = true;
-                    record.tab_index = wanted_index;
-                    record.semantics.role = Role::Tab;
-                    record.semantics.selected = index == selected;
-                }
+            if changed && let Some(record) = tree.get_mut(child) {
+                record.focusable = true;
+                record.tab_index = wanted_index;
+                record.semantics.role = Role::Tab;
+                record.semantics.selected = index == selected;
             }
         }
     }

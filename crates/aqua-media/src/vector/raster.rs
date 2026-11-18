@@ -439,10 +439,9 @@ pub fn curve_outline(
         radius,
         ..
     } = &brush
+        && (focal.x - center.x).hypot(focal.y - center.y) >= *radius
     {
-        if (focal.x - center.x).hypot(focal.y - center.y) >= *radius {
-            return Ok(None);
-        }
+        return Ok(None);
     }
     let Some(inverse) = transform.invert() else {
         return Ok(None);

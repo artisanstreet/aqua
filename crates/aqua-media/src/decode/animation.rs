@@ -90,14 +90,14 @@ impl DecodedAnimation {
         }
         let duration = (*self.ends.last().unwrap_or(&1)).max(1);
         let now = elapsed.as_nanos();
-        if let AnimationLoops::Count(count) = self.loops {
-            if now / duration >= u128::from(count.get()) {
-                return AnimationSample {
-                    frame: self.frames.len() - 1,
-                    next_frame_at: None,
-                    complete: true,
-                };
-            }
+        if let AnimationLoops::Count(count) = self.loops
+            && now / duration >= u128::from(count.get())
+        {
+            return AnimationSample {
+                frame: self.frames.len() - 1,
+                next_frame_at: None,
+                complete: true,
+            };
         }
         let within = now % duration;
         let frame = self

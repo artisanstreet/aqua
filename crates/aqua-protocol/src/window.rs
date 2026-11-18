@@ -78,10 +78,10 @@ impl WindowOptions {
                 return Err(WindowError::EmptySize);
             }
         }
-        if let (Some(min), Some(max)) = (self.min_size, self.max_size) {
-            if min.width > max.width || min.height > max.height {
-                return Err(WindowError::InvalidSizeConstraints);
-            }
+        if let (Some(min), Some(max)) = (self.min_size, self.max_size)
+            && (min.width > max.width || min.height > max.height)
+        {
+            return Err(WindowError::InvalidSizeConstraints);
         }
         if self.title.contains('\0') {
             return Err(WindowError::InvalidTitle);

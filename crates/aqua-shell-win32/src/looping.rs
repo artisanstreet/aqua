@@ -306,35 +306,36 @@ pub fn run<H: Handler>(handler: H) -> Result<(), ShellError> {
         let current = now();
         let (handler_wake, waitables) = state::with(|s| (s.wake_at, s.waitables.clone()));
         let wake_at = [handler_wake, watch_deadline()].into_iter().flatten().min();
-        if waitables.is_empty() && !redraw_pending() {
-            if let Some(message_timer) = MessageTimer::arm(current, wake_at) {
-                if armed.take().is_some() {
-                    for timer in timer.iter().chain(coarse.iter()) {
-                        let _ = unsafe { CancelWaitableTimer(*timer) };
-                    }
+        if waitables.is_empty()
+            && !redraw_pending()
+            && let Some(message_timer) = MessageTimer::arm(current, wake_at)
+        {
+            if armed.take().is_some() {
+                for timer in timer.iter().chain(coarse.iter()) {
+                    let _ = unsafe { CancelWaitableTimer(*timer) };
                 }
-                MESSAGE_WAIT.set(MessageWait::Waiting {
-                    wake_at: handler_wake,
-                });
-                wake_trace::record(Source::MessageWait {
-                    timed: wake_at.is_some(),
-                });
-                let received = unsafe { GetMessageW(&mut msg, None, 0, 0) };
-                MESSAGE_WAIT.set(MessageWait::Inactive);
-                match received.0 {
-                    -1 => {
-                        outcome = Err(win32("GetMessageW", windows::core::Error::from_thread()));
-                        break;
-                    }
-                    0 => break,
-                    _ => {
-                        drop(message_timer);
-                        crate::null_trace::waited();
-                        dispatch(&msg);
-                    }
-                }
-                continue;
             }
+            MESSAGE_WAIT.set(MessageWait::Waiting {
+                wake_at: handler_wake,
+            });
+            wake_trace::record(Source::MessageWait {
+                timed: wake_at.is_some(),
+            });
+            let received = unsafe { GetMessageW(&mut msg, None, 0, 0) };
+            MESSAGE_WAIT.set(MessageWait::Inactive);
+            match received.0 {
+                -1 => {
+                    outcome = Err(win32("GetMessageW", windows::core::Error::from_thread()));
+                    break;
+                }
+                0 => break,
+                _ => {
+                    drop(message_timer);
+                    crate::null_trace::waited();
+                    dispatch(&msg);
+                }
+            }
+            continue;
         }
         if armed != wake_at {
             let plan = wake_at.map(|at| timing::plan(current, at));

@@ -505,7 +505,7 @@ pub struct Lowering {
     cull: Option<Rect>,
     last_commands: Vec<PaintCommand>,
     spare_commands: Vec<PaintCommand>,
-    begun: Option<Settings>,
+    begun: Option<Pending>,
     transition: Option<Transition>,
     outline_text: bool,
     spans: SpanCache,
@@ -1012,7 +1012,7 @@ impl Lowering {
         self.shimmer.end_frame();
         self.pulse_cycles.end_frame();
         self.shapes.end_frame();
-        self.adopt_previous(&previous, &walk.out);
+        self.adopt_previous(&previous, &walk.out, now);
         if self.transition.is_some() {
             self.last_commands.clone_from(&walk.out);
         }
@@ -2831,7 +2831,10 @@ impl Lowering {
     }
 
     pub fn begin_transition(&mut self, settings: Settings) {
-        self.begun = Some(settings);
+        self.begun = Some(Pending {
+            settings,
+            seen: None,
+        });
     }
 
     pub fn set_text_raster(&mut self, mode: TextRasterMode) {
@@ -2856,11 +2859,21 @@ impl Lowering {
         }
     }
 
-    fn adopt_previous(&mut self, previous: &[PaintCommand], current: &[PaintCommand]) {
-        if previous != current
-            && let Some(settings) = self.begun.take()
-        {
-            self.transition = Some(Transition::begin(previous.to_vec(), settings));
+    fn adopt_previous(
+        &mut self,
+        previous: &[PaintCommand],
+        current: &[PaintCommand],
+        now: Instant,
+    ) {
+        let Some(pending) = self.begun.take() else {
+            return;
+        };
+        match pending.resolve(previous != current, now) {
+            Resolution::Start(settings) => {
+                self.transition = Some(Transition::begin(previous.to_vec(), settings));
+            }
+            Resolution::Wait(pending) => self.begun = Some(pending),
+            Resolution::Expire => {}
         }
     }
 
@@ -2884,6 +2897,35 @@ impl Lowering {
                 false
             }
             _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Pending {
+    settings: Settings,
+    seen: Option<Instant>,
+}
+
+enum Resolution {
+    Start(Settings),
+    Wait(Pending),
+    Expire,
+}
+
+impl Pending {
+    fn resolve(self, changed: bool, now: Instant) -> Resolution {
+        let seen = self.seen.unwrap_or(now);
+        match (
+            now.saturating_duration_since(seen) >= self.settings.duration,
+            changed,
+        ) {
+            (true, _) => Resolution::Expire,
+            (false, true) => Resolution::Start(self.settings),
+            (false, false) => Resolution::Wait(Pending {
+                seen: Some(seen),
+                ..self
+            }),
         }
     }
 }

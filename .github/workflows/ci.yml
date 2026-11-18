@@ -48,6 +48,8 @@ jobs:
           CARGO_BUILD_JOBS: 2
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: windows cross-check (whole workspace, all targets)
+        env:
+          AQUA_SHADERS_SKIP: ${{ runner.os == 'Linux' && '1' || '0' }}
         run: cargo check --workspace --all-targets --target x86_64-pc-windows-gnu
       - name: sccache stats
         if: always() && env.RUSTC_WRAPPER != ''

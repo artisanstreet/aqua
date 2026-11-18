@@ -1,4 +1,4 @@
-use aqua_protocol::prefs::{PrefState, PreferenceSource, SystemPrefs};
+use aqua_protocol::prefs::{PrefState, PreferenceSource, SystemPrefs, TextScale};
 use aqua_protocol::ColorScheme;
 use windows::core::{BOOL, PCWSTR};
 use windows::Win32::System::Registry::{
@@ -13,6 +13,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub use aqua_protocol::prefs::{prefers_opaque_frame, should_reduce_motion};
 
 const PERSONALIZE: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
+const ACCESSIBILITY: &str = "Software\\Microsoft\\Accessibility";
 
 fn system_parameter(
     action: SYSTEM_PARAMETERS_INFO_ACTION,
@@ -88,6 +89,8 @@ pub fn query() -> SystemPrefs {
             reduce_motion: reduce_motion(),
             reduce_transparency: reduce_transparency(),
             high_contrast: high_contrast(),
+            text_scale: dword(HKEY_CURRENT_USER, ACCESSIBILITY, "TextScaleFactor")
+                .map_or(TextScale::NORMAL, TextScale::from_percent),
             theme: scheme(),
             source: PreferenceSource::WindowsSystem,
         },

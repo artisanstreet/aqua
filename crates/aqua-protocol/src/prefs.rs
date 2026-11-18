@@ -34,8 +34,34 @@ pub struct SystemPrefs {
     pub reduce_motion: PrefState,
     pub reduce_transparency: PrefState,
     pub high_contrast: PrefState,
+    pub text_scale: TextScale,
     pub theme: ColorScheme,
     pub source: PreferenceSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextScale(u16);
+
+impl TextScale {
+    pub const NORMAL: Self = Self(100);
+
+    pub fn from_percent(percent: u32) -> Self {
+        Self(percent.clamp(100, 225) as u16)
+    }
+
+    pub fn percent(self) -> u16 {
+        self.0
+    }
+
+    pub fn factor(self) -> f32 {
+        f32::from(self.0) / 100.0
+    }
+}
+
+impl Default for TextScale {
+    fn default() -> Self {
+        Self::NORMAL
+    }
 }
 
 impl SystemPrefs {
@@ -44,6 +70,7 @@ impl SystemPrefs {
             reduce_motion: PrefState::Unknown,
             reduce_transparency: PrefState::Unknown,
             high_contrast: PrefState::Unknown,
+            text_scale: TextScale::NORMAL,
             theme: ColorScheme::Unknown,
             source: PreferenceSource::Fallback,
         }
@@ -63,6 +90,10 @@ impl SystemPrefs {
                 *slot = state;
                 overridden = true;
             }
+        }
+        if let Some(scale) = lookup("AQUA_PREF_TEXT_SCALE").and_then(|v| v.trim().parse().ok()) {
+            self.text_scale = TextScale::from_percent(scale);
+            overridden = true;
         }
         if overridden {
             self.source = PreferenceSource::EnvOverride;

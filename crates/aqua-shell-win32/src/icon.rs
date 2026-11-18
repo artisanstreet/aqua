@@ -117,11 +117,10 @@ unsafe fn rendered(
 }
 
 pub fn straight_rgba(premultiplied_bgra: &[u8]) -> Vec<u8> {
-    let without_alpha = premultiplied_bgra
-        .chunks_exact(4)
-        .all(|pixel| pixel[3] == 0);
-    premultiplied_bgra
-        .chunks_exact(4)
+    let (pixels, _) = premultiplied_bgra.as_chunks::<4>();
+    let without_alpha = pixels.iter().all(|pixel| pixel[3] == 0);
+    pixels
+        .iter()
         .flat_map(|pixel| {
             let alpha = if without_alpha { 255 } else { pixel[3] };
             let straight = |channel: u8| match alpha {

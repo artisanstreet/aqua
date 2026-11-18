@@ -136,8 +136,7 @@ impl Harness {
         }
         .expect("request edit session");
         assert!(hr.is_ok(), "session hr {hr:?}");
-        let result = slot.borrow_mut().take().expect("session ran");
-        result
+        slot.borrow_mut().take().expect("session ran")
     }
 
     fn events(&mut self) -> Vec<ImeEvent> {

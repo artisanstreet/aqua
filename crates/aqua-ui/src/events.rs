@@ -332,26 +332,24 @@ fn dispatch_ime_select(tree: &mut UiTree, start: u32, end: u32, reversed: bool) 
     let Some(id) = focused_editable(tree) else {
         return false;
     };
-    let applied = tree
-        .edit_text(id, |tc| match tc.backing {
-            crate::tree::TextBacking::Editable(ref mut ed) if !ed.is_composing() => {
-                let range = utf16_to_byte(ed.text(), start).zip(utf16_to_byte(ed.text(), end));
-                match range {
-                    Some((from, to)) if from <= to => {
-                        let selection = match reversed {
-                            true => aqua_text::Selection::new(to, from),
-                            false => aqua_text::Selection::new(from, to),
-                        };
-                        ed.set_selection(selection);
-                        true
-                    }
-                    _ => false,
+    tree.edit_text(id, |tc| match tc.backing {
+        crate::tree::TextBacking::Editable(ref mut ed) if !ed.is_composing() => {
+            let range = utf16_to_byte(ed.text(), start).zip(utf16_to_byte(ed.text(), end));
+            match range {
+                Some((from, to)) if from <= to => {
+                    let selection = match reversed {
+                        true => aqua_text::Selection::new(to, from),
+                        false => aqua_text::Selection::new(from, to),
+                    };
+                    ed.set_selection(selection);
+                    true
                 }
+                _ => false,
             }
-            _ => false,
-        })
-        .unwrap_or(false);
-    applied
+        }
+        _ => false,
+    })
+    .unwrap_or(false)
 }
 
 pub fn dispatch_ime(tree: &mut UiTree, event: &ImeEvent) -> bool {

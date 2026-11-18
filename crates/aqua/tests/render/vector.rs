@@ -538,7 +538,7 @@ fn svg_curves_preserve_gradients_strokes_group_opacity_and_post_composite_tint()
         )
         .unwrap();
         let mut rgba = raster.pixels.clone();
-        for pixel in rgba.chunks_exact_mut(4) {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
             let alpha = u32::from(pixel[3]);
             for channel in &mut pixel[..3] {
                 *channel = match alpha {
@@ -724,7 +724,7 @@ fn drawing_curves_stretch_nonzero_view_boxes_and_keep_fill_before_stroke() {
     )
     .unwrap()
     .pixels;
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         let alpha = u32::from(pixel[3]);
         for channel in &mut pixel[..3] {
             *channel = match alpha {

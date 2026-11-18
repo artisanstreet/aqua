@@ -336,9 +336,9 @@ mod tests {
             .iter()
             .all(|p| (p[3] - 0.5).abs() < 1e-5 && (p[0] - 0.5).abs() < 1e-5));
         let mut checker = solid(4, 4, [0.0; 4]);
-        for index in 0..16 {
+        for (index, pixel) in checker.pixels.iter_mut().enumerate() {
             if (index % 4 + index / 4) % 2 == 0 {
-                checker.pixels[index] = [1.0, 1.0, 1.0, 1.0];
+                *pixel = [1.0, 1.0, 1.0, 1.0];
             }
         }
         let halved = resample(&checker, 2, 2);

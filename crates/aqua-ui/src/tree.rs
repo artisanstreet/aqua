@@ -1675,10 +1675,9 @@ impl UiTree {
         }
         self.touch_paint(id);
         self.text_index.candidates.insert(id);
-        self.nodes.get_mut(id.raw()).map(|record| {
-            record.plain_bindings = false;
-            record
-        })
+        let record = self.nodes.get_mut(id.raw())?;
+        record.plain_bindings = false;
+        Some(record)
     }
 
     pub(crate) fn reset_binding_metadata(&mut self, id: NodeId) {

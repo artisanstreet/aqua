@@ -4,6 +4,7 @@ pub(crate) mod debug;
 mod formats;
 mod geometry;
 mod hint;
+mod latency;
 mod offscreen;
 mod persistent;
 mod pipeline;

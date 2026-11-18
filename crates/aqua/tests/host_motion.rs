@@ -580,7 +580,7 @@ fn a_snapshot_transition_crossfades_from_the_old_frame_to_the_new_one_through_th
             .send_external(
                 host.id,
                 ExternalUpdate::Transition(Settings {
-                    duration: Duration::from_millis(400),
+                    duration: Duration::from_secs(1),
                     band: 0.4,
                     tint: [1.0, 1.0, 1.0, 0.0],
                     sweep: Sweep::Soft,

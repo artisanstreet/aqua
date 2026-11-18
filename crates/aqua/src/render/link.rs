@@ -45,9 +45,9 @@ pub type InitFactory = Box<dyn FnOnce(RenderContext) -> TargetInit + Send>;
 pub struct RenderLink {
     service: ServiceHandle,
     slot: u64,
-    commands: RingSender<RenderCommand>,
+    commands: RingSender<Vec<RenderCommand>>,
     events: aqua_transport::Receiver<RenderEvent>,
-    backlog: VecDeque<RenderCommand>,
+    backlog: VecDeque<Vec<RenderCommand>>,
     externals: Sender<ExternalUpdate>,
     viewport: Option<(Size, f32)>,
     stats: Arc<RenderStats>,
@@ -149,7 +149,7 @@ impl RenderLink {
         if self.viewport != Some((size, scale)) {
             self.viewport = Some((size, scale));
             self.backlog
-                .push_back(RenderCommand::Viewport { size, scale });
+                .push_back(vec![RenderCommand::Viewport { size, scale }]);
             self.flush();
         }
     }
@@ -159,7 +159,7 @@ impl RenderLink {
         match diff.is_empty() {
             true => false,
             false => {
-                self.backlog.push_back(RenderCommand::Scene(diff));
+                self.backlog.push_back(vec![RenderCommand::Scene(diff)]);
                 self.submitted += 1;
                 self.scenes_queued += 1;
                 self.flush();
@@ -170,7 +170,7 @@ impl RenderLink {
 
     pub fn push_diff(&mut self, diff: SceneDiff) {
         if !diff.is_empty() {
-            self.backlog.push_back(RenderCommand::Scene(diff));
+            self.backlog.push_back(vec![RenderCommand::Scene(diff)]);
             self.submitted += 1;
             self.scenes_queued += 1;
         }
@@ -178,9 +178,13 @@ impl RenderLink {
     }
 
     pub fn push_commands(&mut self, commands: impl IntoIterator<Item = RenderCommand>) {
-        for command in commands {
-            self.scenes_queued += u64::from(matches!(command, RenderCommand::Scene(_)));
-            self.backlog.push_back(command);
+        let batch: Vec<RenderCommand> = commands.into_iter().collect();
+        self.scenes_queued += batch
+            .iter()
+            .filter(|command| matches!(command, RenderCommand::Scene(_)))
+            .count() as u64;
+        if !batch.is_empty() {
+            self.backlog.push_back(batch);
         }
         self.flush();
     }
@@ -195,12 +199,12 @@ impl RenderLink {
     }
 
     pub fn flush(&mut self) {
-        while let Some(command) = self.backlog.pop_front() {
-            match self.commands.try_send(command) {
+        while let Some(batch) = self.backlog.pop_front() {
+            match self.commands.try_send(batch) {
                 Ok(()) => {}
-                Err(aqua_transport::SendError::Full(command))
-                | Err(aqua_transport::SendError::Disconnected(command)) => {
-                    self.backlog.push_front(command);
+                Err(aqua_transport::SendError::Full(batch))
+                | Err(aqua_transport::SendError::Disconnected(batch)) => {
+                    self.backlog.push_front(batch);
                     break;
                 }
             }

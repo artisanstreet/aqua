@@ -25,7 +25,7 @@ fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 pub struct NewSlot {
-    pub commands: Receiver<RenderCommand>,
+    pub commands: Receiver<Vec<RenderCommand>>,
     pub events: Sender<RenderEvent>,
     pub init: TargetInit,
     pub clock: Clock,
@@ -142,7 +142,7 @@ struct Execution {
 
 struct Slot {
     id: u64,
-    commands: Receiver<RenderCommand>,
+    commands: Receiver<Vec<RenderCommand>>,
     events: Sender<RenderEvent>,
     side: RenderSide,
     stage: Stage,
@@ -170,13 +170,13 @@ fn thread_token() -> u64 {
     hasher.finish() | 1
 }
 
-fn drain(receiver: &mut Receiver<RenderCommand>, into: &mut Vec<RenderCommand>) -> bool {
+fn drain(receiver: &mut Receiver<Vec<RenderCommand>>, into: &mut Vec<RenderCommand>) -> bool {
     loop {
         if into.len() >= DRAIN_LIMIT {
             return false;
         }
         match receiver.try_recv() {
-            Ok(command) => into.push(command),
+            Ok(batch) => into.extend(batch),
             Err(RecvError::Disconnected) => return true,
             Err(_) => return false,
         }

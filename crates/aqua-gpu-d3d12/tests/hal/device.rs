@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 use aqua_gpu_d3d12::hal::budget::Visibility;
 use aqua_gpu_d3d12::hal::selection::{Adapter, AdapterPreference};
 use aqua_gpu_d3d12::hal::tier::Tier;
-use aqua_gpu_d3d12::hal::{Core, DeviceOptions, PresentMode, PresentStatus, Swapchain};
+use aqua_gpu_d3d12::hal::{
+    Core, DeviceOptions, MemorySnapshot, PresentMode, PresentStatus, Swapchain,
+};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX};
 use windows::Win32::System::Threading::GetCurrentProcess;
@@ -373,19 +375,23 @@ fn upload_ring_grows_without_stalling_and_returns_memory_when_hidden() {
         "ring should have grown from {initial} to fit 6 MiB frames, is {grown}"
     );
 
-    let before = core.memory().expect("memory");
+    let unified_memory = core.info().unified_memory;
+    let upload_usage = |memory: MemorySnapshot| match unified_memory {
+        true => memory.local.usage,
+        false => memory.non_local.usage,
+    };
+    let before = upload_usage(core.memory().expect("memory"));
     let trim = core.set_visibility(Visibility::Hidden).expect("hide");
     assert!(trim.shrink_upload_ring);
     assert!(core.upload_capacity() < grown);
-    let after = core.memory().expect("memory");
+    let after = upload_usage(core.memory().expect("memory"));
     eprintln!(
-        "[hidden] upload ring {grown} -> {} bytes, non_local usage {} -> {} bytes",
+        "[hidden] upload ring {grown} -> {} bytes, upload segment usage {before} -> {after} bytes (uma={})",
         core.upload_capacity(),
-        before.non_local.usage,
-        after.non_local.usage
+        unified_memory
     );
     assert!(
-        after.non_local.usage + (8 << 20) < before.non_local.usage,
+        after + (8 << 20) < before,
         "hiding must return the grown ring"
     );
     core.set_visibility(Visibility::Visible).expect("show");

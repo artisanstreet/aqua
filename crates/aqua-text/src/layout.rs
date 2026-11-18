@@ -2262,8 +2262,8 @@ mod tests {
         t2.layout_shared(&mut fonts, &mut cache);
         assert_eq!(cache.hits, 1);
         fonts
-            .load_font_file("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
-            .expect("test host needs DejaVuSans");
+            .load_font_file(crate::font::TEST_FONT_FILE)
+            .expect("test host needs its platform test font");
         let mut t3 = TextLayout::new();
         t3.set_text("abc", &style());
         t3.layout_shared(&mut fonts, &mut cache);

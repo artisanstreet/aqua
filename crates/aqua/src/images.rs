@@ -243,7 +243,7 @@ impl State {
             Some(index) => index,
             None => {
                 let index = NEXT_IMAGE_INDEX
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |index| {
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |index| {
                         index.checked_add(1).filter(|next| *next != u32::MAX)
                     })
                     .map_err(|_| ImageAssetError::OverBudget)?;

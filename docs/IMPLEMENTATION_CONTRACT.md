@@ -7,7 +7,7 @@ claims an unimplemented feature works.
 
 ## 0. Toolchain, versions, commands (binding)
 
-- Minimum supported Rust: **1.93** (required by `wgpu` 30; host is 1.98.1).
+- Minimum supported Rust: **1.95** (atomic `try_update`; host is 1.98.1).
   Workspace edition 2021 for core-owned crates.
 - Agreed versions: `wgpu` **30**, `glyphon` **0.12**, `cosmic-text` **0.19**,
   `winit` **0.30** (stable, NOT the 0.31 beta), `taffy` **0.15**,

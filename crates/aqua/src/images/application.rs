@@ -167,7 +167,7 @@ impl ImageState {
                 self.release_gpu(instance.layer);
             }
             if !self.preview_instances.contains_key(&node) {
-                let Ok(index) = super::NEXT_IMAGE_INDEX.fetch_update(
+                let Ok(index) = super::NEXT_IMAGE_INDEX.try_update(
                     std::sync::atomic::Ordering::Relaxed,
                     std::sync::atomic::Ordering::Relaxed,
                     |index| index.checked_add(1).filter(|next| *next != u32::MAX),

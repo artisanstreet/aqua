@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust 1.93+ (workspace minimum; host runs 1.98.1).
+- Rust 1.95+ (workspace minimum; host runs 1.98.1).
 - Windows, or Linux with WSLg/X11 or Wayland, for windowed runs. Model and
   layout tests need no display; GPU pixel tests require a usable adapter
   (software Vulkan is sufficient).

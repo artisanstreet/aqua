@@ -1568,6 +1568,23 @@ impl UiTree {
         self.content_version
     }
 
+    #[must_use]
+    pub fn access_revision(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        (
+            self.content_version,
+            self.semantics_version,
+            self.layout_version,
+            self.focus_generation,
+            self.focused,
+            self.scroll_revision(),
+            self.sink.invalidation_counter.get(),
+        )
+            .hash(&mut hasher);
+        hasher.finish()
+    }
+
     pub fn invalidation_epoch(&self) -> u64 {
         self.content_version
             .wrapping_add(self.semantics_version)

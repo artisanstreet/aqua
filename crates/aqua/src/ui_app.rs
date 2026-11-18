@@ -396,6 +396,10 @@ impl Application for UiApp {
         self.slot(id).and_then(|slot| slot.runtime.a11y_nodes())
     }
 
+    fn a11y_revision_for(&self, id: AquaWindowId) -> Option<u64> {
+        self.slot(id).map(|slot| slot.runtime.access_revision())
+    }
+
     fn on_click_settings(&mut self, settings: aqua_core::ClickSettings) {
         self.root.runtime.set_click_settings(settings);
         self.extra

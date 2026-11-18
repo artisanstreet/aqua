@@ -612,6 +612,32 @@ mod semantics {
         assert_eq!(runtime.tree().scroll_offset(region), Some(Point::ZERO));
     }
 
+    #[test]
+    fn the_access_revision_moves_only_when_the_tree_changes() {
+        let mut runtime = scroller();
+        let idle = runtime.access_revision();
+        runtime.build_frame().unwrap();
+        support::frame(&mut runtime, 1.0);
+        assert_eq!(runtime.access_revision(), idle);
+        let region = labelled(&runtime, "Results").unwrap();
+        support::access(
+            &mut runtime,
+            request(
+                region,
+                A11yAction::SetScrollOffset,
+                A11yActionData::ScrollOffset { x: 0.0, y: 80.0 },
+            ),
+        );
+        runtime.build_frame().unwrap();
+        let scrolled = runtime.access_revision();
+        assert_ne!(scrolled, idle);
+        let row = labelled(&runtime, "Row 3").unwrap();
+        support::access(
+            &mut runtime,
+            request(row, A11yAction::Focus, A11yActionData::None),
+        );
+        assert_ne!(runtime.access_revision(), scrolled);
+    }
 }
 
 mod links {

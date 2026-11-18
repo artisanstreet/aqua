@@ -35,3 +35,11 @@ pub struct AdapterInfo {
     pub dedicated_video_bytes: u64,
     pub shared_system_bytes: u64,
 }
+
+const MICROSOFT_RENDERER_VENDOR: u32 = 0x1414;
+
+impl AdapterInfo {
+    pub fn microsoft_renderer(&self) -> bool {
+        self.vendor_id == MICROSOFT_RENDERER_VENDOR
+    }
+}

@@ -209,6 +209,7 @@ fn run(preference: AdapterPreference, label: &str) {
     let mut resize_total = Vec::new();
     let mut resize_only = Vec::new();
     let mut latency_waits = Vec::new();
+    let mut drains = Vec::new();
     let mut created = 0;
     let mut sums = [Duration::ZERO; 6];
     for step in 0..RESIZE_STEPS {
@@ -218,11 +219,15 @@ fn run(preference: AdapterPreference, label: &str) {
         let (width, height) = window.client();
         let next = Extent { width, height };
         let begun = Instant::now();
-        if next != extent {
-            backend.resize_surface(id, next).unwrap();
-            extent = next;
-        }
-        let resized = begun.elapsed();
+        let drained = match next != extent {
+            true => {
+                backend.resize_surface(id, next).unwrap();
+                extent = next;
+                backend.phases().resize_drain
+            }
+            false => Duration::ZERO,
+        };
+        let resized = begun.elapsed() - drained;
         let wait_started = Instant::now();
         backend.wait_for_frame_slot(id).unwrap();
         let paced = wait_started.elapsed();
@@ -241,13 +246,16 @@ fn run(preference: AdapterPreference, label: &str) {
         sums[3] += phases.submit;
         sums[4] += phases.present;
         sums[5] += resized;
-        resize_total.push(begun.elapsed() - paced);
+        let work = begun.elapsed() - paced - drained;
+        resize_total.push(work);
         latency_waits.push(paced);
+        drains.push(drained);
         resize_only.push(resized);
-        if begun.elapsed() - paced > Duration::from_millis(4) {
+        if work > Duration::from_millis(4) {
             eprintln!(
-                "[{label}] slow resize frame {:?}: resize {:.2} wait {:.2} reserve {:.2} record {:.2} submit {:.2} present {:.2} ms",
+                "[{label}] slow resize frame {:?}: drain {:.2} resize {:.2} wait {:.2} reserve {:.2} record {:.2} submit {:.2} present {:.2} ms",
                 extent,
+                ms(drained),
                 ms(resized),
                 ms(phases.slot_wait),
                 ms(phases.reserve),
@@ -271,6 +279,10 @@ fn run(preference: AdapterPreference, label: &str) {
     summary(
         &format!("{label}] [resize swapchain only"),
         &mut resize_only,
+    );
+    summary(
+        &format!("{label}] [resize gpu drain before ResizeBuffers"),
+        &mut drains,
     );
     summary(
         &format!("{label}] [resize frame latency wait"),

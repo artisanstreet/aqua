@@ -9,23 +9,23 @@ fn gpu_validation_requested() -> bool {
     std::env::var("AQUA_D3D12_GBV").as_deref() == Ok("1")
 }
 
-pub fn enable() {
+pub fn enable(hardware_adapter: bool) -> bool {
     if !requested() {
-        return;
+        return false;
     }
     let mut debug: Option<ID3D12Debug> = None;
     if unsafe { D3D12GetDebugInterface(&mut debug) }.is_err() {
-        return;
+        return false;
     }
     let Some(debug) = debug else {
-        return;
+        return false;
     };
     unsafe { debug.EnableDebugLayer() };
-    if gpu_validation_requested()
-        && let Ok(debug1) = debug.cast::<ID3D12Debug1>()
-    {
-        unsafe { debug1.SetEnableGPUBasedValidation(true) };
-    }
+    let validating = gpu_validation_requested() && hardware_adapter;
+    debug.cast::<ID3D12Debug1>().is_ok_and(|debug1| {
+        unsafe { debug1.SetEnableGPUBasedValidation(validating) };
+        validating
+    })
 }
 
 fn message_text(queue: &ID3D12InfoQueue, index: u64) -> Option<String> {

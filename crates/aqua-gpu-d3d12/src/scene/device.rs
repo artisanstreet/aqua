@@ -15,11 +15,14 @@ pub enum AdapterPreference {
     Warp,
 }
 
+const MICROSOFT_RENDERER_VENDOR: u32 = 0x1414;
+
 pub struct Selected {
     pub device: ID3D12Device,
     pub name: String,
     pub software: bool,
     pub unified_memory: bool,
+    pub gpu_validation: bool,
 }
 
 fn adapter_name(desc: &DXGI_ADAPTER_DESC1) -> String {
@@ -31,10 +34,14 @@ fn adapter_name(desc: &DXGI_ADAPTER_DESC1) -> String {
     String::from_utf16_lossy(&desc.Description[..end])
 }
 
-fn open_device(adapter: &IDXGIAdapter1) -> Result<ID3D12Device, Error> {
+fn open_device(adapter: &IDXGIAdapter1) -> Result<(ID3D12Device, bool), Error> {
+    let desc = unsafe { adapter.GetDesc1()? };
+    let gpu_validation = super::debug::enable(desc.VendorId != MICROSOFT_RENDERER_VENDOR);
     let mut device: Option<ID3D12Device> = None;
     unsafe { D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, &mut device)? };
-    device.ok_or(Error::NoAdapter)
+    device
+        .map(|device| (device, gpu_validation))
+        .ok_or(Error::NoAdapter)
 }
 
 fn unified_memory(device: &ID3D12Device) -> bool {
@@ -49,20 +56,24 @@ fn unified_memory(device: &ID3D12Device) -> bool {
     queried.is_ok() && data.UMA.as_bool()
 }
 
-fn describe(adapter: &IDXGIAdapter1, device: ID3D12Device) -> Result<Selected, Error> {
+fn describe(
+    adapter: &IDXGIAdapter1,
+    (device, gpu_validation): (ID3D12Device, bool),
+) -> Result<Selected, Error> {
     let desc = unsafe { adapter.GetDesc1()? };
     Ok(Selected {
         name: adapter_name(&desc),
         software: desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0,
         unified_memory: unified_memory(&device),
+        gpu_validation,
         device,
     })
 }
 
 fn warp(factory: &IDXGIFactory6) -> Result<Selected, Error> {
     let adapter: IDXGIAdapter1 = unsafe { factory.EnumWarpAdapter()? };
-    let device = open_device(&adapter)?;
-    describe(&adapter, device)
+    let opened = open_device(&adapter)?;
+    describe(&adapter, opened)
 }
 
 fn hardware(factory: &IDXGIFactory6, preference: DXGI_GPU_PREFERENCE) -> Result<Selected, Error> {
@@ -79,8 +90,8 @@ fn hardware(factory: &IDXGIFactory6, preference: DXGI_GPU_PREFERENCE) -> Result<
                 if desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
                     continue;
                 }
-                if let Ok(device) = open_device(&adapter) {
-                    return describe(&adapter, device);
+                if let Ok(opened) = open_device(&adapter) {
+                    return describe(&adapter, opened);
                 }
             }
         }
@@ -88,7 +99,6 @@ fn hardware(factory: &IDXGIFactory6, preference: DXGI_GPU_PREFERENCE) -> Result<
 }
 
 pub fn select(preference: AdapterPreference) -> Result<Selected, Error> {
-    super::debug::enable();
     let factory2: IDXGIFactory2 = unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))? };
     let factory: IDXGIFactory6 = factory2.cast()?;
     match preference {

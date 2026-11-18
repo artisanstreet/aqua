@@ -753,8 +753,8 @@ impl WindowBackend {
         outcome
     }
 
-    pub fn inject_device_removal(&self) -> Result<(), GpuError> {
-        let core = self.core.as_ref().ok_or(no_device())?;
+    pub fn inject_device_removal(&mut self) -> Result<(), GpuError> {
+        let core = self.core.as_mut().ok_or(no_device())?;
         Ok(core.inject_device_removal()?)
     }
 

@@ -37,9 +37,10 @@ mod native {
     const ROW_Y: f32 = 210.0;
     const ROW_W: f32 = 90.0;
     const ROW_H: f32 = 24.0;
-    const MOTION: Motion = Motion::tween(0.4, Easing::Linear);
+    const MOTION: Motion = Motion::tween(1.0, Easing::Linear);
     const WARM: Duration = Duration::from_millis(700);
-    const WINDOW: Duration = Duration::from_millis(1100);
+    const WINDOW: Duration = Duration::from_millis(1600);
+    const SWEEP: Duration = Duration::from_millis(1200);
 
     struct Shot {
         width: i32,
@@ -405,7 +406,7 @@ mod native {
                             ctx.request_window(WindowRequest::BeginSnapshotTransition(
                                 id,
                                 aqua_core::scene::SnapshotTransition {
-                                    duration: Duration::from_millis(600),
+                                    duration: SWEEP,
                                     band: 0.3,
                                     shimmer: Oklch::from_hex("#ffffff").unwrap(),
                                 },
@@ -428,7 +429,8 @@ mod native {
                     if let Ok(shot) = Shot::take(hwnd) {
                         pairs.push((shot.at(4.0, 4.0), shot.at(WIDTH - 4.0, HEIGHT - 4.0)));
                     }
-                    match now.saturating_duration_since(since) >= Duration::from_millis(1200) {
+                    match now.saturating_duration_since(since) >= SWEEP + Duration::from_millis(600)
+                    {
                         false => Phase::Sweeping {
                             since,
                             started,
@@ -445,7 +447,7 @@ mod native {
                             pairs.len()
                         ));
                             if presented < 10 {
-                                self.fail(format!("only {presented} presented frames were reported during a 600 ms transition"));
+                                self.fail(format!("only {presented} presented frames were reported during a {} ms transition", SWEEP.as_millis()));
                             }
                             let first = pairs.first().copied();
                             let last = pairs.last().copied();

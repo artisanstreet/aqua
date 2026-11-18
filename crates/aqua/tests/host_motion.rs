@@ -32,7 +32,7 @@ const SLIDE: f32 = 80.0;
 const ROW_Y: usize = 140;
 const WIDE_Y: usize = 220;
 const POPUP_X: usize = 340;
-const MOTION: Motion = Motion::tween(0.4, Easing::Linear);
+const MOTION: Motion = Motion::tween(1.0, Easing::Linear);
 
 const SHAPE_POINTS: [(usize, usize); 20] = [
     (20, 312),

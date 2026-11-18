@@ -41,10 +41,44 @@ jobs:
         run: cargo fmt --check
       - name: fetch dependencies for every platform
         run: cargo fetch --locked
+      - name: procdump for the test watchdog
+        if: runner.os == 'Windows'
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/Procdump.zip" https://download.sysinternals.com/files/Procdump.zip
+          if echo "5fe68e81632f13188930affff20a9a9910170bae654360850d3108cead708a2d  $RUNNER_TEMP/Procdump.zip" | sha256sum --check --status; then
+            pwsh -NoProfile -Command "Expand-Archive -Force -Path '$(cygpath -w "$RUNNER_TEMP/Procdump.zip")' -DestinationPath '$(cygpath -w "$RUNNER_TEMP/procdump")'"
+            echo "PROCDUMP=$(cygpath -w "$RUNNER_TEMP/procdump/procdump64.exe")" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Procdump.zip no longer matches the pinned SHA-256; update the hash in ci.yml. The test watchdog falls back to cdb."
+          fi
       - name: workspace tests
         env:
           CARGO_BUILD_JOBS: 2
-        run: cargo test --workspace --locked -- --nocapture --test-threads=1
+        run: |
+          if [ "$RUNNER_OS" != Windows ]; then
+            exec cargo test --workspace --locked -- --nocapture --test-threads=1
+          fi
+          stop="$RUNNER_TEMP/test-watchdog.stop"
+          pwsh -NoProfile -File .github/scripts/test-watchdog.ps1 \
+            -TargetDir "$(cygpath -w "$GITHUB_WORKSPACE/target")" \
+            -OutDir "$(cygpath -w "$RUNNER_TEMP/test-hangs")" \
+            -StopFile "$(cygpath -w "$stop")" \
+            -LimitMinutes 10 \
+            -ProcDump "${PROCDUMP:-}" &
+          watchdog=$!
+          status=0
+          cargo test --workspace --locked -- --nocapture --test-threads=1 || status=$?
+          touch "$stop"
+          wait "$watchdog" || true
+          exit "$status"
+      - name: upload hung test dumps
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-hangs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/test-hangs
+          if-no-files-found: ignore
+          retention-days: 14
       - name: clippy (all targets)
         env:
           CARGO_BUILD_JOBS: 2

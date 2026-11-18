@@ -207,7 +207,7 @@ fn warp_steady_state_does_not_grow() {
         "warp_steady_state_does_not_grow",
         AdapterPreference::Warp,
         false,
-        None,
+        Some(RENDERER_OFFSCREEN),
         true,
     );
 }

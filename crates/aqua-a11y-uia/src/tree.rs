@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use accesskit::{
-    Action, ActionData, Affine, Node, NodeId as AkNodeId, Rect as AkRect, Role as AkRole,
+    Action, ActionData, Affine, Live, Node, NodeId as AkNodeId, Rect as AkRect, Role as AkRole,
     TextDirection, TextPosition, TextSelection, TreeId, TreeInfo, TreeUpdate,
 };
-use aqua_core::{NodeId, Point, Rect, Role as CoreRole};
+use aqua_core::{LiveRegion, NodeId, Point, Rect, Role as CoreRole};
 use aqua_protocol::{A11yActionData, A11yActionRequest, A11yNode};
 
 use crate::action::translate_action_request;
@@ -56,6 +56,7 @@ pub fn map_role(role: &CoreRole) -> AkRole {
         CoreRole::Dialog => AkRole::Dialog,
         CoreRole::Menu => AkRole::Menu,
         CoreRole::MenuItem => AkRole::MenuItem,
+        CoreRole::Link => AkRole::Link,
     }
 }
 
@@ -98,6 +99,7 @@ pub(crate) fn build_base_tree_update(
         if !item.semantic.disabled {
             match item.semantic.role {
                 CoreRole::Button
+                | CoreRole::Link
                 | CoreRole::Checkbox
                 | CoreRole::Switch
                 | CoreRole::RadioButton
@@ -127,6 +129,50 @@ pub(crate) fn build_base_tree_update(
                 }
                 _ => {}
             }
+            if item.semantic.focusable {
+                node.add_action(Action::Focus);
+            }
+            if item.semantic.bounds.is_some() {
+                node.add_action(Action::ScrollIntoView);
+            }
+            if item.semantic.expanded.is_some() {
+                node.add_action(Action::Expand);
+                node.add_action(Action::Collapse);
+            }
+        }
+        if let Some(scroll) = item.semantic.scroll {
+            node.set_scroll_x(scroll.x);
+            node.set_scroll_x_min(0.0);
+            node.set_scroll_x_max(scroll.x_max);
+            node.set_scroll_y(scroll.y);
+            node.set_scroll_y_min(0.0);
+            node.set_scroll_y_max(scroll.y_max);
+            if scroll.y_max > 0.0 {
+                node.add_action(Action::ScrollUp);
+                node.add_action(Action::ScrollDown);
+            }
+            if scroll.x_max > 0.0 {
+                node.add_action(Action::ScrollLeft);
+                node.add_action(Action::ScrollRight);
+            }
+            node.add_action(Action::SetScrollOffset);
+        }
+        match item.semantic.live {
+            Some(LiveRegion::Polite) => node.set_live(Live::Polite),
+            Some(LiveRegion::Assertive) => node.set_live(Live::Assertive),
+            None => {}
+        }
+        if item.semantic.busy {
+            node.set_busy();
+        }
+        if item.semantic.modal {
+            node.set_modal();
+        }
+        if let Some(language) = &item.semantic.language {
+            node.set_language(language.clone());
+        }
+        if let Some(active) = item.semantic.active_descendant {
+            node.set_active_descendant(pack_node_id(active));
         }
         if !item.semantic.label.is_empty() {
             node.set_label(item.semantic.label.clone());
@@ -233,7 +279,10 @@ pub struct A11yTree {
     next_run: u32,
     ids: HashMap<(NodeId, usize), AkNodeId>,
     runs: HashMap<AkNodeId, RunAddress>,
+    links: HashMap<AkNodeId, (NodeId, usize)>,
 }
+
+const LINK_SLOT: usize = 1 << 31;
 
 struct RunAddress {
     owner: NodeId,
@@ -248,30 +297,22 @@ impl A11yTree {
             .filter_map(|item| {
                 item.text
                     .as_ref()
-                    .map(|text| (item.semantic.node, text.runs.len()))
+                    .map(|text| (item.semantic.node, text.runs.len(), text.links.len()))
             })
-            .flat_map(|(owner, count)| (0..count).map(move |index| (owner, index)))
+            .flat_map(|(owner, runs, links)| {
+                (0..runs)
+                    .chain((0..links).map(|index| LINK_SLOT + index))
+                    .map(move |index| (owner, index))
+            })
             .collect();
         self.ids.retain(|key, _| live.contains(key));
         self.runs.clear();
+        self.links.clear();
         for item in items {
             let Some(text) = &item.text else { continue };
             let mut run_ids = Vec::new();
             for (index, run) in text.runs.iter().enumerate() {
-                let id = *self
-                    .ids
-                    .entry((item.semantic.node, index))
-                    .or_insert_with(|| {
-                        let serial = self.next_run;
-                        self.next_run = self
-                            .next_run
-                            .checked_add(1)
-                            .expect("accessibility text identity exhausted");
-                        AkNodeId(
-                            ((u64::from(u32::MAX) << 32) | u64::from(serial))
-                                as accesskit::NodeIdContent,
-                        )
-                    });
+                let id = self.text_id(item.semantic.node, index);
                 let mut bytes = run.byte_start;
                 let mut offsets = vec![bytes];
                 for length in &run.character_lengths {
@@ -314,6 +355,30 @@ impl A11yTree {
                 run_ids.push(id);
                 update.nodes.push((id, node));
             }
+            let mut link_ids = Vec::new();
+            for (index, link) in text.links.iter().enumerate() {
+                let id = self.text_id(item.semantic.node, LINK_SLOT + index);
+                let mut node = Node::new(AkRole::Link);
+                node.set_label(link.label.clone());
+                let origin = space_origin(item);
+                let bounds = link.bounds.translate(-origin.x, -origin.y);
+                node.set_bounds(accesskit::Rect {
+                    x0: f64::from(bounds.x),
+                    y0: f64::from(bounds.y),
+                    x1: f64::from(bounds.right()),
+                    y1: f64::from(bounds.bottom()),
+                });
+                if !item.semantic.disabled {
+                    node.add_action(Action::Click);
+                    node.add_action(Action::Focus);
+                }
+                if link.focused && update.focus == pack_node_id(item.semantic.node) {
+                    update.focus = id;
+                }
+                self.links.insert(id, (item.semantic.node, index));
+                link_ids.push(id);
+                update.nodes.push((id, node));
+            }
             let selection = text.selection.and_then(|(anchor, focus)| {
                 Some(TextSelection {
                     anchor: self.position(&run_ids, anchor)?,
@@ -327,6 +392,7 @@ impl A11yTree {
             {
                 let mut children = parent.children().to_vec();
                 children.extend(run_ids);
+                children.extend(link_ids);
                 parent.set_children(children);
                 if text.selection_enabled && !item.semantic.disabled {
                     parent.add_action(Action::SetTextSelection);
@@ -337,6 +403,17 @@ impl A11yTree {
             }
         }
         update
+    }
+
+    fn text_id(&mut self, owner: NodeId, slot: usize) -> AkNodeId {
+        *self.ids.entry((owner, slot)).or_insert_with(|| {
+            let serial = self.next_run;
+            self.next_run = self
+                .next_run
+                .checked_add(1)
+                .expect("accessibility text identity exhausted");
+            AkNodeId(((u64::from(u32::MAX) << 32) | u64::from(serial)) as accesskit::NodeIdContent)
+        })
     }
 
     fn position(&self, ids: &[AkNodeId], byte: usize) -> Option<TextPosition> {
@@ -358,6 +435,11 @@ impl A11yTree {
 
     pub fn translate(&self, request: &accesskit::ActionRequest) -> Option<A11yActionRequest> {
         let mut translated = translate_action_request(request);
+        if let Some((owner, index)) = self.links.get(&request.target_node) {
+            translated.node = *owner;
+            translated.data = A11yActionData::Custom(i32::try_from(*index).ok()?);
+            return Some(translated);
+        }
         match self.runs.get(&request.target_node) {
             Some(run) => translated.node = run.owner,
             None if request.target_node.0 >> 32 == u64::from(u32::MAX) => return None,

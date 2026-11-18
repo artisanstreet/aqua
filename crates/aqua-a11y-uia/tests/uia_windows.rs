@@ -97,6 +97,7 @@ fn tree(version: usize) -> AccessTreeUpdate {
     field.semantic.value_text = Some("héllo".into());
     field.text = Some(A11yText {
         selection_enabled: true,
+        links: vec![],
         selection: Some((0, 0)),
         runs: vec![A11yTextRun {
             text: "héllo".into(),

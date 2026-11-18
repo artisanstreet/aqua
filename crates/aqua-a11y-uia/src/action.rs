@@ -1,5 +1,5 @@
 use accesskit::{Action, ActionData};
-use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest};
+use aqua_protocol::{A11yAction, A11yActionData, A11yActionRequest, A11yScroll};
 
 use crate::tree::unpack_node_id;
 
@@ -16,19 +16,19 @@ fn map_action(action: &Action) -> A11yAction {
         Action::HideTooltip => A11yAction::Other("hide-tooltip"),
         Action::ShowTooltip => A11yAction::Other("show-tooltip"),
         Action::ReplaceSelectedText => A11yAction::ReplaceSelectedText,
-        Action::ScrollDown
-        | Action::ScrollLeft
-        | Action::ScrollRight
-        | Action::ScrollUp
-        | Action::ScrollIntoView
-        | Action::ScrollToPoint
-        | Action::SetScrollOffset => A11yAction::Other("scroll"),
+        Action::ScrollDown => A11yAction::Scroll(A11yScroll::Down),
+        Action::ScrollLeft => A11yAction::Scroll(A11yScroll::Left),
+        Action::ScrollRight => A11yAction::Scroll(A11yScroll::Right),
+        Action::ScrollUp => A11yAction::Scroll(A11yScroll::Up),
+        Action::ScrollIntoView => A11yAction::ScrollIntoView,
+        Action::ScrollToPoint => A11yAction::Other("scroll-to-point"),
+        Action::SetScrollOffset => A11yAction::SetScrollOffset,
         Action::SetTextSelection => A11yAction::Other("set-text-selection"),
         Action::SetSequentialFocusNavigationStartingPoint => {
             A11yAction::Other("sequential-focus-start")
         }
         Action::SetValue => A11yAction::SetValue,
-        Action::ShowContextMenu => A11yAction::Other("context-menu"),
+        Action::ShowContextMenu => A11yAction::ShowContextMenu,
     }
 }
 

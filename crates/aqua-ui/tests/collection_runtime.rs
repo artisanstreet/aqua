@@ -1384,6 +1384,7 @@ fn reorder_preserves_focus_and_edits() {
         kind: ActionKind::TextChanged,
         text: Some("item-5!".to_string()),
         focused: None,
+        request: None,
     });
     assert_eq!(sigs[5].0.get(), "item-5!");
     let source2: Rc<dyn CollectionSource> = Rc::new(EditSource {

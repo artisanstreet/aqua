@@ -74,11 +74,11 @@ pub fn focusable_nodes(tree: &UiTree) -> Vec<NodeId> {
         .enumerate()
         .filter_map(|(order, id)| {
             let record = tree.get(id)?;
-            (record.focusable && !tree.is_disabled(id) && record.tab_index >= 0).then_some((
-                id,
-                record.tab_index,
-                order,
-            ))
+            (record.focusable
+                && !tree.is_disabled(id)
+                && record.tab_index >= 0
+                && tree.in_modal_domain(id))
+            .then_some((id, record.tab_index, order))
         })
         .collect();
     nodes.sort_by_key(|(_, tab_index, order)| {
@@ -209,6 +209,7 @@ pub fn dispatch_text_input(tree: &mut UiTree, text: &str) -> bool {
                 kind: ActionKind::TextChanged,
                 text: committed,
                 focused: None,
+                request: None,
             });
             true
         }
@@ -323,6 +324,7 @@ fn dispatch_ime_replace(tree: &mut UiTree, start: u32, end: u32, replacement: &s
             kind: ActionKind::TextChanged,
             text: committed,
             focused: None,
+            request: None,
         });
     }
     applied
@@ -400,6 +402,7 @@ pub fn dispatch_ime(tree: &mut UiTree, event: &ImeEvent) -> bool {
                     kind: ActionKind::TextChanged,
                     text: committed,
                     focused: None,
+                    request: None,
                 });
                 true
             } else {
@@ -446,11 +449,16 @@ pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
     }
     match event.key {
         Key::Named(NamedKey::Tab) => {
-            if event.modifiers.contains(Modifiers::SHIFT) {
+            let reverse = event.modifiers.contains(Modifiers::SHIFT);
+            if tree.step_link_focus(reverse) {
+                return true;
+            }
+            if reverse {
                 focus_prev(tree);
             } else {
                 focus_next(tree);
             }
+            tree.enter_link_focus(reverse);
             true
         }
         _ => {
@@ -489,6 +497,7 @@ pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
                         kind: ActionKind::Activate,
                         text: None,
                         focused: None,
+                        request: None,
                     });
                     return true;
                 }
@@ -508,6 +517,7 @@ pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
                             kind: ActionKind::Submit,
                             text: None,
                             focused: None,
+                            request: None,
                         });
                         return true;
                     }
@@ -623,6 +633,7 @@ pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
                     kind: ActionKind::TextChanged,
                     text: committed,
                     focused: None,
+                    request: None,
                 });
             }
             true
@@ -736,6 +747,7 @@ pub fn dispatch_default(tree: &mut UiTree, event: &InputEvent) -> bool {
                     kind: ActionKind::Activate,
                     text: None,
                     focused: None,
+                    request: None,
                 });
             }
             true
@@ -772,6 +784,7 @@ pub fn dispatch_default(tree: &mut UiTree, event: &InputEvent) -> bool {
                 kind: ActionKind::Activate,
                 text: None,
                 focused: None,
+                request: None,
             });
             true
         }
@@ -946,6 +959,7 @@ mod tests {
                 selected: false,
                 value_text: None,
                 collection: None,
+                ..Default::default()
             },
         );
         assert!(!dispatch_input(&mut tree, &press(6, 10.0, 10.0)));

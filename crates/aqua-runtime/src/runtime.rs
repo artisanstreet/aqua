@@ -2890,6 +2890,21 @@ impl Runtime {
                             !character.is_control() || matches!(character, '\n' | '\t')
                         })
                         .collect();
+                    let external =
+                        self.tree
+                            .get(request.node)
+                            .and_then(|record| match &record.kind {
+                                NodeKind::Text(text) if text.external_text_input => {
+                                    Some(text.native_text_model.clone())
+                                }
+                                _ => None,
+                            });
+                    match external {
+                        Some(Some(model)) if replace_all => return model.replace_all(&normalized),
+                        Some(Some(model)) => return model.replace_utf16(&normalized, None),
+                        Some(None) => return,
+                        None => {}
+                    }
                     let changed = self
                         .tree
                         .edit_text(request.node, |text| {

@@ -1868,7 +1868,7 @@ impl Runtime {
         let TextBacking::Editable(editor) = &text.backing else {
             return false;
         };
-        if external_text_input && (!matches!(named, NamedKey::Up | NamedKey::Down) || paragraph) {
+        if external_text_input && matches!(named, NamedKey::PageUp | NamedKey::PageDown) {
             return false;
         }
         if editor.is_composing() && !external_text_input {
@@ -1934,6 +1934,29 @@ impl Runtime {
             return false;
         };
         let extend = key.modifiers.contains(Modifiers::SHIFT);
+        let motion = match named {
+            NamedKey::Left => Some(aqua_ui::input::TextMotion::Left),
+            NamedKey::Right => Some(aqua_ui::input::TextMotion::Right),
+            NamedKey::Home => Some(aqua_ui::input::TextMotion::LineStart),
+            NamedKey::End => Some(aqua_ui::input::TextMotion::LineEnd),
+            _ => None,
+        };
+        if let (true, Some(motion)) = (external_text_input, motion) {
+            self.interaction.goal_x = None;
+            let host = &self.host;
+            aqua_ui::input::route_text_motion(
+                &mut self.tree,
+                node,
+                motion,
+                extend,
+                target.byte,
+                |tree, target| host.input_allowed(tree, target),
+            );
+            self.tree.drain_commands();
+            self.tree
+                .edit_editor(node, |editor| editor.settle_caret(target));
+            return true;
+        }
         if external_text_input {
             self.interaction.goal_x = Some((node, goal_x));
             let host = &self.host;

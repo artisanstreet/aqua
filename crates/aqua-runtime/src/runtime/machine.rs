@@ -3,9 +3,9 @@ use std::collections::HashSet;
 use aqua_core::{CursorIcon, InputEvent as CoreInputEvent, NodeId, Point, Rect, Size};
 use aqua_protocol::{
     AccessAction, AccessTreeUpdate, DialogOutcome, DialogSpec, DragRegions, FileDropEvent, FrameId,
-    FrameReason, FrameReport, GpuEvent, ImeCommand, ImeDocument, ImeEvent, Instant, Machine,
-    OsPreferences, RenderCommand, RenderEvent, RequestId, RuntimeInput, RuntimeOutput,
-    ShellCommand, ShellEvent, Utf16Range, WindowId, WindowSpec,
+    FrameReason, FrameReport, GpuEvent, ImeCommand, ImeDocument, ImeEvent, ImeGeometry, ImeLine,
+    ImeStop, Instant, Machine, OsPreferences, RenderCommand, RenderEvent, RequestId, RuntimeInput,
+    RuntimeOutput, ShellCommand, ShellEvent, Utf16Range, WindowId, WindowSpec,
 };
 use aqua_ui::input::{ClipboardPaste, ExternalFileDragEvent};
 use aqua_ui::tree::{NodeKind, TextBacking};
@@ -523,7 +523,11 @@ impl Runtime {
 
     fn ime_document(&self, area: Option<Rect>) -> Option<ImeDocument> {
         let surroundings = aqua_ui::events::ime_surroundings(&self.tree)?;
+        let window_end = surroundings.window_start
+            + u32::try_from(surroundings.text.encode_utf16().count()).unwrap_or(u32::MAX);
+        let geometry = self.ime_geometry(surroundings.node, surroundings.window_start..window_end);
         Some(ImeDocument {
+            geometry,
             window_start: surroundings.window_start,
             total_len: surroundings.total_len,
             text: surroundings.text,
@@ -536,6 +540,71 @@ impl Runtime {
                 h: 0.0,
             }),
         })
+    }
+
+    fn ime_geometry(&self, node: NodeId, window: std::ops::Range<u32>) -> ImeGeometry {
+        let empty = ImeGeometry::UNAVAILABLE;
+        let Some(record) = self.tree.get(node) else {
+            return empty;
+        };
+        let NodeKind::Text(text) = &record.kind else {
+            return empty;
+        };
+        let (Some(entry), Some(transform)) =
+            (self.text_runs.get(&node), self.tree.visual_transform(node))
+        else {
+            return empty;
+        };
+        let guard = self.runs.lock();
+        let Some(handle) = guard.resolve(entry.run) else {
+            return empty;
+        };
+        let source = text.text();
+        let placeholder = text.is_placeholder();
+        let padding = record.style.padding;
+        let place = |x: f32, y: f32| {
+            transform.apply(Point::new(
+                padding.left - entry.scroll_x + x / self.scale,
+                padding.top + y / self.scale,
+            ))
+        };
+        let mut counted = (0usize, 0u32);
+        let mut units = |byte: usize| {
+            let byte = byte.min(source.len());
+            let (from, base) = match byte >= counted.0 {
+                true => counted,
+                false => (0, 0),
+            };
+            let added = source
+                .get(from..byte)
+                .map_or(0, |slice| slice.encode_utf16().count());
+            counted = (byte, base + u32::try_from(added).unwrap_or(u32::MAX));
+            counted.1
+        };
+        let lines = handle
+            .layout
+            .caret_stops()
+            .into_iter()
+            .filter_map(|line| {
+                let top = place(0.0, line.y_top).y;
+                let bottom = place(0.0, line.y_top + line.height).y;
+                let stops: Vec<ImeStop> = line
+                    .stops
+                    .iter()
+                    .filter(|(byte, _)| !placeholder || *byte == 0)
+                    .map(|(byte, x)| ImeStop {
+                        offset: units(*byte),
+                        x: place(*x, line.y_top).x,
+                    })
+                    .filter(|stop| window.contains(&stop.offset) || stop.offset == window.end)
+                    .collect();
+                (!stops.is_empty()).then_some(ImeLine { top, bottom, stops })
+            })
+            .collect();
+        ImeGeometry {
+            clip: self.tree.observe_clip(node),
+            lines,
+        }
     }
 
     fn sync_ime(&mut self, out: &mut RuntimeOutput) {

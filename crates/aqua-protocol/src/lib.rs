@@ -31,7 +31,10 @@ pub use gpu::{
     GpuError, GpuReadback, NativeSurface, PresentHint, PresentTimes, RecoveryReport, SurfaceId,
     SurfacePixels, SurfaceTarget, TextureOp, TextureRegion, TextureUpload, UploadBatch,
 };
-pub use ime::{ImeBackend, ImeCommand, ImeDocument, ImeEvent, Utf16Range};
+pub use ime::{
+    ImeBackend, ImeBounds, ImeCommand, ImeDocument, ImeEvent, ImeGeometry, ImeHit, ImeLine,
+    ImeStop, Utf16Range,
+};
 pub use machine::{
     first_divergence, replay, Input as RuntimeInput, Machine, Output as RuntimeOutput, Recorded,
     Recorder,

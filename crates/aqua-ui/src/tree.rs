@@ -190,6 +190,7 @@ pub trait NativeTextModel {
     fn matches_text(&self, text: &str) -> bool;
     fn selected_bytes(&self) -> Option<std::ops::Range<usize>>;
     fn replace_utf16(&self, text: &str, selected: Option<std::ops::Range<usize>>);
+    fn replace_all(&self, text: &str);
 }
 
 pub struct TextContent {

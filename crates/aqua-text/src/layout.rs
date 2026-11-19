@@ -47,6 +47,13 @@ pub struct LaidLine {
     pub glyphs: Vec<LaidGlyph>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct LineCaretStops {
+    pub y_top: f32,
+    pub height: f32,
+    pub stops: Vec<(usize, f32)>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct LaidOut {
     pub size: (f32, f32),
@@ -1593,6 +1600,38 @@ impl TextLayout {
             }));
         }
         out
+    }
+
+    pub fn caret_stops(&self) -> Vec<LineCaretStops> {
+        let Some(laid) = self.cached.as_ref() else {
+            return Vec::new();
+        };
+        laid.lines
+            .iter()
+            .map(|line| {
+                let mut stops: Vec<(usize, f32)> = glyph_positions(line, &self.display_text)
+                    .into_iter()
+                    .map(|(x, position)| (self.to_source(position.byte), x))
+                    .collect();
+                if stops.is_empty() {
+                    let start = self.to_source(line.display_range.start);
+                    let x = self
+                        .caret_position(CaretPosition {
+                            byte: start,
+                            affinity: CaretAffinity::Downstream,
+                        })
+                        .map_or(0.0, |caret| caret.x);
+                    stops.push((start, x));
+                }
+                stops.sort_by_key(|(byte, _)| *byte);
+                stops.dedup_by_key(|(byte, _)| *byte);
+                LineCaretStops {
+                    y_top: line.y_top,
+                    height: line.height,
+                    stops,
+                }
+            })
+            .collect()
     }
 
     pub fn single_line_height(&self) -> f32 {

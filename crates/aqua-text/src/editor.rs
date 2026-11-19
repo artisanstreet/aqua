@@ -126,6 +126,12 @@ impl TextEditor {
         self.caret_affinity = position.affinity;
     }
 
+    pub fn settle_caret(&mut self, position: CaretPosition) {
+        if self.selection.caret == position.byte {
+            self.caret_affinity = position.affinity;
+        }
+    }
+
     pub fn line_mode(&self) -> LineMode {
         self.line_mode
     }
@@ -580,6 +586,9 @@ impl TextEditor {
         } else {
             None
         };
+        if self.selection != selection || self.model.text() != text {
+            self.caret_affinity = CaretAffinity::Downstream;
+        }
         self.model.set_text(text);
         self.selection = selection;
         self.ime = ime;

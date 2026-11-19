@@ -1,5 +1,5 @@
 use aqua_core::ImeEvent as Composition;
-use aqua_protocol::{ImeDocument, ImeEvent, Utf16Range};
+use aqua_protocol::{ImeDocument, ImeEvent, ImeGeometry, Utf16Range};
 use std::ops::Range;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +52,7 @@ pub struct Model {
     composition: Option<Range<u32>>,
     replaced: Range<u32>,
     area: Area,
+    geometry: ImeGeometry,
     events: Vec<ImeEvent>,
     last_marked: Option<(Vec<u16>, Selection)>,
     app_selection: Range<u32>,
@@ -93,6 +94,7 @@ impl Model {
                 w: 0.0,
                 h: 0.0,
             },
+            geometry: ImeGeometry::UNAVAILABLE,
             events: Vec::new(),
             last_marked: None,
             app_selection: 0..0,
@@ -114,12 +116,17 @@ impl Model {
             end_active: !document.selection_reversed,
         };
         self.area = area_of(document);
+        self.geometry = document.geometry.clone();
         self.app_selection = self.selection.start..self.selection.end;
         self.last_edit = None;
     }
 
     pub fn area(&self) -> Area {
         self.area
+    }
+
+    pub fn geometry(&self) -> &ImeGeometry {
+        &self.geometry
     }
 
     pub fn total_len(&self) -> u32 {
@@ -402,9 +409,10 @@ impl Model {
 
     pub fn apply_document(&mut self, document: &ImeDocument) -> Notify {
         let area = area_of(document);
-        let layout = area != self.area;
+        let layout = area != self.area || document.geometry != self.geometry;
         if self.composition.is_some() {
             self.area = area;
+            self.geometry = document.geometry.clone();
             return Notify {
                 text: None,
                 selection: false,

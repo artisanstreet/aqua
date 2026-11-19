@@ -2,7 +2,9 @@
 
 use aqua_core::{ImeEvent as Composition, Rect};
 use aqua_ime_tsf::{Keystrokes, TsfIme};
-use aqua_protocol::{ImeBackend, ImeCommand, ImeDocument, ImeEvent, Utf16Range};
+use aqua_protocol::{
+    ImeBackend, ImeCommand, ImeDocument, ImeEvent, ImeGeometry, ImeLine, ImeStop, Utf16Range,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 use windows::core::{implement, Interface, Ref, Result, BOOL, BSTR, GUID, PCWSTR};
@@ -69,6 +71,29 @@ struct Harness {
     thread_mgr: ITfThreadMgr,
 }
 
+const CELL: f32 = 10.0;
+
+fn laid_out(text: &str, origin: Rect) -> ImeGeometry {
+    ImeGeometry {
+        clip: Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 400.0,
+            h: 200.0,
+        },
+        lines: vec![ImeLine {
+            top: origin.y,
+            bottom: origin.y + origin.h,
+            stops: (0..=text.encode_utf16().count() as u32)
+                .map(|offset| ImeStop {
+                    offset,
+                    x: origin.x + offset as f32 * CELL,
+                })
+                .collect(),
+        }],
+    }
+}
+
 fn document(text: &str, selection: (u32, u32)) -> ImeDocument {
     ImeDocument {
         window_start: 0,
@@ -77,6 +102,7 @@ fn document(text: &str, selection: (u32, u32)) -> ImeDocument {
         selection: Utf16Range::new(selection.0, selection.1),
         selection_reversed: false,
         area: AREA,
+        geometry: laid_out(text, AREA),
     }
 }
 
@@ -200,30 +226,58 @@ fn document_text_selection_and_utf16_ranges_are_visible_to_tsf() {
 }
 
 #[test]
-fn candidate_window_position_follows_the_document_area() {
+fn text_extents_and_hit_tests_follow_the_laid_out_characters() {
     let mut harness = Harness::new(&document("abc", (3, 3)));
-    let expected = |area: Rect, hwnd: HWND| {
+    let hwnd = harness.hwnd;
+    let frame = || {
         let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as f32 / 96.0;
         let mut origin = POINT::default();
         let _ = unsafe { ClientToScreen(hwnd, &mut origin) };
+        (origin, dpi)
+    };
+    let expected = |left: f32, top: f32| {
+        let (origin, dpi) = frame();
         (
-            origin.x + (area.x * dpi).round() as i32,
-            origin.y + (area.y * dpi).round() as i32,
-            ((area.h * dpi).round() as i32).max(1),
+            origin.x + (left * dpi).round() as i32,
+            origin.y + (top * dpi).round() as i32,
         )
     };
-    let hwnd = harness.hwnd;
-    let measure = |harness: &Harness| {
-        harness.edit(|context, cookie| {
-            let range = unsafe { context.GetEnd(cookie) }?;
+    let extent_of = |harness: &Harness, start: i32, end: i32| {
+        harness.edit(move |context, cookie| {
+            let range = unsafe { context.GetStart(cookie) }?;
+            let mut moved = 0;
+            unsafe { range.ShiftEnd(cookie, end, &mut moved, std::ptr::null()) }?;
+            unsafe { range.ShiftStart(cookie, start, &mut moved, std::ptr::null()) }?;
             let view = unsafe { context.GetActiveView() }?;
             let mut rect = RECT::default();
             let mut clipped = Default::default();
             unsafe { view.GetTextExt(cookie, &range, &mut rect, &mut clipped) }?;
-            Ok((rect.left, rect.top, rect.bottom - rect.top))
+            Ok((rect.left, rect.top, rect.right - rect.left))
         })
     };
-    assert_eq!(measure(&harness), expected(AREA, hwnd));
+    let (_, dpi) = frame();
+    let second = extent_of(&harness, 1, 2);
+    assert_eq!(
+        (second.0, second.1),
+        expected(AREA.x + CELL, AREA.y),
+        "the second character reported the caret's rectangle"
+    );
+    assert_eq!(second.2, (CELL * dpi).round() as i32);
+    let hit = |harness: &Harness, x: f32| {
+        let point = {
+            let (origin, dpi) = frame();
+            POINT {
+                x: origin.x + (x * dpi).round() as i32,
+                y: origin.y + ((AREA.y + AREA.h / 2.0) * dpi).round() as i32,
+            }
+        };
+        harness.edit(move |context, cookie| {
+            let view = unsafe { context.GetActiveView() }?;
+            let range = unsafe { view.GetRangeFromPoint(cookie, &point, 0) }?;
+            Ok(extent(&range).0)
+        })
+    };
+    assert_eq!(hit(&harness, AREA.x + CELL * 2.0 + 2.0), 2);
     let moved = Rect {
         x: 120.0,
         y: 90.0,
@@ -232,8 +286,10 @@ fn candidate_window_position_follows_the_document_area() {
     };
     let mut doc = document("abc", (3, 3));
     doc.area = moved;
+    doc.geometry = laid_out("abc", moved);
     harness.ime.command(ImeCommand::Update(doc)).unwrap();
-    assert_eq!(measure(&harness), expected(moved, hwnd));
+    let first = extent_of(&harness, 0, 1);
+    assert_eq!((first.0, first.1), expected(moved.x, moved.y));
 }
 
 #[test]

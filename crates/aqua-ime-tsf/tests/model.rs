@@ -1,6 +1,6 @@
 use aqua_core::{ImeEvent as Composition, Rect};
 use aqua_ime_tsf::model::{Model, Selection};
-use aqua_protocol::{ImeDocument, ImeEvent, Utf16Range};
+use aqua_protocol::{ImeDocument, ImeEvent, ImeGeometry, Utf16Range};
 
 fn document(text: &str, selection: (u32, u32)) -> ImeDocument {
     ImeDocument {
@@ -15,6 +15,7 @@ fn document(text: &str, selection: (u32, u32)) -> ImeDocument {
             w: 2.0,
             h: 16.0,
         },
+        geometry: ImeGeometry::UNAVAILABLE,
     }
 }
 

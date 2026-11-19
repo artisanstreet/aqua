@@ -161,6 +161,14 @@ impl UiTree {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TextMotion {
+    Left,
+    Right,
+    LineStart,
+    LineEnd,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InputKind {
     PointerDown,
     PointerUp,
@@ -179,6 +187,7 @@ pub enum InputKind {
     TextPointer,
     TextContext,
     TextVertical,
+    TextMotion,
     FilesDropped,
     ClipboardPaste,
     ClipboardCut,
@@ -252,6 +261,11 @@ pub enum RoutedInput {
         extend: bool,
         target: usize,
     },
+    TextMotion {
+        motion: TextMotion,
+        extend: bool,
+        target: usize,
+    },
     Native(InputEvent),
     PointerEnter(PointerEvent),
     PointerLeave(PointerEvent),
@@ -302,6 +316,7 @@ impl RoutedInput {
             Self::ClipboardPaste(_) => InputKind::ClipboardPaste,
             Self::ClipboardCut => InputKind::ClipboardCut,
             Self::TextVertical { .. } => InputKind::TextVertical,
+            Self::TextMotion { .. } => InputKind::TextMotion,
             Self::PointerEnter(_) => InputKind::PointerEnter,
             Self::PointerLeave(_) => InputKind::PointerLeave,
             Self::TextRangeActivated { .. } => InputKind::TextRangeActivated,
@@ -1125,6 +1140,29 @@ pub fn route_text_vertical(
         tree,
         node,
         RoutedInput::TextVertical { up, extend, target },
+        &allowed,
+    )
+}
+
+pub fn route_text_motion(
+    tree: &mut UiTree,
+    node: NodeId,
+    motion: TextMotion,
+    extend: bool,
+    target: usize,
+    allowed: impl Fn(&UiTree, NodeId) -> bool,
+) -> RoutedOutcome {
+    if tree.is_disabled(node) || !allowed(tree, node) {
+        return RoutedOutcome::default();
+    }
+    route(
+        tree,
+        node,
+        RoutedInput::TextMotion {
+            motion,
+            extend,
+            target,
+        },
         &allowed,
     )
 }

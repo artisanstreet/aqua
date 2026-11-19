@@ -1,4 +1,6 @@
 use crate::model::{EditError, Model, Notify, Selection, TextChange};
+use aqua_core::{Point, Rect};
+use aqua_protocol::Utf16Range;
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
@@ -12,11 +14,12 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::TextServices::{
     ITextStoreACP, ITextStoreACPSink, ITextStoreACP_Impl, ITfCompositionView,
     ITfContextOwnerCompositionSink, ITfContextOwnerCompositionSink_Impl, ITfRange, ITfRangeACP,
-    TEXT_STORE_LOCK_FLAGS, TEXT_STORE_TEXT_CHANGE_FLAGS, TS_AE_END, TS_AE_START,
-    TS_AS_LAYOUT_CHANGE, TS_AS_SEL_CHANGE, TS_AS_TEXT_CHANGE, TS_ATTRVAL, TS_E_INVALIDPOS,
-    TS_E_NOLOCK, TS_E_NOSELECTION, TS_E_READONLY, TS_E_SYNCHRONOUS, TS_IAS_QUERYONLY, TS_LC_CHANGE,
-    TS_LF_SYNC, TS_RT_PLAIN, TS_RUNINFO, TS_SELECTIONSTYLE, TS_SELECTION_ACP, TS_SS_NOHIDDENTEXT,
-    TS_STATUS, TS_S_ASYNC, TS_TEXTCHANGE,
+    GXFPF_NEAREST, GXFPF_ROUND_NEAREST, TEXT_STORE_LOCK_FLAGS, TEXT_STORE_TEXT_CHANGE_FLAGS,
+    TS_AE_END, TS_AE_START, TS_AS_LAYOUT_CHANGE, TS_AS_SEL_CHANGE, TS_AS_TEXT_CHANGE, TS_ATTRVAL,
+    TS_E_INVALIDPOINT, TS_E_INVALIDPOS, TS_E_NOLAYOUT, TS_E_NOLOCK, TS_E_NOSELECTION,
+    TS_E_READONLY, TS_E_SYNCHRONOUS, TS_IAS_QUERYONLY, TS_LC_CHANGE, TS_LF_SYNC, TS_RT_PLAIN,
+    TS_RUNINFO, TS_SELECTIONSTYLE, TS_SELECTION_ACP, TS_SS_NOHIDDENTEXT, TS_STATUS, TS_S_ASYNC,
+    TS_TEXTCHANGE,
 };
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
@@ -129,19 +132,25 @@ impl Shared {
         }
     }
 
-    fn screen_rect(&self) -> RECT {
-        let area = self.model.borrow().area();
+    fn client_frame(&self) -> Result<(POINT, f32)> {
         let dpi = unsafe { GetDpiForWindow(self.hwnd) }.max(96) as f32 / 96.0;
         let mut origin = POINT { x: 0, y: 0 };
-        let _ = unsafe { ClientToScreen(self.hwnd, &mut origin) };
-        let left = origin.x + (area.x * dpi).round() as i32;
-        let top = origin.y + (area.y * dpi).round() as i32;
-        RECT {
+        unsafe { ClientToScreen(self.hwnd, &mut origin) }
+            .ok()
+            .map_err(|_| Error::from_hresult(E_FAIL))?;
+        Ok((origin, dpi))
+    }
+
+    fn screen_rect(&self, rect: Rect) -> Result<RECT> {
+        let (origin, dpi) = self.client_frame()?;
+        let left = origin.x + (rect.x * dpi).round() as i32;
+        let top = origin.y + (rect.y * dpi).round() as i32;
+        Ok(RECT {
             left,
             top,
-            right: left + ((area.w * dpi).round() as i32).max(1),
-            bottom: top + ((area.h * dpi).round() as i32).max(1),
-        }
+            right: left + ((rect.w * dpi).round() as i32).max(1),
+            bottom: top + ((rect.h * dpi).round() as i32).max(1),
+        })
     }
 }
 
@@ -519,26 +528,57 @@ impl ITextStoreACP_Impl for Store_Impl {
         Ok(0)
     }
 
-    fn GetACPFromPoint(&self, _view: u32, _point: *const POINT, _flags: u32) -> Result<i32> {
-        let model = self.shared.model.borrow();
-        Ok(model
-            .composition()
-            .map(|c| c.start)
-            .unwrap_or(model.selection().start) as i32)
+    fn GetACPFromPoint(&self, _view: u32, point: *const POINT, flags: u32) -> Result<i32> {
+        self.shared.require(Lock::Read)?;
+        let point = unsafe { point.as_ref() }.ok_or_else(|| Error::from_hresult(E_INVALIDARG))?;
+        let (origin, dpi) = self.shared.client_frame()?;
+        let logical = Point::new(
+            (point.x - origin.x) as f32 / dpi,
+            (point.y - origin.y) as f32 / dpi,
+        );
+        let hit = self
+            .shared
+            .model
+            .borrow()
+            .geometry()
+            .hit(logical)
+            .ok_or_else(|| Error::from_hresult(TS_E_NOLAYOUT))?;
+        let offset = match (hit.inside, flags & GXFPF_ROUND_NEAREST != 0) {
+            (Some(_), true) => hit.nearest,
+            (Some(inside), false) => inside,
+            (None, _) if flags & GXFPF_NEAREST != 0 => hit.nearest,
+            (None, _) => return Err(Error::from_hresult(TS_E_INVALIDPOINT)),
+        };
+        i32::try_from(offset).map_err(|_| Error::from_hresult(TS_E_INVALIDPOINT))
     }
 
     fn GetTextExt(
         &self,
         _view: u32,
-        _start: i32,
-        _end: i32,
+        start: i32,
+        end: i32,
         rect: *mut RECT,
         clipped: *mut BOOL,
     ) -> Result<()> {
         self.shared.require(Lock::Read)?;
+        let model = self.shared.model.borrow();
+        let start = position(start)?;
+        let end = match end {
+            ACP_END => model.total_len(),
+            end => position(end)?,
+        };
+        if start > end {
+            return Err(Error::from_hresult(TS_E_INVALIDPOS));
+        }
+        let bounds = model
+            .geometry()
+            .range_bounds(Utf16Range::new(start, end))
+            .ok_or_else(|| Error::from_hresult(TS_E_NOLAYOUT))?;
+        drop(model);
+        let screen = self.shared.screen_rect(bounds.rect)?;
         unsafe {
-            *rect = self.shared.screen_rect();
-            *clipped = BOOL(0);
+            *rect = screen;
+            *clipped = BOOL::from(bounds.clipped);
         }
         Ok(())
     }

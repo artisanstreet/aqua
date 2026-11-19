@@ -117,6 +117,7 @@ impl Rig {
             selection: Utf16Range::new(selection.0, selection.1),
             selection_reversed: false,
             area: AREA,
+            geometry: aqua_protocol::ImeGeometry::UNAVAILABLE,
         }))
         .expect("enable");
         let thread_mgr: ITfThreadMgr =

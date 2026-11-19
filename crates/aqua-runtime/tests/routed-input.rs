@@ -604,3 +604,54 @@ fn editable_mention_spans_expose_transformed_inline_cells_and_preserve_edit_hist
         .unwrap();
     assert!(runtime.text_range_rects(node, 0..1).is_empty());
 }
+
+#[test]
+fn external_editors_receive_visual_caret_targets() {
+    use aqua_ui::input::TextMotion;
+
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let output = seen.clone();
+    let text = "שלום";
+    let mut runtime = Runtime::new(SharedFonts::new(), SharedRuns::new());
+    runtime
+        .mount(|_| {
+            UiText::new(text)
+                .editable(true)
+                .external_text_input(true)
+                .initial_external_selection(aqua_text::Selection::new(8, 8), None)
+                .build()
+                .on_input(InputKind::TextMotion, EventPhase::Capture, move |event| {
+                    if let RoutedInput::TextMotion {
+                        motion,
+                        extend,
+                        target,
+                    } = &event.input
+                    {
+                        output.borrow_mut().push((*motion, *extend, *target));
+                    }
+                    InputResponse::handled()
+                })
+        })
+        .unwrap();
+    runtime.set_viewport(300.0, 100.0, 1.0);
+    runtime.build_frame().unwrap();
+    let node = runtime.tree().root().unwrap();
+    runtime.tree_mut().set_focused(Some(node));
+    for (key, modifiers) in [
+        (NamedKey::Right, Modifiers::NONE),
+        (NamedKey::Home, Modifiers::SHIFT),
+    ] {
+        runtime.handle_input(&InputEvent::KeyDown(KeyEvent {
+            key: Key::Named(key),
+            modifiers,
+            repeat: false,
+        }));
+    }
+    assert_eq!(
+        *seen.borrow(),
+        [
+            (TextMotion::Right, false, 6),
+            (TextMotion::LineStart, true, 0)
+        ]
+    );
+}

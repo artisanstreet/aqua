@@ -407,6 +407,13 @@ pub enum ElementBinding {
     Checked(bool),
     Expanded(bool),
     Level(usize),
+    AccessHidden,
+    Live(aqua_core::LiveRegion),
+    Busy(bool),
+    Language(String),
+    NumericRange(aqua_core::NumericRangeSemantics),
+    ActiveDescendant,
+    ModalScope,
     InteractionStyle {
         kind: crate::tree::interaction::InteractionStyleKind,
         style: std::boxed::Box<Style>,
@@ -2309,6 +2316,57 @@ impl Element {
 
     pub fn aria_level(mut self, level: usize) -> Self {
         self.bindings.push(ElementBinding::Level(level));
+        self
+    }
+
+    pub fn aria_hidden(mut self) -> Self {
+        self.bindings.push(ElementBinding::AccessHidden);
+        self
+    }
+
+    pub fn aria_live(mut self, live: aqua_core::LiveRegion) -> Self {
+        self.bindings.push(ElementBinding::Live(live));
+        self
+    }
+
+    pub fn aria_busy(mut self, busy: bool) -> Self {
+        self.bindings.push(ElementBinding::Busy(busy));
+        self
+    }
+
+    pub fn aria_language(mut self, language: impl Into<String>) -> Self {
+        self.bindings
+            .push(ElementBinding::Language(language.into()));
+        self
+    }
+
+    pub fn aria_range(mut self, range: aqua_core::NumericRangeSemantics) -> Self {
+        self.bindings.push(ElementBinding::NumericRange(range));
+        self
+    }
+
+    pub fn aria_active_descendant(mut self) -> Self {
+        self.bindings.push(ElementBinding::ActiveDescendant);
+        self
+    }
+
+    pub fn modal_scope(mut self) -> Self {
+        self.bindings.push(ElementBinding::ModalScope);
+        self
+    }
+
+    pub fn on_accessibility_request(
+        mut self,
+        handler: impl Fn(crate::tree::AccessibilityRequest) + 'static,
+    ) -> Self {
+        self.bindings.push(ElementBinding::OnAction {
+            kind: ActionKind::AccessibilityRequest,
+            callback: std::boxed::Box::new(move |event| {
+                if let Some(request) = event.request {
+                    handler(request);
+                }
+            }),
+        });
         self
     }
 

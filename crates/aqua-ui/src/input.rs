@@ -154,6 +154,7 @@ impl UiTree {
                 kind: ActionKind::TextChanged,
                 text: Some(after.text),
                 focused: None,
+                request: None,
             });
         }
         changed
@@ -281,7 +282,7 @@ pub enum RoutedInput {
     TextRangeActivated {
         id: u64,
         range: std::ops::Range<usize>,
-        pointer: PointerEvent,
+        pointer: Option<PointerEvent>,
     },
     FilesDropped {
         paths: std::sync::Arc<[std::path::PathBuf]>,
@@ -355,9 +356,9 @@ impl RoutedInput {
             )
             | Self::PointerEnter(pointer)
             | Self::PointerLeave(pointer)
-            | Self::TextRangeActivated { pointer, .. }
             | Self::TextContext { pointer, .. }
             | Self::TextPointer { pointer, .. } => Some(*pointer),
+            Self::TextRangeActivated { pointer, .. } => *pointer,
             Self::DragEnter { pointer, .. }
             | Self::DragOver { pointer, .. }
             | Self::DragLeave { pointer, .. }
@@ -840,6 +841,7 @@ fn dispatch_action_allowed(
                 kind,
                 text: None,
                 focused: None,
+                request: None,
             });
             return true;
         }
@@ -1213,7 +1215,7 @@ pub fn route_text_range(
     node: NodeId,
     id: u64,
     range: std::ops::Range<usize>,
-    pointer: PointerEvent,
+    pointer: Option<PointerEvent>,
     allowed: impl Fn(&UiTree, NodeId) -> bool,
 ) -> RoutedOutcome {
     if tree.is_disabled(node) || !allowed(tree, node) {

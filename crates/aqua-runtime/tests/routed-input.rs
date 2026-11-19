@@ -47,7 +47,7 @@ fn public_text_links_route_id_range_and_modifiers_without_firing_on_drag() {
                                 callback.borrow_mut().push((
                                     *id,
                                     range.clone(),
-                                    pointer.contact,
+                                    pointer.unwrap().contact,
                                     event.modifiers,
                                 ));
                                 InputResponse::handled()

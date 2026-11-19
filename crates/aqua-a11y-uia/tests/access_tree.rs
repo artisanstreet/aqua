@@ -24,6 +24,7 @@ fn text_node(generation: u32) -> A11yNode {
         children: vec![],
         text: Some(A11yText {
             selection_enabled: true,
+            links: vec![],
             selection: Some((1, 14)),
             runs: vec![A11yTextRun {
                 text: "a👩‍💻é".into(),
@@ -247,4 +248,151 @@ fn reanchoring_a_list_republishes_its_rows_but_not_their_contents() {
     assert!(!changed.contains(&run));
     let row = &aqua_a11y_uia::inspect(&reanchored).unwrap().children[0];
     assert_eq!(row.bounds, Some([10.0, -10.0, 110.0, 10.0]));
+}
+
+fn plain(index: u32, role: Role) -> A11yNode {
+    let id = NodeId::from_raw(RawId {
+        index,
+        generation: 1,
+    });
+    A11yNode {
+        semantic: SemanticNode {
+            bounds: Some(Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 50.0,
+                h: 20.0,
+            }),
+            ..SemanticNode::new(id, role)
+        },
+        bounds: Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 50.0,
+            h: 20.0,
+        }),
+        scroll: aqua_core::Point::ZERO,
+        children: vec![],
+        text: None,
+    }
+}
+
+#[test]
+fn reply_regions_ranges_scrolling_and_active_options_reach_uia() {
+    use accesskit::{Live, Role as AkRole};
+    use aqua_core::{LiveRegion, NumericRangeSemantics, ScrollSemantics};
+    let mut root = plain(1, Role::ScrollRegion);
+    let mut reply = plain(2, Role::Text);
+    let mut chart = plain(3, Role::Group);
+    let mut progress = plain(4, Role::ProgressIndicator);
+    let mut trigger = plain(5, Role::ComboBox);
+    let option = plain(6, Role::Option);
+    let link = plain(7, Role::Link);
+    let mut dialog = plain(8, Role::Dialog);
+    root.semantic.scroll = Some(ScrollSemantics {
+        x: 0.0,
+        y: 40.0,
+        x_max: 0.0,
+        y_max: 400.0,
+    });
+    reply.semantic.label = "Partial answer".into();
+    reply.semantic.live = Some(LiveRegion::Polite);
+    reply.semantic.busy = true;
+    reply.semantic.language = Some("nb-NO".into());
+    chart.semantic.focusable = true;
+    progress.semantic.numeric_range = Some(NumericRangeSemantics {
+        min: 0.0,
+        max: 100.0,
+        value: 30.0,
+        step: 1.0,
+    });
+    trigger.semantic.focused = true;
+    trigger.semantic.active_descendant = Some(option.semantic.node);
+    dialog.semantic.modal = true;
+    let items = [root, reply, chart, progress, trigger, option, link, dialog];
+    let ids: Vec<NodeId> = items.iter().map(|item| item.semantic.node).collect();
+    let mut items = items.to_vec();
+    items[0].children = ids[1..].to_vec();
+    let update = A11yTree::default().build(ids[0], ids[4], &items);
+    let node = |id: NodeId| {
+        &update
+            .nodes
+            .iter()
+            .find(|(packed, _)| *packed == pack_node_id(id))
+            .unwrap()
+            .1
+    };
+    let region = node(ids[0]);
+    assert_eq!(region.scroll_y(), Some(40.0));
+    assert_eq!(region.scroll_y_max(), Some(400.0));
+    assert!(region.supports_action(Action::ScrollDown));
+    assert!(region.supports_action(Action::SetScrollOffset));
+    let reply = node(ids[1]);
+    assert_eq!(reply.live(), Some(Live::Polite));
+    assert!(reply.is_busy());
+    assert_eq!(reply.language(), Some("nb-NO"));
+    assert!(reply.supports_action(Action::ScrollIntoView));
+    assert!(node(ids[2]).supports_action(Action::Focus));
+    assert_eq!(node(ids[3]).numeric_value(), Some(30.0));
+    assert_eq!(node(ids[3]).max_numeric_value(), Some(100.0));
+    assert!(!node(ids[3]).supports_action(Action::SetValue));
+    assert_eq!(node(ids[4]).active_descendant(), Some(pack_node_id(ids[5])));
+    assert_eq!(node(ids[6]).role(), AkRole::Link);
+    assert!(node(ids[6]).supports_action(Action::Click));
+    assert!(node(ids[7]).is_modal());
+}
+
+#[test]
+fn inline_links_become_named_uia_links_that_press_their_owner() {
+    use accesskit::Role as AkRole;
+    use aqua_protocol::A11yLink;
+    let mut item = text_node(1);
+    let owner = item.semantic.node;
+    item.text.as_mut().unwrap().links = vec![
+        A11yLink {
+            label: "docs".into(),
+            bounds: Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 30.0,
+                h: 20.0,
+            },
+            focused: false,
+        },
+        A11yLink {
+            label: "guide".into(),
+            bounds: Rect {
+                x: 50.0,
+                y: 20.0,
+                w: 30.0,
+                h: 20.0,
+            },
+            focused: true,
+        },
+    ];
+    let mut tree = A11yTree::default();
+    let update = tree.build(owner, owner, &[item]);
+    let links: Vec<_> = update
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.role() == AkRole::Link)
+        .collect();
+    assert_eq!(
+        links
+            .iter()
+            .map(|(_, node)| node.label())
+            .collect::<Vec<_>>(),
+        vec![Some("docs"), Some("guide")]
+    );
+    assert_eq!(update.focus, links[1].0);
+    let pressed = tree
+        .translate(&accesskit::ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: links[1].0,
+            data: None,
+        })
+        .unwrap();
+    assert_eq!(pressed.node, owner);
+    assert_eq!(pressed.data, A11yActionData::Custom(1));
 }

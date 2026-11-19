@@ -78,3 +78,17 @@ fn overrides_beat_system_readings_and_unknown_is_never_on() {
     assert_eq!(untouched, SystemPrefs::fallback());
     assert!(!should_reduce_motion(&untouched));
 }
+
+#[test]
+fn text_size_overrides_stay_within_what_windows_offers() {
+    let scaled = |value: &str| {
+        let value = value.to_owned();
+        SystemPrefs::fallback()
+            .with_overrides(|name| (name == "AQUA_PREF_TEXT_SCALE").then(|| value.clone()))
+            .text_scale
+    };
+    assert_eq!(scaled("150").factor(), 1.5);
+    assert_eq!(scaled("80").percent(), 100);
+    assert_eq!(scaled("400").percent(), 225);
+    assert_eq!(scaled("big").percent(), 100);
+}

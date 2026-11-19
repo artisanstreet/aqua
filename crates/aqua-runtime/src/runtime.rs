@@ -40,7 +40,9 @@ use aqua_ui::{
     layout::ProfiledMeasurer,
     motion::{ReducedMotion, Seconds},
     overlay_host::OverlayHost,
-    tree::{ActionEvent, ActionKind, NodeKind, TextBacking, TextContent, UiTree},
+    tree::{
+        AccessibilityRequest, ActionEvent, ActionKind, NodeKind, TextBacking, TextContent, UiTree,
+    },
 };
 
 const SELECTION_FALLBACK: aqua_core::GpuiHsla = aqua_core::GpuiHsla {
@@ -100,6 +102,7 @@ enum SceneKey {
     TextInlinePaint { node: NodeId, index: u32, part: u8 },
     Caret { node: NodeId },
     Selection { node: NodeId, index: u32 },
+    LinkFocus { node: NodeId, index: u32 },
     SelectionInkStart { node: NodeId },
     SelectionInkEnd { node: NodeId },
     ImeUnderline { node: NodeId, index: u32 },
@@ -126,6 +129,7 @@ impl SceneKey {
             | Self::TextInlinePaint { node, .. }
             | Self::Caret { node }
             | Self::Selection { node, .. }
+            | Self::LinkFocus { node, .. }
             | Self::SelectionInkStart { node }
             | Self::SelectionInkEnd { node }
             | Self::ImeUnderline { node, .. }
@@ -2594,6 +2598,38 @@ impl Runtime {
                 ));
             }
         }
+        if let Some(range) = self
+            .tree
+            .link_focus()
+            .filter(|(node, _)| *node == focused)
+            .and_then(|(_, index)| text.interaction_ranges.get(index))
+            .map(|range| range.range.clone())
+        {
+            let ring = self.tree.paint(focused).and_then(|paint| paint.focus_ring);
+            let width = ring.map_or(2.0, |ring| ring.width);
+            let color = ring.map_or(Oklch::oklch(0.55, 0.12, 260.0, 1.0), |ring| ring.color);
+            for (i, r) in layout.selection_rects(range).into_iter().enumerate() {
+                out.push((
+                    SceneKey::LinkFocus {
+                        node: focused,
+                        index: i as u32,
+                    },
+                    DisplayItem::Rect {
+                        bounds: Rect::from_edges(
+                            origin.x + r.x / self.scale - width,
+                            origin.y + r.y / self.scale,
+                            origin.x + (r.x + r.w) / self.scale + width,
+                            origin.y + (r.y + r.h) / self.scale,
+                        ),
+                        radius: width,
+                        fill: Oklch::TRANSPARENT,
+                        border_width: width,
+                        border_color: color,
+                        shadow: None,
+                    },
+                ));
+            }
+        }
         if let Some(range) = composition {
             let underline = appearance.map_or(Oklch::oklch(0.72, 0.14, 95.0, 1.0), |appearance| {
                 appearance.ime_underline
@@ -2781,6 +2817,15 @@ impl Runtime {
     }
 
     #[must_use]
+    pub fn access_revision(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        self.tree.access_revision().hash(&mut hasher);
+        self.scale.to_bits().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[must_use]
     pub fn a11y_nodes(&self) -> Option<(NodeId, NodeId, Vec<A11yNode>)> {
         let root = self.tree.root()?;
         let focused = self.tree.focused().unwrap_or(root);
@@ -2825,6 +2870,7 @@ impl Runtime {
             kind,
             text: None,
             focused: None,
+            request: None,
         });
     }
 
@@ -2834,6 +2880,36 @@ impl Runtime {
             || !self.text_node_allowed(request.node)
         {
             return;
+        }
+        if let Some(custom) = self.custom_access_request(request) {
+            self.tree.fire_action(ActionEvent {
+                source: None,
+                node: request.node,
+                kind: ActionKind::AccessibilityRequest,
+                text: None,
+                focused: None,
+                request: Some(custom),
+            });
+            return;
+        }
+        match (&request.action, &request.data) {
+            (A11yAction::ScrollIntoView, _) => {
+                self.tree.scroll_into_view(request.node);
+                return;
+            }
+            (A11yAction::Scroll(direction), _) => {
+                self.scroll_page(request.node, *direction);
+                return;
+            }
+            (A11yAction::SetScrollOffset, A11yActionData::ScrollOffset { x, y }) => {
+                let scale = f64::from(self.scale.max(f32::MIN_POSITIVE));
+                self.tree.scroll_to(
+                    request.node,
+                    Point::new((x / scale) as f32, (y / scale) as f32),
+                );
+                return;
+            }
+            _ => {}
         }
         if let Some(control) = self.tree.control(request.node) {
             let numeric = match control {
@@ -2867,10 +2943,25 @@ impl Runtime {
                     self.press(request.node);
                 }
             }
-            A11yAction::Focus => {
-                let _ = self.tree.set_focused(Some(request.node));
-            }
-            A11yAction::Press if !self.tree.is_disabled(request.node) => self.press(request.node),
+            A11yAction::Focus => match request.data {
+                A11yActionData::Custom(index) => {
+                    if let Ok(index) = usize::try_from(index) {
+                        self.tree.focus_link(request.node, index);
+                    }
+                }
+                _ => {
+                    let _ = self.tree.set_focused(Some(request.node));
+                }
+            },
+            A11yAction::Press if !self.tree.is_disabled(request.node) => match request.data {
+                A11yActionData::Custom(index) => {
+                    if let Ok(index) = usize::try_from(index) {
+                        self.tree.focus_link(request.node, index);
+                        self.activate_link(request.node, index);
+                    }
+                }
+                _ => self.press(request.node),
+            },
             A11yAction::SetValue | A11yAction::ReplaceSelectedText => {
                 if let A11yActionData::Value(value) = &request.data {
                     if request.action == A11yAction::SetValue
@@ -2933,6 +3024,7 @@ impl Runtime {
                             kind: ActionKind::TextChanged,
                             text,
                             focused: None,
+                            request: None,
                         });
                     }
                 }
@@ -2958,6 +3050,50 @@ impl Runtime {
         {
             self.apply_access_byte_selection(anchor_node, focus_node, anchor_byte, focus_byte);
         }
+    }
+
+    fn custom_access_request(&self, request: &A11yActionRequest) -> Option<AccessibilityRequest> {
+        if !self
+            .tree
+            .has_action(request.node, ActionKind::AccessibilityRequest)
+        {
+            return None;
+        }
+        let ranged = self.tree.control(request.node).is_none()
+            && self
+                .tree
+                .get(request.node)
+                .is_some_and(|record| record.semantics.numeric_range.is_some());
+        match (&request.action, &request.data) {
+            (A11yAction::ShowContextMenu, _) => Some(AccessibilityRequest::ShowContextMenu),
+            (A11yAction::Increment, _) if ranged => Some(AccessibilityRequest::Increment),
+            (A11yAction::Decrement, _) if ranged => Some(AccessibilityRequest::Decrement),
+            (A11yAction::SetValue, A11yActionData::Numeric(value)) if ranged => {
+                Some(AccessibilityRequest::SetValue(*value))
+            }
+            (A11yAction::SetValue, A11yActionData::Value(value)) if ranged => value
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite())
+                .map(AccessibilityRequest::SetValue),
+            _ => None,
+        }
+    }
+
+    fn scroll_page(&mut self, node: NodeId, direction: aqua_protocol::A11yScroll) {
+        let (Some(offset), Some(view)) = (self.tree.scroll_offset(node), self.tree.rect(node))
+        else {
+            return;
+        };
+        let (dx, dy) = match direction {
+            aqua_protocol::A11yScroll::Up => (0.0, -view.h),
+            aqua_protocol::A11yScroll::Down => (0.0, view.h),
+            aqua_protocol::A11yScroll::Left => (-view.w, 0.0),
+            aqua_protocol::A11yScroll::Right => (view.w, 0.0),
+        };
+        self.tree
+            .scroll_to(node, Point::new(offset.x + dx * PAGE, offset.y + dy * PAGE));
     }
 
     fn apply_access_selection(
@@ -3137,6 +3273,7 @@ mod style_decoration_tests {
 }
 
 const PAINT_REBUILD_STREAK: u32 = 30;
+const PAGE: f32 = 0.875;
 
 #[derive(Default)]
 struct PaintRebuilds {

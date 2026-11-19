@@ -808,6 +808,15 @@ pub enum ActionKind {
     FocusChanged,
     /// Enter in a single-line editable field.
     Submit,
+    AccessibilityRequest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AccessibilityRequest {
+    SetValue(f64),
+    Increment,
+    Decrement,
+    ShowContextMenu,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -838,6 +847,7 @@ pub struct ActionEvent {
     pub text: Option<String>,
     /// Focused state for [`ActionKind::FocusChanged`].
     pub focused: Option<bool>,
+    pub request: Option<AccessibilityRequest>,
 }
 
 /// Action callback: event data in, host notification out (channels/signals).
@@ -1018,6 +1028,12 @@ pub struct NodeSemantics {
     /// (lists report `set_size`/`position_in_set`; tables report row/column
     /// counts and indices). `None` for non-collection nodes.
     pub collection: Option<Box<CollectionSemantics>>,
+    pub numeric_range: Option<aqua_core::NumericRangeSemantics>,
+    pub live: Option<aqua_core::LiveRegion>,
+    pub busy: bool,
+    pub language: Option<String>,
+    pub active_descendant: bool,
+    pub hidden: bool,
 }
 
 impl Default for NodeSemantics {
@@ -1029,8 +1045,36 @@ impl Default for NodeSemantics {
             selected: false,
             value_text: None,
             collection: None,
+            numeric_range: None,
+            live: None,
+            busy: false,
+            language: None,
+            active_descendant: false,
+            hidden: false,
         }
     }
+}
+
+enum AccessGate {
+    Open,
+    Scoped {
+        scope: NodeId,
+        path: std::collections::HashSet<NodeId>,
+        layered: std::collections::HashSet<NodeId>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModalOrigin {
+    Element,
+    Host,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ModalScope {
+    node: NodeId,
+    origin: ModalOrigin,
+    restore: Option<NodeId>,
 }
 
 /// One retained node.
@@ -1232,6 +1276,8 @@ pub struct UiTree {
     follow_caret_queue: Vec<NodeId>,
     exiting: std::collections::HashSet<NodeId>,
     access_hidden: std::collections::HashSet<NodeId>,
+    modal_scopes: Vec<ModalScope>,
+    link_focus: Option<(NodeId, usize)>,
     motion_groups: HashMap<NodeId, MotionGroups>,
     hoist_guards: Vec<(taffy::NodeId, taffy::NodeId)>,
     motion_declared: bool,
@@ -1382,6 +1428,8 @@ impl UiTree {
             portal_order: Vec::new(),
             exiting: std::collections::HashSet::new(),
             access_hidden: std::collections::HashSet::new(),
+            modal_scopes: Vec::new(),
+            link_focus: None,
             motion_groups: HashMap::new(),
             hoist_guards: Vec::new(),
             motion_declared: false,
@@ -1518,6 +1566,23 @@ impl UiTree {
     #[must_use]
     pub fn content_version(&self) -> u64 {
         self.content_version
+    }
+
+    #[must_use]
+    pub fn access_revision(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        (
+            self.content_version,
+            self.semantics_version,
+            self.layout_version,
+            self.focus_generation,
+            self.focused,
+            self.scroll_revision(),
+            self.sink.invalidation_counter.get(),
+        )
+            .hash(&mut hasher);
+        hasher.finish()
     }
 
     pub fn invalidation_epoch(&self) -> u64 {
@@ -1735,6 +1800,7 @@ impl UiTree {
         self.focused = id;
         self.focus_generation = self.focus_generation.wrapping_add(1);
         self.pending_keyboard_activation = None;
+        self.link_focus = None;
         self.queue_interaction_focus(previous, id);
         for (node, focused) in [(previous, false), (id, true)] {
             if let Some(node) = node {
@@ -1751,6 +1817,7 @@ impl UiTree {
                     kind: ActionKind::FocusChanged,
                     text: None,
                     focused: Some(focused),
+                    request: None,
                 });
             }
         }
@@ -1780,21 +1847,212 @@ impl UiTree {
         }
     }
 
-    #[must_use]
-    pub fn is_access_hidden(&self, node: NodeId) -> bool {
-        self.exiting.contains(&node) || self.access_hidden.contains(&node)
+    pub fn set_modal_scope(&mut self, node: NodeId, modal: bool) {
+        self.update_modal_scope(node, ModalOrigin::Host, modal);
     }
 
-    fn accessible_nodes(&self) -> Vec<NodeId> {
-        let mut out = Vec::new();
-        let mut stack = self.root.map_or(Vec::new(), |r| vec![r]);
-        while let Some(id) = stack.pop() {
-            if self.is_access_hidden(id) {
-                continue;
+    pub(crate) fn set_element_modal_scope(&mut self, node: NodeId, modal: bool) {
+        self.update_modal_scope(node, ModalOrigin::Element, modal);
+    }
+
+    fn update_modal_scope(&mut self, node: NodeId, origin: ModalOrigin, modal: bool) {
+        let present = self
+            .modal_scopes
+            .iter()
+            .any(|scope| scope.node == node && scope.origin == origin);
+        match (modal, present) {
+            (true, false) if self.nodes.contains(node.raw()) => {
+                let restore = self
+                    .focused
+                    .filter(|focused| !self.is_within(*focused, node));
+                self.modal_scopes.push(ModalScope {
+                    node,
+                    origin,
+                    restore,
+                });
             }
+            (false, true) => self
+                .modal_scopes
+                .retain(|scope| scope.node != node || scope.origin != origin),
+            _ => return,
+        }
+        self.semantics_version = self.semantics_version.wrapping_add(1);
+        self.content_version += 1;
+    }
+
+    #[must_use]
+    pub fn link_count(&self, node: NodeId) -> usize {
+        match self.nodes.get(node.raw()).map(|record| &record.kind) {
+            Some(NodeKind::Text(text)) if !text.is_editable() => text.interaction_ranges.len(),
+            _ => 0,
+        }
+    }
+
+    #[must_use]
+    pub fn link_focus(&self) -> Option<(NodeId, usize)> {
+        self.link_focus
+            .filter(|(node, index)| self.focused == Some(*node) && *index < self.link_count(*node))
+    }
+
+    pub fn focus_link(&mut self, node: NodeId, index: usize) -> bool {
+        if index >= self.link_count(node) || !self.set_focused(Some(node)) {
+            return false;
+        }
+        if self.link_focus != Some((node, index)) {
+            self.link_focus = Some((node, index));
+            self.focus_generation = self.focus_generation.wrapping_add(1);
+            self.touch_paint(node);
+        }
+        true
+    }
+
+    pub fn step_link_focus(&mut self, reverse: bool) -> bool {
+        let Some((node, index)) = self.link_focus() else {
+            return false;
+        };
+        let next = match reverse {
+            true => index.checked_sub(1),
+            false => Some(index + 1).filter(|next| *next < self.link_count(node)),
+        };
+        next.is_some_and(|next| self.focus_link(node, next))
+    }
+
+    pub fn enter_link_focus(&mut self, reverse: bool) {
+        let Some(node) = self.focused else {
+            return;
+        };
+        match (self.link_count(node), reverse) {
+            (0, _) => {}
+            (count, true) => {
+                self.focus_link(node, count - 1);
+            }
+            (_, false) => {
+                self.focus_link(node, 0);
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn active_modal_scope(&self) -> Option<NodeId> {
+        self.modal_scopes
+            .iter()
+            .rev()
+            .map(|scope| scope.node)
+            .find(|node| self.nodes.contains(node.raw()) && !self.is_access_hidden(*node))
+    }
+
+    fn root_layer(&self, node: NodeId) -> Option<NodeId> {
+        let mut current = node;
+        loop {
+            let parent = self.nodes.get(current.raw())?.parent?;
+            if Some(parent) == self.root {
+                return Some(current);
+            }
+            current = parent;
+        }
+    }
+
+    fn layered_above(&self, scope: NodeId) -> Vec<NodeId> {
+        let (Some(root), Some(layer)) = (self.root, self.root_layer(scope)) else {
+            return Vec::new();
+        };
+        let children = self
+            .nodes
+            .get(root.raw())
+            .map_or(&[][..], |record| record.children.as_slice());
+        children
+            .iter()
+            .skip_while(|child| **child != layer)
+            .skip(1)
+            .copied()
+            .collect()
+    }
+
+    #[must_use]
+    pub fn in_modal_domain(&self, node: NodeId) -> bool {
+        let Some(scope) = self.active_modal_scope() else {
+            return true;
+        };
+        self.is_within(node, scope)
+            || self
+                .layered_above(scope)
+                .into_iter()
+                .any(|layer| self.is_within(node, layer))
+    }
+
+    fn removed_scope_restore(&self, removed: NodeId) -> Option<NodeId> {
+        self.modal_scopes
+            .iter()
+            .rev()
+            .filter(|scope| self.is_within(scope.node, removed))
+            .find_map(|scope| scope.restore)
+            .filter(|restore| {
+                self.nodes.contains(restore.raw()) && !self.is_within(*restore, removed)
+            })
+    }
+
+    #[must_use]
+    pub fn is_access_hidden(&self, node: NodeId) -> bool {
+        self.exiting.contains(&node)
+            || self.access_hidden.contains(&node)
+            || self
+                .nodes
+                .get(node.raw())
+                .is_some_and(|record| record.semantics.hidden)
+    }
+
+    fn access_gate(&self) -> AccessGate {
+        let Some(scope) = self.active_modal_scope() else {
+            return AccessGate::Open;
+        };
+        let mut path = std::collections::HashSet::new();
+        let mut current = self.nodes.get(scope.raw()).and_then(|record| record.parent);
+        while let Some(id) = current {
+            path.insert(id);
+            current = self.nodes.get(id.raw()).and_then(|record| record.parent);
+        }
+        AccessGate::Scoped {
+            scope,
+            path,
+            layered: self.layered_above(scope).into_iter().collect(),
+        }
+    }
+
+    fn access_child_visible(&self, gate: &AccessGate, parent: NodeId, child: NodeId) -> bool {
+        if self.is_access_hidden(child) {
+            return false;
+        }
+        match gate {
+            AccessGate::Open => true,
+            AccessGate::Scoped {
+                scope,
+                path,
+                layered,
+            } => {
+                !path.contains(&parent)
+                    || child == *scope
+                    || path.contains(&child)
+                    || layered.contains(&child)
+            }
+        }
+    }
+
+    fn accessible_nodes(&self, gate: &AccessGate) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        let mut stack = self
+            .root
+            .filter(|root| !self.is_access_hidden(*root))
+            .map_or(Vec::new(), |root| vec![root]);
+        while let Some(id) = stack.pop() {
             out.push(id);
             if let Some(rec) = self.nodes.get(id.raw()) {
-                stack.extend(rec.children.iter().rev().copied());
+                stack.extend(
+                    rec.children
+                        .iter()
+                        .rev()
+                        .copied()
+                        .filter(|child| self.access_child_visible(gate, id, *child)),
+                );
             }
         }
         self.visited.set(self.visited.get() + out.len());
@@ -1803,7 +2061,15 @@ impl UiTree {
 
     pub fn emit_semantics(&self) -> Vec<SemanticNode> {
         let mut out = Vec::new();
-        for id in self.accessible_nodes() {
+        let gate = self.access_gate();
+        let visible = self.accessible_nodes(&gate);
+        let modal = self.active_modal_scope();
+        let active_descendant = visible.iter().copied().find(|id| {
+            self.nodes
+                .get(id.raw())
+                .is_some_and(|record| record.semantics.active_descendant)
+        });
+        for id in visible {
             let Some(rec) = self.nodes.get(id.raw()) else {
                 continue;
             };
@@ -1862,7 +2128,7 @@ impl UiTree {
                         value: control.value,
                     })
                 }
-                _ => None,
+                _ => rec.semantics.numeric_range,
             };
             let expanded =
                 self.interaction_semantics(id)
@@ -1888,10 +2154,27 @@ impl UiTree {
                     .children
                     .iter()
                     .copied()
-                    .filter(|child| !self.is_access_hidden(*child))
+                    .filter(|child| self.access_child_visible(&gate, id, *child))
                     .collect(),
                 bounds,
                 collection: rec.semantics.collection.as_deref().copied(),
+                focusable: rec.focusable && !self.is_disabled(id),
+                live: rec.semantics.live,
+                busy: rec.semantics.busy,
+                modal: modal == Some(id),
+                language: rec.semantics.language.clone(),
+                scroll: self.scroll_offset(id).map(|offset| {
+                    let limit = self.scroll_limit(id);
+                    aqua_core::ScrollSemantics {
+                        x: f64::from(offset.x),
+                        y: f64::from(offset.y),
+                        x_max: f64::from(limit.x),
+                        y_max: f64::from(limit.y),
+                    }
+                }),
+                active_descendant: active_descendant
+                    .filter(|_| self.focused == Some(id))
+                    .filter(|active| *active != id),
             });
         }
         out
@@ -2313,7 +2596,8 @@ impl UiTree {
         true
     }
 
-    fn is_within(&self, mut node: NodeId, ancestor: NodeId) -> bool {
+    #[must_use]
+    pub fn is_within(&self, mut node: NodeId, ancestor: NodeId) -> bool {
         loop {
             if node == ancestor {
                 return true;
@@ -3012,8 +3296,8 @@ impl UiTree {
         let Some(rec) = self.nodes.get(id.raw()) else {
             return false;
         };
-        let focus_fallback = rec.parent;
         let out_of_flow = rec.style.absolute.is_some();
+        let focus_fallback = self.removed_scope_restore(id).or(rec.parent);
         let previous_focus = self.focused;
         if self.focused == Some(id) {
             self.focused = focus_fallback;
@@ -3042,6 +3326,7 @@ impl UiTree {
             if self.focused == Some(n) {
                 self.focused = focus_fallback;
             }
+            self.modal_scopes.retain(|scope| scope.node != n);
             if let Some(rec) = self.nodes.get(n.raw()) {
                 stack.extend(rec.children.iter().copied());
             }
@@ -3092,6 +3377,7 @@ impl UiTree {
         if previous_focus != self.focused {
             self.focus_generation = self.focus_generation.wrapping_add(1);
             self.pending_keyboard_activation = None;
+            self.link_focus = None;
         }
         self.queue_interaction_focus(previous_focus, self.focused);
         self.gc_painters();
@@ -3850,6 +4136,38 @@ impl UiTree {
             },
             None => None,
         }
+    }
+
+    pub fn scroll_into_view(&mut self, node: NodeId) -> bool {
+        let shift = |start: f32, end: f32, view_start: f32, view_end: f32| {
+            if start < view_start {
+                start - view_start
+            } else if end > view_end {
+                (end - view_end).min(start - view_start)
+            } else {
+                0.0
+            }
+        };
+        let mut moved = false;
+        let mut current = self.nodes.get(node.raw()).and_then(|record| record.parent);
+        while let Some(ancestor) = current {
+            if let (Some(offset), Some(view), Some(target)) = (
+                self.scroll_offset(ancestor),
+                self.visual_rect(ancestor),
+                self.visual_rect(node),
+            ) {
+                let dx = shift(target.x, target.right(), view.x, view.right());
+                let dy = shift(target.y, target.bottom(), view.y, view.bottom());
+                if dx != 0.0 || dy != 0.0 {
+                    moved |= self.scroll_to(ancestor, Point::new(offset.x + dx, offset.y + dy));
+                }
+            }
+            current = self
+                .nodes
+                .get(ancestor.raw())
+                .and_then(|record| record.parent);
+        }
+        moved
     }
 
     pub fn scroll_to(&mut self, id: NodeId, offset: Point) -> bool {
@@ -5181,6 +5499,7 @@ impl UiTree {
         }
         if self.focused == Some(id)
             && !self.is_disabled(id)
+            && self.link_focus().is_none_or(|(node, _)| node != id)
             && let Some(ring) = paint.focus_ring
         {
             out.push((
@@ -5907,6 +6226,7 @@ mod tests {
             kind: ActionKind::Activate,
             text: None,
             focused: None,
+            request: None,
         });
         assert_eq!(*seen.lock().unwrap(), vec![root]);
     }
@@ -6046,6 +6366,7 @@ mod tests {
                 selected: false,
                 value_text: None,
                 collection: None,
+                ..Default::default()
             },
         );
         assert!(tree.set_focused(Some(kids[1])));
@@ -6083,6 +6404,7 @@ mod tests {
                     position_in_set: Some(1),
                     ..Default::default()
                 })),
+                ..Default::default()
             }
         ));
     }
@@ -6106,6 +6428,7 @@ mod tests {
                     position_in_set: Some(42),
                     ..Default::default()
                 })),
+                ..Default::default()
             }
         ));
         // Default is None (non-collection nodes report no coordinates).

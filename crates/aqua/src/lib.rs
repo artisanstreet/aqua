@@ -75,7 +75,9 @@ pub mod prelude {
         CursorIcon, DisplayItem, ImeEvent, InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId,
         Oklch, Point, PointerButton, PointerEvent, Rect, Srgba8, TextRun,
     };
-    pub use aqua_protocol::prefs::{PrefState, PreferenceSource, SystemPrefs as OsPreferences};
+    pub use aqua_protocol::prefs::{
+        PrefState, PreferenceSource, SystemPrefs as OsPreferences, TextScale,
+    };
     pub use aqua_protocol::{
         A11yAction, A11yActionRequest, A11yNode, AquaWindowId, BadgeError, DisplayInfo,
         FrameReason, MaterialCapability, ObservedWindowState, TaskbarBadge, WindowEvent,

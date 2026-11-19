@@ -35,6 +35,21 @@ pub enum Role {
     Dialog,
     Menu,
     MenuItem,
+    Link,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LiveRegion {
+    Polite,
+    Assertive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollSemantics {
+    pub x: f64,
+    pub y: f64,
+    pub x_max: f64,
+    pub y_max: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -72,6 +87,13 @@ pub struct SemanticNode {
     pub children: Vec<NodeId>,
     pub bounds: Option<Rect>,
     pub collection: Option<CollectionSemantics>,
+    pub focusable: bool,
+    pub live: Option<LiveRegion>,
+    pub busy: bool,
+    pub modal: bool,
+    pub language: Option<String>,
+    pub scroll: Option<ScrollSemantics>,
+    pub active_descendant: Option<NodeId>,
 }
 
 impl SemanticNode {
@@ -93,6 +115,13 @@ impl SemanticNode {
             children: Vec::new(),
             bounds: None,
             collection: None,
+            focusable: false,
+            live: None,
+            busy: false,
+            modal: false,
+            language: None,
+            scroll: None,
+            active_descendant: None,
         }
     }
 }

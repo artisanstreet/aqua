@@ -2180,6 +2180,13 @@ fn effect_keys(bindings: &[ElementBinding]) -> Vec<aqua_reactive::NodeId> {
             | ElementBinding::Checked(_)
             | ElementBinding::Expanded(_)
             | ElementBinding::Level(_)
+            | ElementBinding::AccessHidden
+            | ElementBinding::Live(_)
+            | ElementBinding::Busy(_)
+            | ElementBinding::Language(_)
+            | ElementBinding::NumericRange(_)
+            | ElementBinding::ActiveDescendant
+            | ElementBinding::ModalScope
             | ElementBinding::InteractionStyle { .. }
             | ElementBinding::ValueText(_)
             | ElementBinding::OnInput { .. }
@@ -2195,6 +2202,38 @@ fn effect_keys(bindings: &[ElementBinding]) -> Vec<aqua_reactive::NodeId> {
         }
     }
     keys
+}
+
+fn apply_access_bindings(tree: &mut UiTree, id: NodeId, bindings: &[ElementBinding]) {
+    let Some(current) = tree.get(id).map(|record| record.semantics.clone()) else {
+        return;
+    };
+    let mut next = crate::tree::NodeSemantics {
+        hidden: false,
+        live: None,
+        busy: false,
+        language: None,
+        numeric_range: None,
+        active_descendant: false,
+        ..current.clone()
+    };
+    let mut modal = false;
+    for binding in bindings {
+        match binding {
+            ElementBinding::AccessHidden => next.hidden = true,
+            ElementBinding::Live(live) => next.live = Some(*live),
+            ElementBinding::Busy(busy) => next.busy = *busy,
+            ElementBinding::Language(language) => next.language = Some(language.clone()),
+            ElementBinding::NumericRange(range) => next.numeric_range = Some(*range),
+            ElementBinding::ActiveDescendant => next.active_descendant = true,
+            ElementBinding::ModalScope => modal = true,
+            _ => {}
+        }
+    }
+    if next != current {
+        tree.set_semantics(id, next);
+    }
+    tree.set_element_modal_scope(id, modal);
 }
 
 fn apply_bindings(
@@ -2215,6 +2254,7 @@ fn apply_bindings(
         .iter()
         .any(|binding| matches!(binding, ElementBinding::InteractionStyle { .. }));
     tree.queue_interaction_binding(id, styled);
+    apply_access_bindings(tree, id, &bindings);
     sink.interaction(
         crate::tree::interaction::InteractionCommand::TypographyColor {
             node: id,
@@ -2341,6 +2381,13 @@ fn apply_bindings(
                     style,
                 });
             }
+            ElementBinding::AccessHidden
+            | ElementBinding::Live(_)
+            | ElementBinding::Busy(_)
+            | ElementBinding::Language(_)
+            | ElementBinding::NumericRange(_)
+            | ElementBinding::ActiveDescendant
+            | ElementBinding::ModalScope => {}
             ElementBinding::Level(value) => {
                 sink.interaction(crate::tree::interaction::InteractionCommand::Semantics {
                     node: id,
@@ -2611,6 +2658,7 @@ mod tests {
             kind: crate::tree::ActionKind::Activate,
             text: None,
             focused: None,
+            request: None,
         });
         assert_eq!(*fired.lock().unwrap(), 1);
     }
@@ -2639,6 +2687,7 @@ mod tests {
             kind: crate::tree::ActionKind::TextChanged,
             text: Some("draft!".to_string()),
             focused: None,
+            request: None,
         });
         assert_eq!(text.get(), "draft!");
     }

@@ -1,5 +1,5 @@
 use super::*;
-use aqua_protocol::{A11yText, A11yTextRun};
+use aqua_protocol::{A11yLink, A11yText, A11yTextRun};
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(PartialEq)]
@@ -52,18 +52,6 @@ impl Runtime {
             transform,
             scale: self.scale,
         };
-        if let Some(cached) = entry
-            .access_runs
-            .borrow()
-            .as_ref()
-            .filter(|cached| cached.key == key)
-        {
-            return Some(A11yText {
-                runs: cached.runs.clone(),
-                selection,
-                selection_enabled: text.is_editable() || text.selectable,
-            });
-        }
         let world_rect = |left: f32, top: f32, right: f32, bottom: f32| {
             let start = transform.apply(Point::new(
                 origin.x + left / self.scale,
@@ -80,6 +68,45 @@ impl Runtime {
                 end.y * self.scale,
             )
         };
+        let focused_link = self
+            .tree
+            .link_focus()
+            .filter(|(owner, _)| *owner == node)
+            .map(|(_, index)| index);
+        let links = match text.is_editable() {
+            true => Vec::new(),
+            false => text
+                .interaction_ranges
+                .iter()
+                .enumerate()
+                .filter_map(|(index, range)| {
+                    let label = source.get(range.range.clone())?.trim().to_owned();
+                    let bounds = layout
+                        .selection_rects(range.range.clone())
+                        .into_iter()
+                        .map(|rect| world_rect(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h))
+                        .reduce(Rect::union)?;
+                    Some(A11yLink {
+                        label,
+                        bounds,
+                        focused: focused_link == Some(index),
+                    })
+                })
+                .collect(),
+        };
+        if let Some(cached) = entry
+            .access_runs
+            .borrow()
+            .as_ref()
+            .filter(|cached| cached.key == key)
+        {
+            return Some(A11yText {
+                runs: cached.runs.clone(),
+                selection,
+                selection_enabled: text.is_editable() || text.selectable,
+                links,
+            });
+        }
         let mut units = Vec::new();
         for (offset, grapheme) in source.grapheme_indices(true) {
             match u8::try_from(grapheme.len()) {
@@ -181,6 +208,7 @@ impl Runtime {
             runs,
             selection,
             selection_enabled: text.is_editable() || text.selectable,
+            links,
         })
     }
 

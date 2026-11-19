@@ -18,8 +18,8 @@ pub mod time;
 pub mod window;
 
 pub use access::{
-    A11yAction, A11yActionData, A11yActionRequest, A11yNode, A11yText, A11yTextRun, AccessAction,
-    AccessTreeUpdate,
+    A11yAction, A11yActionData, A11yActionRequest, A11yLink, A11yNode, A11yScroll, A11yText,
+    A11yTextRun, AccessAction, AccessTreeUpdate,
 };
 pub use aqua_motion::{MotionCommand, MotionEvent};
 pub use badge::{BadgeError, TaskbarBadge};

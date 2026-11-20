@@ -77,6 +77,9 @@ pub const FORBIDDEN_EXTERNAL_CRATES: &[&str] = &[
     "glyphon",
     "cosmic-text",
     "fontdb",
+    "wayland-client",
+    "xkbcommon",
+    "zbus",
 ];
 
 pub const FORBIDDEN_SOURCE_TOKENS: &[&str] = &[

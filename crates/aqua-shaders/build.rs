@@ -103,6 +103,7 @@ const LANES: usize = 6;
 enum Bytecode {
     Dxil { bindless: bool },
     Dxbc,
+    Spirv,
 }
 
 enum Host {
@@ -175,6 +176,52 @@ fn locate(variable: &str, stem: &str) -> Option<Tool> {
         })
 }
 
+fn locate_spirv() -> Option<Tool> {
+    env::var_os("AQUA_DXC_SPIRV")
+        .map(PathBuf::from)
+        .into_iter()
+        .chain(on_path("dxc"))
+        .find(|path| path.exists())
+        .map(|path| Tool {
+            path,
+            host: Host::Native,
+        })
+}
+
+enum Toolchain {
+    Windows { dxc: Tool, fxc: Tool },
+    Spirv { dxc: Tool },
+}
+
+impl Toolchain {
+    fn tool(&self, bytecode: Bytecode) -> &Tool {
+        match (self, bytecode) {
+            (Toolchain::Windows { dxc, .. }, Bytecode::Dxil { .. }) => dxc,
+            (Toolchain::Windows { fxc, .. }, Bytecode::Dxbc) => fxc,
+            (Toolchain::Spirv { dxc }, Bytecode::Spirv) => dxc,
+            _ => panic!("a shader job was planned for a toolchain that cannot compile it"),
+        }
+    }
+}
+
+const SPIRV_ARGUMENTS: &[&str] = &[
+    "-spirv",
+    "-fspv-target-env=vulkan1.1",
+    "-fvk-use-dx-layout",
+    "-fvk-b-shift",
+    "0",
+    "0",
+    "-fvk-t-shift",
+    "16",
+    "0",
+    "-fvk-s-shift",
+    "32",
+    "0",
+    "-fvk-u-shift",
+    "48",
+    "0",
+];
+
 fn windows_path(tool: &Tool, path: &Path) -> String {
     match tool.host {
         Host::Native => path.display().to_string(),
@@ -198,6 +245,9 @@ fn profile(entry: &str, bytecode: Bytecode) -> &'static str {
         (Some("vs"), Bytecode::Dxbc) => "vs_5_0",
         (Some("ps"), Bytecode::Dxbc) => "ps_5_0",
         (Some("cs"), Bytecode::Dxbc) => "cs_5_0",
+        (Some("vs"), Bytecode::Spirv) => "vs_6_0",
+        (Some("ps"), Bytecode::Spirv) => "ps_6_0",
+        (Some("cs"), Bytecode::Spirv) => "cs_6_0",
         _ => panic!("entry {entry} must start with vs_, ps_ or cs_"),
     }
 }
@@ -222,8 +272,14 @@ fn compile(tool: &Tool, hlsl: &Path, job: &Job) -> Result<(), String> {
         "-E",
         job.entry.entry,
     ]);
-    if job.bytecode == (Bytecode::Dxil { bindless: true }) {
-        command.args(["-D", "BINDLESS=1"]);
+    match job.bytecode {
+        Bytecode::Dxil { bindless: true } => {
+            command.args(["-D", "BINDLESS=1"]);
+        }
+        Bytecode::Spirv => {
+            command.args(SPIRV_ARGUMENTS);
+        }
+        Bytecode::Dxil { bindless: false } | Bytecode::Dxbc => {}
     }
     let result = command
         .arg("-I")
@@ -246,7 +302,7 @@ fn compile(tool: &Tool, hlsl: &Path, job: &Job) -> Result<(), String> {
     }
 }
 
-fn run_all(jobs: &[Job], hlsl: &Path, dxc: &Tool, fxc: &Tool) {
+fn run_all(jobs: &[Job], hlsl: &Path, toolchain: &Toolchain) {
     let next = AtomicUsize::new(0);
     let failures: Vec<String> = std::thread::scope(|scope| {
         let lanes: Vec<_> = (0..LANES.min(jobs.len()))
@@ -254,11 +310,7 @@ fn run_all(jobs: &[Job], hlsl: &Path, dxc: &Tool, fxc: &Tool) {
                 scope.spawn(|| {
                     let mut failed = Vec::new();
                     while let Some(job) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) {
-                        let tool = match job.bytecode {
-                            Bytecode::Dxil { .. } => dxc,
-                            Bytecode::Dxbc => fxc,
-                        };
-                        if let Err(message) = compile(tool, hlsl, job) {
+                        if let Err(message) = compile(toolchain.tool(job.bytecode), hlsl, job) {
                             failed.push(message);
                         }
                     }
@@ -295,22 +347,24 @@ fn table(generated: &mut String, name: &str, jobs: &[Job], wanted: impl Fn(Bytec
 }
 
 enum Mode {
-    Compile,
+    Windows,
+    Spirv,
     Skip,
 }
 
 fn mode() -> Mode {
-    let targets_windows = env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "windows");
+    let target = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let skip_requested = env::var_os("AQUA_SHADERS_SKIP").is_some_and(|value| value == "1");
-    match (targets_windows, skip_requested) {
-        (false, _) => Mode::Skip,
-        (true, true) => {
+    match (target.as_str(), skip_requested) {
+        ("windows" | "linux", true) => {
             println!(
-                "cargo:warning=AQUA_SHADERS_SKIP=1: shader tables are empty, D3D backends will fail at runtime"
+                "cargo:warning=AQUA_SHADERS_SKIP=1: shader tables are empty, the GPU backends will fail at runtime"
             );
             Mode::Skip
         }
-        (true, false) => Mode::Compile,
+        ("windows", false) => Mode::Windows,
+        ("linux", false) => Mode::Spirv,
+        _ => Mode::Skip,
     }
 }
 
@@ -322,27 +376,34 @@ fn write_tables(out: &Path, jobs: &[Job]) {
     table(&mut generated, "DXBC", jobs, |bytecode| {
         bytecode == Bytecode::Dxbc
     });
+    table(&mut generated, "SPIRV", jobs, |bytecode| {
+        bytecode == Bytecode::Spirv
+    });
     fs::write(out.join("blobs.rs"), generated).unwrap();
 }
 
-fn main() {
-    let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let hlsl = manifest.join("hlsl");
-    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    println!("cargo:rerun-if-changed=hlsl");
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=AQUA_DXC");
-    println!("cargo:rerun-if-env-changed=AQUA_FXC");
-    println!("cargo:rerun-if-env-changed=AQUA_SHADERS_SKIP");
-    if let Mode::Skip = mode() {
-        write_tables(&out, &[]);
-        return;
+fn job(entry: &'static Entry, bytecode: Bytecode, out: &Path) -> Job<'static> {
+    let (name, file) = match bytecode {
+        Bytecode::Dxil { bindless: true } => {
+            let name = format!("{}_bl", entry.entry);
+            let file = format!("{name}.dxil");
+            (name, file)
+        }
+        Bytecode::Dxil { bindless: false } => {
+            (entry.entry.to_string(), format!("{}.dxil", entry.entry))
+        }
+        Bytecode::Dxbc => (entry.entry.to_string(), format!("{}.dxbc", entry.entry)),
+        Bytecode::Spirv => (entry.entry.to_string(), format!("{}.spv", entry.entry)),
+    };
+    Job {
+        entry,
+        bytecode,
+        name,
+        output: out.join(file),
     }
-    let dxc = locate("AQUA_DXC", "dxc")
-        .expect("dxc not found: set AQUA_DXC to dxc or dxc.exe from the Windows SDK");
-    let fxc = locate("AQUA_FXC", "fxc").expect(
-        "fxc not found: set AQUA_FXC to fxc.exe from the Windows SDK (same bin folder as dxc.exe)",
-    );
+}
+
+fn windows_jobs(out: &Path) -> Vec<Job<'static>> {
     let dxil = ENTRIES
         .iter()
         .map(|entry| (entry, Bytecode::Dxil { bindless: false }))
@@ -353,31 +414,51 @@ fn main() {
                 .map(|entry| (entry, Bytecode::Dxil { bindless: true })),
         );
     let dxbc = ENTRIES.iter().map(|entry| (entry, Bytecode::Dxbc));
-    let jobs: Vec<Job> = dxil
-        .chain(dxbc)
-        .map(|(entry, bytecode)| {
-            let (name, file) = match bytecode {
-                Bytecode::Dxil { bindless: true } => {
-                    let name = format!("{}_bl", entry.entry);
-                    let file = format!("{name}.dxil");
-                    (name, file)
-                }
-                Bytecode::Dxil { bindless: false } => {
-                    (entry.entry.to_string(), format!("{}.dxil", entry.entry))
-                }
-                Bytecode::Dxbc => (entry.entry.to_string(), format!("{}.dxbc", entry.entry)),
-            };
-            Job {
-                entry,
-                bytecode,
-                name,
-                output: out.join(file),
-            }
-        })
-        .collect();
+    dxil.chain(dxbc)
+        .map(|(entry, bytecode)| job(entry, bytecode, out))
+        .collect()
+}
+
+fn spirv_jobs(out: &Path) -> Vec<Job<'static>> {
+    ENTRIES
+        .iter()
+        .map(|entry| job(entry, Bytecode::Spirv, out))
+        .collect()
+}
+
+fn main() {
+    let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let hlsl = manifest.join("hlsl");
+    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    println!("cargo:rerun-if-changed=hlsl");
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=AQUA_DXC");
+    println!("cargo:rerun-if-env-changed=AQUA_FXC");
+    println!("cargo:rerun-if-env-changed=AQUA_DXC_SPIRV");
+    println!("cargo:rerun-if-env-changed=AQUA_SHADERS_SKIP");
+    let (toolchain, jobs) = match mode() {
+        Mode::Skip => {
+            write_tables(&out, &[]);
+            return;
+        }
+        Mode::Windows => {
+            let dxc = locate("AQUA_DXC", "dxc")
+                .expect("dxc not found: set AQUA_DXC to dxc or dxc.exe from the Windows SDK");
+            let fxc = locate("AQUA_FXC", "fxc").expect(
+                "fxc not found: set AQUA_FXC to fxc.exe from the Windows SDK (same bin folder as dxc.exe)",
+            );
+            (Toolchain::Windows { dxc, fxc }, windows_jobs(&out))
+        }
+        Mode::Spirv => {
+            let dxc = locate_spirv().expect(
+                "dxc with SPIR-V codegen not found: set AQUA_DXC_SPIRV (nix-shell nix/linux.nix exports it) or AQUA_SHADERS_SKIP=1",
+            );
+            (Toolchain::Spirv { dxc }, spirv_jobs(&out))
+        }
+    };
     jobs.iter().for_each(|job| {
         let _ = fs::remove_file(&job.output);
     });
-    run_all(&jobs, &hlsl, &dxc, &fxc);
+    run_all(&jobs, &hlsl, &toolchain);
     write_tables(&out, &jobs);
 }

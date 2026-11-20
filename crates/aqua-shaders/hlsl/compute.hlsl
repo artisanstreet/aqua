@@ -1,4 +1,7 @@
 Texture2D<float4> input0 : register(t0);
+#ifdef __spirv__
+[[vk::image_format("rgba16f")]]
+#endif
 RWTexture2D<float4> output : register(u0);
 
 cbuffer Parameters : register(b0)

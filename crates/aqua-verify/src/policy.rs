@@ -316,7 +316,10 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "weight_distance_order",
         ],
     ),
-    ("aqua-shaders", &["Stage", "Blob", "find", "find_dxbc"]),
+    (
+        "aqua-shaders",
+        &["Stage", "Blob", "find", "find_dxbc", "find_spirv"],
+    ),
     (
         "aqua-oracle-dwrite",
         &[

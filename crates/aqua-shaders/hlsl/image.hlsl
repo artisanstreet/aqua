@@ -89,8 +89,13 @@ float4 fetch(float2 texel, float4 region)
 
 struct ReplaceOut
 {
+#ifdef __spirv__
+    [[vk::location(0), vk::index(0)]] float4 color : SV_Target0;
+    [[vk::location(0), vk::index(1)]] float4 weight : SV_Target1;
+#else
     float4 color : SV_Target0;
     float4 weight : SV_Target1;
+#endif
 };
 
 float4 shade_image(ImageOut i, out float weight)

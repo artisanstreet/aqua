@@ -159,7 +159,7 @@ struct CollectionMount {
     built_plan: CollectionLayout,
     probe_width: f32,
     probe_changed: bool,
-    spacers_stale: bool,
+    body_stale: bool,
     width_node: Option<NodeId>,
     /// Mirrored pin (the state holds the authoritative one; the mirror
     /// detects focus changes without a state getter).
@@ -170,6 +170,20 @@ struct CollectionMount {
     /// is authoritative input there.
     scroll_restore_pending: bool,
     last_tree_scroll: Option<f32>,
+}
+
+impl CollectionMount {
+    fn carry_rows(
+        &mut self,
+        carry: impl FnOnce(HashMap<usize, RetainedEl>) -> HashMap<usize, RetainedEl>,
+    ) {
+        let slots = |rows: &HashMap<usize, RetainedEl>| -> HashSet<(usize, Option<NodeId>)> {
+            rows.iter().map(|(index, row)| (*index, row.node)).collect()
+        };
+        let before = slots(&self.rows);
+        self.rows = carry(std::mem::take(&mut self.rows));
+        self.body_stale |= slots(&self.rows) != before;
+    }
 }
 
 /// Retained table header: the bar element plus its mounted nodes
@@ -392,7 +406,7 @@ impl View {
         let changed = mount.state.note_measured(index, height, 0.0, 0.0);
         mount.scroll_restore_pending |= changed;
         if changed {
-            mount.spacers_stale = true;
+            mount.body_stale = true;
             tree.mark_layout_dirty(mount.container);
         }
         changed
@@ -1328,16 +1342,16 @@ impl View {
             .collections
             .get_mut(&raw)
             .is_some_and(|m| std::mem::take(&mut m.probe_changed));
-        let spacers_stale = self
+        let body_stale = self
             .collections
             .get_mut(&raw)
-            .is_some_and(|m| std::mem::take(&mut m.spacers_stale));
+            .is_some_and(|m| std::mem::take(&mut m.body_stale));
         let structural = hosts_created
             || !fresh_rows.is_empty()
             || dropped
             || fresh_header.is_some()
             || probe_changed
-            || spacers_stale;
+            || body_stale;
         // Header joint horizontal scroll: the header row lives outside the
         // vertical body viewport (in the clip sibling), so the body's scroll
         // offset is mirrored onto it as a negative leading margin
@@ -2062,21 +2076,20 @@ fn bind_collection(
     match collections.get_mut(&id.raw()) {
         Some(mount) if same_desc(&mount.last_desc, &desc) && mount.typo == typo => Ok(()),
         Some(mount) if same_shape(&mount.last_desc, &desc) && mount.typo == typo => {
-            let previous_rows = std::mem::take(&mut mount.rows);
-            mount.rows = carry_rows_in_place(
-                mount.last_desc.source.as_ref(),
-                desc.source.as_ref(),
-                previous_rows,
-                |row| row.node.is_some_and(|node| tree.get(node).is_some()),
-            );
+            let previous_source = Rc::clone(&mount.last_desc.source);
+            mount.carry_rows(|rows| {
+                carry_rows_in_place(
+                    previous_source.as_ref(),
+                    desc.source.as_ref(),
+                    rows,
+                    |row| row.node.is_some_and(|node| tree.get(node).is_some()),
+                )
+            });
             mount.state.adopt_source(desc.clone());
             mount.last_desc = desc;
             Ok(())
         }
         Some(mount) => {
-            // Ingest the live scroll FIRST: the anchor restore below must
-            // capture where the eye actually is, not a stale snapshot.
-            // (Lists scroll the container; tables scroll the body child.)
             let body = match mount.state.descriptor().source.role() {
                 CollectionRole::List => id,
                 CollectionRole::Table => tree
@@ -2088,29 +2101,26 @@ fn bind_collection(
             if let Some((sx, sy)) = tree.scroll_offset(body).map(|p| (p.x, p.y)) {
                 mount.state.set_scroll(sx, sy);
             }
-            let previous_rows = std::mem::take(&mut mount.rows);
             let previous_source = Rc::clone(&mount.last_desc.source);
             mount
                 .state
                 .refresh(desc.clone())
                 .map_err(|e| MountError::Lower(LowerError::Collection(e)))?;
-            // Re-resolve the authored gap from the fresh styles (style-only
-            // refreshes change strides without touching snapshots).
             mount.state.restyle_gap();
-            mount.rows = carry_rows(
-                previous_source.as_ref(),
-                desc.source.as_ref(),
-                previous_rows,
-                |row| row.node.is_some_and(|node| tree.get(node).is_some()),
-            );
+            mount.carry_rows(|rows| {
+                carry_rows(
+                    previous_source.as_ref(),
+                    desc.source.as_ref(),
+                    rows,
+                    |row| row.node.is_some_and(|node| tree.get(node).is_some()),
+                )
+            });
             mount.last_desc = desc;
             mount.header = None;
             if mount.rows.is_empty() {
                 mount.width_node = None;
             }
             mount.typo = typo;
-            // The refresh restored the scroll from the reading anchor: the
-            // next realization writes it tree-ward, then re-reads actual.
             mount.scroll_restore_pending = true;
             Ok(())
         }
@@ -2130,7 +2140,7 @@ fn bind_collection(
                     built_plan,
                     probe_width: 0.0,
                     probe_changed: false,
-                    spacers_stale: false,
+                    body_stale: false,
                     width_node: None,
                     pin: None,
                     scroll_restore_pending: false,

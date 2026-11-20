@@ -1094,6 +1094,9 @@ impl GpuBackend for WindowBackend {
             SurfaceTarget::Window(_) => Err(GpuError::Unsupported(
                 "window surfaces without a native handle",
             )),
+            SurfaceTarget::Wayland(_) => Err(GpuError::Unsupported(
+                "Wayland surfaces on a Direct3D backend",
+            )),
             SurfaceTarget::Offscreen(_) => Err(GpuError::Unsupported(
                 "offscreen surfaces on the window backend",
             )),

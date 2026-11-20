@@ -36,7 +36,23 @@ jobs:
         run: echo "RUSTC_WRAPPER=$SCCACHE_PATH" >> "$GITHUB_ENV"
       - name: Linux desktop dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev pkg-config
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev pkg-config mesa-vulkan-drivers libvulkan-dev \
+            vulkan-validationlayers vulkan-tools spirv-tools sway grim dbus at-spi2-core xkb-data
+      - name: pinned DXC with SPIR-V codegen
+        if: runner.os == 'Linux'
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/dxc.tar.gz" https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/linux_dxc_2026_09_28.x86_x64.tar.gz
+          echo "96faadc7f5c282d2ffda49804beb4c3ee38127bc252b723234e3c5cdf7aa39a1  $RUNNER_TEMP/dxc.tar.gz" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/dxc"
+          tar -xzf "$RUNNER_TEMP/dxc.tar.gz" -C "$RUNNER_TEMP/dxc"
+          echo "AQUA_DXC_SPIRV=$RUNNER_TEMP/dxc/bin/dxc" >> "$GITHUB_ENV"
+      - name: Linux toolchain probes (SPIR-V, lavapipe, headless sway)
+        if: runner.os == 'Linux'
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: scripts/linux-env.sh
       - name: fmt
         run: cargo fmt --check
       - name: fetch dependencies for every platform

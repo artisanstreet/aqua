@@ -46,6 +46,7 @@ pub trait AccessSink {
     }
     fn apply(&mut self, update: &AccessTreeUpdate);
     fn drain_actions(&mut self) -> Vec<A11yActionRequest>;
+    fn window_focus(&mut self, _focused: bool) {}
 }
 
 pub trait ImeSink {
@@ -993,6 +994,12 @@ impl Aqua {
             .ok_or(WindowError::UnknownWindow(id))?
             .native
             .clone();
+        if let Some(reason) = native
+            .as_ref()
+            .and_then(|native| native.unsupported(request))
+        {
+            return Err(WindowError::Unsupported(reason));
+        }
         match request {
             WindowRequest::Close(_) => {
                 if self.with_ctx(|ctx| app.can_close(ctx, id)) {
@@ -1395,6 +1402,9 @@ impl Aqua {
             WindowEvent::Focused(_, f) => {
                 if let Some(rec) = self.windows.get_mut(&id) {
                     rec.observed.focused = *f;
+                    if let Some(sink) = rec.access.as_mut() {
+                        sink.window_focus(*f);
+                    }
                     if !f {
                         rec.buttons = 0;
                         rec.modifiers = CoreModifiers::NONE;
@@ -2553,9 +2563,24 @@ mod tests {
     #[derive(Default)]
     struct Calls(RefCell<Vec<String>>);
 
-    struct FakeWindow(Rc<Calls>);
+    #[derive(Clone, Copy)]
+    enum Placement {
+        Free,
+        ByCompositor,
+    }
+
+    struct FakeWindow(Rc<Calls>, Placement);
 
     impl NativeWindow for FakeWindow {
+        fn unsupported(&self, request: &WindowRequest) -> Option<&'static str> {
+            match (self.1, request) {
+                (
+                    Placement::ByCompositor,
+                    WindowRequest::SetOuterPosition(..) | WindowRequest::Center(_),
+                ) => Some("global window position"),
+                _ => None,
+            }
+        }
         fn scale(&self) -> f64 {
             1.0
         }
@@ -2628,6 +2653,7 @@ mod tests {
     struct Scripted {
         outputs: VecDeque<RuntimeOutput>,
         fed: Vec<RuntimeInput>,
+        errors: Vec<WindowError>,
     }
 
     impl Application for Scripted {
@@ -2641,6 +2667,9 @@ mod tests {
         }
         fn take_output(&mut self, _id: AquaWindowId) -> RuntimeOutput {
             self.outputs.pop_front().unwrap_or_default()
+        }
+        fn on_window_request_error(&mut self, _request: &WindowRequest, error: &WindowError) {
+            self.errors.push(error.clone());
         }
     }
 
@@ -2665,7 +2694,7 @@ mod tests {
                 occluded: false,
                 maximized: false,
             },
-            Rc::new(FakeWindow(calls.clone())),
+            Rc::new(FakeWindow(calls.clone(), Placement::Free)),
         );
         let window = aqua_protocol::WindowId::new(id.raw()).unwrap();
         let mut app = Scripted {
@@ -2691,6 +2720,7 @@ mod tests {
                 ..RuntimeOutput::default()
             }]),
             fed: Vec::new(),
+            errors: Vec::new(),
         };
         aqua.flush_output(&mut app, id);
         assert_eq!(calls.0.borrow().as_slice(), ["cursor:Pointer"]);
@@ -2705,5 +2735,50 @@ mod tests {
         let creates = aqua.dispatch_window_requests(&mut app);
         assert!(creates.is_empty());
         assert!(calls.0.borrow().iter().any(|call| call == "title:renamed"));
+    }
+
+    #[test]
+    fn positioning_a_window_on_a_backend_that_cannot_reports_unsupported_to_the_app() {
+        let mut aqua = Aqua::new(AquaConfig {
+            headless: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let id = aqua.alloc_id();
+        let calls = Rc::new(Calls::default());
+        aqua.add_native_window(
+            ObservedWindowState {
+                id,
+                title: "placed".into(),
+                inner_size: LogicalSize::new(800.0, 600.0),
+                scale_factor: 1.0,
+                focused: true,
+                visible: true,
+                occluded: false,
+                maximized: false,
+            },
+            Rc::new(FakeWindow(calls.clone(), Placement::ByCompositor)),
+        );
+        let mut app = Scripted {
+            outputs: VecDeque::new(),
+            fed: Vec::new(),
+            errors: Vec::new(),
+        };
+        for request in [
+            WindowRequest::SetOuterPosition(id, aqua_protocol::PhysicalPosition { x: 40, y: 30 }),
+            WindowRequest::Center(id),
+            WindowRequest::SetTitle(id, "still titled".into()),
+        ] {
+            aqua.window_requests.push_back(request);
+        }
+        aqua.dispatch_window_requests(&mut app);
+        assert_eq!(
+            app.errors,
+            [
+                WindowError::Unsupported("global window position"),
+                WindowError::Unsupported("global window position"),
+            ]
+        );
+        assert_eq!(calls.0.borrow().as_slice(), ["title:still titled"]);
     }
 }

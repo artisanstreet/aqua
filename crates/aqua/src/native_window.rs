@@ -1,7 +1,7 @@
 use aqua_core::{ClickSettings, CursorIcon};
 use aqua_protocol::chrome::DragRegions;
 use aqua_protocol::monitor::DisplayInfo;
-use aqua_protocol::{BadgeError, TaskbarBadge};
+use aqua_protocol::{BadgeError, TaskbarBadge, WindowRequest};
 
 pub trait NativeWindow {
     fn scale(&self) -> f64;
@@ -23,5 +23,8 @@ pub trait NativeWindow {
     fn destroy(&self);
     fn attach_composition(&self, _content: &dyn std::any::Any) -> bool {
         false
+    }
+    fn unsupported(&self, _request: &WindowRequest) -> Option<&'static str> {
+        None
     }
 }

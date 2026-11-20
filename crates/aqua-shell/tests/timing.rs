@@ -1,5 +1,5 @@
 use aqua_protocol::Instant;
-use aqua_shell_win32::timing::*;
+use aqua_shell::timing::*;
 use std::time::Duration;
 
 fn at(ms: u64) -> Instant {

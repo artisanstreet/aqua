@@ -144,8 +144,7 @@ fn pure_resolution_glass_stands_opaque_prefs_fall_back() {
         "overlay titlebar passes through resolve"
     );
     let capable =
-        aqua_shell_win32::capability::material_capability(aqua_protocol::WindowMaterial::Acrylic)
-            .supported;
+        aqua::native::material_capability(aqua_protocol::WindowMaterial::Acrylic).supported;
     assert_eq!(
         resolved.material.is_glass(),
         capable,

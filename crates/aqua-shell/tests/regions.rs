@@ -1,6 +1,6 @@
 use aqua_protocol::chrome::{ht, DragRects, RectI};
 use aqua_protocol::{CaptionControl, CaptionRegion, DragRegions};
-use aqua_shell_win32::regions::{drag_rects, hit_test, Geometry};
+use aqua_shell::regions::{drag_rects, hit_test, Geometry};
 
 fn regions() -> DragRegions {
     DragRegions {

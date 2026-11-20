@@ -1,4 +1,4 @@
-use aqua_shell_win32::services::{Clipboard, ClipboardError, ClipboardImage, MemoryClipboard};
+use aqua_shell::services::{Clipboard, ClipboardError, ClipboardImage, MemoryClipboard};
 use std::path::PathBuf;
 
 #[test]

@@ -45,6 +45,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 name = "aqua"
 version = "0.1.0"
 dependencies = [
+ "aqua-a11y",
  "aqua-a11y-uia",
  "aqua-core",
  "aqua-fonts-system",
@@ -59,6 +60,7 @@ dependencies = [
  "aqua-reactive",
  "aqua-runtime",
  "aqua-scene",
+ "aqua-shell",
  "aqua-shell-win32",
  "aqua-text",
  "aqua-transport",
@@ -70,14 +72,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "aqua-a11y"
+version = "0.1.0"
+dependencies = [
+ "accesskit",
+ "aqua-core",
+ "aqua-protocol",
+ "serde_json",
+]
+
+[[package]]
 name = "aqua-a11y-uia"
 version = "0.1.0"
 dependencies = [
  "accesskit",
  "accesskit_windows",
+ "aqua-a11y",
  "aqua-core",
  "aqua-protocol",
- "serde_json",
  "windows",
 ]
 
@@ -258,22 +270,33 @@ name = "aqua-shaders"
 version = "0.1.0"
 
 [[package]]
-name = "aqua-shell-win32"
+name = "aqua-shell"
 version = "0.1.0"
 dependencies = [
  "aqua-core",
  "aqua-protocol",
- "arboard",
  "dunce",
  "percent-encoding",
  "raw-window-handle",
  "rfd",
  "roxmltree",
  "url",
+ "xmlwriter",
+]
+
+[[package]]
+name = "aqua-shell-win32"
+version = "0.1.0"
+dependencies = [
+ "aqua-core",
+ "aqua-protocol",
+ "aqua-shell",
+ "arboard",
+ "raw-window-handle",
+ "rfd",
  "windows",
  "windows-core",
  "windows-registry",
- "xmlwriter",
 ]
 
 [[package]]

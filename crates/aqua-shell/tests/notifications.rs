@@ -1,6 +1,4 @@
-use aqua_shell_win32::notifications::{
-    AppIdentity, Notification, NotificationAction, NotificationError,
-};
+use aqua_shell::notifications::{AppIdentity, Notification, NotificationAction, NotificationError};
 
 fn notification() -> Notification {
     Notification {
@@ -77,7 +75,7 @@ fn arbitrary_thread_tags_are_bounded_and_replacements_keep_the_same_native_tag()
 
 #[test]
 fn protocol_activation_urls_round_trip_hostile_tags_and_actions() {
-    use aqua_shell_win32::notifications::activation::{
+    use aqua_shell::notifications::activation::{
         activation_url, parse_activation_url, ActivationUrlError,
     };
     let identity = AppIdentity::new("com.artisanstreet.editor", "Editor").unwrap();
@@ -118,7 +116,7 @@ fn protocol_toasts_carry_activation_urls_for_the_body_and_every_action() {
     let document = roxmltree::Document::parse(&xml).unwrap();
     let toast = document.root_element();
     assert_eq!(toast.attribute("activationType"), Some("protocol"));
-    let launch = aqua_shell_win32::notifications::activation::parse_activation_url(
+    let launch = aqua_shell::notifications::activation::parse_activation_url(
         toast.attribute("launch").unwrap(),
     )
     .unwrap();
@@ -129,7 +127,7 @@ fn protocol_toasts_carry_activation_urls_for_the_body_and_every_action() {
         .find(|node| node.has_tag_name("action"))
         .unwrap();
     assert_eq!(action.attribute("activationType"), Some("protocol"));
-    let parsed = aqua_shell_win32::notifications::activation::parse_activation_url(
+    let parsed = aqua_shell::notifications::activation::parse_activation_url(
         action.attribute("arguments").unwrap(),
     )
     .unwrap();

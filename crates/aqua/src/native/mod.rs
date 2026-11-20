@@ -1,3 +1,9 @@
+pub(crate) mod platform;
+
+pub use platform::shell::capability::{material_capability, query_preferences};
+
+#[cfg(windows)]
+mod attach_win32;
 #[cfg(windows)]
 pub(crate) mod gpu;
 #[cfg(windows)]

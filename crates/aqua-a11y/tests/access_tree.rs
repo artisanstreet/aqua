@@ -1,5 +1,5 @@
 use accesskit::{Action, ActionData, NodeId as AkNodeId, TextPosition, TextSelection, TreeId};
-use aqua_a11y_uia::{pack_node_id, A11yBridge, A11yTree, BridgeActivationHandler, Connection};
+use aqua_a11y::{pack_node_id, A11yBridge, A11yTree, BridgeActivationHandler, Connection};
 use aqua_core::{NodeId, RawId, Rect, Role, SemanticNode};
 use aqua_protocol::{A11yActionData, A11yNode, A11yText, A11yTextRun, AccessTreeUpdate};
 
@@ -152,6 +152,24 @@ fn identical_snapshots_are_skipped_and_reactivation_sends_a_full_tree() {
 }
 
 #[test]
+fn a_departed_assistive_client_stops_snapshots_and_a_returning_one_gets_the_full_tree() {
+    let bridge = A11yBridge::new(std::sync::Arc::new(|| {}));
+    bridge.connect();
+    let update = AccessTreeUpdate {
+        root: owner(0),
+        focus: owner(0),
+        nodes: vec![text_node(0)],
+    };
+    let full = bridge.snapshot(&update).unwrap().nodes.len();
+    assert!(bridge.snapshot(&update).is_none());
+    bridge.deactivate();
+    assert_eq!(bridge.connection(), Connection::Dormant);
+    assert!(bridge.snapshot(&update).is_none());
+    bridge.connect();
+    assert_eq!(bridge.snapshot(&update).unwrap().nodes.len(), full);
+}
+
+#[test]
 fn changed_snapshots_only_publish_changed_nodes_and_keep_text_actions_live() {
     let bridge = A11yBridge::new(std::sync::Arc::new(|| {}));
     bridge.connect();
@@ -226,7 +244,7 @@ fn scrolling_republishes_only_the_scroll_region_and_keeps_window_bounds() {
     assert!(bridge.snapshot(&scrolled_list(0.0, 0.0)).is_some());
     let scrolled = scrolled_list(30.0, 30.0);
     assert_eq!(published(&bridge, &scrolled), vec![pack_node_id(region())]);
-    let root = aqua_a11y_uia::inspect(&scrolled).unwrap();
+    let root = aqua_a11y::inspect(&scrolled).unwrap();
     assert_eq!(root.bounds, Some([0.0, 0.0, 200.0, 100.0]));
     let row = &root.children[0];
     assert_eq!(row.bounds, Some([10.0, -10.0, 110.0, 10.0]));
@@ -246,7 +264,7 @@ fn reanchoring_a_list_republishes_its_rows_but_not_their_contents() {
         vec![pack_node_id(region()), pack_node_id(owner(0))]
     );
     assert!(!changed.contains(&run));
-    let row = &aqua_a11y_uia::inspect(&reanchored).unwrap().children[0];
+    let row = &aqua_a11y::inspect(&reanchored).unwrap().children[0];
     assert_eq!(row.bounds, Some([10.0, -10.0, 110.0, 10.0]));
 }
 

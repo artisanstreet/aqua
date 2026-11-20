@@ -5,7 +5,7 @@ use std::sync::Arc;
 use aqua::prelude::*;
 use aqua::ui_app::{dispatch_clipboard, ClipboardOutcome};
 use aqua_reactive::{ReadSignal, WriteSignal};
-use aqua_shell_win32::services::MemoryClipboard;
+use aqua_shell::services::MemoryClipboard;
 use aqua_ui::element::Element;
 use aqua_ui::tree::NodeKind;
 

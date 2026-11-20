@@ -1,13 +1,13 @@
-use aqua_shell_win32::open::{OpenError, OpenTarget};
+use aqua_shell::open::{ExternalTarget, OpenError};
 
 #[test]
 fn external_urls_are_normalized_and_keep_arguments_as_url_data() {
-    let target = OpenTarget::url("HTTPS://Example.COM/a%20b?q=%22%26%20calc.exe").unwrap();
+    let target = ExternalTarget::url("HTTPS://Example.COM/a%20b?q=%22%26%20calc.exe").unwrap();
     assert_eq!(
         target,
-        OpenTarget::url("https://example.com/a%20b?q=%22%26%20calc.exe").unwrap()
+        ExternalTarget::url("https://example.com/a%20b?q=%22%26%20calc.exe").unwrap()
     );
-    assert!(OpenTarget::url("mailto:help@example.com?subject=A%26B").is_ok());
+    assert!(ExternalTarget::url("mailto:help@example.com?subject=A%26B").is_ok());
     for value in [
         "javascript:alert(1)",
         "data:text/plain,hello",
@@ -15,7 +15,7 @@ fn external_urls_are_normalized_and_keep_arguments_as_url_data() {
         "artisan://thread/one",
     ] {
         assert!(matches!(
-            OpenTarget::url(value),
+            ExternalTarget::url(value),
             Err(OpenError::UnsupportedScheme(_))
         ));
     }
@@ -25,7 +25,10 @@ fn external_urls_are_normalized_and_keep_arguments_as_url_data() {
         "https://example.com/\0file",
         "https://example.com/\n",
     ] {
-        assert!(matches!(OpenTarget::url(value), Err(OpenError::InvalidUrl)));
+        assert!(matches!(
+            ExternalTarget::url(value),
+            Err(OpenError::InvalidUrl)
+        ));
     }
 }
 
@@ -33,15 +36,15 @@ fn external_urls_are_normalized_and_keep_arguments_as_url_data() {
 fn file_targets_resolve_existing_paths_at_the_boundary() {
     let directory = std::env::current_dir().unwrap();
     assert_eq!(
-        OpenTarget::path(&directory).unwrap(),
-        OpenTarget::path(std::path::Path::new(".")).unwrap()
+        ExternalTarget::path(&directory).unwrap(),
+        ExternalTarget::path(std::path::Path::new(".")).unwrap()
     );
     assert!(matches!(
-        OpenTarget::path(std::path::Path::new("")),
+        ExternalTarget::path(std::path::Path::new("")),
         Err(OpenError::InvalidPath)
     ));
     assert!(matches!(
-        OpenTarget::reveal(&directory.join("aqua-nonexistent-shell-target")),
+        ExternalTarget::reveal(&directory.join("aqua-nonexistent-shell-target")),
         Err(OpenError::Io(_))
     ));
 }

@@ -1,5 +1,5 @@
 use aqua_protocol::{ClipboardImage, RequestId, ShellEvent};
-use aqua_shell_win32::services::{Clipboard, ClipboardError};
+use aqua_shell::services::{Clipboard, ClipboardError};
 
 fn tolerated<T>(what: &str, result: Result<Option<T>, ClipboardError>) -> Option<T> {
     match result {

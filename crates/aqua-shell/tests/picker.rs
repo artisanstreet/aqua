@@ -1,4 +1,4 @@
-use aqua_shell_win32::picker::{DialogError, DialogRequest};
+use aqua_shell::picker::{DialogError, DialogRequest};
 
 #[test]
 fn single_result_api_cannot_silently_drop_multiple_selected_files() {

@@ -21,11 +21,12 @@ use aqua_protocol::{
 use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
 use aqua_runtime::Scheduler;
 use aqua_scene::Scene;
-use aqua_shell_win32::capability::query_preferences;
-use aqua_shell_win32::services::{app_clipboard, Clipboard, ClipboardBackend};
+use aqua_shell::services::{Clipboard, ClipboardBackend};
 
 use crate::config::AquaConfig;
 use crate::inbox::{AquaUserEvent, Inbox};
+use crate::native::platform::shell::capability::query_preferences;
+use crate::native::platform::shell::services::app_clipboard;
 use crate::native_window::NativeWindow;
 use crate::render::host::Clock;
 use crate::render::link::{CompositionSink, ExternalUpdate, InitFactory, RenderLink};

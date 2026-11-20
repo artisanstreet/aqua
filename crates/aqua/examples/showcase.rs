@@ -1045,7 +1045,7 @@ fn main() -> Result<(), String> {
     let mut config = AquaConfig::default();
     config.window.title = "Aqua Showcase — Todo".to_string();
     config.set_fps(60).map_err(|e| e.to_string())?;
-    let prefs = aqua_shell_win32::capability::query_preferences();
+    let prefs = aqua::native::query_preferences();
     if aqua_protocol::prefs::should_reduce_motion(&prefs) {
         config.reduced_motion = true;
     }

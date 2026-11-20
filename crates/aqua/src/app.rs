@@ -30,8 +30,8 @@
 //! Result<ResolvedConfig, ConfigError>` with `ResolvedConfig { runtime:
 //! AquaConfig, material: ResolvedMaterial }`.
 
+use crate::native::platform::shell::capability::query_preferences;
 use aqua_protocol::prefs::SystemPrefs as OsPreferences;
-use aqua_shell_win32::capability::query_preferences;
 
 use aqua_reactive::{DepTuple, Scope};
 use aqua_ui::element::Element;

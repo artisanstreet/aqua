@@ -1,4 +1,4 @@
-use aqua_a11y_uia::{inspect, render_json, render_text};
+use aqua_a11y::{inspect, render_json, render_text};
 use aqua_core::{NodeId, NumericRangeSemantics, RawId, Rect, Role, SemanticNode};
 use aqua_protocol::{A11yNode, AccessTreeUpdate};
 

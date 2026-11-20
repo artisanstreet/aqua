@@ -3,39 +3,34 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aqua_a11y_uia::UiaAdapter;
-use aqua_core::{InputEvent, Oklch};
-use aqua_graph::Extent;
-use aqua_ime_tsf::TsfIme;
+use aqua_core::InputEvent;
 use aqua_protocol::window::Titlebar;
 use aqua_protocol::{
     AquaWindowId, FrameReason, LogicalSize, ObservedWindowState, ThemePreference, WindowEvent,
     WindowOptions, WindowRequest,
 };
 use aqua_protocol::{CaptionControl, DialogOutcome, Instant, RequestId, RuntimeInput};
-use aqua_shell_win32::dialogs::DialogJob;
-use aqua_shell_win32::{
-    Chrome, FileDrag, Handler, ShellError, ShellEvent, Window, WindowKind,
-    WindowOptions as ShellOptions,
+use aqua_shell::{
+    Chrome, FileDrag, Handler, ShellError, ShellEvent, WindowKind, WindowOptions as ShellOptions,
 };
 
 use super::gpu;
-use super::hook::{TsfHook, UiaHook};
+use super::hook::TsfHook;
 use super::inspector::HostInspector;
+use super::platform::shell::{self, dialogs::DialogJob, Window};
 use super::wakes::{self, WakeLedger};
-use super::window::{UiaSink, Win32Window};
+use super::window::Win32Window;
 use crate::coalesce::{merge, Coalescible, Held, Merge};
-use crate::inbox::AquaUserEvent;
 use crate::runtime::{Application, Aqua, ExternalFileDrag};
 
 const FILE_DROP_IDLE: Duration = Duration::from_millis(30);
 
-struct Host<A: Application> {
-    aqua: Aqua,
-    app: A,
+pub(super) struct Host<A: Application> {
+    pub(super) aqua: Aqua,
+    pub(super) app: A,
     shell: HashMap<AquaWindowId, Window>,
     dialogs: Vec<(AquaWindowId, RequestId, DialogJob)>,
-    inspector: Option<HostInspector>,
+    pub(super) inspector: Option<HostInspector>,
     pending: Option<Held>,
     resizes: HashMap<AquaWindowId, (u32, u32)>,
     occlusion: HashMap<AquaWindowId, Occlusion>,
@@ -118,14 +113,6 @@ fn logical(window: Window) -> (LogicalSize, f64) {
     )
 }
 
-fn physical(window: Window) -> Extent {
-    let (width, height) = window.inner_size();
-    Extent {
-        width: width.max(1),
-        height: height.max(1),
-    }
-}
-
 impl<A: Application + 'static> Host<A> {
     fn occlude(&mut self, id: AquaWindowId, change: impl FnOnce(&mut Occlusion)) {
         let state = self.occlusion.entry(id).or_default();
@@ -160,54 +147,7 @@ impl<A: Application + 'static> Host<A> {
         self.shell.insert(id, window);
         self.file_drop_pending.push(id);
         self.rebind_waker();
-        let inbox = self.aqua.inbox();
-        let wake: aqua_a11y_uia::WakeFn = Arc::new(move || {
-            inbox.post(AquaUserEvent::A11yActions(id));
-        });
-        super::startup_mark("uia_begin");
-        let attached = UiaAdapter::attach_routed(id.raw() as isize, wake);
-        super::startup_mark("uia_done");
-        match attached {
-            Ok((adapter, router)) => {
-                aqua_shell_win32::add_message_hook(UiaHook::new(id.raw() as isize, router));
-                let now = self.aqua.clock();
-                if let Some(deadline) = self.app.prepare_accessibility(&observed, now) {
-                    self.aqua.scheduler.request_animation_deadline(id, deadline);
-                }
-                self.aqua.attach_access(
-                    id,
-                    Box::new(UiaSink {
-                        adapter,
-                        inspector: self.inspector.as_ref().map(HostInspector::handle),
-                    }),
-                );
-            }
-            Err(error) => eprintln!("aqua: uia attach failed: {error:?}"),
-        }
-        super::startup_mark("ime_begin");
-        self.aqua
-            .attach_ime(id, Box::new(TsfIme::from_hwnd(id.raw() as isize)));
-        super::startup_mark("window_shown");
-        window.show();
-        super::startup_mark("window_visible");
-        let clear = match options.transparent {
-            true => Oklch::TRANSPARENT,
-            false => Oklch::BLACK,
-        };
-        let factory = gpu::factory(
-            id,
-            id.raw() as isize,
-            physical(window),
-            self.aqua.fonts().clone(),
-            self.aqua.runs().clone(),
-            clear,
-        );
-        super::startup_mark("factory_built");
-        let interval = gpu::refresh_of(id.raw() as isize)
-            .map(Duration::from_nanos)
-            .unwrap_or(Duration::ZERO);
-        self.aqua.attach_render(id, factory, interval);
-        super::startup_mark("render_attached");
+        self.attach(id, window, &observed, &options);
         self.aqua.dispatch_start(&mut self.app, id);
         super::startup_mark("app_started");
         self.aqua.scheduler.request_frame(id, FrameReason::EXPOSE);
@@ -265,7 +205,7 @@ impl<A: Application + 'static> Host<A> {
             let Some(waker) = waker.map(|window| window.waker()) else {
                 continue;
             };
-            match aqua_shell_win32::dialogs::open(&spec, owner, waker) {
+            match shell::dialogs::open(&spec, owner, waker) {
                 Ok(job) => self.dialogs.push((id, request, job)),
                 Err(error) => {
                     let outcome = DialogOutcome::Failed(error.to_string());
@@ -315,7 +255,7 @@ impl<A: Application + 'static> Host<A> {
         }
         self.rebind_waker();
         if self.aqua.windows.is_empty() && !self.aqua.config().headless {
-            aqua_shell_win32::quit();
+            shell::quit();
         }
     }
 
@@ -481,7 +421,7 @@ impl<A: Application + 'static> Handler for Host<A> {
             ShellEvent::Input(input) => self.input(id, input),
             ShellEvent::FileDrag(drag) => self.file_drag(id, drag, scale),
             ShellEvent::PreferencesChanged => {
-                let prefs = aqua_shell_win32::prefs::query();
+                let prefs = shell::prefs::query();
                 let scheme = prefs.theme;
                 self.aqua.prefs = prefs;
                 self.window_event(id, WindowEvent::ThemeChanged(id, scheme));
@@ -524,7 +464,7 @@ impl<A: Application + 'static> Handler for Host<A> {
         self.aqua.report_host_stats();
         self.publish_inspector();
         if self.aqua.quit_requested() {
-            aqua_shell_win32::quit();
+            shell::quit();
             return None;
         }
         if self
@@ -536,7 +476,7 @@ impl<A: Application + 'static> Handler for Host<A> {
                 "aqua: smoke report: wakeups={} presented_frames={} render_errors={}",
                 self.aqua.wakeups, self.aqua.frames_presented, self.aqua.render_errors
             );
-            aqua_shell_win32::quit();
+            shell::quit();
             return None;
         }
         let smoke = self
@@ -563,16 +503,16 @@ impl<A: Application + 'static> Handler for Host<A> {
 }
 
 pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), String> {
-    if aqua_shell_win32::dialogs::run_helper_if_requested() {
+    if shell::dialogs::run_helper_if_requested() {
         return Ok(());
     }
     gpu::prewarm();
-    aqua_core::checkpoint::install(aqua_shell_win32::pump_sent_messages);
+    aqua_core::checkpoint::install(shell::pump_sent_messages);
     super::opt_out_of_throttling();
     super::raise_thread_priority();
     aqua.mark_native_loop();
     let inbox = aqua.inbox();
-    aqua.align_clock(aqua_shell_win32::now());
+    aqua.align_clock(shell::now());
     let options = aqua.config().window.clone();
     let mut host = Host {
         aqua,
@@ -587,7 +527,7 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
         file_drop_pending: Vec::new(),
     };
     super::startup_mark("host_ready");
-    aqua_shell_win32::set_message_hook(TsfHook::new());
+    shell::set_message_hook(TsfHook::new());
     super::startup_mark("hook_set");
     if let Err(message) = host.create_window(options.clone()) {
         let error = aqua_protocol::window::WindowError::Native(message.clone());
@@ -595,5 +535,5 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
             .on_window_request_error(&WindowRequest::Create(options), &error);
         return Err(format!("startup window failed: {message}"));
     }
-    aqua_shell_win32::run(host).map_err(|error| error.to_string())
+    shell::run(host).map_err(|error| error.to_string())
 }

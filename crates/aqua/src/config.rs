@@ -11,7 +11,7 @@ use aqua_protocol::prefs::{prefers_opaque_frame, SystemPrefs as OsPreferences};
 use aqua_protocol::window::ThemePreference;
 pub use aqua_protocol::window::{Titlebar, WindowOptions};
 use aqua_protocol::WindowMaterial;
-use aqua_shell_win32::capability::material_capability;
+use crate::native::platform::shell::capability::material_capability;
 use aqua_ui::style::Length;
 
 /// Top-level application configuration.

@@ -1,6 +1,6 @@
 use std::net::{Ipv4Addr, SocketAddr};
 
-use aqua_a11y_uia::{inspect, render_json};
+use aqua_a11y::{inspect, render_json};
 use aqua_protocol::AccessTreeUpdate;
 use aqua_transport::{FrameRecord, Inspector, InspectorServer};
 

@@ -113,8 +113,10 @@ Adapters
   aqua-gpu-d3d11     GpuBackend on Direct3D 11, the Windows default (decided 2026-11-05)
   aqua-gpu-d3d12     GpuBackend on Direct3D 12, stashed: compiles and is selectable, not the default
   aqua-gpu-ref       GpuBackend on the CPU: the oracle, headless tests, CI
+  aqua-shell         shell vocabulary every platform shell shares: handler, events, window options, clipboard trait, notifications, dialogs, timing, regions; a fallback shell for other targets (14.LW)
   aqua-shell-win32   windows, input, DPI, chrome, clipboard, dialogs, prefs, materials
   aqua-ime-tsf       Text Services Framework
+  aqua-a11y          accessibility bridge every platform adapter shares: AccessKit tree, action translation, connection state, inspector (14.LW)
   aqua-a11y-uia      UI Automation
   aqua-fonts-system  system font enumeration, fallback, memory-mapped font files
   aqua-shaders       build-time HLSL compilation to DXIL (dxc) and DXBC SM 5.0 (fxc)

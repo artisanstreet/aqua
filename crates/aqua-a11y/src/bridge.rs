@@ -57,6 +57,13 @@ impl A11yBridge {
         (self.waker)();
     }
 
+    pub fn deactivate(&self) {
+        let mut shared = self.shared();
+        shared.connection = Connection::Dormant;
+        shared.last_update = None;
+        shared.published.clear();
+    }
+
     pub fn snapshot(&self, update: &AccessTreeUpdate) -> Option<TreeUpdate> {
         let mut shared = self.shared();
         match shared.connection {

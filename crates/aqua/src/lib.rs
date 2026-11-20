@@ -24,6 +24,7 @@ pub mod worker;
 pub use app::{App, Context, IntoView, Program, ReactiveView};
 pub use aqua_protocol::chrome::{CaptionControl, CaptionRegion, DragRegions};
 pub use aqua_reactive::collection::{Changes, Collection, CollectionError, Delta, Query};
+pub use aqua_shell::{AppId, AppIdError};
 #[cfg(windows)]
 pub use aqua_shell_win32::local_time;
 pub use aqua_ui::live::LiveList;

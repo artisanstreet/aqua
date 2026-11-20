@@ -80,6 +80,7 @@ fn shell_options(options: &WindowOptions, aqua: &Aqua) -> ShellOptions {
         maximizable: options.maximizable,
         visible: false,
         alpha_surface: options.transparent,
+        app_id: aqua.config().app_id.clone(),
     }
 }
 

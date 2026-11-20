@@ -15,6 +15,7 @@ url = "2"
 percent-encoding = "2"
 dunce = "1"
 xmlwriter = "0.1"
+thiserror = "2"
 
 [dev-dependencies]
 roxmltree = "0.21"

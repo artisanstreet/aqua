@@ -181,6 +181,8 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "regions",
             "services",
             "timing",
+            "AppId",
+            "AppIdError",
             "Chrome",
             "FileDrag",
             "Handler",

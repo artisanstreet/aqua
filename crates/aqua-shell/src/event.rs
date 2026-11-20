@@ -1,3 +1,4 @@
+use crate::AppId;
 use aqua_core::{InputEvent, Point};
 use aqua_protocol::{CaptionControl, WindowId, WindowMaterial};
 use std::path::PathBuf;
@@ -75,6 +76,7 @@ pub struct WindowOptions {
     pub maximizable: bool,
     pub visible: bool,
     pub alpha_surface: bool,
+    pub app_id: Option<AppId>,
 }
 
 impl Default for WindowOptions {
@@ -95,6 +97,7 @@ impl Default for WindowOptions {
             maximizable: true,
             visible: true,
             alpha_surface: false,
+            app_id: None,
         }
     }
 }

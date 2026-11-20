@@ -9,6 +9,8 @@ pub mod regions;
 pub mod services;
 pub mod timing;
 
+mod app_id;
 mod event;
 
+pub use app_id::{AppId, AppIdError};
 pub use event::{Chrome, FileDrag, Handler, ShellError, ShellEvent, WindowKind, WindowOptions};

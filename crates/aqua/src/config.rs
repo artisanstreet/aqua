@@ -7,37 +7,23 @@
 
 use std::num::NonZeroU32;
 
+use crate::native::platform::shell::capability::material_capability;
 use aqua_protocol::prefs::{prefers_opaque_frame, SystemPrefs as OsPreferences};
 use aqua_protocol::window::ThemePreference;
 pub use aqua_protocol::window::{Titlebar, WindowOptions};
 use aqua_protocol::WindowMaterial;
-use crate::native::platform::shell::capability::material_capability;
+use aqua_shell::AppId;
 use aqua_ui::style::Length;
 
-/// Top-level application configuration.
 #[derive(Clone, Debug)]
 pub struct AquaConfig {
-    /// Window creation options (platform-owned type, re-exported).
     pub window: WindowOptions,
-    /// Frame-production target, passed unchanged to the platform scheduler.
-    /// `None` (default) = unpaced: produce on demand, never tick while idle.
-    /// Any non-zero value is accepted; throughput stays bounded by vsync,
-    /// presentation policy, and backpressure.
     pub fps_target: Option<NonZeroU32>,
-    /// `true` = vsync-paced presentation (`Fifo`); `false` = immediate
-    /// (`Immediate`, tearing allowed where the backend supports it, otherwise
-    /// the backend falls back and the runtime reports it).
     pub vsync: bool,
-    /// Native desktop material behind the window (Mica/Acrylic on Windows 11;
-    /// honest fallback elsewhere). Non-`None` requires a transparent window +
-    /// alpha surface: the runtime forces `window.transparent` (loudly) and
-    /// downgrades to `None` under high-contrast/transparency-off prefs.
     pub material: aqua_protocol::WindowMaterial,
-    /// Headless mode: no window or GPU. Drives the app pump in tests.
     pub headless: bool,
-    /// When true, decorative motion snaps instead of animating (also set
-    /// from OS prefs at startup — see `GETTING_STARTED.md`).
     pub reduced_motion: bool,
+    pub app_id: Option<AppId>,
 }
 
 impl Default for AquaConfig {
@@ -49,6 +35,7 @@ impl Default for AquaConfig {
             material: aqua_protocol::WindowMaterial::Solid,
             headless: false,
             reduced_motion: false,
+            app_id: None,
         }
     }
 }
@@ -320,20 +307,14 @@ impl Default for Window {
     }
 }
 
-/// Authoring app configuration builder: all fields private, setters consume
-/// and return `Self`. Setters never panic — invalid values are stored and
-/// reported by [`resolve`](Config::resolve). Lower-level [`AquaConfig`]
-/// keeps its public fields for advanced/runtime use; this builder is the
-/// canonical authoring path.
 #[derive(Debug, Clone)]
 pub struct Config {
     window: Window,
-    /// `None` = unpaced (default). `Some(0)` is storable but invalid:
-    /// resolve rejects it instead of the setter panicking.
     fps: Option<u32>,
     vsync: bool,
     headless: bool,
     reduced_motion: bool,
+    app_id: Option<AppId>,
 }
 
 impl Config {
@@ -345,6 +326,7 @@ impl Config {
             vsync: false,
             headless: false,
             reduced_motion: false,
+            app_id: None,
         }
     }
 
@@ -391,10 +373,12 @@ impl Config {
         self
     }
 
-    /// Validate the stored builder values against `prefs` and lower them to
-    /// the runtime [`AquaConfig`] plus the startup [`ResolvedMaterial`].
-    /// Pure: no OS/GPU initialization. All setter-stored values (including
-    /// invalid ones) are checked here; the first failure is returned.
+    #[must_use]
+    pub fn app_id(mut self, app_id: AppId) -> Self {
+        self.app_id = Some(app_id);
+        self
+    }
+
     pub fn resolve(&self, prefs: &OsPreferences) -> Result<ResolvedConfig, ConfigError> {
         let inner = px_pair("size", self.window.size)?;
         let min = self
@@ -475,6 +459,7 @@ impl Config {
             material: active,
             headless: self.headless,
             reduced_motion: self.reduced_motion,
+            app_id: self.app_id.clone(),
         };
         Ok(ResolvedConfig {
             runtime,

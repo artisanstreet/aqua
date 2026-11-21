@@ -73,6 +73,7 @@ jobs:
           AQUA_REQUIRE_GPU: ${{ runner.os == 'Linux' && '1' || '0' }}
           VK_ICD_FILENAMES: ${{ runner.os == 'Linux' && '/usr/share/vulkan/icd.d/lvp_icd.x86_64.json' || '' }}
           AQUA_REQUIRE_WAYLAND: ${{ runner.os == 'Linux' && '1' || '0' }}
+          AQUA_REQUIRE_DBUS: ${{ runner.os == 'Linux' && '1' || '0' }}
         run: |
           if [ "$RUNNER_OS" != Windows ]; then
             exec cargo test --workspace --locked -- --nocapture --test-threads=1

@@ -24,6 +24,7 @@ pub enum OpenError {
     InvalidPath,
     Io(std::io::Error),
     Native(i32),
+    Desktop(String),
     Unsupported(&'static str),
 }
 
@@ -37,6 +38,7 @@ impl std::fmt::Display for OpenError {
             Self::InvalidPath => f.write_str("invalid external path"),
             Self::Io(error) => error.fmt(f),
             Self::Native(code) => write!(f, "native shell failed: {code}"),
+            Self::Desktop(reason) => write!(f, "desktop service failed: {reason}"),
             Self::Unsupported(reason) => {
                 write!(f, "opening external targets is unsupported: {reason}")
             }

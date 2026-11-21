@@ -1,13 +1,14 @@
 pub use aqua_shell::notifications::activation::{
-    activation_url, parse_activation_url, Activation, ActivationUrlError, ACTIVATION_FLAG, SCHEME,
+    activation_url, parse_activation_url, Activation, ActivationUrlError, Launch, ACTIVATION_FLAG,
+    SCHEME,
 };
 
 #[cfg(windows)]
-pub use host::{handle_launch, register_protocol, unregister_protocol, Launch, Receiver};
+pub use host::{handle_launch, register_protocol, unregister_protocol, Receiver};
 
 #[cfg(windows)]
 mod host {
-    use super::{parse_activation_url, Activation, ACTIVATION_FLAG, SCHEME};
+    use super::{parse_activation_url, Activation, Launch, ACTIVATION_FLAG, SCHEME};
     use crate::notifications::{NotificationError, ResponseHandler};
     use std::path::Path;
     use windows::core::PCWSTR;
@@ -177,13 +178,6 @@ mod host {
             )
         };
         sent.0 != 0 && result == 1
-    }
-
-    #[derive(Debug, PartialEq, Eq)]
-    pub enum Launch {
-        Ordinary,
-        Handled,
-        Cold(Activation),
     }
 
     pub fn handle_launch() -> Launch {

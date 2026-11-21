@@ -16,6 +16,13 @@ pub struct Activation {
     pub response: NotificationResponse,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum Launch {
+    Ordinary,
+    Handled,
+    Cold(Activation),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActivationUrlError {
     WrongScheme,

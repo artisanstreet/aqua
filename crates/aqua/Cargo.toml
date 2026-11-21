@@ -43,6 +43,10 @@ aqua-ime-wayland = { path = "../aqua-ime-wayland" }
 aqua-a11y-atspi = { path = "../aqua-a11y-atspi" }
 aqua-portal = { path = "../aqua-portal" }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+aqua-shell-appkit = { path = "../aqua-shell-appkit" }
+aqua-gpu-metal = { path = "../aqua-gpu-metal" }
+
 [features]
 d3d12 = ["dep:aqua-gpu-d3d12"]
 probe-allocator = []
@@ -76,8 +80,15 @@ async-io = "2"
 serde = "1"
 rustix = { version = "1", features = ["process", "system"] }
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+aqua-shell-appkit = { path = "../aqua-shell-appkit", features = ["testing"] }
+
 [[test]]
 name = "host_wayland"
+harness = false
+
+[[test]]
+name = "host_macos"
 harness = false
 
 [[test]]

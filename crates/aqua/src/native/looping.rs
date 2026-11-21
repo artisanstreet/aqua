@@ -15,6 +15,10 @@ use aqua_shell::{
     Chrome, FileDrag, Handler, ShellError, ShellEvent, WindowKind, WindowOptions as ShellOptions,
 };
 
+#[cfg(target_os = "macos")]
+use super::attach_appkit::Desktop;
+#[cfg(target_os = "linux")]
+use super::attach_wayland::Desktop;
 use super::gpu;
 #[cfg(windows)]
 use super::hook::TsfHook;
@@ -39,8 +43,8 @@ pub(super) struct Host<A: Application> {
     occlusion: HashMap<AquaWindowId, Occlusion>,
     wakes: Option<WakeLedger>,
     file_drop_pending: Vec<AquaWindowId>,
-    #[cfg(target_os = "linux")]
-    pub(super) desktop: super::attach_wayland::Desktop,
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) desktop: Desktop,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -153,7 +157,7 @@ impl<A: Application + 'static> Host<A> {
         };
         #[cfg(windows)]
         let native: Rc<dyn crate::native_window::NativeWindow> = Rc::new(Win32Window { window });
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let native = self.native_window(window);
         self.aqua.add_native_window(observed.clone(), native);
         self.shell.insert(id, window);
@@ -372,7 +376,7 @@ impl<A: Application + 'static> Host<A> {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl<A: Application + 'static> Host<A> {
     fn follow_preferences(&mut self) {
         if !self.desktop.preferences_changed() {
@@ -464,7 +468,7 @@ impl<A: Application + 'static> Handler for Host<A> {
             ledger.woken();
         }
         self.flush_pending();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.follow_preferences();
         self.aqua.pump_inbox(&mut self.app);
     }
@@ -541,7 +545,7 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
     let inbox = aqua.inbox();
     aqua.align_clock(shell::now());
     let options = aqua.config().window.clone();
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let app_id = aqua.config().app_id.clone();
     let mut host = Host {
         aqua,
@@ -554,8 +558,8 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
         occlusion: HashMap::new(),
         wakes: wakes::enabled().then(|| WakeLedger::new(inbox)),
         file_drop_pending: Vec::new(),
-        #[cfg(target_os = "linux")]
-        desktop: super::attach_wayland::Desktop::new(app_id),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        desktop: Desktop::new(app_id),
     };
     host.app.on_editing_conventions(crate::keys::conventions());
     super::startup_mark("host_ready");

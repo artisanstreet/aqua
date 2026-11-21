@@ -2,7 +2,7 @@
 #[path = "support/wayland.rs"]
 mod wayland;
 
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 mod native {
 
     use aqua::mailbox::Mailbox;
@@ -36,6 +36,7 @@ mod native {
         initial_scene_built: bool,
         resized_at: Option<Instant>,
         errors: Vec<WindowError>,
+        badges_refused: usize,
     }
 
     enum Phase {
@@ -206,6 +207,10 @@ mod native {
         }
 
         fn on_window_request_error(&mut self, _request: &WindowRequest, error: &WindowError) {
+            if cfg!(target_os = "macos") && *error == WindowError::Unsupported("taskbar badges") {
+                self.report.borrow_mut().badges_refused += 1;
+                return;
+            }
             eprintln!("WINDOW_REQUEST_ERROR: {error:?}");
             self.report.borrow_mut().errors.push(error.clone());
             let _ = self.messages.sender().send(());
@@ -273,6 +278,12 @@ mod native {
         let Some(_session) = super::wayland::session("^Aqua desktop") else {
             return;
         };
+        #[cfg(target_os = "macos")]
+        if !aqua_shell_appkit::testing::available(
+            aqua_shell_appkit::testing::Facility::WindowServer,
+        ) {
+            return;
+        }
         unsafe { std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1") };
         let report = Rc::new(RefCell::new(Report::default()));
         let mut config = AquaConfig::default();
@@ -294,6 +305,11 @@ mod native {
             .unwrap();
         let report = report.borrow();
         assert_eq!(report.started.len(), 2);
+        assert_eq!(
+            report.badges_refused,
+            if cfg!(target_os = "macos") { 2 } else { 0 },
+            "macOS refuses dock badges until the dock tile is wired; other platforms accept them"
+        );
         assert!(report.errors.is_empty(), "{:?}", report.errors);
         assert!(
             report.passed && report.display && report.title_observed,
@@ -306,13 +322,17 @@ mod native {
             report.display,
             report.title_observed
         );
+        let badges = match cfg!(target_os = "macos") {
+            true => "taskbar badges refused as unsupported",
+            false => "taskbar badges accepted",
+        };
         println!(
-            "WINDOWS_DESKTOP_OK: worker wake, native resize, taskbar badges, two-window lifecycle, close veto, snapshot transition and text raster requests accepted"
+            "WINDOWS_DESKTOP_OK: worker wake, native resize, two-window lifecycle, close veto, snapshot transition and text raster requests accepted; {badges}"
         );
     }
 }
 
 fn main() {
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     native::run();
 }

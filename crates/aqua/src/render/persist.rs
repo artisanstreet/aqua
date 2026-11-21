@@ -5,12 +5,17 @@ use aqua_fonts_system::{default_fallback_index_path, read_cache_file, write_cach
 use aqua_text::style::{FontFamily, FontWeight};
 use aqua_text::{SharedFonts, TextStyle};
 
-#[cfg(all(not(target_os = "linux"), not(feature = "d3d12")))]
+#[cfg(all(
+    not(any(target_os = "linux", target_os = "macos")),
+    not(feature = "d3d12")
+))]
 const PIPELINE_CACHE: &str = "pipelines-d3d11.cache";
-#[cfg(all(not(target_os = "linux"), feature = "d3d12"))]
+#[cfg(all(not(any(target_os = "linux", target_os = "macos")), feature = "d3d12"))]
 const PIPELINE_CACHE: &str = "pipelines-d3d12.cache";
 #[cfg(target_os = "linux")]
 const PIPELINE_CACHE: &str = "pipelines-vulkan.cache";
+#[cfg(target_os = "macos")]
+const PIPELINE_CACHE: &str = "pipelines-metal.cache";
 
 fn cache_root() -> Option<PathBuf> {
     default_fallback_index_path().and_then(|path| path.parent().map(PathBuf::from))

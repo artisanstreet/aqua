@@ -2,7 +2,7 @@
 #[path = "support/wayland.rs"]
 mod wayland;
 
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 mod native {
     use std::collections::HashMap;
     use std::sync::atomic::Ordering::Relaxed;
@@ -159,6 +159,9 @@ mod native {
                 if s.failures.load(Relaxed) != 0 {
                     return Err(format!("window {} reported render failures", id.raw()));
                 }
+                if cfg!(target_os = "macos") {
+                    continue;
+                }
                 if partial < full * 3 {
                     return Err(format!(
                         "window {} was mostly repainted in full (partial {partial}, full {full})",
@@ -174,6 +177,11 @@ mod native {
                 return Err("the transparent window never attached its composition surface".into());
             }
             lines.push(format!("composition surfaces attached: {attached}"));
+            if cfg!(target_os = "macos") {
+                lines.push(
+                    "partial damage not checked: Metal repaints whole drawables (14.MA M5)".into(),
+                );
+            }
             Ok(lines.join("\n"))
         }
     }
@@ -291,6 +299,12 @@ mod native {
         let Some(_session) = super::wayland::session("^aqua shared") else {
             return;
         };
+        #[cfg(target_os = "macos")]
+        if !aqua_shell_appkit::testing::available(
+            aqua_shell_appkit::testing::Facility::WindowServer,
+        ) {
+            return;
+        }
         unsafe { std::env::set_var("AQUA_SMOKE_MS", "40000") };
         unsafe { std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1") };
         let outcome = Arc::new(Mutex::new(Outcome::default()));
@@ -324,8 +338,8 @@ mod native {
 }
 
 fn main() {
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     native::run();
-    #[cfg(not(any(windows, target_os = "linux")))]
-    eprintln!("render_shared: skipped; requires Windows or Linux");
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    eprintln!("render_shared: skipped; requires Windows, Linux or macOS");
 }

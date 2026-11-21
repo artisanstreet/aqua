@@ -2,10 +2,12 @@ pub mod capture;
 pub mod cases;
 pub mod drag;
 pub mod inject;
+pub mod input_source;
 pub mod pasteboard;
 pub mod post;
 pub mod screen;
 pub mod script;
+pub mod text_input;
 
 use crate::window::Window;
 use aqua_protocol::WindowId;
@@ -23,6 +25,7 @@ pub enum Facility {
     WindowServer,
     PostEvent,
     ScreenCapture,
+    InputMethod,
 }
 
 impl Facility {
@@ -31,6 +34,7 @@ impl Facility {
             Facility::WindowServer => "AQUA_REQUIRE_APPKIT",
             Facility::PostEvent => "AQUA_REQUIRE_POST_EVENT",
             Facility::ScreenCapture => "AQUA_REQUIRE_SCREEN_CAPTURE",
+            Facility::InputMethod => "AQUA_REQUIRE_MAC_IME",
         }
     }
 
@@ -39,6 +43,7 @@ impl Facility {
             Facility::WindowServer => "SKIP-NO-WINDOW-SERVER",
             Facility::PostEvent => "SKIP-NO-POST-EVENT",
             Facility::ScreenCapture => "SKIP-NO-SCREEN-CAPTURE",
+            Facility::InputMethod => "SKIP-NO-INPUT-METHOD",
         }
     }
 
@@ -48,6 +53,11 @@ impl Facility {
             Facility::WindowServer => session,
             Facility::PostEvent => session && CGPreflightPostEventAccess(),
             Facility::ScreenCapture => session && CGPreflightScreenCaptureAccess(),
+            Facility::InputMethod => {
+                session
+                    && CGPreflightPostEventAccess()
+                    && input_source::installed(input_source::KOTOERI_HIRAGANA)
+            }
         }
     }
 }

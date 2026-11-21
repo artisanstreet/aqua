@@ -62,7 +62,7 @@ pub use looping::{pump_sent_messages, quit, run, schedule, Waker};
 #[cfg(target_os = "macos")]
 pub use output::Monitor;
 #[cfg(target_os = "macos")]
-pub use text_input::{TextInputClient, Utf16Range};
+pub use text_input::{Insertion, ScreenRect, TextInputClient, Utf16Range};
 #[cfg(target_os = "macos")]
 pub use unsupported::Unsupported;
 #[cfg(target_os = "macos")]

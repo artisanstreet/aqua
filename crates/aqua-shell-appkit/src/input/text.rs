@@ -1,6 +1,6 @@
 use crate::looping::emit;
 use crate::state::SharedClient;
-use crate::text_input::Utf16Range;
+use crate::text_input::{Insertion, Utf16Range};
 use crate::view::AquaView;
 use aqua_core::InputEvent;
 use aqua_shell::ShellEvent;
@@ -54,34 +54,38 @@ fn utf16_len(text: &str) -> usize {
     text.encode_utf16().count()
 }
 
-pub(crate) fn insert(view: &AquaView, string: &AnyObject, replacement: NSRange) {
-    let text = string_of(string);
-    match client(view) {
-        Some(client) => {
-            client
-                .borrow_mut()
-                .insert_text(&text, range_of(replacement));
-            if let Some(pass) = view.ivars().pass.borrow_mut().as_mut() {
-                pass.delivered = true;
+fn typed(view: &AquaView, text: &str) {
+    let mut pass = view.ivars().pass.borrow_mut();
+    match pass.as_mut() {
+        Some(pass) => pass.inserted.get_or_insert_with(String::new).push_str(text),
+        None => {
+            let typed = aqua_shell::input::control_free(text);
+            if !typed.is_empty() {
+                emit(
+                    view.id(),
+                    ShellEvent::Input(InputEvent::TextInput { text: typed }),
+                );
             }
         }
+    }
+}
+
+pub(crate) fn insert(view: &AquaView, string: &AnyObject, replacement: NSRange) {
+    let text = string_of(string);
+    let insertion = match client(view) {
+        Some(client) => client
+            .borrow_mut()
+            .insert_text(&text, range_of(replacement)),
         None => {
             view.ivars().marked.replace(None);
-            let mut pass = view.ivars().pass.borrow_mut();
-            match pass.as_mut() {
-                Some(pass) => pass
-                    .inserted
-                    .get_or_insert_with(String::new)
-                    .push_str(&text),
-                None => {
-                    let typed = aqua_shell::input::control_free(&text);
-                    if !typed.is_empty() {
-                        emit(
-                            view.id(),
-                            ShellEvent::Input(InputEvent::TextInput { text: typed }),
-                        );
-                    }
-                }
+            Insertion::Typed
+        }
+    };
+    match insertion {
+        Insertion::Typed => typed(view, &text),
+        Insertion::Taken => {
+            if let Some(pass) = view.ivars().pass.borrow_mut().as_mut() {
+                pass.taken = true;
             }
         }
     }
@@ -148,6 +152,18 @@ pub(crate) fn marked_range(view: &AquaView) -> NSRange {
     }
 }
 
+pub(crate) fn key_pressed(view: &AquaView) {
+    if let Some(client) = client(view) {
+        client.borrow_mut().key_pressed();
+    }
+}
+
+pub(crate) fn deactivated(view: &AquaView) {
+    if let Some(client) = client(view) {
+        client.borrow_mut().deactivated();
+    }
+}
+
 pub(crate) fn has_marked(view: &AquaView) -> bool {
     match client(view) {
         Some(client) => client.borrow().marked_range().is_some(),
@@ -181,9 +197,12 @@ pub(crate) fn first_rect(view: &AquaView, range: NSRange, actual: NSRangePointer
         client(view).and_then(|client| client.borrow().first_rect(requested))
     });
     match answer {
-        Some(((x, y, width, height), covered)) => {
+        Some((rect, covered)) => {
             write_actual(actual, ns_range(Some(covered)));
-            NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))
+            NSRect::new(
+                NSPoint::new(rect.x, rect.y),
+                NSSize::new(rect.width, rect.height),
+            )
         }
         None => {
             write_actual(actual, range);

@@ -152,6 +152,7 @@ jobs:
           AQUA_REQUIRE_APPKIT: ${{ runner.os == 'macOS' && '1' || '0' }}
           AQUA_REQUIRE_POST_EVENT: ${{ runner.os == 'macOS' && '1' || '0' }}
           AQUA_REQUIRE_SCREEN_CAPTURE: ${{ runner.os == 'macOS' && '1' || '0' }}
+          AQUA_REQUIRE_MAC_IME: ${{ runner.os == 'macOS' && '1' || '0' }}
           AQUA_REQUIRE_DXCOMPILER: ${{ runner.os == 'macOS' && '1' || '0' }}
           AQUA_REQUIRE_SPIRV_CROSS: ${{ runner.os == 'macOS' && '1' || '0' }}
         run: |
@@ -233,6 +234,7 @@ jobs:
           AQUA_REQUIRE_APPKIT: '1'
           AQUA_REQUIRE_POST_EVENT: '1'
           AQUA_REQUIRE_SCREEN_CAPTURE: '1'
+          AQUA_REQUIRE_MAC_IME: '1'
           AQUA_REQUIRE_DXCOMPILER: '1'
           AQUA_REQUIRE_SPIRV_CROSS: '1'
           FILTER: ${{ inputs.filter }}

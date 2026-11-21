@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use aqua_core::Oklch;
 use aqua_graph::Extent;
+use aqua_ime_appkit::AppKitIme;
 use aqua_protocol::prefs::SystemPrefs;
 use aqua_protocol::{AquaWindowId, ObservedWindowState, WindowOptions};
 use aqua_shell::AppId;
@@ -62,6 +63,7 @@ impl<A: Application + 'static> Host<A> {
             self.aqua
                 .attach_access(id, Box::new(InspectorSink { inspector }));
         }
+        self.aqua.attach_ime(id, Box::new(AppKitIme::new(window)));
         super::startup_mark("window_shown");
         if let Err(error) = window.show() {
             eprintln!("aqua: window {} did not show: {error}", id.raw());

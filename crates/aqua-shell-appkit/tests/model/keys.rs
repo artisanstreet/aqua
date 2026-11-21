@@ -85,9 +85,26 @@ fn commands_and_control_text_reach_the_app_as_keys_only() {
         ..Interpretation::default()
     };
     assert_eq!(key_outcome(&control), KeyOutcome::Key);
-    let client = Interpretation {
-        delivered: true,
+}
+
+#[test]
+fn a_key_whose_text_the_input_method_took_does_not_also_reach_the_app() {
+    let commit = Interpretation {
+        marked_before: true,
+        taken: true,
         ..Interpretation::default()
     };
-    assert_eq!(key_outcome(&client), KeyOutcome::Key);
+    assert_eq!(key_outcome(&commit), KeyOutcome::Consumed);
+    let passed_through = Interpretation {
+        marked_before: true,
+        taken: true,
+        command: true,
+        ..Interpretation::default()
+    };
+    assert_eq!(key_outcome(&passed_through), KeyOutcome::Key);
+    let typed = Interpretation {
+        inserted: Some("a".into()),
+        ..Interpretation::default()
+    };
+    assert_eq!(key_outcome(&typed), KeyOutcome::KeyAndText("a".into()));
 }

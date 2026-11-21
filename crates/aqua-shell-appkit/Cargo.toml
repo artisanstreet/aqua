@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Aqua AppKit shell: explicit-time run loop, NSWindow/NSView windows, backing scale, screens, occlusion, keyboard, mouse and scroll input, cursors, overlay chrome with traffic lights, layer leases, pasteboard, file drops"
+description = "Aqua AppKit shell: explicit-time run loop, NSWindow/NSView windows, backing scale, screens, occlusion, keyboard, mouse and scroll input, cursors, overlay chrome with traffic lights, layer leases, pasteboard, file drops, NSTextInputClient routing"
 
 [features]
 testing = []

@@ -68,7 +68,7 @@ pub struct Interpretation {
     pub marked_after: bool,
     pub composed: bool,
     pub command: bool,
-    pub delivered: bool,
+    pub taken: bool,
     pub inserted: Option<String>,
 }
 
@@ -80,15 +80,16 @@ pub enum KeyOutcome {
 }
 
 pub fn key_outcome(pass: &Interpretation) -> KeyOutcome {
-    match (&pass.inserted, pass.command || pass.delivered) {
-        (Some(text), _) => match aqua_shell::input::control_free(text) {
+    match (&pass.inserted, pass.command, pass.taken) {
+        (Some(text), _, _) => match aqua_shell::input::control_free(text) {
             typed if typed.is_empty() => KeyOutcome::Key,
             typed => KeyOutcome::KeyAndText(typed),
         },
-        (None, true) => KeyOutcome::Key,
-        (None, false) if pass.composed || pass.marked_before || pass.marked_after => {
+        (None, true, _) => KeyOutcome::Key,
+        (None, false, true) => KeyOutcome::Consumed,
+        (None, false, false) if pass.composed || pass.marked_before || pass.marked_after => {
             KeyOutcome::Consumed
         }
-        (None, false) => KeyOutcome::Key,
+        (None, false, false) => KeyOutcome::Key,
     }
 }

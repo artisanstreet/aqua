@@ -28,6 +28,7 @@ mod macos {
     use aqua_shell_appkit::testing::capture::window_number_image;
     use aqua_shell_appkit::testing::cases::{case, Case};
     use aqua_shell_appkit::testing::inject::{Button, Motion};
+    use aqua_shell_appkit::testing::input_source::{self, KOTOERI_HIRAGANA};
     use aqua_shell_appkit::testing::post::{self, END, TAB};
     use aqua_shell_appkit::testing::screen::{windows_of, OnScreen};
     use aqua_shell_appkit::testing::{available, Facility};
@@ -58,7 +59,7 @@ mod macos {
         }
     }
 
-    const ALL: [Case; 18] = [
+    const ALL: [Case; 19] = [
         case(
             "a_real_app_shows_a_window_and_presents_frames",
             shows_and_presents,
@@ -71,6 +72,10 @@ mod macos {
         case(
             "text_copied_in_a_field_reaches_another_process_and_its_copy_pastes_back",
             pasteboard,
+        ),
+        case(
+            "kotoeri_composes_into_a_field_through_posted_keys_once",
+            kotoeri,
         ),
         case(
             "text_renders_with_fonts_found_through_core_text_alone",
@@ -729,6 +734,50 @@ mod macos {
         inspector.await_value(
             "Command-V to paste what this process copied",
             "draft \u{4e16}\u{754c}",
+        );
+        app.quits_cleanly();
+    }
+
+    fn kotoeri() {
+        if !available(Facility::InputMethod) {
+            return;
+        }
+        let selected = input_source::select(KOTOERI_HIRAGANA)
+            .unwrap_or_else(|error| panic!("Kotoeri is selectable: {error}"));
+        let (mut app, inspector) = inspected("field", &[]);
+        inspector.await_value("the first tree", "draft");
+        let window = app.windows(1).remove(0);
+        click(at(&window, SIZE.1, (100.0, 56.0)));
+        post::tap(END, Modifiers::NONE);
+        post::type_text("ka");
+        post::tap(post::RETURN, Modifiers::NONE);
+        let japanese = |value: &String| {
+            value
+                .strip_prefix("draft")
+                .is_some_and(|rest| !rest.is_empty() && !rest.chars().any(|c| c.is_ascii()))
+        };
+        let value = within("the composed text to reach the field", || {
+            inspector.value().filter(japanese)
+        });
+        drop(selected);
+        let composed = value
+            .strip_prefix("draft")
+            .expect("the field keeps its text")
+            .to_owned();
+        println!("kotoeri composed {composed:?}");
+        post::type_text("z");
+        inspector.await_value(
+            "a Latin key typed after the commit, with nothing repeated before it",
+            &format!("draft{composed}z"),
+        );
+        let half = composed.chars().count() / 2;
+        let (first, second): (String, String) = (
+            composed.chars().take(half).collect(),
+            composed.chars().skip(half).collect(),
+        );
+        assert!(
+            composed.chars().count() == 1 || first != second,
+            "the composition was committed once: {composed:?}"
         );
         app.quits_cleanly();
     }

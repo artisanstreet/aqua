@@ -26,6 +26,7 @@ pub const ADAPTER_CRATES: &[&str] = &[
     "aqua-shell-appkit",
     "aqua-ime-tsf",
     "aqua-ime-wayland",
+    "aqua-ime-appkit",
     "aqua-a11y",
     "aqua-a11y-uia",
     "aqua-a11y-atspi",
@@ -72,6 +73,7 @@ pub const FORBIDDEN_ADAPTER_CRATES: &[&str] = &[
     "aqua-shell-appkit",
     "aqua-ime-tsf",
     "aqua-ime-wayland",
+    "aqua-ime-appkit",
     "aqua-a11y",
     "aqua-a11y-uia",
     "aqua-a11y-atspi",
@@ -146,6 +148,7 @@ pub const ADAPTER_PORT_IMPLS: &[(&str, &str)] = &[
     ("aqua-gpu-ref", "GpuBackend"),
     ("aqua-ime-tsf", "ImeBackend"),
     ("aqua-ime-wayland", "ImeBackend"),
+    ("aqua-ime-appkit", "ImeBackend"),
     ("aqua-transport", "RenderHost"),
     ("aqua-transport", "Lowering"),
 ];
@@ -370,6 +373,8 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "schedule",
             "Waker",
             "Monitor",
+            "Insertion",
+            "ScreenRect",
             "TextInputClient",
             "Utf16Range",
             "Unsupported",
@@ -393,6 +398,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
         "aqua-ime-wayland",
         &["model", "WaylandIme", "WaylandImeError"],
     ),
+    ("aqua-ime-appkit", &["model", "AppKitIme", "AppKitImeError"]),
     (
         "aqua-a11y",
         &[

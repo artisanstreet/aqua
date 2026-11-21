@@ -44,6 +44,7 @@ aqua-a11y-atspi = { path = "../aqua-a11y-atspi" }
 aqua-portal = { path = "../aqua-portal" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+aqua-ime-appkit = { path = "../aqua-ime-appkit" }
 aqua-shell-appkit = { path = "../aqua-shell-appkit" }
 aqua-gpu-metal = { path = "../aqua-gpu-metal" }
 

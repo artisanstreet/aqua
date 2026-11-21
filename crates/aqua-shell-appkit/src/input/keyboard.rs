@@ -70,6 +70,7 @@ pub(crate) fn key_down(view: &AquaView, event: &NSEvent) {
         press(view, key);
         return;
     }
+    text::key_pressed(view);
     let marked_before = text::has_marked(view);
     let previous = view.ivars().pass.replace(Some(Interpretation {
         marked_before,

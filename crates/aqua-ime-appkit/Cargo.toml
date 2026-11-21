@@ -1,0 +1,22 @@
+[package]
+name = "aqua-ime-appkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Aqua NSTextInputClient IME adapter: UTF-16 document windows as absolute NSRanges, marked text, replacement ranges, screen-space caret rects, commit and cancel without double insertion"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-protocol = { path = "../aqua-protocol" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+aqua-shell-appkit = { path = "../aqua-shell-appkit" }
+thiserror = "2"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+aqua-shell-appkit = { path = "../aqua-shell-appkit", features = ["testing"] }
+
+[[test]]
+name = "ime"
+harness = false

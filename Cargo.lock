@@ -88,6 +88,7 @@ dependencies = [
  "aqua-gpu-ref",
  "aqua-gpu-vulkan",
  "aqua-graph",
+ "aqua-ime-appkit",
  "aqua-ime-tsf",
  "aqua-ime-wayland",
  "aqua-media",
@@ -269,6 +270,16 @@ name = "aqua-graph"
 version = "0.1.0"
 dependencies = [
  "aqua-core",
+]
+
+[[package]]
+name = "aqua-ime-appkit"
+version = "0.1.0"
+dependencies = [
+ "aqua-core",
+ "aqua-protocol",
+ "aqua-shell-appkit",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

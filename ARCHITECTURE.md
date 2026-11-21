@@ -121,6 +121,7 @@ Adapters
   aqua-shell-appkit  AppKit: run loop with explicit time, NSWindow/NSView windows, backing scale, screens, occlusion, keyboard/mouse/scroll input, cursors, overlay chrome with traffic lights, layer leases, pasteboard, file drops, NSTextInputClient routing (14.MA)
   aqua-ime-tsf       Text Services Framework
   aqua-ime-wayland   text-input-v3: UTF-16 windows as UTF-8 surrounding text, composition, commit and cancel without double insertion (14.LW)
+  aqua-ime-appkit    NSTextInputClient: UTF-16 document windows as absolute NSRanges, marked text, replacement ranges, screen-space caret rects, commit and cancel without double insertion (14.MA)
   aqua-a11y          accessibility bridge every platform adapter shares: AccessKit tree, action translation, connection state, inspector (14.LW)
   aqua-a11y-uia      UI Automation
   aqua-a11y-atspi    AT-SPI through accesskit_unix on the session bus, fed from the shared bridge (14.LW)

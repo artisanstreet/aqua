@@ -109,6 +109,9 @@ define_class!(
         #[unsafe(method(windowDidResignKey:))]
         fn did_resign_key(&self, _notification: &NSNotification) {
             emit(self.id(), ShellEvent::Focused(false));
+            if let Some(view) = crate::state::window(self.id(), |window| window.view.clone()) {
+                crate::input::text::deactivated(&view);
+            }
             crate::chrome::place_buttons(self.id());
             callback_done();
         }

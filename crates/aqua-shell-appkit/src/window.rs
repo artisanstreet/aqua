@@ -5,7 +5,7 @@ use crate::model::drop::DropTarget;
 use crate::model::presence::{Change, Occlusion};
 use crate::output::{monitor_of, primary_height, refresh_of, Monitor};
 use crate::state::{self, Pointer, Reported, Spec, WindowState};
-use crate::text_input::TextInputClient;
+use crate::text_input::{ScreenRect, TextInputClient};
 use crate::unsupported::Unsupported;
 use crate::view::AquaView;
 use crate::window_class::{occlusion_of, AquaWindow, WindowDelegate};
@@ -609,6 +609,20 @@ impl Window {
             window.text_client =
                 client.map(|client| std::rc::Rc::new(std::cell::RefCell::new(client)))
         });
+    }
+
+    pub fn view_on_screen(self) -> Option<ScreenRect> {
+        let (native, view) = state::window(self.id, |window| {
+            (window.native.clone(), window.view.clone())
+        })?;
+        let in_window = view.convertRect_toView(view.bounds(), None);
+        let on_screen = native.convertRectToScreen(in_window);
+        Some(ScreenRect {
+            x: on_screen.origin.x,
+            y: on_screen.origin.y,
+            width: on_screen.size.width,
+            height: on_screen.size.height,
+        })
     }
 
     pub fn discard_marked_text(self) {

@@ -1,19 +1,24 @@
+mod custom;
+pub mod dxc;
 mod formats;
 mod frames;
 mod hint;
 #[path = "../../aqua-shaders/msl/map.rs"]
-#[allow(dead_code)]
 mod map;
 mod offscreen;
 mod persistent;
 mod pipeline;
 mod renderer;
+pub mod spirv_cross;
 mod transients;
 
 use aqua_graph::TextureHandle;
 
 pub use crate::hal::selection::AdapterPreference;
 pub use crate::hal::DeviceOptions;
+pub use custom::compiler::{
+    Attempt, LibrarySource, LoadError, RuntimeCompiler, ShaderCompiler, Toolchain,
+};
 pub use formats::SurfaceFormat;
 pub use offscreen::{OffscreenBackend, OffscreenOptions, HEAP_ALIGNMENT};
 pub use persistent::PersistentStats;
@@ -32,6 +37,12 @@ pub enum Error {
     Texture(&'static str),
     #[error("transient textures need {needed} bytes, above the {ceiling} byte ceiling")]
     Budget { needed: u64, ceiling: u64 },
+    #[error("shader compilation: {0}")]
+    Shader(#[from] dxc::CompileError),
+    #[error("shader translation: {0}")]
+    Translation(#[from] spirv_cross::TranslateError),
+    #[error("shader compilation: Metal rejected the MSL for {entry}: {reason}")]
+    Msl { entry: String, reason: String },
 }
 
 impl From<Error> for aqua_protocol::GpuError {

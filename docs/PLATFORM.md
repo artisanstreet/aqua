@@ -1,5 +1,11 @@
 # Aqua platform adapter (`aqua-platform`)
 
+Status note (2026-11-21): `aqua-platform` was replaced by the native shells
+(`ARCHITECTURE.md` record 14.4). Windows uses `aqua-shell-win32`; Linux uses
+`aqua-shell-wayland` and `aqua-portal` (record 14.LW). The tables below describe
+the historical crate; the Linux section at the end describes the current Linux
+behaviour.
+
 Owner: platform agent. Windows-first; one portable API over **winit 0.30
 (stable, crate version `0.30.12+`)** plus native Windows (DWM) and OS-service
 integrations. Facade (`aqua`) owns the event loop and `ApplicationHandler`;
@@ -94,11 +100,40 @@ popup menus are implemented by `aqua-ui`; native file drops include their
 actual client coordinates. The facade drains bounded worker mailboxes and
 applies window commands, per-window frame targets and live vsync changes.
 
-Global window coordinates on Wayland, macOS `NSVisualEffectView`, Linux
-compositor blur, a software-rendering fallback policy and an AT-SPI adapter
-remain outside the Windows qualification. Native UIA tests establish API
-behavior; screen-reader speech quality and physical CJK candidate-window
-placement remain release qualification tasks.
+macOS `NSVisualEffectView` and a software-rendering fallback policy remain
+outside the Windows qualification. Native UIA tests establish API behavior;
+screen-reader speech quality and physical CJK candidate-window placement
+remain release qualification tasks.
+
+## Linux (Wayland and Vulkan)
+
+Linux is a supported target on Wayland only; there is no X11 path. The details
+and evidence are in `ARCHITECTURE.md` record 14.LW. In short:
+
+| Service | Linux implementation | When it is missing |
+|---|---|---|
+| Windows, input, chrome, cursors | `aqua-shell-wayland` over `xdg-shell`; server-side decorations through xdg-decoration | without xdg-decoration, `Titlebar::Native` becomes a 40 px drag band (logged once); `native::run` returns an error without a compositor |
+| Rendering | `aqua-gpu-vulkan`, Vulkan 1.3; custom passes through `libdxcompiler.so` | custom passes report `Unsupported("custom passes")` |
+| Clipboard, primary selection, file drops | `wl_data_device` and `zwp_primary_selection_v1`; selecting text sets the primary selection and a middle click pastes it | `ClipboardBackend::MemoryFallback`; primary selection does nothing |
+| Text input | `aqua-ime-wayland` over text-input-v3 | typing still works, without composition |
+| Fonts | fontconfig, loaded at run time, configured generic families first | a walk of the XDG font directories, reported with one `aqua:` line |
+| Preferences, open, reveal, notifications, badge | `aqua-portal` over the session bus (portal Settings, OpenURI with the window's exported handle and an activation token, FileManager1, Notification, launcher badge) | fallback preferences; `OpenError::Unsupported`, `NotificationError::Unsupported`, `BadgeError::Unsupported` |
+| File dialogs | rfd through the FileChooser portal, parented to the window | `DialogError::Unavailable` without a display; a portal that cannot answer ends the dialog with no paths |
+| Accessibility | `aqua-a11y-atspi` (AT-SPI through `accesskit_unix`) | no screen-reader tree |
+| Memory pressure | PSI trigger on `/proc/pressure/memory`, else `MemAvailable` below 5 % | no low-memory trims |
+| Caches | `$XDG_CACHE_HOME/aqua` (else `~/.cache/aqua`): font fallback index and `pipelines-vulkan.cache` | caches are not persisted |
+
+Unsupported on Wayland, returned as `Unsupported` with a reason: global window
+position, restoring a minimized window, always-on-top, sending a window to the
+back, raw mouse input, and on some compositors minimizing, activation and
+exported handles. Window materials other than solid report a fallback. There is
+no `local_time` (the Windows locale formatter) and `file_icon` returns `None`.
+
+Tests never reach the user's desktop: `.cargo/config.toml` points the session
+bus, accessibility bus, runtime directory and Wayland display at dead ends and
+the cache directory at `target/aqua-test-cache`, and
+`aqua-verify/tests/isolation.rs` enforces that. Wayland tests run against a
+private headless sway and a private D-Bus daemon (`docs/GETTING_STARTED.md`).
 
 ## Validation
 

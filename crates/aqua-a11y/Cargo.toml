@@ -1,0 +1,15 @@
+[package]
+name = "aqua-a11y"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Aqua accessibility bridge shared by every platform adapter: AccessKit tree building, action translation, connection state and the inspector"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-protocol = { path = "../aqua-protocol" }
+accesskit = "0.25"
+
+[dev-dependencies]
+serde_json = "1"

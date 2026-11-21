@@ -1,4 +1,8 @@
-#[cfg(windows)]
+#[cfg(target_os = "linux")]
+#[path = "support/wayland.rs"]
+mod wayland;
+
+#[cfg(any(windows, target_os = "linux"))]
 mod native {
 
     use aqua::mailbox::Mailbox;
@@ -265,10 +269,18 @@ mod native {
     }
 
     pub fn run() {
+        #[cfg(target_os = "linux")]
+        let Some(_session) = super::wayland::session("^Aqua desktop") else {
+            return;
+        };
         unsafe { std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1") };
         let report = Rc::new(RefCell::new(Report::default()));
         let mut config = AquaConfig::default();
         config.window.title = "Aqua desktop contract".into();
+        #[cfg(target_os = "linux")]
+        {
+            config.app_id = Some(aqua::AppId::new("org.aqua.DesktopContract").unwrap());
+        }
         Aqua::new(config)
             .unwrap()
             .run(Desktop {
@@ -301,6 +313,6 @@ mod native {
 }
 
 fn main() {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     native::run();
 }

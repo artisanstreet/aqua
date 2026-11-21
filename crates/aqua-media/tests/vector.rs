@@ -321,12 +321,12 @@ fn curve_paints_match_raster_gradients_through_transforms_and_alpha() {
                     continue;
                 }
                 let sampled = aqua_graph::curve_paint::sample(|i| packed[i as usize], paint, em);
-                for channel in 0..4 {
+                for (channel, value) in sampled.iter().enumerate() {
                     let expected = raster.pixels[(y * 64 + x) * 4 + channel] as f32;
                     assert!(
-                        (sampled[channel] * 255.0 - expected).abs() <= 3.0,
+                        (value * 255.0 - expected).abs() <= 3.0,
                         "pixel {x},{y} channel {channel}: {} vs {expected}",
-                        sampled[channel] * 255.0
+                        value * 255.0
                     );
                 }
             }

@@ -1,6 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use aqua_core::{CursorIcon, InputEvent as CoreInputEvent, NodeId, Point, Rect, Size};
+use aqua_core::{
+    CursorIcon, InputEvent as CoreInputEvent, NodeId, Point, PointerButton, Rect, Size,
+};
 use aqua_protocol::{
     AccessAction, AccessTreeUpdate, DialogOutcome, DialogSpec, DragRegions, FileDropEvent, FrameId,
     FrameReason, FrameReport, GpuEvent, ImeCommand, ImeDocument, ImeEvent, ImeGeometry, ImeLine,
@@ -10,6 +12,7 @@ use aqua_protocol::{
 use aqua_ui::input::{ClipboardPaste, ExternalFileDragEvent};
 use aqua_ui::tree::{NodeKind, TextBacking};
 
+use super::interaction::{PrimaryPaste, SelectionKey};
 use super::{emit_scene_diff, Runtime};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,6 +54,13 @@ pub struct GpuState {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PrimaryButton {
+    #[default]
+    Up,
+    Down,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum DragState {
     #[default]
     Idle,
@@ -71,6 +81,9 @@ pub(super) struct Bridge {
     ime_area: Option<Rect>,
     access: AccessState,
     pastes: HashSet<RequestId>,
+    primary_pastes: HashMap<RequestId, PrimaryPaste>,
+    primary_button: PrimaryButton,
+    published_selection: Option<SelectionKey>,
     pub(super) input_consumed: bool,
     dialogs: Vec<(RequestId, DialogOutcome)>,
     queued: Vec<ShellCommand>,
@@ -96,6 +109,9 @@ impl Bridge {
             ime_area: None,
             access: AccessState::Detached,
             pastes: HashSet::new(),
+            primary_pastes: HashMap::new(),
+            primary_button: PrimaryButton::Up,
+            published_selection: None,
             input_consumed: false,
             dialogs: Vec::new(),
             queued: Vec::new(),
@@ -237,6 +253,10 @@ impl Runtime {
             self.bridge.pointer = Some(position);
         }
         let intent = clipboard_intent(event);
+        let middle = match event {
+            CoreInputEvent::PointerDown(pointer, PointerButton::Middle) => Some(pointer.position),
+            _ => None,
+        };
         let consumed = self.handle_input_with_default(event, |runtime| match intent {
             Some(ClipboardIntent::Copy | ClipboardIntent::Cut) => {
                 let cut = matches!(intent, Some(ClipboardIntent::Cut));
@@ -262,11 +282,45 @@ impl Runtime {
                     .push(ShellCommand::ClipboardRead { request });
                 Some(false)
             }
-            None => None,
+            None => {
+                if let Some(target) = middle.and_then(|at| runtime.primary_paste_at(at)) {
+                    let request = runtime.bridge.request();
+                    runtime.bridge.primary_pastes.insert(request, target);
+                    runtime
+                        .bridge
+                        .queued
+                        .push(ShellCommand::PrimarySelectionRead { request });
+                }
+                None
+            }
         });
         self.bridge.input_consumed = consumed;
+        self.bridge.primary_button = match event {
+            CoreInputEvent::PointerDown(_, PointerButton::Primary) => PrimaryButton::Down,
+            CoreInputEvent::PointerUp(_, PointerButton::Primary) => PrimaryButton::Up,
+            _ => self.bridge.primary_button,
+        };
+        self.publish_primary_selection();
         let reason = self.input_redraw(consumed);
         self.request_frame(out, reason);
+    }
+
+    fn publish_primary_selection(&mut self) {
+        if self.bridge.primary_button == PrimaryButton::Down {
+            return;
+        }
+        let key = self.selection_key();
+        if key == self.bridge.published_selection {
+            return;
+        }
+        self.bridge.published_selection = key;
+        if key.is_some()
+            && let Some(text) = self.selected_text().filter(|text| !text.is_empty())
+        {
+            self.bridge
+                .queued
+                .push(ShellCommand::PrimarySelectionWrite { text });
+        }
     }
 
     fn shell_event(&mut self, event: ShellEvent, out: &mut RuntimeOutput) {
@@ -323,7 +377,14 @@ impl Runtime {
                 image,
                 paths,
             } => {
-                if self.bridge.pastes.remove(&request) {
+                if let Some(target) = self.bridge.primary_pastes.remove(&request) {
+                    if text
+                        .as_deref()
+                        .is_some_and(|text| self.paste_primary_selection(target, text))
+                    {
+                        self.request_frame(out, FrameReason::INPUT);
+                    }
+                } else if self.bridge.pastes.remove(&request) {
                     let redraw = self.paste_clipboard(ClipboardPaste {
                         text: text.map(std::sync::Arc::from),
                         image: image.and_then(|image| {

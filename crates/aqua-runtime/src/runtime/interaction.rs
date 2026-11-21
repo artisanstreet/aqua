@@ -23,15 +23,32 @@ use aqua_ui::{
 use super::Runtime;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TextPosition {
+pub(super) struct TextPosition {
     node: NodeId,
     byte: usize,
 }
 
-#[derive(Clone, Copy)]
-struct DocumentSelection {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DocumentSelection {
     anchor: TextPosition,
     focus: TextPosition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SelectionKey {
+    Editable {
+        node: NodeId,
+        selection: Selection,
+        revision: u64,
+    },
+    Source(SourcePosition, SourcePosition),
+    Document(DocumentSelection),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PrimaryPaste {
+    node: NodeId,
+    byte: usize,
 }
 
 struct DocumentIndex {
@@ -418,6 +435,75 @@ impl Runtime {
             |tree, node| host.input_allowed(tree, node),
         );
         true
+    }
+
+    pub(super) fn selection_key(&self) -> Option<SelectionKey> {
+        if let Some(node) = self.tree.focused()
+            && self.text_node_allowed(node)
+            && !self.tree.is_disabled(node)
+            && let Some(NodeKind::Text(text)) = self.tree.get(node).map(|node| &node.kind)
+        {
+            if text.password {
+                return None;
+            }
+            if let TextBacking::Editable(editor) = &text.backing {
+                let selection = editor.selection();
+                return (!selection.is_caret()).then_some(SelectionKey::Editable {
+                    node,
+                    selection,
+                    revision: editor.revision(),
+                });
+            }
+        }
+        if let Some((anchor, focus)) = self.interaction.source_document.selection() {
+            return (self.source_selection_allowed() && anchor != focus)
+                .then_some(SelectionKey::Source(anchor, focus));
+        }
+        self.interaction
+            .selection
+            .filter(|selection| selection.anchor != selection.focus)
+            .map(SelectionKey::Document)
+    }
+
+    pub(super) fn primary_paste_at(&self, at: Point) -> Option<PrimaryPaste> {
+        let node = hit_test(&self.tree, at)?;
+        let editable = self.tree.get(node).is_some_and(|record| {
+            matches!(&record.kind, NodeKind::Text(text) if text.is_editable() && !text.external_text_input)
+        });
+        if !editable || !self.text_node_allowed(node) || self.tree.is_disabled(node) {
+            return None;
+        }
+        let position = self.hit_text_position(node, at)?;
+        Some(PrimaryPaste {
+            node,
+            byte: position.byte,
+        })
+    }
+
+    pub(super) fn paste_primary_selection(&mut self, at: PrimaryPaste, text: &str) -> bool {
+        if text.is_empty() || aqua_ui::events::text_is_composing(&self.tree) {
+            return false;
+        }
+        let Some(NodeKind::Text(record)) = self.tree.get(at.node).map(|node| &node.kind) else {
+            return false;
+        };
+        if !record.is_editable() || !self.text_node_allowed(at.node) {
+            return false;
+        }
+        let content = record.text();
+        let byte = (0..=at.byte.min(content.len()))
+            .rev()
+            .find(|byte| content.is_char_boundary(*byte))
+            .unwrap_or(0);
+        self.clear_document_selection();
+        self.tree.set_focused(Some(at.node));
+        self.tree
+            .set_text_selection(at.node, Some(Selection::caret_at(byte)));
+        self.paste_clipboard(aqua_ui::input::ClipboardPaste {
+            text: Some(std::sync::Arc::from(text)),
+            image: None,
+            paths: std::sync::Arc::from(Vec::new()),
+        })
     }
 
     pub fn selected_text(&self) -> Option<String> {

@@ -253,5 +253,5 @@ fn main() {
     #[cfg(windows)]
     native::run();
     #[cfg(not(windows))]
-    eprintln!("host_native: skipped; requires Windows");
+    eprintln!("host_native: skipped; Windows only: drives the window through a UIA client and Win32 messages; host_wayland covers the same flow through AT-SPI and virtual input");
 }

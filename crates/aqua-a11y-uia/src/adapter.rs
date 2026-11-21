@@ -9,7 +9,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_GETOBJECT, WM_KILLFOCUS, WM_SETFOCUS,
 };
 
-use crate::bridge::{A11yBridge, BridgeActionHandler, BridgeActivationHandler, Connection, WakeFn};
+use aqua_a11y::{A11yBridge, BridgeActionHandler, BridgeActivationHandler, Connection, WakeFn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachError {

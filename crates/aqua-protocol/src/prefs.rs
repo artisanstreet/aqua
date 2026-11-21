@@ -26,6 +26,7 @@ impl PrefState {
 pub enum PreferenceSource {
     EnvOverride,
     WindowsSystem,
+    Portal,
     Fallback,
 }
 

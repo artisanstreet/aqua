@@ -1,0 +1,27 @@
+[package]
+name = "aqua-gpu-vulkan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aqua Vulkan GpuBackend for Linux: ash, dynamic rendering, push descriptors, pooled transients, SPIR-V compiled from the shared HLSL"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-graph = { path = "../aqua-graph" }
+aqua-protocol = { path = "../aqua-protocol" }
+bytemuck = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aqua-shaders = { path = "../aqua-shaders" }
+ash = "0.38"
+libloading = "0.8"
+
+[dev-dependencies]
+aqua-gpu-ref = { path = "../aqua-gpu-ref" }
+aqua-verify = { path = "../aqua-verify" }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+aqua-shell = { path = "../aqua-shell" }
+aqua-shell-wayland = { path = "../aqua-shell-wayland", features = ["testing"] }
+serde_json = "1"

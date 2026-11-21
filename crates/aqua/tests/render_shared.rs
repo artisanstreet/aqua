@@ -1,4 +1,8 @@
-#[cfg(windows)]
+#[cfg(target_os = "linux")]
+#[path = "support/wayland.rs"]
+mod wayland;
+
+#[cfg(any(windows, target_os = "linux"))]
 mod native {
     use std::collections::HashMap;
     use std::sync::atomic::Ordering::Relaxed;
@@ -166,7 +170,7 @@ mod native {
                 }
             }
             let attached: u64 = stats.iter().map(|(_, s)| s.attached.load(Relaxed)).sum();
-            if attached == 0 {
+            if cfg!(windows) && attached == 0 {
                 return Err("the transparent window never attached its composition surface".into());
             }
             lines.push(format!("composition surfaces attached: {attached}"));
@@ -265,11 +269,14 @@ mod native {
                         stats.iter().map(|(_, s)| s.attached.load(Relaxed)).sum();
                     let attached_before: u64 = marks.iter().map(|(_, m)| m.attached).sum();
                     if moving && recoveries > 0 {
-                        let verdict = match attached_now > attached_before {
-                        true => Ok(format!(
+                        let verdict = match (cfg!(windows), attached_now > attached_before) {
+                        (false, _) => Ok(format!(
+                            "device loss recovered on {recoveries} windows"
+                        )),
+                        (true, true) => Ok(format!(
                             "device loss recovered on {recoveries} windows, composition surface re-attached"
                         )),
-                        false => Err("composition surface was not re-attached after recovery".into()),
+                        (true, false) => Err("composition surface was not re-attached after recovery".into()),
                     };
                         self.finish(ctx, verdict);
                     }
@@ -280,6 +287,10 @@ mod native {
     }
 
     pub fn run() {
+        #[cfg(target_os = "linux")]
+        let Some(_session) = super::wayland::session("^aqua shared") else {
+            return;
+        };
         unsafe { std::env::set_var("AQUA_SMOKE_MS", "40000") };
         unsafe { std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1") };
         let outcome = Arc::new(Mutex::new(Outcome::default()));
@@ -313,8 +324,8 @@ mod native {
 }
 
 fn main() {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     native::run();
-    #[cfg(not(windows))]
-    eprintln!("render_shared: skipped; requires Windows");
+    #[cfg(not(any(windows, target_os = "linux")))]
+    eprintln!("render_shared: skipped; requires Windows or Linux");
 }

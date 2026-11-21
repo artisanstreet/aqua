@@ -1,2 +1,7 @@
 [env]
-AQUA_FONT_DIRS = "/usr/share/fonts/truetype/dejavu:/usr/share/fonts/truetype/ubuntu:/usr/share/fonts/truetype/noto:/usr/share/fonts/truetype/droid"
+DBUS_SESSION_BUS_ADDRESS = { value = "unix:path=/nonexistent/aqua-tests-have-no-session-bus", force = true }
+AT_SPI_BUS_ADDRESS = { value = "unix:path=/nonexistent/aqua-tests-have-no-accessibility-bus", force = true }
+XDG_RUNTIME_DIR = { value = "/nonexistent/aqua-tests-have-no-runtime-dir", force = true }
+WAYLAND_DISPLAY = { value = "aqua-tests-have-no-display", force = true }
+DISPLAY = { value = "", force = true }
+XDG_CACHE_HOME = { value = "target/aqua-test-cache", relative = true, force = true }

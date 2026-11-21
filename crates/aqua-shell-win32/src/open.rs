@@ -1,77 +1,33 @@
-use std::path::{Path, PathBuf};
+use aqua_shell::open::ExternalTarget;
+use std::path::Path;
+
+pub use aqua_shell::open::OpenError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OpenTarget(Target);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Target {
-    Url(url::Url),
-    Path(PathBuf),
-    Reveal(PathBuf),
-}
-
-#[derive(Debug)]
-pub enum OpenError {
-    InvalidUrl,
-    UnsupportedScheme(String),
-    InvalidPath,
-    Io(std::io::Error),
-    Native(i32),
-}
-
-impl std::fmt::Display for OpenError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidUrl => f.write_str("invalid external URL"),
-            Self::UnsupportedScheme(scheme) => {
-                write!(f, "unsupported external URL scheme: {scheme}")
-            }
-            Self::InvalidPath => f.write_str("invalid external path"),
-            Self::Io(error) => error.fmt(f),
-            Self::Native(code) => write!(f, "native shell failed: {code}"),
-        }
-    }
-}
-
-impl std::error::Error for OpenError {}
+pub struct OpenTarget(ExternalTarget);
 
 impl OpenTarget {
     pub fn url(input: &str) -> Result<Self, OpenError> {
-        if input.chars().any(char::is_control) {
-            return Err(OpenError::InvalidUrl);
-        }
-        let url = url::Url::parse(input).map_err(|_| OpenError::InvalidUrl)?;
-        match url.scheme() {
-            "http" | "https" if url.host_str().is_some() => Ok(Self(Target::Url(url))),
-            "mailto" if !url.path().is_empty() => Ok(Self(Target::Url(url))),
-            "http" | "https" | "mailto" => Err(OpenError::InvalidUrl),
-            scheme => Err(OpenError::UnsupportedScheme(scheme.to_owned())),
-        }
+        ExternalTarget::url(input).map(Self)
     }
 
     pub fn path(path: &Path) -> Result<Self, OpenError> {
-        Self::canonical(path).map(|path| Self(Target::Path(path)))
+        ExternalTarget::path(path).map(Self)
     }
 
     pub fn reveal(path: &Path) -> Result<Self, OpenError> {
-        Self::canonical(path).map(|path| Self(Target::Reveal(path)))
-    }
-
-    fn canonical(path: &Path) -> Result<PathBuf, OpenError> {
-        if path.as_os_str().is_empty() {
-            return Err(OpenError::InvalidPath);
-        }
-        dunce::canonicalize(path).map_err(OpenError::Io)
+        ExternalTarget::reveal(path).map(Self)
     }
 
     #[cfg(windows)]
     pub fn execute(&self) -> Result<(), OpenError> {
-        execute(self)
+        execute(&self.0)
     }
 }
 
 #[cfg(windows)]
-fn execute(target: &OpenTarget) -> Result<(), OpenError> {
+fn execute(target: &ExternalTarget) -> Result<(), OpenError> {
+    use aqua_shell::open::Destination;
     use std::os::windows::ffi::OsStrExt;
     use windows::core::{w, PCWSTR};
     use windows::Win32::UI::Shell::{
@@ -81,16 +37,17 @@ fn execute(target: &OpenTarget) -> Result<(), OpenError> {
 
     let _apartment =
         crate::apartment::Apartment::new().map_err(|error| OpenError::Native(error.code().0))?;
-    let value = match &target.0 {
-        Target::Url(url) => std::ffi::OsStr::new(url.as_str()),
-        Target::Path(path) | Target::Reveal(path) => path.as_os_str(),
+    let destination = target.destination();
+    let value = match destination {
+        Destination::Url(url) => std::ffi::OsStr::new(url.as_str()),
+        Destination::Path(path) | Destination::Reveal(path) => path.as_os_str(),
     };
     let mut wide: Vec<u16> = value.encode_wide().collect();
     if wide.contains(&0) {
         return Err(OpenError::InvalidPath);
     }
     wide.push(0);
-    if matches!(&target.0, Target::Reveal(_)) {
+    if matches!(destination, Destination::Reveal(_)) {
         let mut item = std::ptr::null_mut();
         unsafe {
             SHParseDisplayName(PCWSTR(wide.as_ptr()), None, &mut item, 0, None)

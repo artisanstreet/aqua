@@ -63,12 +63,21 @@ pub enum SurfaceTarget {
     Offscreen(Extent),
     Window(WindowId),
     Native(NativeSurface),
+    Wayland(WaylandSurface),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NativeSurface {
     pub window: WindowId,
     pub hwnd: u64,
+    pub extent: Extent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WaylandSurface {
+    pub window: WindowId,
+    pub display: u64,
+    pub surface: u64,
     pub extent: Extent,
 }
 

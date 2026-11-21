@@ -21,3 +21,7 @@ pub fn find(name: &str) -> Option<&'static Blob> {
 pub fn find_dxbc(name: &str) -> Option<&'static Blob> {
     DXBC.iter().find(|blob| blob.name == name)
 }
+
+pub fn find_spirv(name: &str) -> Option<&'static Blob> {
+    SPIRV.iter().find(|blob| blob.name == name)
+}

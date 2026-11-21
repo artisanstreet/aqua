@@ -1,0 +1,21 @@
+[package]
+name = "aqua-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Aqua shell vocabulary shared by every platform shell: handler and events, window options, clipboard, notifications, dialogs, timing, chrome regions"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-protocol = { path = "../aqua-protocol" }
+raw-window-handle = "0.6"
+rfd = "0.17"
+url = "2"
+percent-encoding = "2"
+dunce = "1"
+xmlwriter = "0.1"
+thiserror = "2"
+
+[dev-dependencies]
+roxmltree = "0.21"

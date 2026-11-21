@@ -221,6 +221,12 @@ pub enum ShellCommand {
     ClipboardRead {
         request: RequestId,
     },
+    PrimarySelectionWrite {
+        text: String,
+    },
+    PrimarySelectionRead {
+        request: RequestId,
+    },
     Dialog {
         request: RequestId,
         spec: DialogSpec,

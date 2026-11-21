@@ -6,15 +6,13 @@ pub mod input;
 pub mod notifications;
 pub mod occlusion;
 pub mod open;
-pub mod picker;
 pub mod pointer;
-pub mod regions;
 pub mod services;
-pub mod timing;
 pub mod wake_trace;
 
 mod event;
 
+pub use aqua_shell::{picker, regions, timing};
 pub use event::{Chrome, FileDrag, Handler, ShellError, ShellEvent, WindowKind, WindowOptions};
 pub use hooks::{add_message_hook, set_message_hook, MessageHook, RawMessage};
 

@@ -17,10 +17,17 @@ pub const PURE_CRATES: &[&str] = &[
 pub const ADAPTER_CRATES: &[&str] = &[
     "aqua-gpu-d3d11",
     "aqua-gpu-d3d12",
+    "aqua-gpu-vulkan",
     "aqua-gpu-ref",
+    "aqua-shell",
     "aqua-shell-win32",
+    "aqua-shell-wayland",
     "aqua-ime-tsf",
+    "aqua-ime-wayland",
+    "aqua-a11y",
     "aqua-a11y-uia",
+    "aqua-a11y-atspi",
+    "aqua-portal",
     "aqua-fonts-system",
     "aqua-shaders",
     "aqua-transport",
@@ -53,11 +60,18 @@ pub const FORBIDDEN_ADAPTER_CRATES: &[&str] = &[
     "aqua",
     "aqua-gpu-d3d11",
     "aqua-gpu-d3d12",
+    "aqua-gpu-vulkan",
     "aqua-gpu-ref",
     "aqua-gpu-wgpu",
+    "aqua-shell",
     "aqua-shell-win32",
+    "aqua-shell-wayland",
     "aqua-ime-tsf",
+    "aqua-ime-wayland",
+    "aqua-a11y",
     "aqua-a11y-uia",
+    "aqua-a11y-atspi",
+    "aqua-portal",
     "aqua-fonts-system",
     "aqua-shaders",
     "aqua-transport",
@@ -77,6 +91,9 @@ pub const FORBIDDEN_EXTERNAL_CRATES: &[&str] = &[
     "glyphon",
     "cosmic-text",
     "fontdb",
+    "wayland-client",
+    "xkbcommon",
+    "zbus",
 ];
 
 pub const FORBIDDEN_SOURCE_TOKENS: &[&str] = &[
@@ -109,8 +126,10 @@ pub const REFERENCE_ONLY_KERNEL_USERS: &[&str] = &["aqua-gpu-ref"];
 pub const ADAPTER_PORT_IMPLS: &[(&str, &str)] = &[
     ("aqua-gpu-d3d11", "GpuBackend"),
     ("aqua-gpu-d3d12", "GpuBackend"),
+    ("aqua-gpu-vulkan", "GpuBackend"),
     ("aqua-gpu-ref", "GpuBackend"),
     ("aqua-ime-tsf", "ImeBackend"),
+    ("aqua-ime-wayland", "ImeBackend"),
     ("aqua-transport", "RenderHost"),
     ("aqua-transport", "Lowering"),
 ];
@@ -148,6 +167,21 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "aqua-gpu-vulkan",
+        &[
+            "hal",
+            "half",
+            "ledger",
+            "lifetimes",
+            "memo",
+            "pack",
+            "pool",
+            "sprite",
+            "scene",
+            "window",
+        ],
+    ),
+    (
         "aqua-gpu-ref",
         &[
             "backend",
@@ -161,6 +195,29 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "shadow",
             "sprites",
             "RefBackend",
+        ],
+    ),
+    (
+        "aqua-shell",
+        &[
+            "fallback",
+            "icon",
+            "input",
+            "notifications",
+            "open",
+            "picker",
+            "regions",
+            "services",
+            "timing",
+            "AppId",
+            "AppIdError",
+            "Chrome",
+            "FileDrag",
+            "Handler",
+            "ShellError",
+            "ShellEvent",
+            "WindowKind",
+            "WindowOptions",
         ],
     ),
     (
@@ -211,6 +268,49 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "aqua-shell-wayland",
+        &[
+            "capability",
+            "picker",
+            "regions",
+            "services",
+            "testing",
+            "timing",
+            "wake_trace",
+            "Chrome",
+            "FileDrag",
+            "Handler",
+            "ShellError",
+            "ShellEvent",
+            "WindowKind",
+            "WindowOptions",
+            "from_monotonic",
+            "FrameWait",
+            "Presented",
+            "SurfaceGeometry",
+            "SurfaceLease",
+            "now",
+            "pump_sent_messages",
+            "quit",
+            "run",
+            "schedule",
+            "set_waitables",
+            "Waker",
+            "Monitor",
+            "Scaling",
+            "CursorRect",
+            "Preedit",
+            "Surrounding",
+            "TextInput",
+            "TextInputBatch",
+            "TextInputEvent",
+            "TextInputState",
+            "Unsupported",
+            "DialogParent",
+            "Window",
+        ],
+    ),
+    (
         "aqua-ime-tsf",
         &[
             "double",
@@ -221,6 +321,31 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "KeyPhase",
             "TsfError",
             "TsfIme",
+        ],
+    ),
+    (
+        "aqua-ime-wayland",
+        &["model", "WaylandIme", "WaylandImeError"],
+    ),
+    (
+        "aqua-a11y",
+        &[
+            "accesskit",
+            "A11yBridge",
+            "BridgeActionHandler",
+            "BridgeActivationHandler",
+            "BridgeDeactivationHandler",
+            "Connection",
+            "WakeFn",
+            "inspect",
+            "render_json",
+            "render_text",
+            "InspectorNode",
+            "build_tree_update",
+            "map_role",
+            "pack_node_id",
+            "unpack_node_id",
+            "A11yTree",
         ],
     ),
     (
@@ -247,6 +372,21 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "UiaRouter",
         ],
     ),
+    ("aqua-a11y-atspi", &["AtspiAdapter", "Connection", "WakeFn"]),
+    (
+        "aqua-portal",
+        &[
+            "notifications",
+            "open",
+            "prefs",
+            "taskbar",
+            "testing",
+            "Bus",
+            "Method",
+            "PortalError",
+            "Wake",
+        ],
+    ),
     (
         "aqua-fonts-system",
         &[
@@ -260,14 +400,19 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "FaceBytes",
             "FaceFingerprint",
             "FontDatabase",
+            "Generic",
             "read_cache_file",
             "write_cache_file",
             "default_fallback_index_path",
             "system_font_directories",
             "weight_distance_order",
+            "testing",
         ],
     ),
-    ("aqua-shaders", &["Stage", "Blob", "find", "find_dxbc"]),
+    (
+        "aqua-shaders",
+        &["Stage", "Blob", "find", "find_dxbc", "find_spirv"],
+    ),
     (
         "aqua-oracle-dwrite",
         &[
@@ -429,3 +574,30 @@ pub fn architecture_crate_roles(document: &str) -> Vec<(String, String)> {
     }
     roles
 }
+
+pub const TEST_SESSION_DEAD_ENDS: &[(&str, &str)] = &[
+    (
+        "DBUS_SESSION_BUS_ADDRESS",
+        "unix:path=/nonexistent/aqua-tests-have-no-session-bus",
+    ),
+    (
+        "AT_SPI_BUS_ADDRESS",
+        "unix:path=/nonexistent/aqua-tests-have-no-accessibility-bus",
+    ),
+    (
+        "XDG_RUNTIME_DIR",
+        "/nonexistent/aqua-tests-have-no-runtime-dir",
+    ),
+    ("WAYLAND_DISPLAY", "aqua-tests-have-no-display"),
+    ("DISPLAY", ""),
+];
+
+pub const REAL_SESSION_TOKENS: &[&str] = &["/mnt/wslg", "/run/user", "wayland-0"];
+
+pub const SESSION_ESCAPE_TOKENS: &[&str] = &[
+    "env_clear(",
+    "env_remove(\"DBUS_SESSION_BUS_ADDRESS\")",
+    "env_remove(\"XDG_RUNTIME_DIR\")",
+    "remove_var(\"DBUS_SESSION_BUS_ADDRESS\")",
+    "remove_var(\"XDG_RUNTIME_DIR\")",
+];

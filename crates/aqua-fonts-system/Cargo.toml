@@ -5,6 +5,13 @@ edition = "2024"
 description = "Aqua system font discovery: memory-mapped faces shared between shaping and rasterization"
 license = "BSD-3-Clause"
 
+[features]
+testing = []
+
 [dependencies]
 skrifa = "0.46.2"
 memmap2 = "0.9"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.8"
+thiserror = "2"

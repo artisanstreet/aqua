@@ -1,0 +1,34 @@
+[package]
+name = "aqua-portal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Aqua desktop services over D-Bus for Linux: portal preferences and click settings, open and reveal, notifications and the launcher badge"
+
+[features]
+testing = []
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-protocol = { path = "../aqua-protocol" }
+aqua-shell = { path = "../aqua-shell" }
+thiserror = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5.19", default-features = false, features = ["async-io"] }
+serde = "1"
+futures-lite = "2"
+async-io = "2"
+async-channel = "2"
+rustix = { version = "1", features = ["fs"] }
+url = "2"
+
+[dev-dependencies]
+aqua-portal = { path = ".", features = ["testing"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = { version = "5.19", default-features = false, features = ["async-io"] }
+futures-lite = "2"
+async-io = "2"
+serde = "1"

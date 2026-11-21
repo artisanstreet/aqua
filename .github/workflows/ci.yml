@@ -49,6 +49,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/dxc"
           tar -xzf "$RUNNER_TEMP/dxc.tar.gz" -C "$RUNNER_TEMP/dxc"
           echo "AQUA_DXC_SPIRV=$RUNNER_TEMP/dxc/bin/dxc" >> "$GITHUB_ENV"
+          echo "AQUA_DXCOMPILER=$RUNNER_TEMP/dxc/lib/libdxcompiler.so" >> "$GITHUB_ENV"
       - name: Linux toolchain probes (SPIR-V, lavapipe, headless sway)
         if: runner.os == 'Linux'
         env:

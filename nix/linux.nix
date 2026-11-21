@@ -10,6 +10,8 @@ let
     pkgs.wayland
     pkgs.libxkbcommon
     pkgs.dbus
+    pkgs.zlib
+    pkgs.stdenv.cc.cc.lib
   ];
 in
 pkgs.mkShell {
@@ -33,6 +35,7 @@ pkgs.mkShell {
     pkgs.pkg-config
   ];
   AQUA_DXC_SPIRV = "${pkgs.directx-shader-compiler}/bin/dxc";
+  AQUA_DXCOMPILER = "${pkgs.directx-shader-compiler}/lib/libdxcompiler.so";
   AQUA_ATSPI_BUS_LAUNCHER = "${pkgs.at-spi2-core}/libexec/at-spi-bus-launcher";
   VK_ICD_FILENAMES = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.x86_64.json";
   VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";

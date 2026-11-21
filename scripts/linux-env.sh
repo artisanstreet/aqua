@@ -28,6 +28,13 @@ else
   report missing "dxc with SPIR-V codegen" "$dxc could not compile ps_quad to valid SPIR-V: $(head -n3 "$work/dxc.log" | tr '\n' ' ')"
 fi
 
+dxcompiler=${AQUA_DXCOMPILER:-}
+if [[ -n "$dxcompiler" && -f "$dxcompiler" ]]; then
+  report ok "libdxcompiler for runtime custom passes ($dxcompiler)"
+else
+  report missing libdxcompiler "set AQUA_DXCOMPILER to lib/libdxcompiler.so of DXC 1.7.2308 or newer; Vulkan custom passes need it at run time"
+fi
+
 if ! command -v vulkaninfo >/dev/null 2>&1; then
   report missing vulkaninfo "install vulkan-tools"
 else

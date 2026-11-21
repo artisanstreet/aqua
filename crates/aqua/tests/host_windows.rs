@@ -236,5 +236,5 @@ fn main() {
     #[cfg(windows)]
     native::run();
     #[cfg(not(windows))]
-    eprintln!("host_windows: skipped; requires Windows");
+    eprintln!("host_windows: skipped; Windows only: sends Win32 DPI and caption hit-test messages; host_wayland covers scale, resize and multi-window close on sway");
 }

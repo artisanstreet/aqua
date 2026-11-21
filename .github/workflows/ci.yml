@@ -39,7 +39,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwayland-dev libxkbcommon-dev pkg-config mesa-vulkan-drivers libvulkan-dev \
-            vulkan-validationlayers vulkan-tools spirv-tools sway grim dbus at-spi2-core xkb-data adwaita-icon-theme
+            vulkan-validationlayers vulkan-tools spirv-tools sway grim dbus at-spi2-core xkb-data adwaita-icon-theme \
+            fonts-dejavu-core
       - name: pinned DXC with SPIR-V codegen
         if: runner.os == 'Linux'
         run: |

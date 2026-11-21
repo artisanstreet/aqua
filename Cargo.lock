@@ -102,10 +102,15 @@ dependencies = [
  "aqua-text",
  "aqua-transport",
  "aqua-ui",
+ "async-io",
+ "futures-lite",
  "image",
+ "rustix",
+ "serde",
  "serde_json",
  "taffy",
  "windows",
+ "zbus",
 ]
 
 [[package]]

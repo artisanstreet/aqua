@@ -63,6 +63,19 @@ windows = { version = "0.62.2", features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+aqua-shell-wayland = { path = "../aqua-shell-wayland", features = ["testing"] }
+aqua-portal = { path = "../aqua-portal", features = ["testing"] }
+zbus = { version = "5.19", default-features = false, features = ["async-io"] }
+futures-lite = "2"
+async-io = "2"
+serde = "1"
+rustix = { version = "1", features = ["process"] }
+
+[[test]]
+name = "host_wayland"
+harness = false
+
 [[test]]
 name = "host_native"
 harness = false

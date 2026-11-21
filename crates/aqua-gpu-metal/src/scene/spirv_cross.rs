@@ -175,6 +175,23 @@ fn text(raw: *const c_char) -> Option<String> {
     }
 }
 
+fn signed_pow(msl: &str) -> String {
+    let mut out = String::with_capacity(msl.len());
+    let mut rest = msl;
+    while let Some(at) = rest.find("powr(") {
+        let (before, after) = rest.split_at(at);
+        let standalone = !before
+            .chars()
+            .next_back()
+            .is_some_and(|previous| previous.is_ascii_alphanumeric() || previous == '_');
+        out.push_str(before);
+        out.push_str(if standalone { "pow(" } else { "powr(" });
+        rest = &after["powr(".len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
 fn target(slot: Slot) -> c_uint {
     match slot {
         Slot::Buffer(index) | Slot::Texture(index) | Slot::Sampler(index) => index,
@@ -288,10 +305,13 @@ impl Translator {
         context.check("compiling to MSL", unsafe {
             (api.compile)(compiler, &mut source)
         })?;
-        let source = text(source).ok_or(TranslateError::Rejected {
-            step: "compiling to MSL",
-            reason: "no source was returned".to_owned(),
-        })?;
+        let source =
+            text(source)
+                .map(|source| signed_pow(&source))
+                .ok_or(TranslateError::Rejected {
+                    step: "compiling to MSL",
+                    reason: "no source was returned".to_owned(),
+                })?;
         let mut entries = null();
         let mut count = 0;
         context.check("listing entry points", unsafe {

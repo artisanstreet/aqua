@@ -27,6 +27,12 @@ pub fn appkit() -> bool {
     available(Facility::WindowServer)
 }
 
+pub fn compiling() -> bool {
+    offscreen::open(SurfaceFormat::Bgra8Unorm)
+        .and_then(offscreen::compiling)
+        .is_some()
+}
+
 pub fn options(title: &str, logical: (f64, f64), at: (i32, i32)) -> ShellOptions {
     ShellOptions {
         title: title.into(),

@@ -1,6 +1,8 @@
 #[cfg(target_os = "macos")]
 mod composition;
 #[cfg(target_os = "macos")]
+mod custom;
+#[cfg(target_os = "macos")]
 mod pacing;
 #[cfg(target_os = "macos")]
 mod present;
@@ -26,7 +28,7 @@ fn main() {
 mod cases {
     use super::support::{case, Case};
 
-    pub const ALL: [Case; 9] = [
+    pub const ALL: [Case; 10] = [
         case(
             "the_presented_drawable_equals_the_offscreen_render",
             super::present::drawable_equals_offscreen,
@@ -34,6 +36,10 @@ mod cases {
         case(
             "the_screen_shows_what_was_presented",
             super::present::screen_shows_presented,
+        ),
+        case(
+            "a_runtime_custom_pass_shows_on_screen",
+            super::custom::custom_pass_shows_on_screen,
         ),
         case(
             "a_premultiplied_window_composites_over_the_window_behind",

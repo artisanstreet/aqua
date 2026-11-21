@@ -30,6 +30,7 @@ pub const ADAPTER_CRATES: &[&str] = &[
     "aqua-a11y",
     "aqua-a11y-uia",
     "aqua-a11y-atspi",
+    "aqua-a11y-ax",
     "aqua-portal",
     "aqua-fonts-system",
     "aqua-shaders",
@@ -77,6 +78,7 @@ pub const FORBIDDEN_ADAPTER_CRATES: &[&str] = &[
     "aqua-a11y",
     "aqua-a11y-uia",
     "aqua-a11y-atspi",
+    "aqua-a11y-ax",
     "aqua-portal",
     "aqua-fonts-system",
     "aqua-shaders",
@@ -453,6 +455,10 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
         ],
     ),
     ("aqua-a11y-atspi", &["AtspiAdapter", "Connection", "WakeFn"]),
+    (
+        "aqua-a11y-ax",
+        &["AxAdapter", "Connection", "WakeFn", "testing"],
+    ),
     (
         "aqua-portal",
         &[

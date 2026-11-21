@@ -125,6 +125,7 @@ Adapters
   aqua-a11y          accessibility bridge every platform adapter shares: AccessKit tree, action translation, connection state, inspector (14.LW)
   aqua-a11y-uia      UI Automation
   aqua-a11y-atspi    AT-SPI through accesskit_unix on the session bus, fed from the shared bridge (14.LW)
+  aqua-a11y-ax       NSAccessibility through accesskit_macos, answering the AppKit view's accessibility calls, fed from the shared bridge (14.MA)
   aqua-portal        Linux desktop services over D-Bus: portal settings, open and reveal, notifications, launcher badge (14.LW)
   aqua-fonts-system  system font enumeration, fallback, memory-mapped font files
   aqua-shaders       build-time HLSL compilation to DXIL (dxc), DXBC SM 5.0 (fxc), SPIR-V (dxc, 14.LW) and MSL (SPIR-V through SPIRV-Cross, 14.MA)

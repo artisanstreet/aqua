@@ -1,0 +1,51 @@
+[package]
+name = "aqua-a11y-ax"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Aqua NSAccessibility provider: AccessKit's macOS adapter answering the AppKit view's accessibility calls, fed from the shared bridge"
+
+[features]
+testing = ["dep:objc2-application-services", "dep:objc2-core-foundation", "dep:thiserror"]
+
+[dependencies]
+aqua-protocol = { path = "../aqua-protocol" }
+aqua-a11y = { path = "../aqua-a11y" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+accesskit_macos = "0.27.2"
+aqua-shell-appkit = { path = "../aqua-shell-appkit" }
+thiserror = { version = "2", optional = true }
+objc2-application-services = { version = "0.3.2", default-features = false, optional = true, features = [
+  "std",
+  "AXActionConstants",
+  "AXAttributeConstants",
+  "AXError",
+  "AXNotificationConstants",
+  "AXUIElement",
+  "AXValue",
+  "AXValueConstants",
+  "HIServices",
+  "libc",
+] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, optional = true, features = [
+  "std",
+  "CFArray",
+  "CFCGTypes",
+  "CFDate",
+  "CFNumber",
+  "CFRunLoop",
+  "CFString",
+] }
+
+[dev-dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-a11y-ax = { path = ".", features = ["testing"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+aqua-shell-appkit = { path = "../aqua-shell-appkit", features = ["testing"] }
+
+[[test]]
+name = "ax"
+harness = false

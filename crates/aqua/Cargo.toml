@@ -35,6 +35,7 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Me
 
 [target.'cfg(target_os = "linux")'.dependencies]
 aqua-shell-wayland = { path = "../aqua-shell-wayland" }
+raw-window-handle = "0.6"
 aqua-gpu-vulkan = { path = "../aqua-gpu-vulkan" }
 aqua-ime-wayland = { path = "../aqua-ime-wayland" }
 aqua-a11y-atspi = { path = "../aqua-a11y-atspi" }

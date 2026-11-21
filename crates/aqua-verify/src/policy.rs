@@ -306,6 +306,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "TextInputEvent",
             "TextInputState",
             "Unsupported",
+            "DialogParent",
             "Window",
         ],
     ),

@@ -29,6 +29,8 @@ mod decoration;
 #[cfg(target_os = "linux")]
 mod drop;
 #[cfg(target_os = "linux")]
+mod external;
+#[cfg(target_os = "linux")]
 mod formats;
 #[cfg(target_os = "linux")]
 mod globals;
@@ -74,4 +76,4 @@ pub use text_input::{
 #[cfg(target_os = "linux")]
 pub use unsupported::Unsupported;
 #[cfg(target_os = "linux")]
-pub use window::Window;
+pub use window::{DialogParent, Window};

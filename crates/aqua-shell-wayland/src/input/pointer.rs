@@ -364,6 +364,7 @@ fn pressed(shell: &mut Shell, serial: u32, time: u32, code: u32, down: bool) {
     };
     if down {
         shell.seat.serial = Some(serial);
+        shell.seat.interacted = Some(focus.window);
     }
     let (which, bit) = button(source(code));
     let hit = hit_at(shell, focus);

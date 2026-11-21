@@ -29,6 +29,7 @@ pub(crate) struct Globals {
     pub fractional: Option<WpFractionalScaleManagerV1>,
     pub cursor_shape: Option<WpCursorShapeManagerV1>,
     pub activation: Option<XdgActivationV1>,
+    pub exporter: Option<crate::external::Exporter>,
     pub xdg_output: Option<ZxdgOutputManagerV1>,
     pub presentation: Option<WpPresentation>,
     pub data_device: Option<WlDataDeviceManager>,
@@ -49,6 +50,7 @@ impl Globals {
             fractional: None,
             cursor_shape: None,
             activation: None,
+            exporter: None,
             xdg_output: None,
             presentation: None,
             data_device: None,
@@ -107,6 +109,22 @@ impl Shell {
                 globals.cursor_shape = Some(registry.bind(name, 1, qh, ()));
             }
             "xdg_activation_v1" => globals.activation = Some(registry.bind(name, 1, qh, ())),
+            "zxdg_exporter_v2" => {
+                globals.exporter = Some(crate::external::Exporter::V2(registry.bind(
+                    name,
+                    1,
+                    qh,
+                    (),
+                )));
+            }
+            "zxdg_exporter_v1" if globals.exporter.is_none() => {
+                globals.exporter = Some(crate::external::Exporter::V1(registry.bind(
+                    name,
+                    1,
+                    qh,
+                    (),
+                )));
+            }
             "wp_presentation" => globals.presentation = Some(registry.bind(name, 1, qh, ())),
             "zxdg_output_manager_v1" => {
                 let manager: ZxdgOutputManagerV1 = registry.bind(name, version.min(3), qh, ());

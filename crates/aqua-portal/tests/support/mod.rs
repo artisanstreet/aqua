@@ -55,6 +55,11 @@ pub enum Event {
     Closed {
         id: u32,
     },
+    ChooseFile {
+        parent: String,
+        title: String,
+        request: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -187,6 +192,35 @@ impl OpenUri {
     }
 }
 
+pub struct FileChooser {
+    events: Mutex<Sender<Event>>,
+}
+
+#[zbus::interface(name = "org.freedesktop.portal.FileChooser")]
+impl FileChooser {
+    async fn open_file(
+        &self,
+        parent_window: String,
+        title: String,
+        options: HashMap<String, OwnedValue>,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+    ) -> zbus::fdo::Result<OwnedObjectPath> {
+        let sender = header
+            .sender()
+            .map(|sender| sender.trim_start_matches(':').replace('.', "_"))
+            .ok_or_else(|| zbus::fdo::Error::Failed("the call has no sender".into()))?;
+        let token = text(&options, "handle_token").unwrap_or_else(|| "aqua".into());
+        let request = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
+        let _ = self.events.lock().unwrap().send(Event::ChooseFile {
+            parent: parent_window,
+            title,
+            request: request.clone(),
+        });
+        OwnedObjectPath::try_from(request)
+            .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))
+    }
+}
+
 pub struct FileManager {
     events: Mutex<Sender<Event>>,
 }
@@ -302,6 +336,7 @@ pub struct Desktop {
     pub hung_settings: bool,
     pub open_uri: Option<bool>,
     pub notifications: bool,
+    pub file_chooser: bool,
 }
 
 pub struct Service {
@@ -354,6 +389,14 @@ pub fn desktop(bus: &PrivateBus, parts: Desktop) -> (Service, Receiver<Event>) {
                 OpenUri {
                     events: Mutex::new(events.clone()),
                     directories,
+                },
+            )?;
+        }
+        if parts.file_chooser {
+            builder = builder.serve_at(
+                PORTAL_PATH,
+                FileChooser {
+                    events: Mutex::new(events.clone()),
                 },
             )?;
         }

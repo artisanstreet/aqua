@@ -169,14 +169,27 @@ impl DialogRequest {
             .collect())
     }
 
+    pub fn execute_multi_for<
+        W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle + ?Sized,
+    >(
+        &self,
+        parent: &W,
+    ) -> Result<Vec<PathBuf>, DialogError> {
+        self.execute_multi_with(rfd::FileDialog::new().set_parent(parent))
+    }
+
     pub fn execute_multi(&self) -> Result<Vec<PathBuf>, DialogError> {
+        self.execute_multi_with(rfd::FileDialog::new())
+    }
+
+    fn execute_multi_with(&self, dialog: rfd::FileDialog) -> Result<Vec<PathBuf>, DialogError> {
         let kind = self.validated()?;
         if !dialogs_available() {
             return Err(DialogError::Unavailable(
                 "no display / portal for native dialogs in this session",
             ));
         }
-        let dialog = self.apply_to(rfd::FileDialog::new());
+        let dialog = self.apply_to(dialog);
         Ok(match kind {
             DialogKind::OpenFiles => dialog.pick_files().unwrap_or_default(),
             DialogKind::OpenFile => dialog.pick_file().into_iter().collect(),

@@ -64,6 +64,10 @@ fn read_keymap(fd: OwnedFd, size: u32) -> Option<String> {
 }
 
 impl Keyboard {
+    pub(crate) fn focus(&self) -> Option<WindowId> {
+        self.focus
+    }
+
     pub(crate) fn new(proxy: WlKeyboard) -> Self {
         let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
         let compose = compose_state(&context);
@@ -280,6 +284,7 @@ impl Dispatch<WlKeyboard, ()> for Shell {
                 let pressed = key_state == KeyState::Pressed;
                 if pressed {
                     seat.serial = Some(serial);
+                    seat.interacted = keyboard.focus.or(seat.interacted);
                 }
                 keyboard.key(key, pressed);
             }

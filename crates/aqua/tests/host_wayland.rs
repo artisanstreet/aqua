@@ -26,10 +26,13 @@ mod wayland {
     use aqua_fonts_system::testing::{FixtureFont, FontconfigFixture};
     use aqua_fonts_system::Generic;
     use aqua_portal::testing::{find_binary, scratch_dir, unavailable, PrivateBus};
-    use aqua_protocol::{AquaWindowId, Instant as AquaInstant, ObservedWindowState, WindowEvent};
+    use aqua_protocol::{
+        AquaWindowId, DialogKind, DialogOutcome, DialogSpec, Instant as AquaInstant,
+        ObservedWindowState, RequestId, WindowEvent,
+    };
     use aqua_shell_wayland::testing::{
-        capture, Compositor, DataControl, Edit, InputMethod, Rect, Selection, VirtualKeyboard,
-        VirtualPointer,
+        capture, Compositor, DataControl, Edit, Importer, InputMethod, Rect, Selection,
+        VirtualKeyboard, VirtualPointer,
     };
     use futures_lite::future;
 
@@ -40,6 +43,9 @@ mod wayland {
     const CHILD: &str = "AQUA_HOST_WAYLAND_APP";
     const APP_ID: &str = "org.aqua.HostWayland";
     const RECORDER_ID: &str = "org.aqua.HostWayland.Recorder";
+    const SERVICES_ID: &str = "org.aqua.HostWayland.Services";
+    const OPENED_URL: &str = "https://example.com/aqua?from=host-wayland";
+    const CHOSEN: &str = "/tmp/aqua-host-wayland-chosen.txt";
     const APPEARANCE: &str = "org.freedesktop.appearance";
     const TITLE: &str = "aqua host wayland";
     const LIMIT: Duration = Duration::from_secs(20);
@@ -68,6 +74,7 @@ mod wayland {
     pub fn main() {
         match std::env::var(CHILD).as_deref() {
             Ok("recorder") => recorder(),
+            Ok("services") => services(),
             Ok(_) => child(),
             Err(_) => parent(),
         }
@@ -152,6 +159,79 @@ mod wayland {
         }
     }
 
+    #[derive(Default)]
+    struct Services {
+        pointed: bool,
+        asked: bool,
+    }
+
+    fn report(line: &str) {
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
+    }
+
+    impl Application for Services {
+        fn on_window_event(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _event: &WindowEvent) {}
+
+        fn on_input(&mut self, ctx: &mut AppCtx, id: AquaWindowId, event: &InputEvent) {
+            if !self.pointed && matches!(event, InputEvent::PointerMove(..)) {
+                self.pointed = true;
+                report("pointer");
+            }
+            if self.asked || !matches!(event, InputEvent::PointerUp(..)) {
+                return;
+            }
+            self.asked = true;
+            match aqua::prelude::OpenTarget::url(OPENED_URL).and_then(|target| target.execute()) {
+                Ok(()) => report("opened"),
+                Err(error) => report(&format!("open failed: {error}")),
+            }
+            ctx.dialog(
+                id,
+                DialogSpec {
+                    kind: DialogKind::OpenFile { multiple: false },
+                    title: "Pick a file".into(),
+                    filters: Vec::new(),
+                },
+            );
+        }
+
+        fn on_dialog(
+            &mut self,
+            _ctx: &mut AppCtx,
+            _id: AquaWindowId,
+            _request: RequestId,
+            outcome: DialogOutcome,
+        ) {
+            match outcome {
+                DialogOutcome::Chosen(paths) => report(&format!("chosen {}", paths.join(" "))),
+                other => report(&format!("dialog {other:?}")),
+            }
+        }
+
+        fn build_scene(
+            &mut self,
+            _window: &ObservedWindowState,
+            _now: AquaInstant,
+        ) -> Option<AquaInstant> {
+            None
+        }
+    }
+
+    fn services() {
+        let mut config = AquaConfig {
+            app_id: Some(AppId::new(SERVICES_ID).expect("the services app id is valid")),
+            ..AquaConfig::default()
+        };
+        config.window.title = "aqua host wayland services".into();
+        let result = Aqua::new(config).and_then(|aqua| aqua.run(Services::default()));
+        if let Err(error) = result {
+            eprintln!("host_wayland: the services app failed: {error}");
+            std::process::exit(1);
+        }
+    }
+
     struct Lines(Receiver<String>);
 
     impl Lines {
@@ -164,6 +244,18 @@ mod wayland {
                     .try_for_each(|line| sender.send(line))
             });
             Lines(lines)
+        }
+
+        fn saw_within(&self, limit: Duration, accept: impl Fn(&str) -> bool) -> bool {
+            let deadline = Instant::now() + limit;
+            while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+                match self.0.recv_timeout(left) {
+                    Ok(line) if accept(&line) => return true,
+                    Ok(_) => {}
+                    Err(_) => return false,
+                }
+            }
+            false
         }
 
         fn expect(&self, what: &str, accept: impl Fn(&str) -> bool) {
@@ -315,10 +407,14 @@ mod wayland {
         }
 
         fn spawn_recorder(&self) -> (App, Lines) {
+            self.spawn_reporting("recorder", "the recorder")
+        }
+
+        fn spawn_reporting(&self, mode: &str, label: &str) -> (App, Lines) {
             let program = std::env::current_exe().expect("the test binary path");
-            let mut command = self.command(&program, &[(CHILD, "recorder")]);
+            let mut command = self.command(&program, &[(CHILD, mode)]);
             command.stdout(Stdio::piped());
-            let mut app = start(command, "the recorder");
+            let mut app = start(command, label);
             let stdout = app
                 .child
                 .stdout
@@ -846,6 +942,95 @@ mod wayland {
         );
     }
 
+    fn exported_handle(parent: &str) -> &str {
+        parent
+            .strip_prefix("wayland:")
+            .unwrap_or_else(|| panic!("the portal parent {parent:?} names a Wayland window"))
+    }
+
+    fn opening_a_url_and_a_file_dialog_hand_the_portal_the_window_and_an_activation_token(
+        desktop: &Desktop,
+    ) {
+        let (portal, events) = portal::desktop(
+            &desktop.bus,
+            portal::Desktop {
+                open_uri: Some(true),
+                file_chooser: true,
+                ..portal::Desktop::default()
+            },
+        );
+        let pointer = VirtualPointer::new(&desktop.compositor).expect("the virtual pointer binds");
+        let mut importer = Importer::connect(&desktop.compositor).expect("the importer binds");
+        let (mut app, lines) = desktop.spawn_reporting("services", "the services app");
+        let (_, rect) = desktop.mapped(SERVICES_ID, 1)[0];
+        let mut nudge = 0;
+        within("the app to see the pointer", || {
+            nudge = (nudge + 1) % 16;
+            pointer
+                .move_to(
+                    (rect.x + rect.width / 2 + nudge) as u32,
+                    (rect.y + rect.height / 2) as u32,
+                )
+                .expect("the pointer moves over the window");
+            lines
+                .saw_within(TICK * 10, |line| line == "pointer")
+                .then_some(())
+        });
+        pointer
+            .press(VirtualPointer::LEFT)
+            .and_then(|()| pointer.release(VirtualPointer::LEFT))
+            .expect("the window is clicked");
+
+        let portal::Event::OpenUri { parent, uri, token } = portal::next(&events) else {
+            panic!("the click opens the URL through the OpenURI portal first");
+        };
+        assert_eq!(uri, OPENED_URL);
+        assert!(
+            token.as_deref().is_some_and(|token| !token.is_empty()),
+            "the portal gets an activation token for the opened app"
+        );
+        let opened = importer
+            .import(exported_handle(&parent))
+            .expect("the importer asks");
+        assert!(
+            importer.alive(opened).expect("the importer answers"),
+            "the OpenURI parent is the app's exported window"
+        );
+        lines.expect("the open call", |line| line == "opened");
+
+        let portal::Event::ChooseFile {
+            parent,
+            title,
+            request,
+        } = portal::next(&events)
+        else {
+            panic!("the dialog goes to the FileChooser portal");
+        };
+        assert_eq!(title, "Pick a file");
+        let chooser = importer
+            .import(exported_handle(&parent))
+            .expect("the importer asks");
+        assert!(
+            importer.alive(chooser).expect("the importer answers"),
+            "the file dialog is parented to the app's exported window"
+        );
+        let uris = vec![format!("file://{CHOSEN}")];
+        let results = std::collections::HashMap::from([("uris", Variant::from(uris))]);
+        portal.emit(
+            &request,
+            "org.freedesktop.portal.Request",
+            "Response",
+            &(0u32, results),
+        );
+        lines.expect("the chosen file", |line| line == format!("chosen {CHOSEN}"));
+
+        desktop.kill(&format!("[app_id=\"^{SERVICES_ID}$\"]"));
+        assert!(
+            app.exit().success(),
+            "the services app quits when its window closes"
+        );
+    }
+
     fn button_pixels(desktop: &Desktop, window: Rect) -> Vec<[u8; 4]> {
         let shot = capture(&desktop.compositor, false).expect("sway captures the output");
         (window.y..window.y + 40)
@@ -952,6 +1137,10 @@ mod wayland {
             (
                 "selecting_offers_the_primary_selection_and_a_middle_click_pastes_another_clients",
                 selecting_offers_the_primary_selection_and_a_middle_click_pastes_another_clients,
+            ),
+            (
+                "opening_a_url_and_a_file_dialog_hand_the_portal_the_window_and_an_activation_token",
+                opening_a_url_and_a_file_dialog_hand_the_portal_the_window_and_an_activation_token,
             ),
             (
                 "text_renders_with_fonts_found_through_fontconfig_alone",

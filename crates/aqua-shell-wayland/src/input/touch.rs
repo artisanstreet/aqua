@@ -122,6 +122,7 @@ impl Dispatch<WlTouch, ()> for Shell {
             } => {
                 seat.serial = Some(serial);
                 if let Some(window) = surface.data::<WindowId>().copied() {
+                    seat.interacted = Some(window);
                     touch.down(window, id, (x, y));
                 }
             }

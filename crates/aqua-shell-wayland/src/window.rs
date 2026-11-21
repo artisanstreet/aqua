@@ -12,12 +12,9 @@ use aqua_protocol::{DragRegions, MaterialCapability, WindowId, WindowMaterial};
 use aqua_shell::{Chrome, ShellError, ShellEvent, WindowKind, WindowOptions};
 use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
-use wayland_client::{delegate_noop, Connection, Dispatch, QueueHandle};
+use wayland_client::delegate_noop;
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::WpCursorShapeDeviceV1;
 use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
-use wayland_protocols::xdg::activation::v1::client::xdg_activation_token_v1::{
-    self, XdgActivationTokenV1,
-};
 
 const CONFIGURE_LIMIT: Duration = Duration::from_secs(1);
 
@@ -390,26 +387,34 @@ impl Window {
     }
 
     pub fn activate(self) -> Result<(), Unsupported> {
-        state::try_with(|shell| {
-            let activation = shell
-                .globals
-                .activation
-                .clone()
-                .ok_or(Unsupported::Activation)?;
-            let surface = shell
-                .windows
-                .get(&self.id)
-                .map(|window| window.core.surface.clone())
-                .ok_or(Unsupported::Activation)?;
-            let token = activation.get_activation_token(&shell.qh, self.id);
-            if let (Some(serial), Some((_, seat))) = (shell.seat.serial, &shell.globals.seat) {
-                token.set_serial(serial, seat);
-            }
-            token.set_surface(&surface);
-            token.commit();
-            Ok(())
+        crate::external::activate(self.id)
+    }
+
+    pub fn activation_token(self) -> Result<String, Unsupported> {
+        crate::external::activation_token(self.id)
+    }
+
+    pub fn activate_with_token(self, token: &str) -> Result<(), Unsupported> {
+        crate::external::activate_with_token(self.id, token)
+    }
+
+    pub fn exported_handle(self) -> Result<String, Unsupported> {
+        crate::external::exported_handle(self.id)
+    }
+
+    pub fn engaged() -> Option<Window> {
+        state::try_with(|shell| shell.seat.engaged())
+            .flatten()
+            .map(|id| Window { id })
+    }
+
+    pub fn dialog_parent(self) -> Option<DialogParent> {
+        let (display, surface) = crate::external::proxy_pointers(self.id)?;
+        Some(DialogParent {
+            _lease: self.surface_lease()?,
+            display,
+            surface,
         })
-        .unwrap_or(Err(Unsupported::Activation))
     }
 
     pub fn show(self) -> Result<(), ShellError> {
@@ -427,6 +432,7 @@ impl Window {
         let remaining = state::try_with(|shell| {
             shell.seat.forget(self.id);
             shell.text_input.forget(self.id);
+            shell.external.forget(self.id);
             shell.windows.remove(&self.id).map(|_| shell.windows.len())
         })
         .flatten();
@@ -452,23 +458,19 @@ impl Window {
     }
 }
 
-impl Dispatch<XdgActivationTokenV1, WindowId> for Shell {
-    fn event(
-        state: &mut Self,
-        token: &XdgActivationTokenV1,
-        event: xdg_activation_token_v1::Event,
-        id: &WindowId,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        if let xdg_activation_token_v1::Event::Done { token: value } = event {
-            if let (Some(activation), Some(window)) =
-                (&state.globals.activation, state.windows.get(id))
-            {
-                activation.activate(value, &window.core.surface);
-            }
-            token.destroy();
-        }
+pub struct DialogParent {
+    _lease: SurfaceLease,
+    display: usize,
+    surface: usize,
+}
+
+impl DialogParent {
+    pub fn display_pointer(&self) -> usize {
+        self.display
+    }
+
+    pub fn surface_pointer(&self) -> usize {
+        self.surface
     }
 }
 

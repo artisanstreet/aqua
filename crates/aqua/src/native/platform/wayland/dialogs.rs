@@ -4,7 +4,10 @@ use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use aqua_protocol::{DialogKind, DialogSpec};
 use aqua_shell::picker::{DialogRequest, FileFilter};
 use aqua_shell::ShellError;
-use aqua_shell_wayland::{Waker, Window};
+use std::ffi::c_void;
+use std::ptr::NonNull;
+
+use aqua_shell_wayland::{DialogParent, Waker, Window};
 
 pub type DialogResult = Result<Vec<PathBuf>, ShellError>;
 
@@ -41,19 +44,46 @@ fn request_of(spec: &DialogSpec) -> DialogRequest {
         })
 }
 
+struct Parent(DialogParent);
+
+impl raw_window_handle::HasWindowHandle for Parent {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        let surface = NonNull::new(self.0.surface_pointer() as *mut c_void)
+            .ok_or(raw_window_handle::HandleError::Unavailable)?;
+        let raw = raw_window_handle::WaylandWindowHandle::new(surface);
+        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw.into()) })
+    }
+}
+
+impl raw_window_handle::HasDisplayHandle for Parent {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        let display = NonNull::new(self.0.display_pointer() as *mut c_void)
+            .ok_or(raw_window_handle::HandleError::Unavailable)?;
+        let raw = raw_window_handle::WaylandDisplayHandle::new(display);
+        Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(raw.into()) })
+    }
+}
+
 pub fn open(
     spec: &DialogSpec,
-    _owner: Option<Window>,
+    owner: Option<Window>,
     waker: Waker,
 ) -> Result<DialogJob, ShellError> {
     let request = request_of(spec);
+    let parent = owner.and_then(Window::dialog_parent).map(Parent);
     let (sender, receiver) = channel();
     std::thread::Builder::new()
         .name("aqua-dialog".into())
         .spawn(move || {
-            let result = request
-                .execute_multi()
-                .map_err(|error| ShellError::Dialog(error.to_string()));
+            let result = match &parent {
+                Some(parent) => request.execute_multi_for(parent),
+                None => request.execute_multi(),
+            }
+            .map_err(|error| ShellError::Dialog(error.to_string()));
             let _ = sender.send(result);
             waker.wake();
         })

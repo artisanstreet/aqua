@@ -17,6 +17,7 @@ pub(crate) struct Seat {
     pub keyboard: Option<keyboard::Keyboard>,
     pub touch: Option<touch::Touch>,
     pub serial: Option<u32>,
+    pub interacted: Option<WindowId>,
 }
 
 impl Seat {
@@ -26,7 +27,17 @@ impl Seat {
         self.touch = None;
     }
 
+    pub(crate) fn engaged(&self) -> Option<WindowId> {
+        self.keyboard
+            .as_ref()
+            .and_then(keyboard::Keyboard::focus)
+            .or(self.interacted)
+    }
+
     pub(crate) fn forget(&mut self, window: WindowId) {
+        if self.interacted == Some(window) {
+            self.interacted = None;
+        }
         if let Some(pointer) = self.pointer.as_mut() {
             pointer.forget(window);
         }

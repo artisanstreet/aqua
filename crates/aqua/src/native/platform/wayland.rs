@@ -1,10 +1,11 @@
 pub use aqua_shell_wayland::*;
 
-pub use aqua_portal::open;
 pub use aqua_shell::fallback::icon;
 
 #[path = "wayland/dialogs.rs"]
 pub mod dialogs;
+#[path = "wayland/open.rs"]
+pub mod open;
 #[path = "wayland/prefs.rs"]
 pub mod prefs;
 

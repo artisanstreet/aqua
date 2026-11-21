@@ -6,6 +6,7 @@ pub enum Unsupported {
     ConstrainedSize,
     Topmost,
     Activation,
+    Export,
     Lowering,
     RawMouse,
 }
@@ -19,6 +20,9 @@ impl Unsupported {
             Unsupported::ConstrainedSize => "size of a maximized, tiled or fullscreen window",
             Unsupported::Topmost => "always-on-top windows",
             Unsupported::Activation => "activating a window on this compositor",
+            Unsupported::Export => {
+                "handing a window to other clients (xdg-foreign) on this compositor"
+            }
             Unsupported::Lowering => "sending a window to the back",
             Unsupported::RawMouse => "raw mouse input",
         }

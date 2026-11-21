@@ -42,7 +42,7 @@ else
   if grep -q 'deviceType *= PHYSICAL_DEVICE_TYPE_CPU' "$work/vulkan.txt" && grep -q 'llvmpipe' "$work/vulkan.txt"; then
     report ok "lavapipe ($(grep -m1 'driverInfo' "$work/vulkan.txt" | sed 's/.*= //'))"
   else
-    report missing lavapipe "install mesa-vulkan-drivers and point VK_ICD_FILENAMES at lvp_icd.x86_64.json"
+    report missing lavapipe "install mesa-vulkan-drivers and point VK_ICD_FILENAMES at its lvp_icd json (VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-unset}): $(grep -m3 -iE 'error|fail' "$work/vulkan.txt" | tr '\n' ' ')"
   fi
   if grep -q 'VK_LAYER_KHRONOS_validation' "$work/vulkan.txt"; then
     report ok "VK_LAYER_KHRONOS_validation"

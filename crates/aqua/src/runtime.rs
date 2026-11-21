@@ -597,6 +597,7 @@ pub struct Aqua {
     runs: aqua_text::SharedRuns,
     pub(crate) prefs: OsPreferences,
     clipboard: Box<dyn Clipboard>,
+    primary: crate::paste::PrimarySelection,
     pub(crate) window_requests: VecDeque<WindowRequest>,
     pub(crate) dialogs: VecDeque<(AquaWindowId, RequestId, DialogSpec)>,
     next_request: u64,
@@ -648,6 +649,7 @@ impl Aqua {
             eprintln!("aqua: reduced-motion motion policy requested");
         }
         let (clipboard, clipboard_backend) = app_clipboard();
+        let primary = crate::paste::PrimarySelection::platform();
         crate::native::startup_mark("clipboard_ready");
         eprintln!("aqua: clipboard backend: {clipboard_backend:?}");
         let smoke_frames = std::env::var("AQUA_SMOKE_FRAMES")
@@ -682,6 +684,7 @@ impl Aqua {
             runs: aqua_text::SharedRuns::new(),
             prefs,
             clipboard,
+            primary,
             clipboard_backend,
             window_requests: VecDeque::new(),
             dialogs: VecDeque::new(),
@@ -856,6 +859,10 @@ impl Aqua {
                         &mut *self.clipboard,
                         request,
                     )));
+                }
+                ShellCommand::PrimarySelectionWrite { text } => self.primary.write(text),
+                ShellCommand::PrimarySelectionRead { request } => {
+                    feedback.push(RuntimeInput::Shell(self.primary.read(request)));
                 }
                 ShellCommand::Dialog { request, spec } => {
                     self.dialogs.push_back((id, request, spec));

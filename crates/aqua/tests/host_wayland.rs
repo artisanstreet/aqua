@@ -779,6 +779,72 @@ mod wayland {
             .unwrap_or_else(|| panic!("the {name} example is built next to {}", binary.display()))
     }
 
+    fn selecting_offers_the_primary_selection_and_a_middle_click_pastes_another_clients(
+        desktop: &Desktop,
+    ) {
+        let mut keyboard = VirtualKeyboard::with_layout(&desktop.compositor, "us", "")
+            .expect("the virtual keyboard binds");
+        let pointer = VirtualPointer::new(&desktop.compositor).expect("the virtual pointer binds");
+        let peer =
+            Clipboard(DataControl::connect(&desktop.compositor).expect("data control binds"));
+        let port = free_port().to_string();
+        let mut app = desktop.spawn_test_app(&[("AQUA_INSPECTOR", port.as_str())]);
+        let inspector = Inspector(port.parse().expect("a port number"));
+        let (_, rect) = desktop.mapped(APP_ID, 1)[0];
+        inspector.await_value("the first tree", "draft");
+        desktop.rendered(rect);
+
+        pointer
+            .move_to((rect.x + 100) as u32, (rect.y + 56) as u32)
+            .expect("the pointer moves over the field");
+        pointer
+            .press(VirtualPointer::LEFT)
+            .and_then(|()| pointer.release(VirtualPointer::LEFT))
+            .expect("the field is clicked");
+        within("the field to take focus", || {
+            inspector
+                .field("TextInput", "focused")
+                .filter(|focused| focused == true)
+        });
+        let clipboard = peer.text(Selection::Clipboard);
+        chord(&mut keyboard, VirtualKeyboard::KEY_A);
+        within("the selection to become the primary selection", || {
+            peer.text(Selection::Primary).filter(|text| text == "draft")
+        });
+        assert_eq!(
+            peer.text(Selection::Clipboard),
+            clipboard,
+            "selecting alone leaves the clipboard alone"
+        );
+
+        peer.0.offer(
+            Selection::Primary,
+            vec![(TEXT.to_owned(), "peer ".as_bytes().to_vec())],
+        );
+        within("the peer to own the primary selection", || {
+            peer.text(Selection::Primary).filter(|text| text == "peer ")
+        });
+        pointer
+            .move_to((rect.x + 1) as u32, (rect.y + 56) as u32)
+            .expect("the pointer moves to the start of the field");
+        pointer
+            .press(VirtualPointer::MIDDLE)
+            .and_then(|()| pointer.release(VirtualPointer::MIDDLE))
+            .expect("the field is middle-clicked");
+        inspector.await_value("the middle-click paste", "peer draft");
+        assert_eq!(
+            peer.text(Selection::Primary).as_deref(),
+            Some("peer "),
+            "pasting does not take the primary selection back"
+        );
+
+        desktop.kill(&format!("[app_id=\"^{APP_ID}$\"]"));
+        assert!(
+            app.exit().success(),
+            "the test app quits when its window closes"
+        );
+    }
+
     fn button_pixels(desktop: &Desktop, window: Rect) -> Vec<[u8; 4]> {
         let shot = capture(&desktop.compositor, false).expect("sway captures the output");
         (window.y..window.y + 40)
@@ -881,6 +947,10 @@ mod wayland {
             (
                 "smoke_mode_exits_after_the_requested_presented_frames",
                 smoke_mode_exits_after_the_requested_presented_frames,
+            ),
+            (
+                "selecting_offers_the_primary_selection_and_a_middle_click_pastes_another_clients",
+                selecting_offers_the_primary_selection_and_a_middle_click_pastes_another_clients,
             ),
             (
                 "text_renders_with_fonts_found_through_fontconfig_alone",

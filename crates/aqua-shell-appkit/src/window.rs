@@ -111,6 +111,15 @@ pub(crate) fn occlusion(id: WindowId) -> Occlusion {
     state::native(id).map_or(Occlusion::Covered, |native| occlusion_of(&native))
 }
 
+fn backing_scale(id: WindowId, native: &AquaWindow) -> f64 {
+    #[cfg(feature = "testing")]
+    if let Some(scale) = crate::testing::scale_override(id) {
+        return scale;
+    }
+    let _ = id;
+    native.backingScaleFactor()
+}
+
 pub(crate) fn refresh_metrics(id: WindowId) {
     let Some((native, view, layer, reported, geometry)) = state::window(id, |window| {
         (
@@ -123,7 +132,7 @@ pub(crate) fn refresh_metrics(id: WindowId) {
     }) else {
         return;
     };
-    let scale = native.backingScaleFactor();
+    let scale = backing_scale(id, &native);
     let size = view.bounds().size;
     let physical = (
         (size.width * scale).round().max(1.0) as u32,
@@ -304,7 +313,7 @@ impl Window {
     }
 
     pub fn scale(self) -> f64 {
-        state::window(self.id, |window| window.native.backingScaleFactor()).unwrap_or(1.0)
+        state::native(self.id).map_or(1.0, |native| backing_scale(self.id, &native))
     }
 
     pub fn inner_size(self) -> (u32, u32) {

@@ -1,14 +1,20 @@
 pub mod capture;
+pub mod cases;
 pub mod inject;
 pub mod post;
+pub mod screen;
+pub mod script;
 
 use crate::window::Window;
+use aqua_protocol::WindowId;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSButton, NSWindowButton};
+use objc2_app_kit::{NSButton, NSWindowButton, NSWindowDidChangeBackingPropertiesNotification};
 use objc2_core_graphics::{
     CGPreflightPostEventAccess, CGPreflightScreenCaptureAccess, CGSessionCopyCurrentDictionary,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect};
+use objc2_foundation::{MainThreadMarker, NSNotificationCenter, NSPoint, NSRect};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Facility {
@@ -177,4 +183,31 @@ pub fn track_events_for(duration: std::time::Duration) {
             app.sendEvent(&event);
         }
     }
+}
+
+thread_local! {
+    static SCALES: RefCell<BTreeMap<WindowId, f64>> = const { RefCell::new(BTreeMap::new()) };
+}
+
+pub(crate) fn scale_override(id: WindowId) -> Option<f64> {
+    SCALES.with_borrow(|scales| scales.get(&id).copied())
+}
+
+pub fn report_backing_scale(window: Window, scale: Option<f64>) {
+    SCALES.with_borrow_mut(|scales| match scale {
+        Some(scale) => scales.insert(window.id(), scale),
+        None => scales.remove(&window.id()),
+    });
+    if let Some(native) = crate::state::native(window.id()) {
+        unsafe {
+            NSNotificationCenter::defaultCenter().postNotificationName_object(
+                NSWindowDidChangeBackingPropertiesNotification,
+                Some(&native),
+            )
+        };
+    }
+}
+
+pub fn contents_scale(window: Window) -> Option<f64> {
+    crate::state::window(window.id(), |state| state.layer.contentsScale())
 }

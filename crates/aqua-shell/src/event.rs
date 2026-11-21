@@ -120,6 +120,7 @@ impl WindowOptions {
 pub enum ShellError {
     Win32(&'static str, i32),
     Wayland(&'static str, String),
+    AppKit(&'static str, String),
     ClipboardBusy,
     ClipboardUnavailable,
     LoopAlreadyRunning,
@@ -131,6 +132,7 @@ impl std::fmt::Display for ShellError {
         match self {
             ShellError::Win32(call, code) => write!(f, "{call} failed with {code:#x}"),
             ShellError::Wayland(request, reason) => write!(f, "{request} failed: {reason}"),
+            ShellError::AppKit(call, reason) => write!(f, "{call} failed: {reason}"),
             ShellError::ClipboardBusy => write!(f, "clipboard is held by another process"),
             ShellError::ClipboardUnavailable => write!(f, "clipboard has no unicode text"),
             ShellError::LoopAlreadyRunning => write!(f, "message loop already running"),

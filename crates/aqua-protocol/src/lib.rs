@@ -28,8 +28,8 @@ pub use control::{Pace, Timeline};
 pub use geometry::{AquaWindowId, LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 pub use gpu::{
     DeviceStatus, FeatureTier, Features, FrameInputs, FrameReport, GpuBackend, GpuCapabilities,
-    GpuError, GpuReadback, NativeSurface, PresentHint, PresentTimes, RecoveryReport, SurfaceId,
-    SurfacePixels, SurfaceTarget, TextureOp, TextureRegion, TextureUpload, UploadBatch,
+    GpuError, GpuReadback, MetalSurface, NativeSurface, PresentHint, PresentTimes, RecoveryReport,
+    SurfaceId, SurfacePixels, SurfaceTarget, TextureOp, TextureRegion, TextureUpload, UploadBatch,
     WaylandSurface,
 };
 pub use ime::{

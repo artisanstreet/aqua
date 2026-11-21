@@ -10,8 +10,8 @@ use aqua_gpu_d3d11::window::{RecoveryNotice, WindowBackend, WindowOptions};
 use aqua_gpu_ref::RefBackend;
 use aqua_graph::{plan_paint, Extent, FramePlan, PaintCommand, Quad};
 use aqua_protocol::{
-    DeviceStatus, FrameInputs, GpuBackend, GpuError, GpuReadback, NativeSurface, PresentHint,
-    SurfaceId, SurfaceTarget, WindowId,
+    DeviceStatus, FrameInputs, GpuBackend, GpuError, GpuReadback, MetalSurface, NativeSurface,
+    PresentHint, SurfaceId, SurfaceTarget, WindowId,
 };
 
 use crate::test_window::TestWindow;
@@ -322,4 +322,22 @@ fn surfaces_can_be_destroyed_and_recreated_on_the_same_window() {
         .is_err());
     let (second, _) = open(&mut backend, &window);
     frame(&mut backend, &window, second, &scene(extent, 0.0));
+}
+
+#[test]
+fn a_metal_layer_target_is_refused_as_unsupported() {
+    use aqua_gpu_d3d11::scene::{AdapterPreference as SceneAdapter, OffscreenBackend};
+
+    let target = SurfaceTarget::Metal(MetalSurface {
+        window: WindowId::new(1).unwrap(),
+        layer: 1,
+        extent: Extent::new(8, 8),
+    });
+    let refused = Err(GpuError::Unsupported("Metal layers need aqua-gpu-metal"));
+    assert_eq!(
+        backend(AdapterPreference::Warp).create_surface(target),
+        refused
+    );
+    let mut offscreen = OffscreenBackend::new(SceneAdapter::Warp).expect("WARP offscreen backend");
+    assert_eq!(offscreen.create_surface(target), refused);
 }

@@ -98,6 +98,9 @@ impl GpuBackend for RefBackend {
             SurfaceTarget::Window(_) | SurfaceTarget::Native(_) | SurfaceTarget::Wayland(_) => {
                 Err(GpuError::Unsupported("window surfaces"))
             }
+            SurfaceTarget::Metal(_) => {
+                Err(GpuError::Unsupported("Metal layers need aqua-gpu-metal"))
+            }
         }
     }
 

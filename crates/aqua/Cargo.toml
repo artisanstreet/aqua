@@ -36,6 +36,8 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Me
 [target.'cfg(target_os = "linux")'.dependencies]
 aqua-shell-wayland = { path = "../aqua-shell-wayland" }
 raw-window-handle = "0.6"
+rustix = { version = "1", features = ["event", "fs"] }
+thiserror = "2"
 aqua-gpu-vulkan = { path = "../aqua-gpu-vulkan" }
 aqua-ime-wayland = { path = "../aqua-ime-wayland" }
 aqua-a11y-atspi = { path = "../aqua-a11y-atspi" }
@@ -72,7 +74,7 @@ zbus = { version = "5.19", default-features = false, features = ["async-io"] }
 futures-lite = "2"
 async-io = "2"
 serde = "1"
-rustix = { version = "1", features = ["process"] }
+rustix = { version = "1", features = ["process", "system"] }
 
 [[test]]
 name = "host_wayland"

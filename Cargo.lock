@@ -110,6 +110,7 @@ dependencies = [
  "serde",
  "serde_json",
  "taffy",
+ "thiserror",
  "windows",
  "zbus",
 ]

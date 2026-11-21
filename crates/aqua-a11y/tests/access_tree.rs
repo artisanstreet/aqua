@@ -170,6 +170,40 @@ fn a_departed_assistive_client_stops_snapshots_and_a_returning_one_gets_the_full
 }
 
 #[test]
+fn a_leaving_and_returning_client_wakes_once_each_after_the_lock_and_advances_the_epoch() {
+    use accesskit::{ActivationHandler, DeactivationHandler};
+    use aqua_a11y::BridgeDeactivationHandler;
+    use std::sync::{Arc, Mutex, OnceLock, Weak};
+
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let target: Arc<OnceLock<Weak<A11yBridge>>> = Arc::new(OnceLock::new());
+    let (seen, reader) = (observed.clone(), target.clone());
+    let bridge = A11yBridge::new(Arc::new(move || {
+        let bridge = reader.get().and_then(Weak::upgrade).unwrap();
+        seen.lock()
+            .unwrap()
+            .push((bridge.connection(), bridge.epoch()));
+    }));
+    target.set(Arc::downgrade(&bridge)).unwrap();
+    let mut activation = BridgeActivationHandler::new(bridge.clone());
+    let mut deactivation = BridgeDeactivationHandler::new(bridge.clone());
+    assert_eq!(bridge.epoch(), 0);
+
+    activation.request_initial_tree();
+    deactivation.deactivate_accessibility();
+    activation.request_initial_tree();
+
+    assert_eq!(
+        *observed.lock().unwrap(),
+        vec![
+            (Connection::Connected, 1),
+            (Connection::Dormant, 1),
+            (Connection::Connected, 2),
+        ]
+    );
+}
+
+#[test]
 fn changed_snapshots_only_publish_changed_nodes_and_keep_text_actions_live() {
     let bridge = A11yBridge::new(std::sync::Arc::new(|| {}));
     bridge.connect();

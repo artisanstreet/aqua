@@ -18,6 +18,7 @@ pub enum Connection {
 #[derive(Default)]
 struct Shared {
     connection: Connection,
+    epoch: u64,
     actions: VecDeque<A11yActionRequest>,
     tree: A11yTree,
     last_update: Option<AccessTreeUpdate>,
@@ -47,10 +48,15 @@ impl A11yBridge {
         self.shared().connection
     }
 
+    pub fn epoch(&self) -> u64 {
+        self.shared().epoch
+    }
+
     pub fn connect(&self) {
         {
             let mut shared = self.shared();
             shared.connection = Connection::Connected;
+            shared.epoch += 1;
             shared.last_update = None;
             shared.published.clear();
         }
@@ -58,10 +64,13 @@ impl A11yBridge {
     }
 
     pub fn deactivate(&self) {
-        let mut shared = self.shared();
-        shared.connection = Connection::Dormant;
-        shared.last_update = None;
-        shared.published.clear();
+        {
+            let mut shared = self.shared();
+            shared.connection = Connection::Dormant;
+            shared.last_update = None;
+            shared.published.clear();
+        }
+        (self.waker)();
     }
 
     pub fn snapshot(&self, update: &AccessTreeUpdate) -> Option<TreeUpdate> {
@@ -118,6 +127,22 @@ impl accesskit::ActivationHandler for BridgeActivationHandler {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
         self.bridge.connect();
         None
+    }
+}
+
+pub struct BridgeDeactivationHandler {
+    bridge: Arc<A11yBridge>,
+}
+
+impl BridgeDeactivationHandler {
+    pub fn new(bridge: Arc<A11yBridge>) -> Self {
+        Self { bridge }
+    }
+}
+
+impl accesskit::DeactivationHandler for BridgeDeactivationHandler {
+    fn deactivate_accessibility(&mut self) {
+        self.bridge.deactivate();
     }
 }
 

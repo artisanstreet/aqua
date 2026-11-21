@@ -329,6 +329,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "A11yBridge",
             "BridgeActionHandler",
             "BridgeActivationHandler",
+            "BridgeDeactivationHandler",
             "Connection",
             "WakeFn",
             "inspect",

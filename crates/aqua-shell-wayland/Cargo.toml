@@ -1,0 +1,34 @@
+[package]
+name = "aqua-shell-wayland"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Aqua Wayland shell: explicit-time loop, xdg-shell windows, fractional scale, outputs, seat input through xkbcommon, cursors, client chrome"
+
+[features]
+testing = [
+  "dep:wayland-protocols-wlr",
+  "dep:wayland-protocols-misc",
+  "dep:serde_json",
+]
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-protocol = { path = "../aqua-protocol" }
+aqua-shell = { path = "../aqua-shell" }
+thiserror = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = { version = "0.31", features = ["system"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-cursor = "0.31"
+xkbcommon = { version = "0.8", default-features = false }
+rustix = { version = "1", features = ["event", "fs", "thread", "time"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
+wayland-protocols-misc = { version = "0.3", features = ["client"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[dev-dependencies]
+serde_json = "1"
+aqua-shell-wayland = { path = ".", features = ["testing"] }

@@ -24,6 +24,7 @@ mod macos {
         WindowRequest,
     };
     use aqua_scene::Scene;
+    use aqua_shell_appkit::services::app_clipboard;
     use aqua_shell_appkit::testing::capture::window_number_image;
     use aqua_shell_appkit::testing::cases::{case, Case};
     use aqua_shell_appkit::testing::inject::{Button, Motion};
@@ -57,7 +58,7 @@ mod macos {
         }
     }
 
-    const ALL: [Case; 17] = [
+    const ALL: [Case; 18] = [
         case(
             "a_real_app_shows_a_window_and_presents_frames",
             shows_and_presents,
@@ -66,6 +67,10 @@ mod macos {
         case(
             "typing_copying_and_pasting_in_a_field_shows_the_text_on_screen",
             typing,
+        ),
+        case(
+            "text_copied_in_a_field_reaches_another_process_and_its_copy_pastes_back",
+            pasteboard,
         ),
         case(
             "text_renders_with_fonts_found_through_core_text_alone",
@@ -685,6 +690,45 @@ mod macos {
         inspector.await_value(
             "Command-A, Command-C, End, Command-V through the app clipboard",
             "draftxyzdraftxyz",
+        );
+        app.quits_cleanly();
+    }
+
+    fn pasteboard() {
+        if !available(Facility::PostEvent) {
+            return;
+        }
+        let (clipboard, _) = app_clipboard();
+        let clipboard = std::cell::RefCell::new(clipboard);
+        clipboard
+            .borrow_mut()
+            .set_text("stale".into())
+            .expect("the test pasteboard takes text");
+        let (mut app, inspector) = inspected("field", &[]);
+        inspector.await_value("the first tree", "draft");
+        let window = app.windows(1).remove(0);
+        click(at(&window, SIZE.1, (100.0, 56.0)));
+        post::tap(KEY_A, Modifiers::LOGO);
+        post::tap(KEY_C, Modifiers::LOGO);
+        within(
+            "Command-C to reach the pasteboard this process reads",
+            || {
+                let text = clipboard
+                    .borrow_mut()
+                    .get_text()
+                    .expect("the pasteboard reads");
+                (text.as_deref() == Some("draft")).then_some(())
+            },
+        );
+        clipboard
+            .borrow_mut()
+            .set_text(" \u{4e16}\u{754c}".into())
+            .expect("the test pasteboard takes text");
+        post::tap(END, Modifiers::NONE);
+        post::tap(KEY_V, Modifiers::LOGO);
+        inspector.await_value(
+            "Command-V to paste what this process copied",
+            "draft \u{4e16}\u{754c}",
         );
         app.quits_cleanly();
     }

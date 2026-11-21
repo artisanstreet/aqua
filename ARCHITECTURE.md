@@ -118,7 +118,7 @@ Adapters
   aqua-shell         shell vocabulary every platform shell shares: handler, events, window options, clipboard trait, notifications, dialogs, timing, regions, input formulas; a fallback shell for other targets (14.LW)
   aqua-shell-win32   windows, input, DPI, chrome, clipboard, dialogs, prefs, materials
   aqua-shell-wayland Wayland: explicit-time loop, xdg-shell windows, fractional scale, outputs, seat input through xkbcommon, cursors, client chrome, surface leases, clipboard and primary selection, file drops, text-input-v3 transport (14.LW)
-  aqua-shell-appkit  AppKit: run loop with explicit time, NSWindow/NSView windows, backing scale, screens, occlusion, keyboard/mouse/scroll input, cursors, overlay chrome with traffic lights, layer leases, NSTextInputClient routing (14.MA)
+  aqua-shell-appkit  AppKit: run loop with explicit time, NSWindow/NSView windows, backing scale, screens, occlusion, keyboard/mouse/scroll input, cursors, overlay chrome with traffic lights, layer leases, pasteboard, NSTextInputClient routing (14.MA)
   aqua-ime-tsf       Text Services Framework
   aqua-ime-wayland   text-input-v3: UTF-16 windows as UTF-8 surrounding text, composition, commit and cancel without double insertion (14.LW)
   aqua-a11y          accessibility bridge every platform adapter shares: AccessKit tree, action translation, connection state, inspector (14.LW)

@@ -348,6 +348,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "model",
             "picker",
             "regions",
+            "services",
             "testing",
             "timing",
             "wake_trace",
@@ -673,4 +674,10 @@ pub const SESSION_ESCAPE_TOKENS: &[&str] = &[
     "env_remove(\"XDG_RUNTIME_DIR\")",
     "remove_var(\"DBUS_SESSION_BUS_ADDRESS\")",
     "remove_var(\"XDG_RUNTIME_DIR\")",
+    "env_remove(\"AQUA_MAC_PASTEBOARD\")",
+    "remove_var(\"AQUA_MAC_PASTEBOARD\")",
+    "env_remove(PASTEBOARD_VARIABLE)",
+    "remove_var(PASTEBOARD_VARIABLE)",
 ];
+
+pub const GENERAL_PASTEBOARD_TOKENS: &[&str] = &["generalPasteboard", "PasteboardName::General"];

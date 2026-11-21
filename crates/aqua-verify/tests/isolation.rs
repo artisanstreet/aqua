@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use aqua_verify::metadata::workspace_root;
-use aqua_verify::policy::{REAL_SESSION_TOKENS, SESSION_ESCAPE_TOKENS, TEST_SESSION_DEAD_ENDS};
+use aqua_verify::policy::{
+    GENERAL_PASTEBOARD_TOKENS, REAL_SESSION_TOKENS, SESSION_ESCAPE_TOKENS, TEST_SESSION_DEAD_ENDS,
+};
 
 fn rust_files(dir: &Path) -> Vec<PathBuf> {
     let mut stack = vec![dir.to_path_buf()];
@@ -111,6 +113,37 @@ fn test_code_never_names_the_real_session_or_strips_the_dead_ends() {
     assert!(
         found.is_empty(),
         "sources that could reach the user's session:\n{}",
+        found.join("\n")
+    );
+}
+
+fn is_test_source(path: &Path) -> bool {
+    path.components().any(|part| part.as_os_str() == "tests")
+        || path
+            .ancestors()
+            .any(|dir| dir.ends_with("aqua-shell-appkit/src/testing"))
+}
+
+#[test]
+fn no_test_source_names_the_general_pasteboard() {
+    let this = Path::new(file!())
+        .file_name()
+        .expect("this test file has a name");
+    let found: Vec<String> = rust_files(&workspace_root().join("crates"))
+        .into_iter()
+        .filter(|path| path.file_name() != Some(this) && is_test_source(path))
+        .flat_map(|path| {
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            GENERAL_PASTEBOARD_TOKENS
+                .iter()
+                .filter(|token| text.contains(**token))
+                .map(|token| format!("{} uses {token}", path.display()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(
+        found.is_empty(),
+        "test sources that could write to the user's clipboard:\n{}",
         found.join("\n")
     );
 }

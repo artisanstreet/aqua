@@ -9,6 +9,8 @@ pub mod model;
 
 #[cfg(target_os = "macos")]
 pub mod capability;
+#[cfg(target_os = "macos")]
+pub mod services;
 #[cfg(all(target_os = "macos", feature = "testing"))]
 pub mod testing;
 #[cfg(target_os = "macos")]
@@ -20,6 +22,8 @@ mod access;
 mod app;
 #[cfg(target_os = "macos")]
 mod chrome;
+#[cfg(target_os = "macos")]
+mod clipboard;
 #[cfg(target_os = "macos")]
 mod clock;
 #[cfg(target_os = "macos")]

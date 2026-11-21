@@ -1,6 +1,7 @@
 pub mod capture;
 pub mod cases;
 pub mod inject;
+pub mod pasteboard;
 pub mod post;
 pub mod screen;
 pub mod script;

@@ -1,6 +1,6 @@
 pub use aqua_shell_appkit::*;
 
-pub use aqua_shell::fallback::{icon, open, services};
+pub use aqua_shell::fallback::{icon, open};
 
 #[path = "appkit/dialogs.rs"]
 pub mod dialogs;

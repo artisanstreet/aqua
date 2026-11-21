@@ -132,6 +132,10 @@ impl Compositor {
             .env_remove("SWAYSOCK")
             .env_remove("WAYLAND_DEBUG")
             .env("XDG_RUNTIME_DIR", &runtime)
+            .env(
+                "DBUS_SESSION_BUS_ADDRESS",
+                format!("unix:path={}", runtime.join("no-session-bus").display()),
+            )
             .env("WLR_BACKENDS", "headless")
             .env("WLR_RENDERER", "pixman")
             .env("WLR_LIBINPUT_NO_DEVICES", "1")

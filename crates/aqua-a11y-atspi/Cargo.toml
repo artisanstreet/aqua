@@ -1,0 +1,29 @@
+[package]
+name = "aqua-a11y-atspi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Aqua AT-SPI provider: AccessKit's Unix adapter fed from the runtime's accessibility snapshots"
+
+[dependencies]
+aqua-protocol = { path = "../aqua-protocol" }
+aqua-a11y = { path = "../aqua-a11y" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+accesskit_unix = { version = "0.24.1", default-features = false, features = ["async-io"] }
+
+[dev-dependencies]
+aqua-core = { path = "../aqua-core" }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+aqua-portal = { path = "../aqua-portal", features = ["testing"] }
+zbus = { version = "5.19", default-features = false, features = ["async-io"] }
+futures-lite = "2"
+async-io = "2"
+serde = "1"
+rustix = { version = "1", features = ["process"] }
+
+[[test]]
+name = "atspi"
+harness = false

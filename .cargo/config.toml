@@ -5,3 +5,5 @@ XDG_RUNTIME_DIR = { value = "/nonexistent/aqua-tests-have-no-runtime-dir", force
 WAYLAND_DISPLAY = { value = "aqua-tests-have-no-display", force = true }
 DISPLAY = { value = "", force = true }
 XDG_CACHE_HOME = { value = "target/aqua-test-cache", relative = true, force = true }
+AQUA_MAC_PASTEBOARD = { value = "org.aqua.tests.pasteboard", force = true }
+MACOSX_DEPLOYMENT_TARGET = "14.0"

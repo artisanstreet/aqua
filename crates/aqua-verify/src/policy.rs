@@ -601,6 +601,7 @@ pub const TEST_SESSION_DEAD_ENDS: &[(&str, &str)] = &[
     ),
     ("WAYLAND_DISPLAY", "aqua-tests-have-no-display"),
     ("DISPLAY", ""),
+    ("AQUA_MAC_PASTEBOARD", "org.aqua.tests.pasteboard"),
 ];
 
 pub const REAL_SESSION_TOKENS: &[&str] = &["/mnt/wslg", "/run/user", "wayland-0"];

@@ -1,10 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::sync::Arc;
 
+use aqua_graph::{CustomPassSpec, CustomShaderId};
 use ash::vk;
 
 use super::binding::Layouts;
+use super::custom::Custom;
+use super::dxc::RuntimeCompiler;
 use super::Error;
 use crate::hal::{Checked, Device, Garbage};
 use crate::pack::{QUAD_STRIDE, SHADOW_STRIDE, SOLID_STRIDE};
@@ -54,7 +57,7 @@ const FIRST_FRAME: [Kind; 5] = [
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Layout {
+pub(super) enum Layout {
     None,
     Floats { count: u32, stride: usize },
     Solid,
@@ -62,7 +65,7 @@ enum Layout {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Blending {
+pub(super) enum Blending {
     Opaque,
     Over,
     Dual,
@@ -223,6 +226,99 @@ fn compatible_cache<'a>(device: &Device, library: &'a [u8]) -> &'a [u8] {
     }
 }
 
+pub(super) fn shader_module(device: &Device, code: &[u32]) -> Result<vk::ShaderModule, Error> {
+    let info = vk::ShaderModuleCreateInfo::default().code(code);
+    Ok(unsafe { device.raw.create_shader_module(&info, None) }.checked("vkCreateShaderModule")?)
+}
+
+pub(super) struct Stages<'a> {
+    pub vertex: (vk::ShaderModule, &'a CStr),
+    pub pixel: (vk::ShaderModule, &'a CStr),
+}
+
+pub(super) struct GraphicsDesc<'a> {
+    pub stages: Stages<'a>,
+    pub layout: Layout,
+    pub blend: Blending,
+    pub pipeline_layout: vk::PipelineLayout,
+    pub format: vk::Format,
+}
+
+pub(super) fn graphics_pipeline(
+    device: &Device,
+    cache: vk::PipelineCache,
+    desc: GraphicsDesc<'_>,
+) -> Result<vk::Pipeline, Error> {
+    let stages = [
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(desc.stages.vertex.0)
+            .name(desc.stages.vertex.1),
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(desc.stages.pixel.0)
+            .name(desc.stages.pixel.1),
+    ];
+    let (bindings, attributes) = vertex_input(desc.layout);
+    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+        .vertex_binding_descriptions(&bindings)
+        .vertex_attribute_descriptions(&attributes);
+    let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::TRIANGLE_STRIP);
+    let viewport = vk::PipelineViewportStateCreateInfo::default()
+        .viewport_count(1)
+        .scissor_count(1);
+    let raster = vk::PipelineRasterizationStateCreateInfo::default()
+        .polygon_mode(vk::PolygonMode::FILL)
+        .cull_mode(vk::CullModeFlags::NONE)
+        .front_face(vk::FrontFace::CLOCKWISE)
+        .line_width(1.0);
+    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    let attachments = [blend_attachment(desc.blend)];
+    let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+    let formats = [desc.format];
+    let mut rendering =
+        vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&formats);
+    let info = vk::GraphicsPipelineCreateInfo::default()
+        .stages(&stages)
+        .vertex_input_state(&vertex_input)
+        .input_assembly_state(&assembly)
+        .viewport_state(&viewport)
+        .rasterization_state(&raster)
+        .multisample_state(&multisample)
+        .color_blend_state(&blend)
+        .dynamic_state(&dynamic)
+        .layout(desc.pipeline_layout)
+        .push_next(&mut rendering);
+    let pipeline = unsafe { device.raw.create_graphics_pipelines(cache, &[info], None) }
+        .map_err(|(_, result)| result)
+        .checked("vkCreateGraphicsPipelines")?[0];
+    Ok(pipeline)
+}
+
+pub(super) fn compute_pipeline(
+    device: &Device,
+    cache: vk::PipelineCache,
+    module: vk::ShaderModule,
+    entry: &CStr,
+    layout: vk::PipelineLayout,
+) -> Result<vk::Pipeline, Error> {
+    let stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::COMPUTE)
+        .module(module)
+        .name(entry);
+    let info = vk::ComputePipelineCreateInfo::default()
+        .stage(stage)
+        .layout(layout);
+    let pipeline = unsafe { device.raw.create_compute_pipelines(cache, &[info], None) }
+        .map_err(|(_, result)| result)
+        .checked("vkCreateComputePipelines")?[0];
+    Ok(pipeline)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PipelineStats {
     pub compiled: u32,
@@ -247,6 +343,7 @@ pub struct Pipelines {
     startup_open: bool,
     late: Vec<Kind>,
     hint: Option<BTreeSet<String>>,
+    custom: Custom,
 }
 
 fn label(kind: Kind) -> String {
@@ -263,7 +360,11 @@ fn is_own_label(name: &str) -> bool {
 }
 
 impl Pipelines {
-    pub fn new(device: &Arc<Device>, cache: Option<&[u8]>) -> Result<Self, Error> {
+    pub fn new(
+        device: &Arc<Device>,
+        cache: Option<&[u8]>,
+        compiler: RuntimeCompiler,
+    ) -> Result<Self, Error> {
         let (hint, library) = super::hint::decode(cache);
         let initial = compatible_cache(device, library.unwrap_or_default());
         let info = vk::PipelineCacheCreateInfo::default().initial_data(initial);
@@ -281,6 +382,7 @@ impl Pipelines {
             startup_open: true,
             late: Vec::new(),
             hint: hint.filter(|names| names.iter().all(|name| is_own_label(name))),
+            custom: Custom::new(device, compiler),
         })
     }
 
@@ -288,10 +390,7 @@ impl Pipelines {
         if let Some(module) = self.modules.get(name) {
             return Ok(*module);
         }
-        let code = words(name)?;
-        let info = vk::ShaderModuleCreateInfo::default().code(&code);
-        let module = unsafe { self.device.raw.create_shader_module(&info, None) }
-            .checked("vkCreateShaderModule")?;
+        let module = shader_module(&self.device, &words(name)?)?;
         self.modules.insert(name, module);
         Ok(module)
     }
@@ -307,57 +406,20 @@ impl Pipelines {
         let pixel = self.module(shaders.pixel)?;
         let vertex_entry = CString::new(shaders.vertex).expect("entry names have no NUL");
         let pixel_entry = CString::new(shaders.pixel).expect("entry names have no NUL");
-        let stages = [
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(vertex)
-                .name(&vertex_entry),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(pixel)
-                .name(&pixel_entry),
-        ];
-        let (bindings, attributes) = vertex_input(shaders.layout);
-        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
-            .vertex_binding_descriptions(&bindings)
-            .vertex_attribute_descriptions(&attributes);
-        let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-            .topology(vk::PrimitiveTopology::TRIANGLE_STRIP);
-        let viewport = vk::PipelineViewportStateCreateInfo::default()
-            .viewport_count(1)
-            .scissor_count(1);
-        let raster = vk::PipelineRasterizationStateCreateInfo::default()
-            .polygon_mode(vk::PolygonMode::FILL)
-            .cull_mode(vk::CullModeFlags::NONE)
-            .front_face(vk::FrontFace::CLOCKWISE)
-            .line_width(1.0);
-        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-        let attachments = [blend_attachment(shaders.blend)];
-        let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
-        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-        let formats = [format];
-        let mut rendering =
-            vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&formats);
-        let info = vk::GraphicsPipelineCreateInfo::default()
-            .stages(&stages)
-            .vertex_input_state(&vertex_input)
-            .input_assembly_state(&assembly)
-            .viewport_state(&viewport)
-            .rasterization_state(&raster)
-            .multisample_state(&multisample)
-            .color_blend_state(&blend)
-            .dynamic_state(&dynamic)
-            .layout(layouts.graphics)
-            .push_next(&mut rendering);
-        let pipeline = unsafe {
-            self.device
-                .raw
-                .create_graphics_pipelines(self.cache, &[info], None)
-        }
-        .map_err(|(_, result)| result)
-        .checked("vkCreateGraphicsPipelines")?[0];
+        let pipeline = graphics_pipeline(
+            &self.device,
+            self.cache,
+            GraphicsDesc {
+                stages: Stages {
+                    vertex: (vertex, &vertex_entry),
+                    pixel: (pixel, &pixel_entry),
+                },
+                layout: shaders.layout,
+                blend: shaders.blend,
+                pipeline_layout: layouts.graphics(),
+                format,
+            },
+        )?;
         self.stats.compiled += 1;
         Ok(pipeline)
     }
@@ -392,24 +454,46 @@ impl Pipelines {
             return Ok(pipeline);
         }
         let module = self.module("cs_row_box_blur")?;
-        let entry = c"cs_row_box_blur";
-        let stage = vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::COMPUTE)
-            .module(module)
-            .name(entry);
-        let info = vk::ComputePipelineCreateInfo::default()
-            .stage(stage)
-            .layout(layouts.compute);
-        let pipeline = unsafe {
-            self.device
-                .raw
-                .create_compute_pipelines(self.cache, &[info], None)
-        }
-        .map_err(|(_, result)| result)
-        .checked("vkCreateComputePipelines")?[0];
+        let pipeline = compute_pipeline(
+            &self.device,
+            self.cache,
+            module,
+            c"cs_row_box_blur",
+            layouts.compute(),
+        )?;
         self.stats.compiled += 1;
         self.compute = Some(pipeline);
         Ok(pipeline)
+    }
+
+    pub fn custom_available(&self) -> bool {
+        self.custom.available()
+    }
+
+    pub fn custom(
+        &mut self,
+        spec: &CustomPassSpec,
+        format: vk::Format,
+        layouts: &Layouts,
+    ) -> Result<vk::Pipeline, Error> {
+        self.custom.graphics(self.cache, spec, format, layouts)
+    }
+
+    pub fn register_compute(
+        &mut self,
+        id: CustomShaderId,
+        hlsl: &str,
+        entry: &str,
+    ) -> Result<(), Error> {
+        self.custom.register(id, hlsl, entry)
+    }
+
+    pub fn registered_compute(
+        &mut self,
+        id: CustomShaderId,
+        layouts: &Layouts,
+    ) -> Result<Option<vk::Pipeline>, Error> {
+        self.custom.registered(self.cache, id, layouts)
     }
 
     pub fn warm(&mut self, format: vk::Format, layouts: &Layouts) -> Result<(), Error> {

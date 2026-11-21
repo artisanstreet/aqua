@@ -227,6 +227,7 @@ dependencies = [
  "aqua-verify",
  "ash",
  "bytemuck",
+ "libloading",
  "serde_json",
  "thiserror",
 ]

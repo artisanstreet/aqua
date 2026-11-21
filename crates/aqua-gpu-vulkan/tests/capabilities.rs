@@ -21,7 +21,11 @@ fn capabilities_report_baseline_tier_and_software_on_lavapipe() {
     assert_eq!(capabilities.tier, FeatureTier::Baseline);
     assert!(capabilities.features.software);
     assert!(capabilities.features.compute && capabilities.features.color_matrix);
-    assert!(!capabilities.features.custom_passes);
+    assert_eq!(
+        capabilities.features.custom_passes,
+        backend.runtime_compiler().ready().is_some(),
+        "custom passes are offered exactly when libdxcompiler loads"
+    );
     assert!(!capabilities.features.window_surfaces);
     assert!(capabilities.max_texture_extent >= 16384);
 }

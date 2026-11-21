@@ -37,20 +37,18 @@ fn run(mut backend: OffscreenBackend, tolerance: Tolerance) {
     };
     let report = run_suite(&mut reference, &mut backend, &config);
     eprintln!("{report}");
-    let unexpected: Vec<String> = report
+    let skipped: Vec<String> = report
         .cases
         .iter()
         .filter_map(|case| match &case.outcome {
-            Outcome::Unsupported(reason) if !reason.ends_with("custom passes") => {
-                Some(format!("{}: {reason}", case.name))
-            }
+            Outcome::Unsupported(reason) => Some(format!("{}: {reason}", case.name)),
             _ => None,
         })
         .collect();
     assert!(
-        unexpected.is_empty(),
-        "only custom passes may be skipped:\n{}",
-        unexpected.join("\n")
+        skipped.is_empty(),
+        "no case may be skipped:\n{}",
+        skipped.join("\n")
     );
     assert!(report.passed(), "{}", report.failures().join("\n"));
     support::assert_clean(&backend);
@@ -58,14 +56,18 @@ fn run(mut backend: OffscreenBackend, tolerance: Tolerance) {
 
 #[test]
 fn software_float_surface_matches_reference() {
-    if let Some(backend) = support::open(AdapterPreference::Software, SurfaceFormat::Rgba16Float) {
+    if let Some(backend) = support::open(AdapterPreference::Software, SurfaceFormat::Rgba16Float)
+        .and_then(support::compiling)
+    {
         run(backend, Tolerance::default());
     }
 }
 
 #[test]
 fn software_eight_bit_surface_matches_reference() {
-    if let Some(backend) = support::open(AdapterPreference::Software, SurfaceFormat::Bgra8Unorm) {
+    if let Some(backend) = support::open(AdapterPreference::Software, SurfaceFormat::Bgra8Unorm)
+        .and_then(support::compiling)
+    {
         run(backend, EIGHT_BIT);
     }
 }
@@ -77,7 +79,7 @@ fn without_push_descriptors_the_pool_path_matches_reference() {
         format: SurfaceFormat::Rgba16Float,
         ..OffscreenOptions::default()
     };
-    if let Some(backend) = support::open_with(options) {
+    if let Some(backend) = support::open_with(options).and_then(support::compiling) {
         assert_eq!(backend.device_info().binding, Binding::Pool);
         run(backend, Tolerance::default());
     }
@@ -85,14 +87,18 @@ fn without_push_descriptors_the_pool_path_matches_reference() {
 
 #[test]
 fn hardware_float_surface_matches_reference() {
-    if let Some(backend) = support::open(AdapterPreference::Hardware, SurfaceFormat::Rgba16Float) {
+    if let Some(backend) = support::open(AdapterPreference::Hardware, SurfaceFormat::Rgba16Float)
+        .and_then(support::compiling)
+    {
         run(backend, Tolerance::default());
     }
 }
 
 #[test]
 fn hardware_eight_bit_surface_matches_reference() {
-    if let Some(backend) = support::open(AdapterPreference::Hardware, SurfaceFormat::Bgra8Unorm) {
+    if let Some(backend) = support::open(AdapterPreference::Hardware, SurfaceFormat::Bgra8Unorm)
+        .and_then(support::compiling)
+    {
         run(backend, EIGHT_BIT);
     }
 }

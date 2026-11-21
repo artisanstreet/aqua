@@ -1,4 +1,6 @@
 mod binding;
+mod custom;
+mod dxc;
 mod formats;
 mod frames;
 mod hint;
@@ -12,6 +14,7 @@ use aqua_graph::TextureHandle;
 
 pub use crate::hal::selection::AdapterPreference;
 pub use crate::hal::{Descriptors, DeviceOptions, Validation};
+pub use dxc::{Attempt, CompileError, LoadError, RuntimeCompiler, ShaderCompiler, LIBRARY};
 pub use formats::SurfaceFormat;
 pub use frames::PassTime;
 pub(crate) use frames::{Frames, Presentable};
@@ -35,6 +38,8 @@ pub enum Error {
     UnknownTexture(TextureHandle),
     #[error("persistent texture: {0}")]
     Texture(&'static str),
+    #[error("shader compilation: {0}")]
+    Shader(#[from] dxc::CompileError),
     #[error("transient textures need {needed} bytes, above the {ceiling} byte ceiling")]
     Budget { needed: u64, ceiling: u64 },
 }

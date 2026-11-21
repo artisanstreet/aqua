@@ -5,9 +5,11 @@ use aqua_graph::{
 };
 use ash::vk;
 
-use super::binding::{Layouts, Uniform};
+use super::binding::{Layouts, Uniform, CUSTOM_INPUTS};
+use super::custom::parameters;
+use super::dxc::RuntimeCompiler;
 use super::frames::Frame;
-use super::persistent::PersistentTextures;
+use super::persistent::{clear_image, PersistentTextures};
 use super::pipeline::{Kind, PipelineStats, Pipelines};
 use super::transients::Transients;
 use super::Error;
@@ -22,7 +24,7 @@ use crate::sprite::{pack_glyph_with, pack_image, pack_slug_with, SPRITE_STRIDE};
 pub const CONSTANT_FLOATS: usize = 36;
 const CONSTANT_BYTES: u64 = (CONSTANT_FLOATS * 4) as u64;
 const COMPUTE_PARAMETER_BYTES: u64 = 16;
-const MAX_INPUTS: usize = 8;
+const MAX_INPUTS: usize = CUSTOM_INPUTS;
 const ROW_BOX_BLUR: CustomShaderId = CustomShaderId(1);
 const INSTANCE_ALIGNMENT: u64 = 16;
 
@@ -205,6 +207,16 @@ fn confine(rect: vk::Rect2D, within: Option<vk::Rect2D>) -> vk::Rect2D {
     }
 }
 
+fn scissor_of(bounds: aqua_core::geometry::Rect, extent: Extent) -> vk::Rect2D {
+    let clamp = |value: f32, limit: u32| (value.max(0.0) as i64).min(limit as i64) as i32;
+    from_edges(
+        clamp(bounds.x.floor(), extent.width),
+        clamp(bounds.y.floor(), extent.height),
+        clamp((bounds.x + bounds.w).ceil(), extent.width),
+        clamp((bounds.y + bounds.h).ceil(), extent.height),
+    )
+}
+
 fn is_empty(rect: vk::Rect2D) -> bool {
     rect.extent.width == 0 || rect.extent.height == 0
 }
@@ -249,10 +261,26 @@ enum Vertices {
     Two(u64, u64),
 }
 
+enum Bindings {
+    Builtin {
+        uniform: u64,
+        sources: [vk::ImageView; 2],
+    },
+    Custom {
+        uniform: Uniform,
+        inputs: [vk::ImageView; CUSTOM_INPUTS],
+    },
+}
+
+#[derive(Clone, Copy)]
+enum ComputeProgram {
+    Builtin(vk::Pipeline),
+    Registered(vk::Pipeline),
+}
+
 struct Draw {
     pipeline: vk::Pipeline,
-    uniform: u64,
-    sources: [vk::ImageView; 2],
+    bindings: Bindings,
     vertices: Vertices,
     instances: u32,
 }
@@ -305,6 +333,7 @@ impl SceneRenderer {
         device: &Arc<Device>,
         cache: Option<&[u8]>,
         options: SceneOptions,
+        compiler: RuntimeCompiler,
     ) -> Result<Self, Error> {
         let dummy = Image::new(
             device,
@@ -313,11 +342,11 @@ impl SceneRenderer {
                     width: 1,
                     height: 1,
                 },
-                format: vk::Format::R8_UNORM,
+                format: vk::Format::R8G8B8A8_UNORM,
                 usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
                 label: "unbound_source",
                 kind: LedgerKind::Texture,
-                bytes: 1,
+                bytes: 4,
             },
         )?;
         let alignment = device.info().uniform_alignment;
@@ -327,7 +356,7 @@ impl SceneRenderer {
                 layouts: Layouts::new(device)?,
                 dummy,
             },
-            pipelines: Pipelines::new(device, cache)?,
+            pipelines: Pipelines::new(device, cache, compiler)?,
             transients: Transients::new(options.transient_ceiling),
             scratch: Scratch::default(),
             uniform_slot: CONSTANT_BYTES.next_multiple_of(alignment) + alignment,
@@ -340,6 +369,19 @@ impl SceneRenderer {
 
     pub fn close_startup(&mut self) {
         self.pipelines.close_startup();
+    }
+
+    pub fn custom_passes(&self) -> bool {
+        self.pipelines.custom_available()
+    }
+
+    pub fn register_compute(
+        &mut self,
+        id: CustomShaderId,
+        hlsl: &str,
+        entry: &str,
+    ) -> Result<(), Error> {
+        self.pipelines.register_compute(id, hlsl, entry)
     }
 
     pub fn late_pipelines(&self) -> &[Kind] {
@@ -383,15 +425,17 @@ impl SceneRenderer {
             })
             .sum::<u64>()
             + 1;
-        let bounds: u64 = plan
+        let alignment = self.shared.device.info().uniform_alignment;
+        let side_data: u64 = plan
             .passes
             .iter()
             .map(|pass| match &pass.kind {
                 PassKind::SrgbaSolids { bounds, .. } => bounds.len() as u64 * 16 + 16,
+                PassKind::Custom(spec) => parameters(&spec.params).len() as u64 * 4 + alignment,
                 _ => 0,
             })
             .sum();
-        self.scratch.bytes.len() as u64 + INSTANCE_ALIGNMENT + bounds + draws * self.uniform_slot
+        self.scratch.bytes.len() as u64 + INSTANCE_ALIGNMENT + side_data + draws * self.uniform_slot
     }
 
     pub fn record(
@@ -413,6 +457,9 @@ impl SceneRenderer {
         };
         self.transients
             .ensure(&self.shared.device, plan, precision)?;
+        if self.shared.dummy.as_ref().access.get() == Access::Undefined {
+            clear_image(frame, &self.shared.dummy);
+        }
         let base = frame.stream.push(INSTANCE_ALIGNMENT, &self.scratch.bytes);
         let mut stats = SceneStats {
             passes: plan.passes.len() as u32,
@@ -550,14 +597,19 @@ impl Shared {
     }
 
     fn draw(&self, frame: &mut Frame<'_>, draw: &Draw) -> Result<(), Error> {
-        self.layouts.bind_draw(
-            frame,
-            &Uniform {
-                offset: draw.uniform,
-                range: CONSTANT_BYTES,
-            },
-            draw.sources,
-        )?;
+        match &draw.bindings {
+            Bindings::Builtin { uniform, sources } => self.layouts.bind_draw(
+                frame,
+                &Uniform {
+                    offset: *uniform,
+                    range: CONSTANT_BYTES,
+                },
+                *sources,
+            )?,
+            Bindings::Custom { uniform, inputs } => {
+                self.layouts.bind_custom(frame, uniform, inputs)?
+            }
+        }
         let device = &self.device.raw;
         let command = frame.command();
         let ring = frame.ring();
@@ -621,6 +673,8 @@ fn record_pass(
         reads.first().map_or(dummy, |read| read.view),
         reads.get(1).map_or(dummy, |read| read.view),
     ];
+    let inputs: [vk::ImageView; CUSTOM_INPUTS] =
+        std::array::from_fn(|slot| reads.get(slot).map_or(dummy, |read| read.view));
     match &pass.kind {
         PassKind::Copy {
             source_origin,
@@ -716,8 +770,10 @@ fn record_pass(
             );
             let draw = Draw {
                 pipeline,
-                uniform: uniform.offset,
-                sources,
+                bindings: Bindings::Builtin {
+                    uniform: uniform.offset,
+                    sources,
+                },
                 vertices: Vertices::None,
                 instances: 1,
             };
@@ -727,14 +783,21 @@ fn record_pass(
             shader: ShaderId::Custom(id),
             groups,
             params,
-        } if *id == ROW_BOX_BLUR => {
+        } => {
             if !matches!(write, TextureRef::Transient(_)) {
                 return Err(Error::Unsupported("compute output must be a transient"));
             }
             if out.format != vk::Format::R16G16B16A16_SFLOAT {
                 return Err(Error::Unsupported("compute output must be rgba16f"));
             }
-            let pipeline = pipelines.compute(&shared.layouts)?;
+            let program = match (
+                pipelines.registered_compute(*id, &shared.layouts)?,
+                *id == ROW_BOX_BLUR,
+            ) {
+                (Some(pipeline), _) => ComputeProgram::Registered(pipeline),
+                (None, true) => ComputeProgram::Builtin(pipelines.compute(&shared.layouts)?),
+                (None, false) => return Err(Error::Unsupported("unregistered compute shader")),
+            };
             let uniform = shared.uniform(frame, params);
             let mut barriers = transitions(
                 reads
@@ -745,15 +808,24 @@ fn record_pass(
             );
             barriers.extend(out.transition(Access::Storage));
             frame.barrier(&barriers);
-            shared.layouts.bind_compute(
-                frame,
-                &Uniform {
-                    offset: uniform.offset,
-                    range: COMPUTE_PARAMETER_BYTES,
-                },
-                sources[0],
-                out.view,
-            )?;
+            let uniform = Uniform {
+                offset: uniform.offset,
+                range: COMPUTE_PARAMETER_BYTES,
+            };
+            let pipeline = match program {
+                ComputeProgram::Builtin(pipeline) => {
+                    shared
+                        .layouts
+                        .bind_compute(frame, &uniform, sources[0], out.view)?;
+                    pipeline
+                }
+                ComputeProgram::Registered(pipeline) => {
+                    shared
+                        .layouts
+                        .bind_custom_compute(frame, &uniform, &inputs, out.view)?;
+                    pipeline
+                }
+            };
             unsafe {
                 shared.device.raw.cmd_bind_pipeline(
                     frame.command(),
@@ -767,10 +839,29 @@ fn record_pass(
             }
             Ok(1)
         }
-        PassKind::Compute { .. } => Err(Error::Unsupported(
-            "compute shaders other than the row box blur",
-        )),
-        PassKind::Custom(_) => Err(Error::Unsupported("custom passes")),
+        PassKind::Compute { .. } => {
+            Err(Error::Unsupported("compute shaders other than custom ids"))
+        }
+        PassKind::Custom(spec) => {
+            if matches!(write, TextureRef::Persistent(_)) {
+                return Err(Error::Unsupported("write to a persistent texture"));
+            }
+            let pipeline = pipelines.custom(spec, out.format, &shared.layouts)?;
+            let clear = match pass.load {
+                LoadOp::Clear(color) => Some((color.to_gpu(), confine(full(extent), bound))),
+                LoadOp::Load | LoadOp::DontCare => None,
+            };
+            let scissor = confine(scissor_of(spec.bounds, extent), bound);
+            let uniform = shared.uniform(frame, &parameters(&spec.params));
+            let draw = Draw {
+                pipeline,
+                bindings: Bindings::Custom { uniform, inputs },
+                vertices: Vertices::None,
+                instances: 1,
+            };
+            let drawn = shared.render(frame, out, &reads, scissor, clear, &[draw])?;
+            Ok(drawn * u32::from(!is_empty(scissor)))
+        }
         kind => {
             if matches!(write, TextureRef::Persistent(_)) {
                 return Err(Error::Unsupported("write to a persistent texture"));
@@ -810,8 +901,10 @@ fn draws<'a>(
     let mut sampled: Vec<ImageRef<'a>> = reads.to_vec();
     let single = |pipeline, uniform: Uniform, vertices, instances| Draw {
         pipeline,
-        uniform: uniform.offset,
-        sources,
+        bindings: Bindings::Builtin {
+            uniform: uniform.offset,
+            sources,
+        },
         vertices,
         instances,
     };
@@ -964,11 +1057,13 @@ fn draws<'a>(
                 sampled.extend(mask);
                 draws.push(Draw {
                     pipeline,
-                    uniform: uniform.offset,
-                    sources: [
-                        source.view,
-                        mask.map_or(shared.dummy.as_ref().view, |mask| mask.view),
-                    ],
+                    bindings: Bindings::Builtin {
+                        uniform: uniform.offset,
+                        sources: [
+                            source.view,
+                            mask.map_or(shared.dummy.as_ref().view, |mask| mask.view),
+                        ],
+                    },
                     vertices: Vertices::One(base + offset + start as u64 * SPRITE_STRIDE as u64),
                     instances: (end - start) as u32,
                 });

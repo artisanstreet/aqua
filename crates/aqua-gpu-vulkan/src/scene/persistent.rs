@@ -67,7 +67,7 @@ pub fn staging_bytes(batches: &[UploadBatch]) -> u64 {
         .sum()
 }
 
-fn clear(frame: &mut Frame<'_>, image: &Image) {
+pub(super) fn clear_image(frame: &mut Frame<'_>, image: &Image) {
     let target = image.as_ref();
     let transitions: Vec<_> = target
         .transition(Access::TransferDestination)
@@ -174,7 +174,7 @@ impl PersistentTextures {
                 extent,
             },
         };
-        clear(frame, &entry.image);
+        clear_image(frame, &entry.image);
         if let Some(replaced) = self.entries.insert(handle, entry) {
             self.retire(replaced);
         }

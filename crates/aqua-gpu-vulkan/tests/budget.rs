@@ -70,7 +70,7 @@ fn a_plan_whose_transients_exceed_the_ceiling_is_refused_and_smaller_plans_still
             transient_ceiling: Some(1024),
             ..SceneOptions::default()
         },
-        pipeline_cache: None,
+        ..OffscreenOptions::default()
     };
     let Some(mut backend) = support::open_with(options) else {
         return;

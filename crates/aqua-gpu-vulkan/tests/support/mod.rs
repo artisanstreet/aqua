@@ -1,7 +1,7 @@
 use aqua_gpu_vulkan::hal::Error as DeviceError;
 use aqua_gpu_vulkan::scene::{
     AdapterPreference, Descriptors, DeviceOptions, Error, OffscreenBackend, OffscreenOptions,
-    SurfaceFormat, Validation,
+    SurfaceFormat, Validation, LIBRARY,
 };
 
 fn required() -> bool {
@@ -45,6 +45,21 @@ pub fn open(preference: AdapterPreference, format: SurfaceFormat) -> Option<Offs
         format,
         ..OffscreenOptions::default()
     })
+}
+
+#[allow(dead_code)]
+pub fn compiling(backend: OffscreenBackend) -> Option<OffscreenBackend> {
+    match backend.runtime_compiler().error() {
+        None => Some(backend),
+        Some(error) => {
+            eprintln!("SKIP-NO-DXCOMPILER: {error}");
+            assert!(
+                !required(),
+                "AQUA_REQUIRE_GPU=1 but {LIBRARY} is unavailable: {error}"
+            );
+            None
+        }
+    }
 }
 
 #[allow(dead_code)]

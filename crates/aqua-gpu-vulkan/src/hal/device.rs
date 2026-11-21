@@ -53,6 +53,7 @@ pub struct DeviceInfo {
     pub timestamp_period: Option<f32>,
     pub binding: Binding,
     pub memory_budget: bool,
+    pub storage_without_format: bool,
 }
 
 pub(crate) enum Garbage {
@@ -129,6 +130,7 @@ struct Probe {
     budget: bool,
     swapchain: bool,
     incremental: bool,
+    without_format: bool,
 }
 
 fn graphics_family(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Option<(u32, bool)> {
@@ -175,7 +177,10 @@ fn probe(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Result<Probe
     let extensions = unsafe { instance.enumerate_device_extension_properties(physical) }
         .checked("vkEnumerateDeviceExtensionProperties")?;
     let family = graphics_family(instance, physical);
+    let core = unsafe { instance.get_physical_device_features(physical) };
     Ok(Probe {
+        without_format: core.shader_storage_image_write_without_format == vk::TRUE
+            && core.shader_storage_image_read_without_format == vk::TRUE,
         physical,
         properties,
         family: family.map(|(index, _)| index),
@@ -264,7 +269,10 @@ impl Device {
         let queues = [vk::DeviceQueueCreateInfo::default()
             .queue_family_index(family)
             .queue_priorities(&priorities)];
-        let core = vk::PhysicalDeviceFeatures::default().dual_src_blend(true);
+        let core = vk::PhysicalDeviceFeatures::default()
+            .dual_src_blend(true)
+            .shader_storage_image_write_without_format(chosen.without_format)
+            .shader_storage_image_read_without_format(chosen.without_format);
         let mut v13 = vk::PhysicalDeviceVulkan13Features::default()
             .dynamic_rendering(true)
             .synchronization2(true);
@@ -300,6 +308,7 @@ impl Device {
                 false => Binding::Pool,
             },
             memory_budget: chosen.budget,
+            storage_without_format: chosen.without_format,
         };
         Ok(Arc::new(Self {
             push: push.then(|| ash::khr::push_descriptor::Device::new(&instance.raw, &raw)),

@@ -19,7 +19,8 @@ use crate::hal::{Access, Device, DeviceOptions};
 use crate::half::bgra8_rows_to_rgba8;
 use crate::scene::{
     capabilities, staging_bytes, Error as SceneError, Frames, PassTime, PersistentStats,
-    PersistentTextures, PipelineStats, Presentable, SceneOptions, SceneRenderer,
+    PersistentTextures, PipelineStats, Presentable, RuntimeCompiler, SceneOptions, SceneRenderer,
+    ShaderCompiler,
 };
 
 const ACQUIRE_LIMIT: Duration = Duration::from_millis(50);
@@ -28,6 +29,7 @@ const ACQUIRE_LIMIT: Duration = Duration::from_millis(50);
 pub struct WindowOptions {
     pub device: DeviceOptions,
     pub scene: SceneOptions,
+    pub compiler: ShaderCompiler,
 }
 
 impl WindowOptions {
@@ -35,6 +37,7 @@ impl WindowOptions {
         Self {
             device: DeviceOptions::from_env(),
             scene: SceneOptions::default(),
+            compiler: ShaderCompiler::from_env(),
         }
     }
 }
@@ -132,6 +135,7 @@ pub struct WindowBackend {
     surfaces: HashMap<SurfaceId, WindowSurface>,
     gpu: Gpu,
     options: WindowOptions,
+    compiler: RuntimeCompiler,
     capabilities: GpuCapabilities,
     pending: Vec<UploadBatch>,
     next_surface: u32,
@@ -172,8 +176,8 @@ fn device_error(error: crate::hal::Error) -> GpuError {
     SceneError::from(error).into()
 }
 
-fn describe(device: &Device) -> GpuCapabilities {
-    let mut described = capabilities(device.info());
+fn describe(device: &Device, custom_passes: bool) -> GpuCapabilities {
+    let mut described = capabilities(device.info(), custom_passes);
     described.features.window_surfaces = true;
     described
 }
@@ -214,9 +218,13 @@ fn layer(rect: &PixelRect) -> vk::RectLayerKHR {
 }
 
 impl Gpu {
-    fn new(options: &WindowOptions, cache: Option<&[u8]>) -> Result<Self, GpuError> {
+    fn new(
+        options: &WindowOptions,
+        cache: Option<&[u8]>,
+        compiler: &RuntimeCompiler,
+    ) -> Result<Self, GpuError> {
         let device = Device::create_presenting(&options.device).map_err(device_error)?;
-        let mut renderer = SceneRenderer::new(&device, cache, options.scene)?;
+        let mut renderer = SceneRenderer::new(&device, cache, options.scene, compiler.clone())?;
         renderer.warm(vk::Format::B8G8R8A8_UNORM)?;
         Ok(Self {
             textures: PersistentTextures::new(&device),
@@ -367,12 +375,14 @@ impl WindowBackend {
         options: WindowOptions,
         cache: Option<&[u8]>,
     ) -> Result<Self, GpuError> {
-        let gpu = Gpu::new(&options, cache)?;
+        let compiler = RuntimeCompiler::load(&options.compiler);
+        let gpu = Gpu::new(&options, cache, &compiler)?;
         Ok(Self {
-            capabilities: describe(&gpu.device),
+            capabilities: describe(&gpu.device, gpu.renderer.custom_passes()),
             surfaces: HashMap::new(),
             gpu,
             options,
+            compiler,
             pending: Vec::new(),
             next_surface: 0,
             generation: 0,
@@ -776,7 +786,7 @@ impl WindowBackend {
 
     fn recover_inner(&mut self) -> Result<RecoveryReport, GpuError> {
         let cache = self.pipeline_cache();
-        let gpu = Gpu::new(&self.options, cache.as_deref())?;
+        let gpu = Gpu::new(&self.options, cache.as_deref(), &self.compiler)?;
         let surfaces: Vec<(SurfaceId, WindowSurface)> = self.surfaces.drain().collect();
         self.pending.clear();
         let rebuilt = surfaces
@@ -785,7 +795,7 @@ impl WindowBackend {
             .collect::<Result<Vec<_>, GpuError>>()?;
         let count = rebuilt.len() as u32;
         self.surfaces.extend(rebuilt);
-        self.capabilities = describe(&gpu.device);
+        self.capabilities = describe(&gpu.device, gpu.renderer.custom_passes());
         self.gpu = gpu;
         self.generation += 1;
         self.stats.recoveries += 1;

@@ -9,6 +9,40 @@ A passing historical qualification does not prove the current dirty worktree
 passed every former gate.
 
 
+## Linux status (2026-11-21)
+
+Aqua runs on Linux with Wayland and Vulkan (`../ARCHITECTURE.md` record 14.LW,
+M1 to M12; service table in [PLATFORM.md](PLATFORM.md)). The Editor port to
+Linux (M13) needs to know:
+
+- Ship `libdxcompiler.so` (pinned DXC v1.9.2609) beside the executable or in
+  `../lib`, or the sky and any other custom pass report `Unsupported`.
+- Set `AquaConfig::app_id` to the reverse-DNS id of the installed `.desktop`
+  file. The compositor groups windows by it, and the launcher badge and portal
+  notifications key on it; without it the badge returns `BadgeError::Unsupported`.
+- Fonts come from fontconfig at run time (`libfontconfig.so.1`). Families the
+  Editor names explicitly still win; generic families and fallback follow the
+  user's fontconfig aliases. `AQUA_FONT_DIRS` is not needed.
+- Text fields built on Aqua's editable text set the primary selection and paste
+  it on middle click without Editor code. A custom text surface that wants the
+  same behaviour sends `ShellCommand::PrimarySelectionWrite` and
+  `PrimarySelectionRead`; on Windows both do nothing.
+- `aqua::prelude::file_icon` returns `None` on Linux, and `aqua::local_time`
+  does not exist there. The Editor's only `file_icon` call (default-browser icon
+  in `editor-aqua/src/shell/browser.rs`) already has no Linux browser to show, and
+  it formats times with its own module.
+- Opening URLs and files and showing file dialogs pass the window's exported
+  handle and an activation token to the portal, so the opened app may take focus
+  and dialogs stay on top of the Editor.
+- Window position, always-on-top, lowering, restoring from minimized and raw
+  mouse input are unsupported on Wayland and come back as `Unsupported` with a
+  reason; materials other than solid fall back to an opaque frame.
+- Caches live in `$XDG_CACHE_HOME/aqua` (else `~/.cache/aqua`).
+- Editor tests that start Aqua apps on Linux should copy Aqua's
+  `.cargo/config.toml` `[env]` dead ends and run against a private headless
+  sway and D-Bus, as `aqua/tests/host_wayland.rs` does, so they never reach the
+  developer's desktop.
+
 Status, 2026-11-03: **ready to begin porting the entire Windows Editor app**. The target is
 starting the Windows port of the entire Editor through public Aqua APIs. It covers
 the shell and every Editor section, including rich blocks and native services.

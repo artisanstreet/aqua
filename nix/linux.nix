@@ -25,6 +25,7 @@ pkgs.mkShell {
     pkgs.wayland-utils
     pkgs.libxkbcommon
     pkgs.xkeyboard_config
+    pkgs.adwaita-icon-theme
     pkgs.sway
     pkgs.grim
     pkgs.dbus
@@ -36,5 +37,7 @@ pkgs.mkShell {
   VK_ICD_FILENAMES = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.x86_64.json";
   VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
   XKB_CONFIG_ROOT = "${pkgs.xkeyboard_config}/share/X11/xkb";
+  XCURSOR_PATH = "${pkgs.adwaita-icon-theme}/share/icons";
+  XCURSOR_THEME = "Adwaita";
   LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibraries;
 }

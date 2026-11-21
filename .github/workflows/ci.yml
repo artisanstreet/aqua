@@ -39,7 +39,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwayland-dev libxkbcommon-dev pkg-config mesa-vulkan-drivers libvulkan-dev \
-            vulkan-validationlayers vulkan-tools spirv-tools sway grim dbus at-spi2-core xkb-data
+            vulkan-validationlayers vulkan-tools spirv-tools sway grim dbus at-spi2-core xkb-data adwaita-icon-theme
       - name: pinned DXC with SPIR-V codegen
         if: runner.os == 'Linux'
         run: |
@@ -72,6 +72,7 @@ jobs:
           CARGO_BUILD_JOBS: 2
           AQUA_REQUIRE_GPU: ${{ runner.os == 'Linux' && '1' || '0' }}
           VK_ICD_FILENAMES: ${{ runner.os == 'Linux' && '/usr/share/vulkan/icd.d/lvp_icd.x86_64.json' || '' }}
+          AQUA_REQUIRE_WAYLAND: ${{ runner.os == 'Linux' && '1' || '0' }}
         run: |
           if [ "$RUNNER_OS" != Windows ]; then
             exec cargo test --workspace --locked -- --nocapture --test-threads=1

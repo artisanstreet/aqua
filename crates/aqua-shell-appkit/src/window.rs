@@ -1,6 +1,7 @@
 use crate::access::AccessHooks;
 use crate::lease::{self, LayerGeometry, LayerLease};
 use crate::looping::{emit, Waker};
+use crate::model::drop::DropTarget;
 use crate::model::presence::{Change, Occlusion};
 use crate::output::{monitor_of, primary_height, refresh_of, Monitor};
 use crate::state::{self, Pointer, Reported, Spec, WindowState};
@@ -279,6 +280,7 @@ impl Window {
                 raw_mouse: false,
                 redraw_pending: true,
                 geometry,
+                drop: DropTarget::Disabled,
                 text_client: None,
                 access: None,
             },
@@ -576,7 +578,11 @@ impl Window {
     }
 
     pub fn enable_file_drop(self) {
-        if let Some(view) = state::window(self.id, |window| window.view.clone()) {
+        let view = state::window(self.id, |window| {
+            window.drop = std::mem::take(&mut window.drop).enabled();
+            window.view.clone()
+        });
+        if let Some(view) = view {
             let types = NSArray::from_slice(&[unsafe { NSPasteboardTypeFileURL }]);
             view.registerForDraggedTypes(&types);
         }

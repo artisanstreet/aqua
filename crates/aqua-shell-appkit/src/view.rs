@@ -256,27 +256,27 @@ define_class!(
     unsafe impl NSDraggingDestination for AquaView {
         #[unsafe(method(draggingEntered:))]
         fn dragging_entered(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> NSDragOperation {
-            let operation = crate::drop::entered(self.id(), sender);
+            let operation = crate::drop::entered(self, sender);
             crate::looping::callback_done();
             operation
         }
 
         #[unsafe(method(draggingUpdated:))]
         fn dragging_updated(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> NSDragOperation {
-            let operation = crate::drop::updated(self.id(), sender);
+            let operation = crate::drop::updated(self, sender);
             crate::looping::callback_done();
             operation
         }
 
         #[unsafe(method(draggingExited:))]
         fn dragging_exited(&self, _sender: Option<&ProtocolObject<dyn NSDraggingInfo>>) {
-            crate::drop::exited(self.id());
+            crate::drop::exited(self);
             crate::looping::callback_done();
         }
 
         #[unsafe(method(performDragOperation:))]
         fn perform_drag(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
-            let accepted = crate::drop::perform(self.id(), sender);
+            let accepted = crate::drop::perform(self, sender);
             crate::looping::callback_done();
             accepted
         }

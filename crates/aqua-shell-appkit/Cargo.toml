@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Aqua AppKit shell: explicit-time run loop, NSWindow/NSView windows, backing scale, screens, occlusion, keyboard, mouse and scroll input, cursors, overlay chrome with traffic lights, layer leases, pasteboard"
+description = "Aqua AppKit shell: explicit-time run loop, NSWindow/NSView windows, backing scale, screens, occlusion, keyboard, mouse and scroll input, cursors, overlay chrome with traffic lights, layer leases, pasteboard, file drops"
 
 [features]
 testing = []
@@ -55,6 +55,8 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "NSControl",
   "NSCursor",
   "NSDragging",
+  "NSDraggingItem",
+  "NSDraggingSession",
   "NSEvent",
   "NSGraphics",
   "NSGraphicsContext",
@@ -138,4 +140,8 @@ harness = false
 
 [[test]]
 name = "clipboard"
+harness = false
+
+[[test]]
+name = "drop"
 harness = false

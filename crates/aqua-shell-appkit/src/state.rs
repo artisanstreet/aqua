@@ -1,6 +1,7 @@
 use crate::access::AccessHooks;
 use crate::lease::{self, LayerGeometry};
 use crate::looping::emit;
+use crate::model::drop::DropTarget;
 use crate::model::presence::{Change, Presence};
 use crate::text_input::TextInputClient;
 use crate::view::AquaView;
@@ -64,6 +65,7 @@ pub(crate) struct WindowState {
     pub raw_mouse: bool,
     pub redraw_pending: bool,
     pub geometry: Arc<Mutex<LayerGeometry>>,
+    pub drop: DropTarget,
     pub text_client: Option<SharedClient>,
     pub access: Option<SharedAccess>,
 }

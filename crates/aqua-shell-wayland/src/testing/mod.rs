@@ -9,7 +9,7 @@ pub use compositor::{Compositor, Options, Rect};
 pub use ipc::IpcError;
 pub use keyboard::VirtualKeyboard;
 pub use pointer::VirtualPointer;
-pub use screencopy::{capture, Capture};
+pub use screencopy::{capture, Capture, DamageWatch};
 
 #[derive(Debug, thiserror::Error)]
 pub enum HarnessError {

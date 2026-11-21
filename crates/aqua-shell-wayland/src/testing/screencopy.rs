@@ -1,5 +1,5 @@
 use super::client::{failed, Client};
-use super::compositor::Compositor;
+use super::compositor::{Compositor, Rect};
 use super::HarnessError;
 use rustix::fs::{memfd_create, MemfdFlags};
 use std::os::fd::AsFd;
@@ -46,6 +46,7 @@ struct Copying {
     buffer: Option<(Format, u32, u32, u32)>,
     announced: bool,
     outcome: Option<bool>,
+    damage: Vec<Rect>,
 }
 
 impl Dispatch<WlRegistry, GlobalListContents> for Copying {
@@ -77,6 +78,17 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for Copying {
                 stride,
             } if state.buffer.is_none() => state.buffer = Some((format, width, height, stride)),
             zwlr_screencopy_frame_v1::Event::BufferDone => state.announced = true,
+            zwlr_screencopy_frame_v1::Event::Damage {
+                x,
+                y,
+                width,
+                height,
+            } => state.damage.push(Rect {
+                x: x as i32,
+                y: y as i32,
+                width: width as i32,
+                height: height as i32,
+            }),
             zwlr_screencopy_frame_v1::Event::Ready { .. } => {
                 state.outcome = Some(true);
                 frame.destroy();
@@ -96,29 +108,59 @@ delegate_noop!(Copying: ignore WlShm);
 delegate_noop!(Copying: WlShmPool);
 delegate_noop!(Copying: ignore WlBuffer);
 
-pub fn capture(compositor: &Compositor, with_cursor: bool) -> Result<Capture, HarnessError> {
-    let name = "screencopy";
-    let mut client = Client::connect(compositor.display(), name, Copying::default())?;
+struct Bound {
+    manager: ZwlrScreencopyManagerV1,
+    shm: WlShm,
+    output: WlOutput,
+}
+
+const NAME: &str = "screencopy";
+const LIMIT: Duration = Duration::from_secs(5);
+
+fn connect(compositor: &Compositor) -> Result<(Client<Copying>, Bound), HarnessError> {
+    let client = Client::connect(compositor.display(), NAME, Copying::default())?;
     let manager: ZwlrScreencopyManagerV1 = client.bind(3, ())?;
     if manager.version() < 3 {
-        return Err(failed(name, "screencopy older than version 3"));
+        return Err(failed(NAME, "screencopy older than version 3"));
     }
     let shm: WlShm = client.bind(1, ())?;
     let output: WlOutput = client.bind(1, ())?;
-    let frame = manager.capture_output(i32::from(with_cursor), &output, &client.handle(), ());
-    let limit = Duration::from_secs(5);
-    client.dispatch_until(limit, |state| state.announced)?;
+    Ok((
+        client,
+        Bound {
+            manager,
+            shm,
+            output,
+        },
+    ))
+}
+
+fn copy(
+    client: &mut Client<Copying>,
+    bound: &Bound,
+    with_cursor: bool,
+    with_damage: bool,
+    limit: Duration,
+) -> Result<Capture, HarnessError> {
+    client.state = Copying::default();
+    let frame =
+        bound
+            .manager
+            .capture_output(i32::from(with_cursor), &bound.output, &client.handle(), ());
+    client.dispatch_until(LIMIT, |state| state.announced)?;
     let (format, width, height, stride) = client
         .state
         .buffer
-        .ok_or_else(|| failed(name, "the compositor offered no shm buffer"))?;
+        .ok_or_else(|| failed(NAME, "the compositor offered no shm buffer"))?;
     let size = stride * height;
     let fd = memfd_create("aqua-test-capture", MemfdFlags::CLOEXEC)
-        .map_err(|error| failed(name, error))?;
+        .map_err(|error| failed(NAME, error))?;
     let file = std::fs::File::from(fd);
     file.set_len(u64::from(size))
-        .map_err(|error| failed(name, error))?;
-    let pool = shm.create_pool(file.as_fd(), size as i32, &client.handle(), ());
+        .map_err(|error| failed(NAME, error))?;
+    let pool = bound
+        .shm
+        .create_pool(file.as_fd(), size as i32, &client.handle(), ());
     let buffer = pool.create_buffer(
         0,
         width as i32,
@@ -128,21 +170,47 @@ pub fn capture(compositor: &Compositor, with_cursor: bool) -> Result<Capture, Ha
         &client.handle(),
         (),
     );
-    frame.copy(&buffer);
-    client.dispatch_until(limit, |state| state.outcome.is_some())?;
-    let copied = client.state.outcome == Some(true);
+    match with_damage {
+        true => frame.copy_with_damage(&buffer),
+        false => frame.copy(&buffer),
+    }
+    let finished = client.dispatch_until(limit, |state| state.outcome.is_some());
     buffer.destroy();
     pool.destroy();
-    if !copied {
-        return Err(failed(name, "the compositor failed the copy"));
+    finished?;
+    if client.state.outcome != Some(true) {
+        return Err(failed(NAME, "the compositor failed the copy"));
     }
     let mut pixels = vec![0u8; size as usize];
     file.read_exact_at(&mut pixels, 0)
-        .map_err(|error| failed(name, error))?;
+        .map_err(|error| failed(NAME, error))?;
     Ok(Capture {
         width,
         height,
         stride,
         pixels,
     })
+}
+
+pub fn capture(compositor: &Compositor, with_cursor: bool) -> Result<Capture, HarnessError> {
+    let (mut client, bound) = connect(compositor)?;
+    copy(&mut client, &bound, with_cursor, false, LIMIT)
+}
+
+pub struct DamageWatch {
+    client: Client<Copying>,
+    bound: Bound,
+}
+
+impl DamageWatch {
+    pub fn start(compositor: &Compositor) -> Result<(DamageWatch, Capture), HarnessError> {
+        let (mut client, bound) = connect(compositor)?;
+        let first = copy(&mut client, &bound, false, true, LIMIT)?;
+        Ok((DamageWatch { client, bound }, first))
+    }
+
+    pub fn next(&mut self, limit: Duration) -> Result<(Capture, Vec<Rect>), HarnessError> {
+        let capture = copy(&mut self.client, &self.bound, false, true, limit)?;
+        Ok((capture, std::mem::take(&mut self.client.state.damage)))
+    }
 }

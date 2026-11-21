@@ -573,3 +573,30 @@ pub fn architecture_crate_roles(document: &str) -> Vec<(String, String)> {
     }
     roles
 }
+
+pub const TEST_SESSION_DEAD_ENDS: &[(&str, &str)] = &[
+    (
+        "DBUS_SESSION_BUS_ADDRESS",
+        "unix:path=/nonexistent/aqua-tests-have-no-session-bus",
+    ),
+    (
+        "AT_SPI_BUS_ADDRESS",
+        "unix:path=/nonexistent/aqua-tests-have-no-accessibility-bus",
+    ),
+    (
+        "XDG_RUNTIME_DIR",
+        "/nonexistent/aqua-tests-have-no-runtime-dir",
+    ),
+    ("WAYLAND_DISPLAY", "aqua-tests-have-no-display"),
+    ("DISPLAY", ""),
+];
+
+pub const REAL_SESSION_TOKENS: &[&str] = &["/mnt/wslg", "/run/user", "wayland-0"];
+
+pub const SESSION_ESCAPE_TOKENS: &[&str] = &[
+    "env_clear(",
+    "env_remove(\"DBUS_SESSION_BUS_ADDRESS\")",
+    "env_remove(\"XDG_RUNTIME_DIR\")",
+    "remove_var(\"DBUS_SESSION_BUS_ADDRESS\")",
+    "remove_var(\"XDG_RUNTIME_DIR\")",
+];

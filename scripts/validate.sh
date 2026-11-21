@@ -74,8 +74,10 @@ fi
 
 if [[ "${1:-}" == "--smoke" ]]; then
   echo "== WSLg smoke =="
-  export DISPLAY="${DISPLAY:-:0}" WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1001}"
-  if AQUA_SMOKE_FRAMES=120 CARGO_BUILD_JOBS="$JOBS" timeout 120 cargo run -p aqua --example showcase -- --smoke-test >/tmp/opencode-smoke.log 2>&1; then
+  showcase="${CARGO_TARGET_DIR:-$(cd "$(dirname "$0")/.." && pwd)/target}/debug/examples/showcase"
+  if CARGO_BUILD_JOBS="$JOBS" cargo build -p aqua --example showcase >/tmp/opencode-smoke.log 2>&1 &&
+    DISPLAY="${DISPLAY:-:0}" WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+      AQUA_SMOKE_FRAMES=120 timeout 120 "$showcase" --smoke-test >>/tmp/opencode-smoke.log 2>&1; then
     report "showcase smoke (finite frames)" PASS
   else
     report "showcase smoke (finite frames)" FAIL "(see /tmp/opencode-smoke.log)"

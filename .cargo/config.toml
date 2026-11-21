@@ -1,0 +1,6 @@
+[env]
+DBUS_SESSION_BUS_ADDRESS = { value = "unix:path=/nonexistent/aqua-tests-have-no-session-bus", force = true }
+AT_SPI_BUS_ADDRESS = { value = "unix:path=/nonexistent/aqua-tests-have-no-accessibility-bus", force = true }
+XDG_RUNTIME_DIR = { value = "/nonexistent/aqua-tests-have-no-runtime-dir", force = true }
+WAYLAND_DISPLAY = { value = "aqua-tests-have-no-display", force = true }
+DISPLAY = { value = "", force = true }

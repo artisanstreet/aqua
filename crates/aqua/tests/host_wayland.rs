@@ -251,6 +251,7 @@ mod wayland {
             .env_remove("AQUA_FONT_DIRS")
             .env_remove("DISPLAY")
             .env_remove("WAYLAND_DISPLAY")
+            .env_remove("WAYLAND_SOCKET")
             .env_remove("SWAYSOCK");
     }
 

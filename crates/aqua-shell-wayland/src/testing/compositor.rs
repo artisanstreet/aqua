@@ -131,7 +131,15 @@ impl Compositor {
             .env_remove("DISPLAY")
             .env_remove("SWAYSOCK")
             .env_remove("WAYLAND_DEBUG")
+            .env_remove("WAYLAND_SOCKET")
             .env("XDG_RUNTIME_DIR", &runtime)
+            .env(
+                "AT_SPI_BUS_ADDRESS",
+                format!(
+                    "unix:path={}",
+                    runtime.join("no-accessibility-bus").display()
+                ),
+            )
             .env(
                 "DBUS_SESSION_BUS_ADDRESS",
                 format!("unix:path={}", runtime.join("no-session-bus").display()),

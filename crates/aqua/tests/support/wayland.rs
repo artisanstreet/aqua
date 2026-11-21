@@ -17,7 +17,12 @@ pub fn session(floating_titles: &str) -> Option<Session> {
     compositor
         .attach()
         .expect("the shell connects to the headless compositor");
-    unsafe { std::env::set_var("DBUS_SESSION_BUS_ADDRESS", bus.address()) };
+    unsafe {
+        std::env::set_var("DBUS_SESSION_BUS_ADDRESS", bus.address());
+        std::env::set_var("XDG_RUNTIME_DIR", compositor.runtime_dir());
+        std::env::set_var("WAYLAND_DISPLAY", compositor.display());
+        std::env::remove_var("WAYLAND_SOCKET");
+    }
     Some(Session {
         _compositor: compositor,
         _bus: bus,

@@ -16,6 +16,8 @@ pub enum Access {
     Storage,
     TransferSource,
     TransferDestination,
+    Acquired,
+    Present,
 }
 
 impl Access {
@@ -27,6 +29,8 @@ impl Access {
             Access::Storage => vk::ImageLayout::GENERAL,
             Access::TransferSource => vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             Access::TransferDestination => vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            Access::Acquired => vk::ImageLayout::UNDEFINED,
+            Access::Present => vk::ImageLayout::PRESENT_SRC_KHR,
         }
     }
 
@@ -41,6 +45,7 @@ impl Access {
             Access::TransferSource | Access::TransferDestination => {
                 vk::PipelineStageFlags2::ALL_TRANSFER
             }
+            Access::Acquired | Access::Present => vk::PipelineStageFlags2::ALL_COMMANDS,
         }
     }
 
@@ -54,6 +59,7 @@ impl Access {
             Access::Storage => vk::AccessFlags2::SHADER_STORAGE_WRITE,
             Access::TransferSource => vk::AccessFlags2::TRANSFER_READ,
             Access::TransferDestination => vk::AccessFlags2::TRANSFER_WRITE,
+            Access::Acquired | Access::Present => vk::AccessFlags2::NONE,
         }
     }
 

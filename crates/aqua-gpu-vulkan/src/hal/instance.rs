@@ -25,10 +25,40 @@ impl Validation {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Purpose {
+    Offscreen,
+    Present,
+}
+
+pub(crate) struct SurfaceLoaders {
+    pub surface: ash::khr::surface::Instance,
+    pub wayland: ash::khr::wayland_surface::Instance,
+}
+
 pub(crate) struct Instance {
     _loader: ash::Entry,
     pub raw: ash::Instance,
+    pub surfaces: Option<SurfaceLoaders>,
     messenger: Option<Messenger>,
+}
+
+static PRESENT_EXTENSIONS: [&CStr; 2] = [ash::khr::surface::NAME, ash::khr::wayland_surface::NAME];
+
+fn require_instance_extensions(entry: &ash::Entry) -> Result<(), Error> {
+    let available = unsafe { entry.enumerate_instance_extension_properties(None) }
+        .checked("vkEnumerateInstanceExtensionProperties")?;
+    let missing = PRESENT_EXTENSIONS.iter().find(|wanted| {
+        !available
+            .iter()
+            .any(|extension| extension.extension_name_as_c_str() == Ok(**wanted))
+    });
+    match missing {
+        Some(extension) => Err(Error::MissingExtension {
+            extension: extension.to_str().unwrap_or("a surface extension"),
+        }),
+        None => Ok(()),
+    }
 }
 
 fn layer_available(entry: &ash::Entry, layer: &CStr) -> Result<bool, Error> {
@@ -40,19 +70,22 @@ fn layer_available(entry: &ash::Entry, layer: &CStr) -> Result<bool, Error> {
 }
 
 impl Instance {
-    pub fn new(validation: Validation) -> Result<Self, Error> {
+    pub fn new(validation: Validation, purpose: Purpose) -> Result<Self, Error> {
         let entry = unsafe { ash::Entry::load() }?;
         if validation == Validation::On && !layer_available(&entry, VALIDATION_LAYER)? {
             return Err(Error::MissingLayer {
                 layer: "VK_LAYER_KHRONOS_validation",
             });
         }
+        if purpose == Purpose::Present {
+            require_instance_extensions(&entry)?;
+        }
         let application = vk::ApplicationInfo::default()
             .application_name(c"aqua")
             .engine_name(c"aqua")
             .api_version(vk::API_VERSION_1_3);
         let sink: Arc<Sink> = Arc::default();
-        let (layers, extensions): (Vec<*const i8>, Vec<*const i8>) = match validation {
+        let (layers, mut extensions): (Vec<*const i8>, Vec<*const i8>) = match validation {
             Validation::On => (
                 vec![VALIDATION_LAYER.as_ptr()],
                 vec![
@@ -62,6 +95,9 @@ impl Instance {
             ),
             Validation::Off => (Vec::new(), Vec::new()),
         };
+        if purpose == Purpose::Present {
+            extensions.extend(PRESENT_EXTENSIONS.iter().map(|name| name.as_ptr()));
+        }
         let mut messages = create_info(&sink);
         let enabled = [vk::ValidationFeatureEnableEXT::SYNCHRONIZATION_VALIDATION];
         let mut features =
@@ -84,9 +120,14 @@ impl Instance {
             },
             Validation::Off => None,
         };
+        let surfaces = (purpose == Purpose::Present).then(|| SurfaceLoaders {
+            surface: ash::khr::surface::Instance::new(&entry, &raw),
+            wayland: ash::khr::wayland_surface::Instance::new(&entry, &raw),
+        });
         Ok(Self {
             _loader: entry,
             raw,
+            surfaces,
             messenger,
         })
     }

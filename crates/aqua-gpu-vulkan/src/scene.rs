@@ -14,9 +14,13 @@ pub use crate::hal::selection::AdapterPreference;
 pub use crate::hal::{Descriptors, DeviceOptions, Validation};
 pub use formats::SurfaceFormat;
 pub use frames::PassTime;
+pub(crate) use frames::{Frames, Presentable};
+pub(crate) use offscreen::capabilities;
 pub use offscreen::{OffscreenBackend, OffscreenOptions, HEAP_ALIGNMENT};
 pub use persistent::PersistentStats;
+pub(crate) use persistent::{staging_bytes, PersistentTextures};
 pub use pipeline::{Kind as PipelineKind, PipelineStats};
+pub(crate) use renderer::SceneRenderer;
 pub use renderer::{SceneOptions, SceneStats};
 
 #[derive(Debug, thiserror::Error)]

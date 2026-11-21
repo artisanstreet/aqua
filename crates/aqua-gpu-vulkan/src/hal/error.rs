@@ -21,6 +21,8 @@ pub enum Error {
     },
     #[error("validation was requested but {layer} is not installed")]
     MissingLayer { layer: &'static str },
+    #[error("presenting needs {extension}, which this Vulkan installation lacks")]
+    MissingExtension { extension: &'static str },
     #[error("no memory type with {wanted:?} can hold the {purpose}")]
     NoMemoryType {
         purpose: &'static str,

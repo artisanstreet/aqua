@@ -362,6 +362,7 @@ impl Frames {
             )
         }
         .checked("vkBeginCommandBuffer")?;
+        let before = image.access.get();
         let transitions: Vec<_> = image
             .transition(Access::TransferSource)
             .into_iter()
@@ -388,26 +389,47 @@ impl Frames {
                 &[region],
             )
         };
-        submit(device, slot)?;
+        if before == Access::Present {
+            let restore: Vec<_> = image.transition(Access::Present).into_iter().collect();
+            barrier(device, slot.command, &restore);
+        }
+        submit(device, slot, None)?;
         Self::wait(device, slot)?;
         buffer.read(bytes as usize, <[u8]>::to_vec)
     }
 }
 
-fn submit(device: &Device, slot: &mut Slot) -> Result<(), Error> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Presentable {
+    pub acquired: vk::Semaphore,
+    pub rendered: vk::Semaphore,
+}
+
+fn submit(
+    device: &Device,
+    slot: &mut Slot,
+    presentable: Option<Presentable>,
+) -> Result<u64, Error> {
     let raw = &device.raw;
     unsafe { raw.end_command_buffer(slot.command) }.checked("vkEndCommandBuffer")?;
+    let waits: Vec<vk::Semaphore> = presentable.iter().map(|sync| sync.acquired).collect();
+    let signals: Vec<vk::Semaphore> = presentable.iter().map(|sync| sync.rendered).collect();
+    let stages = vec![vk::PipelineStageFlags::ALL_COMMANDS; waits.len()];
     let submitted = device
         .check("queue submit")
         .and_then(|()| unsafe { raw.reset_fences(&[slot.fence]) }.checked("vkResetFences"))
         .and_then(|()| {
             let commands = [slot.command];
-            let info = vk::SubmitInfo::default().command_buffers(&commands);
+            let info = vk::SubmitInfo::default()
+                .command_buffers(&commands)
+                .wait_semaphores(&waits)
+                .wait_dst_stage_mask(&stages)
+                .signal_semaphores(&signals);
             unsafe { raw.queue_submit(device.queue, &[info], slot.fence) }.checked("vkQueueSubmit")
         });
     device.observe(submitted)?;
     slot.serial = device.begin_submission();
-    Ok(())
+    Ok(slot.serial)
 }
 
 pub struct Frame<'a> {
@@ -470,6 +492,14 @@ impl Frame<'_> {
     }
 
     pub fn submit(self) -> Result<(), Error> {
+        self.finish(None).map(drop)
+    }
+
+    pub fn submit_presentable(self, presentable: Presentable) -> Result<u64, Error> {
+        self.finish(Some(presentable))
+    }
+
+    fn finish(self, presentable: Option<Presentable>) -> Result<u64, Error> {
         if let Some(pool) = self.slot.queries {
             unsafe {
                 self.device.raw.cmd_write_timestamp2(
@@ -486,7 +516,7 @@ impl Frame<'_> {
             .as_ref()
             .expect("a frame always holds its ring")
             .write(&self.stream.bytes)?;
-        submit(self.device, self.slot)
+        submit(self.device, self.slot, presentable)
     }
 }
 

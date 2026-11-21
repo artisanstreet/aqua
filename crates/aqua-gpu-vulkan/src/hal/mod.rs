@@ -13,9 +13,9 @@ mod instance;
 mod memory;
 
 #[cfg(target_os = "linux")]
-pub(crate) use device::Garbage;
-#[cfg(target_os = "linux")]
 pub use device::{Binding, Descriptors, Device, DeviceInfo, DeviceOptions};
+#[cfg(target_os = "linux")]
+pub(crate) use device::{Garbage, Presenting};
 #[cfg(target_os = "linux")]
 pub(crate) use error::Checked;
 #[cfg(target_os = "linux")]

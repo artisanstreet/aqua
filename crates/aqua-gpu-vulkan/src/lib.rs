@@ -11,3 +11,4 @@ pub mod sprite;
 
 #[cfg(target_os = "linux")]
 pub mod scene;
+pub mod window;

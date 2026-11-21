@@ -6,7 +6,7 @@ use ash::vk;
 
 use super::budget::MemoryBudget;
 use super::error::{Checked, Error};
-use super::instance::{Instance, Validation};
+use super::instance::{Instance, Purpose, SurfaceLoaders, Validation};
 use super::selection::{choose, Adapter, AdapterPreference, Candidate, Fitness};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -77,8 +77,18 @@ pub(crate) enum Garbage {
     PipelineCache(vk::PipelineCache),
 }
 
+pub(crate) struct Presenting<'a> {
+    pub loaders: &'a SurfaceLoaders,
+    pub swapchain: &'a ash::khr::swapchain::Device,
+    pub physical: vk::PhysicalDevice,
+    pub family: u32,
+    pub incremental: bool,
+}
+
 pub struct Device {
     instance: Instance,
+    swapchain: Option<ash::khr::swapchain::Device>,
+    incremental_present: bool,
     physical: vk::PhysicalDevice,
     pub(crate) raw: ash::Device,
     pub(crate) queue: vk::Queue,
@@ -117,6 +127,8 @@ struct Probe {
     timestamps: bool,
     push: bool,
     budget: bool,
+    swapchain: bool,
+    incremental: bool,
 }
 
 fn graphics_family(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Option<(u32, bool)> {
@@ -128,7 +140,14 @@ fn graphics_family(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Op
         .map(|(index, family)| (index as u32, family.timestamp_valid_bits > 0))
 }
 
-fn fitness(instance: &ash::Instance, probe: &Probe) -> Fitness {
+fn fitness(instance: &ash::Instance, probe: &Probe, purpose: Purpose) -> Fitness {
+    match (purpose, probe.swapchain) {
+        (Purpose::Present, false) => Fitness::Lacks("VK_KHR_swapchain"),
+        _ => core_fitness(instance, probe),
+    }
+}
+
+fn core_fitness(instance: &ash::Instance, probe: &Probe) -> Fitness {
     let mut v13 = vk::PhysicalDeviceVulkan13Features::default();
     let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut v13);
     if probe.properties.api_version >= REQUIRED_API {
@@ -163,6 +182,8 @@ fn probe(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Result<Probe
         timestamps: family.is_some_and(|(_, timestamps)| timestamps),
         push: has_extension(&extensions, ash::khr::push_descriptor::NAME),
         budget: has_extension(&extensions, ash::ext::memory_budget::NAME),
+        swapchain: has_extension(&extensions, ash::khr::swapchain::NAME),
+        incremental: has_extension(&extensions, ash::khr::incremental_present::NAME),
     })
 }
 
@@ -173,7 +194,11 @@ fn device_name(properties: &vk::PhysicalDeviceProperties) -> String {
         .unwrap_or_else(|_| "unnamed Vulkan device".to_owned())
 }
 
-fn select(instance: &ash::Instance, preference: &AdapterPreference) -> Result<Probe, Error> {
+fn select(
+    instance: &ash::Instance,
+    preference: &AdapterPreference,
+    purpose: Purpose,
+) -> Result<Probe, Error> {
     let devices =
         unsafe { instance.enumerate_physical_devices() }.checked("vkEnumeratePhysicalDevices")?;
     let mut probes = devices
@@ -185,7 +210,7 @@ fn select(instance: &ash::Instance, preference: &AdapterPreference) -> Result<Pr
         .map(|probe| Candidate {
             name: device_name(&probe.properties),
             kind: kind(probe.properties.device_type),
-            fitness: fitness(instance, probe),
+            fitness: fitness(instance, probe, purpose),
         })
         .collect();
     match choose(preference, &candidates) {
@@ -206,8 +231,16 @@ fn select(instance: &ash::Instance, preference: &AdapterPreference) -> Result<Pr
 
 impl Device {
     pub fn create(options: &DeviceOptions) -> Result<Arc<Self>, Error> {
-        let instance = Instance::new(options.validation)?;
-        let chosen = select(&instance.raw, &options.preference)?;
+        Self::create_for(options, Purpose::Offscreen)
+    }
+
+    pub fn create_presenting(options: &DeviceOptions) -> Result<Arc<Self>, Error> {
+        Self::create_for(options, Purpose::Present)
+    }
+
+    fn create_for(options: &DeviceOptions, purpose: Purpose) -> Result<Arc<Self>, Error> {
+        let instance = Instance::new(options.validation, purpose)?;
+        let chosen = select(&instance.raw, &options.preference, purpose)?;
         let family = chosen
             .family
             .expect("a usable adapter always has a graphics and compute queue");
@@ -218,6 +251,14 @@ impl Device {
         }
         if chosen.budget {
             extensions.push(ash::ext::memory_budget::NAME.as_ptr());
+        }
+        let presenting = purpose == Purpose::Present;
+        let incremental_present = presenting && chosen.incremental;
+        if presenting {
+            extensions.push(ash::khr::swapchain::NAME.as_ptr());
+        }
+        if incremental_present {
+            extensions.push(ash::khr::incremental_present::NAME.as_ptr());
         }
         let priorities = [1.0f32];
         let queues = [vk::DeviceQueueCreateInfo::default()
@@ -262,6 +303,8 @@ impl Device {
         };
         Ok(Arc::new(Self {
             push: push.then(|| ash::khr::push_descriptor::Device::new(&instance.raw, &raw)),
+            swapchain: presenting.then(|| ash::khr::swapchain::Device::new(&instance.raw, &raw)),
+            incremental_present,
             physical: chosen.physical,
             instance,
             raw,
@@ -286,6 +329,41 @@ impl Device {
 
     pub fn validation_errors(&self) -> Vec<String> {
         self.instance.validation_errors()
+    }
+
+    pub(crate) fn presenting(&self) -> Option<Presenting<'_>> {
+        match (&self.instance.surfaces, &self.swapchain) {
+            (Some(loaders), Some(swapchain)) => Some(Presenting {
+                loaders,
+                swapchain,
+                physical: self.physical,
+                family: self.family,
+                incremental: self.incremental_present,
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn incremental_present(&self) -> bool {
+        self.incremental_present
+    }
+
+    pub(crate) fn completed_serial(&self) -> u64 {
+        self.completed.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn wait_semaphore(&self, semaphore: vk::Semaphore) -> Result<(), Error> {
+        let semaphores = [semaphore];
+        let stages = [vk::PipelineStageFlags::ALL_COMMANDS];
+        let info = vk::SubmitInfo::default()
+            .wait_semaphores(&semaphores)
+            .wait_dst_stage_mask(&stages);
+        let submitted = unsafe {
+            self.raw
+                .queue_submit(self.queue, &[info], vk::Fence::null())
+        }
+        .checked("vkQueueSubmit");
+        self.observe(submitted)
     }
 
     pub fn inject_loss(&self) {

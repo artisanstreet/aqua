@@ -47,6 +47,7 @@ pub(crate) struct WindowState {
     pub starved: bool,
     pub probe: crate::occlusion::Probe,
     pub announced: Option<Announced>,
+    pub file_drop: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -68,6 +69,8 @@ pub(crate) struct Shell {
     pub outputs: Vec<Output>,
     pub windows: HashMap<WindowId, WindowState>,
     pub seat: Seat,
+    pub transfer: crate::data_device::Transfer,
+    pub drag: crate::drop::Drag,
     pub next_window: u64,
 }
 
@@ -111,6 +114,8 @@ pub(crate) fn connect(endpoint: Endpoint) -> Result<(), ShellError> {
         outputs: Vec::new(),
         windows: HashMap::new(),
         seat: Seat::default(),
+        transfer: crate::data_device::Transfer::default(),
+        drag: crate::drop::Drag::default(),
         next_window: 1,
     };
     for _ in 0..2 {

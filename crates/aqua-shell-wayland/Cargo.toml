@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Aqua Wayland shell: explicit-time loop, xdg-shell windows, fractional scale, outputs, seat input through xkbcommon, cursors, client chrome"
+description = "Aqua Wayland shell: explicit-time loop, xdg-shell windows, fractional scale, outputs, seat input through xkbcommon, cursors, client chrome, clipboard and primary selection, file drops"
 
 [features]
 testing = [
@@ -24,10 +24,12 @@ wayland-client = { version = "0.31", features = ["system"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 wayland-cursor = "0.31"
 xkbcommon = { version = "0.8", default-features = false }
-rustix = { version = "1", features = ["event", "fs", "thread", "time"] }
+rustix = { version = "1", features = ["event", "fs", "pipe", "thread", "time"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
 wayland-protocols-misc = { version = "0.3", features = ["client"], optional = true }
 serde_json = { version = "1", optional = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
+url = "2"
 
 [dev-dependencies]
 serde_json = "1"

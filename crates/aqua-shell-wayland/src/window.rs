@@ -141,6 +141,7 @@ fn insert(shell: &mut Shell, options: &WindowOptions) -> WindowId {
             starved: false,
             probe: crate::occlusion::Probe::Idle,
             announced: None,
+            file_drop: false,
         },
     );
     toplevel::rescale(shell, id);
@@ -201,6 +202,10 @@ impl Window {
 
     pub fn id(self) -> WindowId {
         self.id
+    }
+
+    pub fn enable_file_drop(self) {
+        state::window(self.id, |window| window.file_drop = true);
     }
 
     pub fn waker(self) -> Waker {

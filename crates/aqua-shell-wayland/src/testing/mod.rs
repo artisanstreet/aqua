@@ -1,11 +1,16 @@
 mod client;
 mod compositor;
+mod data_control;
+mod drag_source;
 mod ipc;
 mod keyboard;
+mod peer;
 mod pointer;
 mod screencopy;
 
 pub use compositor::{Compositor, Options, Rect};
+pub use data_control::{DataControl, Reply, Selection};
+pub use drag_source::{DragReport, DragSource};
 pub use ipc::IpcError;
 pub use keyboard::VirtualKeyboard;
 pub use pointer::VirtualPointer;

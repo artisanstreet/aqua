@@ -7,6 +7,8 @@ pub use aqua_shell::{
 
 #[cfg(target_os = "linux")]
 pub mod capability;
+#[cfg(target_os = "linux")]
+pub mod services;
 #[cfg(all(target_os = "linux", feature = "testing"))]
 pub mod testing;
 #[cfg(target_os = "linux")]
@@ -15,11 +17,19 @@ pub mod wake_trace;
 #[cfg(target_os = "linux")]
 mod chrome;
 #[cfg(target_os = "linux")]
+mod clipboard;
+#[cfg(target_os = "linux")]
 mod clock;
 #[cfg(target_os = "linux")]
 mod cursor;
 #[cfg(target_os = "linux")]
+mod data_device;
+#[cfg(target_os = "linux")]
 mod decoration;
+#[cfg(target_os = "linux")]
+mod drop;
+#[cfg(target_os = "linux")]
+mod formats;
 #[cfg(target_os = "linux")]
 mod globals;
 #[cfg(target_os = "linux")]

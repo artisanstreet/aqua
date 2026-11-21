@@ -120,6 +120,15 @@ pub fn pump_sent_messages(_location: &'static std::panic::Location<'static>) {
     }
 }
 
+pub(crate) fn refresh() -> Result<(), ShellError> {
+    match state::connected() {
+        true => {
+            read_socket(Some(Duration::ZERO)).and_then(|()| state::dispatch_pending().map(|_| ()))
+        }
+        false => Ok(()),
+    }
+}
+
 fn wayland(request: &'static str, reason: impl std::fmt::Display) -> ShellError {
     ShellError::Wayland(request, reason.to_string())
 }

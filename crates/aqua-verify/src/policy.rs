@@ -266,6 +266,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "capability",
             "picker",
             "regions",
+            "services",
             "testing",
             "timing",
             "wake_trace",

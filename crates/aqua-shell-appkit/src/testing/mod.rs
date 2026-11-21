@@ -163,6 +163,10 @@ pub fn set_frame_size(window: Window, width: f64, height: f64) {
     }
 }
 
+pub fn exposed(window: Window) -> bool {
+    crate::window::occlusion(window.id()) == crate::model::presence::Occlusion::Exposed
+}
+
 pub fn set_shadow(window: Window, shadow: bool) {
     if let Some(native) = crate::state::native(window.id()) {
         native.setHasShadow(shadow);

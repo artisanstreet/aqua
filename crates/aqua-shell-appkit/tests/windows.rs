@@ -175,11 +175,14 @@ mod cases {
                 stage(
                     "show",
                     move || window.show().expect("show"),
-                    |cx| cx.saw(|event| *event == ShellEvent::Covered(false)),
+                    move |cx| {
+                        cx.saw(|event| *event == ShellEvent::Covered(false))
+                            && aqua_shell_appkit::testing::exposed(window)
+                            && !window.is_covered()
+                    },
                 ),
             ],
         );
-        assert!(!window.is_covered());
         let lease = window.layer_lease().expect("lease");
         assert!(
             !lease.geometry().covered,

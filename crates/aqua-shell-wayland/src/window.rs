@@ -259,6 +259,10 @@ impl Window {
         });
     }
 
+    pub fn title(self) -> String {
+        state::window(self.id, |window| window.spec.title.clone()).unwrap_or_default()
+    }
+
     pub fn request_redraw(self) {
         state::window(self.id, |window| window.redraw_pending = true);
     }

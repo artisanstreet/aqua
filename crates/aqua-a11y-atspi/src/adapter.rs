@@ -8,11 +8,14 @@ use aqua_a11y::{
 };
 use aqua_protocol::{A11yActionRequest, AccessTreeUpdate};
 
-fn as_window(mut snapshot: TreeUpdate) -> TreeUpdate {
+fn as_window(mut snapshot: TreeUpdate, name: &str) -> TreeUpdate {
     let root = snapshot.tree.as_ref().map(|tree| tree.root);
     for (id, node) in &mut snapshot.nodes {
         if Some(*id) == root {
             node.set_role(Role::Window);
+            if node.label().is_none() && !name.is_empty() {
+                node.set_label(name);
+            }
         }
     }
     snapshot
@@ -21,6 +24,7 @@ fn as_window(mut snapshot: TreeUpdate) -> TreeUpdate {
 pub struct AtspiAdapter {
     adapter: Adapter,
     bridge: Arc<A11yBridge>,
+    name: String,
 }
 
 impl AtspiAdapter {
@@ -31,7 +35,11 @@ impl AtspiAdapter {
             BridgeActionHandler::new(bridge.clone()),
             BridgeDeactivationHandler::new(bridge.clone()),
         );
-        Self { adapter, bridge }
+        Self {
+            adapter,
+            bridge,
+            name: String::new(),
+        }
     }
 
     pub fn connection(&self) -> Connection {
@@ -42,9 +50,16 @@ impl AtspiAdapter {
         self.bridge.epoch()
     }
 
+    pub fn set_window_name(&mut self, name: &str) {
+        if self.name != name {
+            self.name = name.to_owned();
+        }
+    }
+
     pub fn apply(&mut self, update: &AccessTreeUpdate) {
         if let Some(snapshot) = self.bridge.snapshot(update) {
-            self.adapter.update_if_active(|| as_window(snapshot));
+            let name = self.name.as_str();
+            self.adapter.update_if_active(|| as_window(snapshot, name));
         }
     }
 

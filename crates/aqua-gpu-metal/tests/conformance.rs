@@ -2,12 +2,8 @@
 
 mod support;
 
-use std::collections::BTreeSet;
-
 use aqua_gpu_metal::scene::{OffscreenBackend, SurfaceFormat};
-use aqua_gpu_ref::conformance::{
-    all_cases, requirements, run_suite, Outcome, Requirement, SuiteConfig, Tolerance,
-};
+use aqua_gpu_ref::conformance::{run_suite, Outcome, SuiteConfig, Tolerance};
 use aqua_gpu_ref::RefBackend;
 
 const EIGHT_BIT: Tolerance = Tolerance {
@@ -39,14 +35,9 @@ fn run(mut backend: OffscreenBackend, tolerance: Tolerance) {
         fuzz_count: fuzz_count(),
         ..SuiteConfig::default()
     };
-    let custom: BTreeSet<String> = all_cases(&config)
-        .into_iter()
-        .filter(|case| requirements(&case.plan).contains(&Requirement::CustomPasses))
-        .map(|case| case.name)
-        .collect();
     let report = run_suite(&mut reference, &mut backend, &config);
     eprintln!("{report}");
-    let skipped: BTreeSet<String> = report
+    let skipped: Vec<String> = report
         .cases
         .iter()
         .filter_map(|case| match &case.outcome {
@@ -54,14 +45,10 @@ fn run(mut backend: OffscreenBackend, tolerance: Tolerance) {
             _ => None,
         })
         .collect();
-    let expected: BTreeSet<String> = custom
-        .iter()
-        .map(|name| format!("{name}: not offered by the backend: custom passes"))
-        .collect();
-    assert!(!custom.is_empty(), "the suite has custom-pass cases");
-    assert_eq!(
-        skipped, expected,
-        "only the custom-pass cases (M12) may be skipped"
+    assert!(
+        skipped.is_empty(),
+        "no case may be skipped:\n{}",
+        skipped.join("\n")
     );
     assert!(report.passed(), "{}", report.failures().join("\n"));
     support::assert_clean(&backend);
@@ -69,14 +56,14 @@ fn run(mut backend: OffscreenBackend, tolerance: Tolerance) {
 
 #[test]
 fn a_float_surface_matches_the_reference() {
-    if let Some(backend) = support::open(SurfaceFormat::Rgba16Float) {
+    if let Some(backend) = support::open(SurfaceFormat::Rgba16Float).and_then(support::compiling) {
         run(backend, Tolerance::default());
     }
 }
 
 #[test]
 fn an_eight_bit_surface_matches_the_reference() {
-    if let Some(backend) = support::open(SurfaceFormat::Bgra8Unorm) {
+    if let Some(backend) = support::open(SurfaceFormat::Bgra8Unorm).and_then(support::compiling) {
         run(backend, EIGHT_BIT);
     }
 }

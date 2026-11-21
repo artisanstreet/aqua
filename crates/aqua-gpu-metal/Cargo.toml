@@ -15,6 +15,7 @@ bytemuck = { version = "1", features = ["derive"] }
 aqua-shaders = { path = "../aqua-shaders" }
 thiserror = "2"
 block2 = "0.6.2"
+libloading = "0.8"
 objc2 = { version = "0.6.5", default-features = false, features = ["std"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
   "std",

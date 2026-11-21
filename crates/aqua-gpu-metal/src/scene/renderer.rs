@@ -14,6 +14,8 @@ use objc2_metal::{
     MTLSamplerState, MTLScissorRect, MTLSize, MTLTextureUsage, MTLViewport,
 };
 
+use super::custom::compiler::RuntimeCompiler;
+use super::custom::{parameters, Custom, CUSTOM_INPUTS};
 use super::frames::Frame;
 use super::map::{slot, Slot, INSTANCES, SECOND_INSTANCES};
 use super::persistent::PersistentTextures;
@@ -29,8 +31,13 @@ use crate::pack::{pack_quad_with, pack_shadow_with};
 use crate::sprite::{pack_glyph_with, pack_image, pack_slug_with, SPRITE_STRIDE};
 
 pub const CONSTANT_FLOATS: usize = 36;
-const COMPUTE_THREADS: usize = 64;
-const MAX_INPUTS: usize = 8;
+const BOX_BLUR_THREADS: MTLSize = MTLSize {
+    width: 64,
+    height: 1,
+    depth: 1,
+};
+const MAX_INPUTS: usize = CUSTOM_INPUTS;
+const SET_BYTES_LIMIT: usize = 4096;
 const ROW_BOX_BLUR: CustomShaderId = CustomShaderId(1);
 const INSTANCE_ALIGNMENT: u64 = 16;
 const FRAME_BINDING: u32 = 0;
@@ -188,6 +195,18 @@ impl Rect {
         }
     }
 
+    fn bounded(bounds: aqua_core::geometry::Rect, extent: Extent) -> Self {
+        let clamp = |value: f32, limit: u32| (value.max(0.0) as u64).min(limit as u64) as u32;
+        let left = clamp(bounds.x.floor(), extent.width);
+        let top = clamp(bounds.y.floor(), extent.height);
+        Self {
+            left,
+            top,
+            right: clamp((bounds.x + bounds.w).ceil(), extent.width).max(left),
+            bottom: clamp((bounds.y + bounds.h).ceil(), extent.height).max(top),
+        }
+    }
+
     fn is_empty(self) -> bool {
         self.right <= self.left || self.bottom <= self.top
     }
@@ -282,6 +301,7 @@ struct Shared {
 pub struct SceneRenderer {
     shared: Shared,
     pipelines: Pipelines,
+    custom: Custom,
     transients: Transients,
     scratch: Scratch,
     dummy_cleared: bool,
@@ -308,6 +328,7 @@ impl SceneRenderer {
         device: &Arc<Device>,
         cache: Option<&[u8]>,
         options: SceneOptions,
+        compiler: RuntimeCompiler,
     ) -> Result<Self, Error> {
         let dummy = Texture::new(
             device,
@@ -330,6 +351,7 @@ impl SceneRenderer {
                 sampler: linear_clamp(device)?,
             },
             pipelines: Pipelines::new(device, cache),
+            custom: Custom::new(device, compiler),
             transients: Transients::new(options.transient_ceiling),
             scratch: Scratch::default(),
             dummy_cleared: false,
@@ -338,6 +360,19 @@ impl SceneRenderer {
 
     pub fn warm(&mut self, format: MTLPixelFormat) -> Result<(), Error> {
         self.pipelines.warm(format)
+    }
+
+    pub fn custom_passes(&self) -> bool {
+        self.custom.available()
+    }
+
+    pub fn register_compute(
+        &mut self,
+        id: CustomShaderId,
+        hlsl: &str,
+        entry: &str,
+    ) -> Result<(), Error> {
+        self.custom.register(id, hlsl, entry)
     }
 
     pub fn close_startup(&mut self) {
@@ -446,7 +481,15 @@ impl SceneRenderer {
                 uploads: &self.scratch.uploads,
                 base,
             };
-            stats.draws += record_pass(&context, &mut self.pipelines, frame, plan, index, write)?;
+            stats.draws += record_pass(
+                &context,
+                &mut self.pipelines,
+                &mut self.custom,
+                frame,
+                plan,
+                index,
+                write,
+            )?;
         }
         aqua_protocol::probe::count(
             aqua_protocol::probe::Metric::UploadBytes,
@@ -465,6 +508,61 @@ impl Shared {
         scissor: Rect,
         draws: &[Draw<'_>],
     ) -> Result<u32, Error> {
+        self.encode(frame, out, clear, scissor, |encoder| {
+            draws
+                .iter()
+                .for_each(|draw| self.draw(encoder, frame, draw))
+        })?;
+        Ok(draws.len() as u32)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn custom(
+        &self,
+        frame: &Frame<'_>,
+        out: View<'_>,
+        clear: Option<[f32; 4]>,
+        scissor: Rect,
+        pipeline: &RenderPipeline,
+        parameters: &[f32],
+        inputs: &[View<'_>; CUSTOM_INPUTS],
+    ) -> Result<u32, Error> {
+        let bytes: &[u8] = bytemuck::cast_slice(parameters);
+        if bytes.len() > SET_BYTES_LIMIT {
+            return Err(Error::Unsupported(
+                "custom pass parameters above 4096 bytes",
+            ));
+        }
+        self.encode(frame, out, clear, scissor, |encoder| {
+            encoder.setRenderPipelineState(pipeline);
+            unsafe {
+                encoder.setFragmentBytes_length_atIndex(
+                    NonNull::from(bytes).cast(),
+                    bytes.len(),
+                    FRAME_SLOT,
+                );
+                for (slot, input) in inputs.iter().enumerate() {
+                    encoder.setFragmentTexture_atIndex(Some(input.raw), SOURCE_SLOT + slot);
+                }
+                encoder.setFragmentSamplerState_atIndex(Some(&self.sampler), SAMPLER_SLOT);
+                encoder.drawPrimitives_vertexStart_vertexCount(
+                    MTLPrimitiveType::TriangleStrip,
+                    0,
+                    4,
+                );
+            }
+        })?;
+        Ok(u32::from(!scissor.is_empty()))
+    }
+
+    fn encode(
+        &self,
+        frame: &Frame<'_>,
+        out: View<'_>,
+        clear: Option<[f32; 4]>,
+        scissor: Rect,
+        record: impl FnOnce(&ProtocolObject<dyn MTLRenderCommandEncoder>),
+    ) -> Result<(), Error> {
         let encoder = frame.render_pass(out, clear)?;
         encoder.setViewport(MTLViewport {
             originX: 0.0,
@@ -476,12 +574,10 @@ impl Shared {
         });
         if !scissor.is_empty() {
             encoder.setScissorRect(scissor.scissor());
-            draws
-                .iter()
-                .for_each(|draw| self.draw(&encoder, frame, draw));
+            record(&encoder);
         }
         encoder.endEncoding();
-        Ok(draws.len() as u32)
+        Ok(())
     }
 
     fn draw(
@@ -569,14 +665,16 @@ impl Shared {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
         frame: &Frame<'_>,
         pipeline: &ComputePipeline,
         params: [f32; 4],
-        input: View<'_>,
+        inputs: &[View<'_>],
         out: View<'_>,
         groups: [u32; 3],
+        threads: MTLSize,
     ) -> Result<(), Error> {
         let encoder = frame
             .command()
@@ -588,7 +686,9 @@ impl Shared {
         encoder.setComputePipelineState(pipeline);
         unsafe {
             encoder.setBytes_length_atIndex(parameters, length, FRAME_SLOT);
-            encoder.setTexture_atIndex(Some(input.raw), SOURCE_SLOT);
+            for (slot, input) in inputs.iter().enumerate() {
+                encoder.setTexture_atIndex(Some(input.raw), SOURCE_SLOT + slot);
+            }
             encoder.setTexture_atIndex(Some(out.raw), OUTPUT_SLOT);
         }
         encoder.dispatchThreadgroups_threadsPerThreadgroup(
@@ -597,11 +697,7 @@ impl Shared {
                 height: groups[1] as usize,
                 depth: groups[2] as usize,
             },
-            MTLSize {
-                width: COMPUTE_THREADS,
-                height: 1,
-                depth: 1,
-            },
+            threads,
         );
         encoder.endEncoding();
         Ok(())
@@ -626,6 +722,7 @@ impl<'a> Context<'a> {
 fn record_pass(
     context: &Context<'_>,
     pipelines: &mut Pipelines,
+    custom: &mut Custom,
     frame: &mut Frame<'_>,
     plan: &FramePlan,
     index: usize,
@@ -650,6 +747,8 @@ fn record_pass(
         reads.first().copied().unwrap_or(dummy),
         reads.get(1).copied().unwrap_or(dummy),
     ];
+    let inputs: [View<'_>; CUSTOM_INPUTS] =
+        std::array::from_fn(|slot| reads.get(slot).copied().unwrap_or(dummy));
     match &pass.kind {
         PassKind::Copy {
             source_origin,
@@ -726,17 +825,51 @@ fn record_pass(
             if out.format != MTLPixelFormat::RGBA16Float {
                 return Err(Error::Unsupported("compute output must be rgba16f"));
             }
-            if *id != ROW_BOX_BLUR {
-                return Err(Error::Unsupported("unregistered compute shader"));
+            match (custom.registered(*id)?, *id == ROW_BOX_BLUR) {
+                (Some(registered), _) => shared.dispatch(
+                    frame,
+                    &registered.pipeline,
+                    *params,
+                    &inputs,
+                    out,
+                    *groups,
+                    registered.threads,
+                )?,
+                (None, true) => shared.dispatch(
+                    frame,
+                    &pipelines.compute()?,
+                    *params,
+                    &sources[..1],
+                    out,
+                    *groups,
+                    BOX_BLUR_THREADS,
+                )?,
+                (None, false) => return Err(Error::Unsupported("unregistered compute shader")),
             }
-            let pipeline = pipelines.compute()?;
-            shared.dispatch(frame, &pipeline, *params, sources[0], out, *groups)?;
             Ok(1)
         }
         PassKind::Compute { .. } => {
             Err(Error::Unsupported("compute shaders other than custom ids"))
         }
-        PassKind::Custom(_) => Err(Error::Unsupported("custom passes")),
+        PassKind::Custom(spec) => {
+            if matches!(write, TextureRef::Persistent(_)) {
+                return Err(Error::Unsupported("write to a persistent texture"));
+            }
+            let pipeline = custom.graphics(spec, out.format)?;
+            let clear = match pass.load {
+                LoadOp::Clear(color) => Some(color.to_gpu()),
+                LoadOp::Load | LoadOp::DontCare => None,
+            };
+            shared.custom(
+                frame,
+                out,
+                clear,
+                Rect::bounded(spec.bounds, extent),
+                &pipeline,
+                &parameters(&spec.params),
+                &inputs,
+            )
+        }
         kind => {
             if matches!(write, TextureRef::Persistent(_)) {
                 return Err(Error::Unsupported("write to a persistent texture"));

@@ -152,6 +152,8 @@ jobs:
           AQUA_REQUIRE_APPKIT: ${{ runner.os == 'macOS' && '1' || '0' }}
           AQUA_REQUIRE_POST_EVENT: ${{ runner.os == 'macOS' && '1' || '0' }}
           AQUA_REQUIRE_SCREEN_CAPTURE: ${{ runner.os == 'macOS' && '1' || '0' }}
+          AQUA_REQUIRE_DXCOMPILER: ${{ runner.os == 'macOS' && '1' || '0' }}
+          AQUA_REQUIRE_SPIRV_CROSS: ${{ runner.os == 'macOS' && '1' || '0' }}
         run: |
           if [ "$RUNNER_OS" != Windows ]; then
             exec cargo test --workspace --locked ${{ runner.os == 'macOS' && '--no-fail-fast' || '' }} -- --nocapture --test-threads=1
@@ -231,6 +233,8 @@ jobs:
           AQUA_REQUIRE_APPKIT: '1'
           AQUA_REQUIRE_POST_EVENT: '1'
           AQUA_REQUIRE_SCREEN_CAPTURE: '1'
+          AQUA_REQUIRE_DXCOMPILER: '1'
+          AQUA_REQUIRE_SPIRV_CROSS: '1'
           FILTER: ${{ inputs.filter }}
           CAPTURE: ${{ inputs.capture }}
         run: |

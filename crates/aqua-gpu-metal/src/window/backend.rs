@@ -19,7 +19,7 @@ use crate::hal::budget::{pressure, trim_for, MemoryBudget, Pressure, Trim, Visib
 use crate::hal::{Device, DeviceOptions};
 use crate::scene::{
     capabilities, staging_bytes, Error as SceneError, Frames, PersistentStats, PersistentTextures,
-    PipelineStats, SceneOptions, SceneRenderer, SurfaceFormat,
+    PipelineStats, RuntimeCompiler, SceneOptions, SceneRenderer, ShaderCompiler, SurfaceFormat,
 };
 
 const PRESENT_LABEL: &str = "aqua present";
@@ -28,6 +28,7 @@ const PRESENT_LABEL: &str = "aqua present";
 pub struct WindowOptions {
     pub device: DeviceOptions,
     pub scene: SceneOptions,
+    pub compiler: ShaderCompiler,
 }
 
 impl WindowOptions {
@@ -35,6 +36,7 @@ impl WindowOptions {
         Self {
             device: DeviceOptions::from_env(),
             scene: SceneOptions::default(),
+            compiler: ShaderCompiler::from_env(),
         }
     }
 }
@@ -126,6 +128,7 @@ pub struct WindowBackend {
     surfaces: HashMap<SurfaceId, WindowSurface>,
     gpu: Gpu,
     options: WindowOptions,
+    compiler: RuntimeCompiler,
     capabilities: GpuCapabilities,
     pending: Vec<UploadBatch>,
     next_surface: u32,
@@ -140,8 +143,8 @@ fn device_error(error: crate::hal::Error) -> GpuError {
     SceneError::from(error).into()
 }
 
-fn describe(device: &Device) -> GpuCapabilities {
-    let mut described = capabilities(device.info());
+fn describe(device: &Device, custom_passes: bool) -> GpuCapabilities {
+    let mut described = capabilities(device.info(), custom_passes);
     described.features.window_surfaces = true;
     described
 }
@@ -156,9 +159,13 @@ fn whole(extent: Extent) -> Rect {
 }
 
 impl Gpu {
-    fn new(options: &WindowOptions, cache: Option<&[u8]>) -> Result<Self, GpuError> {
+    fn new(
+        options: &WindowOptions,
+        cache: Option<&[u8]>,
+        compiler: &RuntimeCompiler,
+    ) -> Result<Self, GpuError> {
         let device = Device::create(&options.device).map_err(device_error)?;
-        let mut renderer = SceneRenderer::new(&device, cache, options.scene)?;
+        let mut renderer = SceneRenderer::new(&device, cache, options.scene, compiler.clone())?;
         renderer.warm(super::layer::FORMAT)?;
         Ok(Self {
             textures: PersistentTextures::new(&device),
@@ -222,12 +229,14 @@ impl WindowBackend {
         options: WindowOptions,
         cache: Option<&[u8]>,
     ) -> Result<Self, GpuError> {
-        let gpu = Gpu::new(&options, cache)?;
+        let compiler = RuntimeCompiler::load(&options.compiler);
+        let gpu = Gpu::new(&options, cache, &compiler)?;
         Ok(Self {
-            capabilities: describe(&gpu.device),
+            capabilities: describe(&gpu.device, gpu.renderer.custom_passes()),
             surfaces: HashMap::new(),
             gpu,
             options,
+            compiler,
             pending: Vec::new(),
             next_surface: 0,
             generation: 0,
@@ -553,7 +562,7 @@ impl WindowBackend {
 
     fn recover_device(&mut self) -> Result<RecoveryReport, GpuError> {
         let cache = self.pipeline_cache();
-        let gpu = Gpu::new(&self.options, cache.as_deref())?;
+        let gpu = Gpu::new(&self.options, cache.as_deref(), &self.compiler)?;
         self.pending.clear();
         self.surfaces.values_mut().for_each(|entry| {
             entry.settle();
@@ -561,7 +570,7 @@ impl WindowBackend {
             entry.pacing.restart();
         });
         let count = self.surfaces.len() as u32;
-        self.capabilities = describe(&gpu.device);
+        self.capabilities = describe(&gpu.device, gpu.renderer.custom_passes());
         self.gpu = gpu;
         self.generation += 1;
         self.stats.recoveries += 1;

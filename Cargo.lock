@@ -225,6 +225,7 @@ dependencies = [
  "block2",
  "bytemuck",
  "image",
+ "libloading",
  "objc2",
  "objc2-core-foundation",
  "objc2-core-graphics",

@@ -10,6 +10,7 @@ use aqua_protocol::{
 };
 use objc2_metal::MTLTextureUsage;
 
+use super::custom::compiler::{RuntimeCompiler, ShaderCompiler};
 use super::formats::SurfaceFormat;
 use super::frames::Frames;
 use super::persistent::{staging_bytes, PersistentStats, PersistentTextures};
@@ -28,6 +29,7 @@ pub struct OffscreenOptions {
     pub format: SurfaceFormat,
     pub scene: SceneOptions,
     pub pipeline_cache: Option<Vec<u8>>,
+    pub compiler: ShaderCompiler,
 }
 
 impl Default for OffscreenOptions {
@@ -37,6 +39,7 @@ impl Default for OffscreenOptions {
             format: SurfaceFormat::Rgba16Float,
             scene: SceneOptions::default(),
             pipeline_cache: None,
+            compiler: ShaderCompiler::from_env(),
         }
     }
 }
@@ -58,12 +61,13 @@ pub struct OffscreenBackend {
     options: OffscreenOptions,
     capabilities: GpuCapabilities,
     surfaces: HashMap<SurfaceId, Surface>,
+    compiler: RuntimeCompiler,
     gpu: Gpu,
     next_surface: u32,
     last_scene_stats: SceneStats,
 }
 
-pub(crate) fn capabilities(info: &DeviceInfo) -> GpuCapabilities {
+pub(crate) fn capabilities(info: &DeviceInfo, custom_passes: bool) -> GpuCapabilities {
     GpuCapabilities {
         backend: "metal".into(),
         adapter: info.name.clone(),
@@ -72,7 +76,7 @@ pub(crate) fn capabilities(info: &DeviceInfo) -> GpuCapabilities {
         heap_alignment: HEAP_ALIGNMENT,
         features: Features {
             compute: true,
-            custom_passes: false,
+            custom_passes,
             color_matrix: true,
             enhanced_barriers: false,
             tearing: false,
@@ -105,9 +109,13 @@ fn create_surface(
 }
 
 impl Gpu {
-    fn new(options: &OffscreenOptions, cache: Option<&[u8]>) -> Result<Self, Error> {
+    fn new(
+        options: &OffscreenOptions,
+        cache: Option<&[u8]>,
+        compiler: &RuntimeCompiler,
+    ) -> Result<Self, Error> {
         let device = Device::create(&options.device)?;
-        let mut renderer = SceneRenderer::new(&device, cache, options.scene)?;
+        let mut renderer = SceneRenderer::new(&device, cache, options.scene, compiler.clone())?;
         renderer.warm(options.format.metal())?;
         Ok(Self {
             textures: PersistentTextures::new(&device),
@@ -121,10 +129,12 @@ impl Gpu {
 
 impl OffscreenBackend {
     pub fn new(options: OffscreenOptions) -> Result<Self, Error> {
-        let gpu = Gpu::new(&options, options.pipeline_cache.as_deref())?;
+        let compiler = RuntimeCompiler::load(&options.compiler);
+        let gpu = Gpu::new(&options, options.pipeline_cache.as_deref(), &compiler)?;
         Ok(Self {
-            capabilities: capabilities(gpu.device.info()),
+            capabilities: capabilities(gpu.device.info(), gpu.renderer.custom_passes()),
             options,
+            compiler,
             surfaces: HashMap::new(),
             gpu,
             next_surface: 0,
@@ -144,13 +154,20 @@ impl OffscreenBackend {
         self.gpu.device.info()
     }
 
+    pub fn runtime_compiler(&self) -> &RuntimeCompiler {
+        &self.compiler
+    }
+
     pub fn register_compute(
         &mut self,
-        _id: aqua_graph::CustomShaderId,
-        _hlsl: &str,
-        _entry: &str,
+        id: aqua_graph::CustomShaderId,
+        hlsl: &str,
+        entry: &str,
     ) -> Result<(), GpuError> {
-        Err(GpuError::Unsupported("custom passes"))
+        self.gpu
+            .renderer
+            .register_compute(id, hlsl, entry)
+            .map_err(GpuError::from)
     }
 
     pub fn validating(&self) -> bool {
@@ -335,8 +352,8 @@ impl GpuBackend for OffscreenBackend {
             .map(|(id, entry)| (*id, entry.texture.extent()))
             .collect();
         self.surfaces.clear();
-        self.gpu = Gpu::new(&self.options, None)?;
-        self.capabilities = capabilities(self.gpu.device.info());
+        self.gpu = Gpu::new(&self.options, None, &self.compiler)?;
+        self.capabilities = capabilities(self.gpu.device.info(), self.gpu.renderer.custom_passes());
         for (id, extent) in &extents {
             self.surfaces.insert(
                 *id,

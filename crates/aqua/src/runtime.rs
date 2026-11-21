@@ -315,6 +315,8 @@ pub trait Application {
 
     fn on_click_settings(&mut self, _settings: aqua_core::ClickSettings) {}
 
+    fn on_editing_conventions(&mut self, _conventions: aqua_core::EditingConventions) {}
+
     fn on_caption_hover(
         &mut self,
         _ctx: &mut AppCtx,

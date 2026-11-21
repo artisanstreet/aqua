@@ -1,5 +1,6 @@
 pub use aqua_core::{
-    ColorProfile, GpuiBackground, GpuiGradientColorSpace, GpuiGradientStop, GpuiHsla, GpuiTextColor,
+    ColorProfile, EditingConventions, GpuiBackground, GpuiGradientColorSpace, GpuiGradientStop,
+    GpuiHsla, GpuiTextColor,
 };
 pub mod app;
 pub mod coalesce;
@@ -9,6 +10,7 @@ pub mod error;
 pub mod factory;
 pub mod images;
 pub mod inbox;
+pub mod keys;
 pub mod latency;
 pub mod mailbox;
 pub mod mem_probe;

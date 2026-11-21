@@ -557,6 +557,7 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
         #[cfg(target_os = "linux")]
         desktop: super::attach_wayland::Desktop::new(app_id),
     };
+    host.app.on_editing_conventions(crate::keys::conventions());
     super::startup_mark("host_ready");
     #[cfg(windows)]
     shell::set_message_hook(TsfHook::new());

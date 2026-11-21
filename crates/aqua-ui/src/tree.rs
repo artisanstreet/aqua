@@ -1270,6 +1270,7 @@ pub struct UiTree {
     fill_base: u64,
     non_fill_version: u64,
     interaction: interaction::InteractionStore,
+    editing: aqua_core::EditingConventions,
     gpui_paint: bool,
     portal_roots: std::collections::HashSet<NodeId>,
     portal_order: Vec<NodeId>,
@@ -1414,9 +1415,19 @@ impl UiTree {
     }
 
     #[must_use]
+    pub fn editing_conventions(&self) -> aqua_core::EditingConventions {
+        self.editing
+    }
+
+    pub fn set_editing_conventions(&mut self, conventions: aqua_core::EditingConventions) {
+        self.editing = conventions;
+    }
+
+    #[must_use]
     pub fn new() -> Self {
         Self {
             interaction: interaction::InteractionStore::default(),
+            editing: aqua_core::EditingConventions::Pc,
             fill_owner: Rc::new(()),
             fill_changes: Vec::new(),
             srgba_changes: aqua_core::SrgbaFillBatch::default(),

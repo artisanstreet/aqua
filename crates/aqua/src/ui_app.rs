@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 
-use aqua_core::{InputEvent as CoreInputEvent, Key, Modifiers, NamedKey};
+use aqua_core::{ClipboardCommand, InputEvent as CoreInputEvent};
 use aqua_protocol::{
     A11yActionRequest, AquaWindowId, Instant, Machine, ObservedWindowState, PixelSize, Recorded,
     RuntimeInput, RuntimeOutput, ShellEvent, WindowEvent, WindowSpec,
@@ -152,7 +152,8 @@ impl UiApp {
             None => return,
         };
         match built {
-            Ok(runtime) => {
+            Ok(mut runtime) => {
+                runtime.set_editing_conventions(self.root.runtime.editing_conventions());
                 self.extra.insert(id, Slot::new(runtime));
             }
             Err(error) => eprintln!("aqua: window {id:?} mount failed: {error}"),
@@ -271,14 +272,10 @@ pub fn dispatch_clipboard(
     let CoreInputEvent::KeyDown(key) = event else {
         return Ok(ClipboardOutcome::Unhandled);
     };
-    let control = key.modifiers == Modifiers::CONTROL
-        || key.modifiers == Modifiers::CONTROL.union(Modifiers::SHIFT);
-    let shift = key.modifiers == Modifiers::SHIFT;
-    let copy = control && matches!(key.key, Key::Char('c' | 'C') | Key::Named(NamedKey::Insert));
-    let cut = (control && matches!(key.key, Key::Char('x' | 'X')))
-        || (shift && key.key == Key::Named(NamedKey::Delete));
-    let paste = (control && matches!(key.key, Key::Char('v' | 'V')))
-        || (shift && key.key == Key::Named(NamedKey::Insert));
+    let command = app.editing_conventions().clipboard_command(key);
+    let cut = command == Some(ClipboardCommand::Cut);
+    let copy = command == Some(ClipboardCommand::Copy);
+    let paste = command == Some(ClipboardCommand::Paste);
     if copy || cut {
         let mut redraw = false;
         if let Some(text) = app.selected_text() {
@@ -398,6 +395,13 @@ impl Application for UiApp {
 
     fn a11y_revision_for(&self, id: AquaWindowId) -> Option<u64> {
         self.slot(id).map(|slot| slot.runtime.access_revision())
+    }
+
+    fn on_editing_conventions(&mut self, conventions: aqua_core::EditingConventions) {
+        self.root.runtime.set_editing_conventions(conventions);
+        self.extra
+            .values_mut()
+            .for_each(|slot| slot.runtime.set_editing_conventions(conventions));
     }
 
     fn on_click_settings(&mut self, settings: aqua_core::ClickSettings) {

@@ -114,7 +114,7 @@ Adapters
   aqua-gpu-d3d12     GpuBackend on Direct3D 12, stashed: compiles and is selectable, not the default
   aqua-gpu-vulkan    GpuBackend on Vulkan for Linux: offscreen surfaces, lavapipe as the test device (14.LW)
   aqua-gpu-ref       GpuBackend on the CPU: the oracle, headless tests, CI
-  aqua-shell         shell vocabulary every platform shell shares: handler, events, window options, clipboard trait, notifications, dialogs, timing, regions; a fallback shell for other targets (14.LW)
+  aqua-shell         shell vocabulary every platform shell shares: handler, events, window options, clipboard trait, notifications, dialogs, timing, regions, input formulas; a fallback shell for other targets (14.LW)
   aqua-shell-win32   windows, input, DPI, chrome, clipboard, dialogs, prefs, materials
   aqua-ime-tsf       Text Services Framework
   aqua-a11y          accessibility bridge every platform adapter shares: AccessKit tree, action translation, connection state, inspector (14.LW)

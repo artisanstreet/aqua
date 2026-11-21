@@ -2,6 +2,7 @@
 
 pub mod fallback;
 pub mod icon;
+pub mod input;
 pub mod notifications;
 pub mod open;
 pub mod picker;

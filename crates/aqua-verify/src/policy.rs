@@ -192,6 +192,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
         &[
             "fallback",
             "icon",
+            "input",
             "notifications",
             "open",
             "picker",

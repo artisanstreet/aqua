@@ -145,6 +145,8 @@ jobs:
         env:
           CARGO_BUILD_JOBS: 2
           AQUA_REQUIRE_GPU: ${{ runner.os != 'Windows' && '1' || '0' }}
+          MTL_DEBUG_LAYER: ${{ runner.os == 'macOS' && '1' || '' }}
+          MTL_SHADER_VALIDATION: ${{ runner.os == 'macOS' && '1' || '' }}
           AQUA_REQUIRE_WAYLAND: ${{ runner.os == 'Linux' && '1' || '0' }}
           AQUA_REQUIRE_DBUS: ${{ runner.os == 'Linux' && '1' || '0' }}
         run: |
@@ -220,6 +222,9 @@ jobs:
       - name: one test binary
         env:
           CARGO_BUILD_JOBS: 3
+          AQUA_REQUIRE_GPU: 1
+          MTL_DEBUG_LAYER: 1
+          MTL_SHADER_VALIDATION: 1
           FILTER: ${{ inputs.filter }}
           CAPTURE: ${{ inputs.capture }}
         run: |

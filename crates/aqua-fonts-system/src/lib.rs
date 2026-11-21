@@ -167,8 +167,21 @@ pub fn write_cache_file(path: impl AsRef<Path>, bytes: &[u8]) -> std::io::Result
     std::fs::rename(&staging, path)
 }
 
+#[cfg(not(target_os = "linux"))]
 pub fn default_fallback_index_path() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
+    Some(base.join("aqua").join("font-fallback.index"))
+}
+
+#[cfg(target_os = "linux")]
+pub fn default_fallback_index_path() -> Option<PathBuf> {
+    let absolute = |name: &str| {
+        std::env::var_os(name)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    };
+    let base =
+        absolute("XDG_CACHE_HOME").or_else(|| absolute("HOME").map(|home| home.join(".cache")))?;
     Some(base.join("aqua").join("font-fallback.index"))
 }
 

@@ -50,6 +50,12 @@ define_class!(
             NSApplicationTerminateReply::TerminateCancel
         }
 
+        #[unsafe(method(applicationDidFinishLaunching:))]
+        #[allow(deprecated)]
+        fn did_finish_launching(&self, _notification: &NSNotification) {
+            shared(MainThreadMarker::from(self)).activateIgnoringOtherApps(true);
+        }
+
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
         fn after_last_window(&self, _sender: &NSApplication) -> bool {
             false

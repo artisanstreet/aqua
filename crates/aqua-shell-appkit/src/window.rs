@@ -16,11 +16,11 @@ use objc2::runtime::ProtocolObject;
 use objc2::AnyThread;
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-    NSColor, NSEvent, NSTrackingArea, NSTrackingAreaOptions, NSWindowCollectionBehavior,
-    NSWindowLevel, NSWindowOrderingMode, NSWindowStyleMask, NSWindowTabbingMode,
-    NSWindowTitleVisibility,
+    NSColor, NSEvent, NSPasteboardTypeFileURL, NSTrackingArea, NSTrackingAreaOptions,
+    NSWindowCollectionBehavior, NSWindowLevel, NSWindowOrderingMode, NSWindowStyleMask,
+    NSWindowTabbingMode, NSWindowTitleVisibility,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{MainThreadMarker, NSArray, NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::{kCAGravityTopLeft, CAMetalLayer};
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -572,6 +572,13 @@ impl Window {
         emit(self.id, ShellEvent::Destroyed);
         if remaining == 0 {
             crate::looping::quit();
+        }
+    }
+
+    pub fn enable_file_drop(self) {
+        if let Some(view) = state::window(self.id, |window| window.view.clone()) {
+            let types = NSArray::from_slice(&[unsafe { NSPasteboardTypeFileURL }]);
+            view.registerForDraggedTypes(&types);
         }
     }
 

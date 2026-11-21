@@ -49,7 +49,7 @@ pub(crate) fn present(
     pool.destroy();
     let surface = &window.core.surface;
     surface.attach(Some(&buffer), 0, 0);
-    window.core.apply_geometry();
+    window.core.apply_geometry((width, height));
     surface.damage_buffer(0, 0, width as i32, height as i32);
     surface.commit();
     true

@@ -10,7 +10,7 @@ use std::time::Duration;
 use support::{drive, options, Flow};
 
 enum Ask {
-    Prepare,
+    Prepare((u32, u32)),
     Wait(Duration),
     Presented,
     Stop,
@@ -30,8 +30,8 @@ fn render_thread(
     let thread = std::thread::spawn(move || {
         while let Ok(request) = asks.recv() {
             let reply = match request {
-                Ask::Prepare => {
-                    lease.before_present();
+                Ask::Prepare(buffer) => {
+                    lease.before_present(buffer);
                     Answer::Prepared
                 }
                 Ask::Wait(timeout) => {
@@ -58,7 +58,7 @@ fn present_once(
     answers: &Receiver<Answer>,
     timeout: Duration,
 ) -> (FrameWait, Duration) {
-    ask.send(Ask::Prepare).unwrap();
+    ask.send(Ask::Prepare(window.inner_size())).unwrap();
     assert!(matches!(answers.recv().unwrap(), Answer::Prepared));
     support::paint(window);
     ask.send(Ask::Wait(timeout)).unwrap();
@@ -187,7 +187,7 @@ fn a_lease_outlives_its_window_without_a_protocol_error() {
             1 => first.destroy(),
             2 => {
                 let held = lease.as_ref().unwrap();
-                held.before_present();
+                held.before_present((200, 200));
                 assert_eq!(
                     held.wait_ready(Duration::from_millis(30)).unwrap(),
                     FrameWait::TimedOut

@@ -56,7 +56,7 @@ impl SurfaceCore {
         self.commits.load(Ordering::Acquire)
     }
 
-    pub(crate) fn apply_geometry(&self) -> SurfaceGeometry {
+    pub(crate) fn apply_geometry(&self, buffer: (u32, u32)) -> SurfaceGeometry {
         self.commits.fetch_add(1, Ordering::AcqRel);
         let geometry = self.geometry();
         match (geometry.scaling, &self.viewport) {
@@ -64,9 +64,12 @@ impl SurfaceCore {
                 i32::try_from(geometry.logical.0).unwrap_or(i32::MAX),
                 i32::try_from(geometry.logical.1).unwrap_or(i32::MAX),
             ),
-            (Scaling::BufferScale(factor), _) if self.surface.version() >= 3 => {
-                self.surface.set_buffer_scale(factor)
-            }
+            (Scaling::BufferScale(factor), _) if self.surface.version() >= 3 => self
+                .surface
+                .set_buffer_scale(match buffer == geometry.physical {
+                    true => factor,
+                    false => 1,
+                }),
             _ => {}
         }
         geometry
@@ -151,7 +154,7 @@ impl SurfaceLease {
         self.core.geometry()
     }
 
-    pub fn before_present(&self) -> SurfaceGeometry {
+    pub fn before_present(&self, buffer: (u32, u32)) -> SurfaceGeometry {
         let mut frames = locked(&self.frames);
         let qh = frames.queue.handle();
         let sequence = frames.events.next;
@@ -161,7 +164,7 @@ impl SurfaceLease {
         if let Some(presentation) = &self.core.presentation {
             presentation.feedback(&self.core.surface, &qh, ());
         }
-        self.core.apply_geometry()
+        self.core.apply_geometry(buffer)
     }
 
     pub fn take_presented(&self) -> Vec<Presented> {

@@ -8,6 +8,12 @@ use skrifa::raw::FileRef;
 use skrifa::string::StringId;
 use skrifa::{FontRef, MetadataProvider};
 
+mod discovery;
+#[cfg(target_os = "linux")]
+mod fontconfig;
+#[cfg(feature = "testing")]
+pub mod testing;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ID(u32);
 
@@ -20,6 +26,54 @@ pub enum Style {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Weight(pub u16);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Generic {
+    SansSerif,
+    Serif,
+    Monospace,
+    Cursive,
+    Fantasy,
+    Emoji,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scope {
+    Everything,
+    Preferred,
+}
+
+impl Generic {
+    pub const ALL: [Generic; 6] = [
+        Generic::SansSerif,
+        Generic::Serif,
+        Generic::Monospace,
+        Generic::Cursive,
+        Generic::Fantasy,
+        Generic::Emoji,
+    ];
+
+    #[cfg(target_os = "linux")]
+    fn fallback_scope(self) -> Scope {
+        match self {
+            Generic::Emoji => Scope::Preferred,
+            _ => Scope::Everything,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn fontconfig_name(self) -> &'static std::ffi::CStr {
+        match self {
+            Generic::SansSerif => c"sans-serif",
+            Generic::Serif => c"serif",
+            Generic::Monospace => c"monospace",
+            Generic::Cursive => c"cursive",
+            Generic::Fantasy => c"fantasy",
+            Generic::Emoji => c"emoji",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Stretch(pub f32);
@@ -96,6 +150,7 @@ struct Record {
 pub struct FontDatabase {
     records: Vec<Record>,
     fingerprints: HashMap<ID, Option<FaceFingerprint>>,
+    configured: Vec<(Generic, Vec<String>)>,
 }
 
 pub fn read_cache_file(path: impl AsRef<Path>) -> Option<Vec<u8>> {
@@ -118,29 +173,7 @@ pub fn default_fallback_index_path() -> Option<PathBuf> {
 }
 
 pub fn system_font_directories() -> Vec<PathBuf> {
-    let windows = std::env::var_os("SystemRoot")
-        .or_else(|| std::env::var_os("WINDIR"))
-        .map(|root| PathBuf::from(root).join("Fonts"));
-    let user = std::env::var_os("LOCALAPPDATA").map(|base| {
-        PathBuf::from(base)
-            .join("Microsoft")
-            .join("Windows")
-            .join("Fonts")
-    });
-    let configured = std::env::var_os("AQUA_FONT_DIRS")
-        .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
-        .unwrap_or_default();
-    windows.into_iter().chain(user).chain(configured).collect()
-}
-
-fn is_font_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            ["ttf", "otf", "ttc", "otc"]
-                .iter()
-                .any(|known| extension.eq_ignore_ascii_case(known))
-        })
+    discovery::discover().directories
 }
 
 fn string_of(font: &FontRef, id: StringId) -> Option<String> {
@@ -225,30 +258,52 @@ impl FontDatabase {
         Self {
             records: Vec::new(),
             fingerprints: HashMap::new(),
+            configured: Vec::new(),
         }
     }
 
     pub fn system() -> Self {
         let mut database = Self::empty();
-        for directory in system_font_directories() {
-            database.load_directory(&directory);
+        let found = discovery::discover();
+        for path in &found.files {
+            let _ = database.load_file(path);
         }
+        database.configured = found
+            .sorted
+            .iter()
+            .map(|(generic, faces)| (*generic, database.families_of(faces)))
+            .collect();
         database
     }
 
-    fn load_directory(&mut self, directory: &Path) {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            return;
-        };
-        let mut paths: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| is_font_file(path))
+    fn families_of(&self, faces: &[discovery::FaceRef]) -> Vec<String> {
+        let located: HashMap<(&Path, u32), &FaceInfo> = self
+            .faces()
+            .filter_map(|face| match &face.source {
+                Source::File(path) => Some(((path.as_path(), face.index), face)),
+                Source::Memory => None,
+            })
             .collect();
-        paths.sort();
-        for path in paths {
-            let _ = self.load_file(&path);
+        let mut names: Vec<String> = Vec::new();
+        for face in faces {
+            let Some(info) = located.get(&(face.path.as_path(), face.index)) else {
+                continue;
+            };
+            let Some(name) = info.families.first() else {
+                continue;
+            };
+            if !names.iter().any(|known| known.eq_ignore_ascii_case(name)) {
+                names.push(name.clone());
+            }
         }
+        names
+    }
+
+    pub fn configured_families(&self, generic: Generic) -> &[String] {
+        self.configured
+            .iter()
+            .find(|(configured, _)| *configured == generic)
+            .map_or(&[], |(_, names)| names.as_slice())
     }
 
     fn insert(&mut self, data: Arc<dyn AsRef<[u8]> + Send + Sync>, source: Source) -> usize {

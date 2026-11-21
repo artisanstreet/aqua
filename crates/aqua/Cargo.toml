@@ -64,6 +64,7 @@ windows = { version = "0.62.2", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+aqua-fonts-system = { path = "../aqua-fonts-system", features = ["testing"] }
 aqua-shell-wayland = { path = "../aqua-shell-wayland", features = ["testing"] }
 aqua-portal = { path = "../aqua-portal", features = ["testing"] }
 zbus = { version = "5.19", default-features = false, features = ["async-io"] }

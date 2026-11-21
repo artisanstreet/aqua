@@ -23,6 +23,8 @@ mod wayland {
     use aqua::runtime::{AppCtx, Application};
     use aqua::{px, AppId, Aqua, Context, IntoView};
     use aqua_core::InputEvent;
+    use aqua_fonts_system::testing::{FixtureFont, FontconfigFixture};
+    use aqua_fonts_system::Generic;
     use aqua_portal::testing::{find_binary, scratch_dir, unavailable, PrivateBus};
     use aqua_protocol::{AquaWindowId, Instant as AquaInstant, ObservedWindowState, WindowEvent};
     use aqua_shell_wayland::testing::{
@@ -183,7 +185,6 @@ mod wayland {
         bus: PrivateBus,
         _launcher: Launcher,
         runtime: PathBuf,
-        fonts: String,
     }
 
     impl Drop for Desktop {
@@ -241,36 +242,13 @@ mod wayland {
         }
     }
 
-    fn font_directories() -> String {
-        let configured = std::env::var_os("AQUA_FONT_DIRS").unwrap_or_default();
-        let mut pending: Vec<PathBuf> = std::env::split_paths(&configured)
-            .chain([PathBuf::from("/usr/share/fonts")])
-            .collect();
-        let mut found = Vec::new();
-        while let Some(directory) = pending.pop() {
-            let Ok(entries) = std::fs::read_dir(&directory) else {
-                continue;
-            };
-            found.push(directory);
-            pending.extend(
-                entries
-                    .filter_map(Result::ok)
-                    .map(|entry| entry.path())
-                    .filter(|path| path.is_dir()),
-            );
-        }
-        std::env::join_paths(found)
-            .expect("font directories join")
-            .to_string_lossy()
-            .into_owned()
-    }
-
     fn isolated(command: &mut Command, bus: &PrivateBus, runtime: &Path) {
         command
             .env("DBUS_SESSION_BUS_ADDRESS", bus.address())
             .env("XDG_RUNTIME_DIR", runtime)
             .env("GSETTINGS_BACKEND", "memory")
             .env_remove("AT_SPI_BUS_ADDRESS")
+            .env_remove("AQUA_FONT_DIRS")
             .env_remove("DISPLAY")
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("SWAYSOCK");
@@ -309,7 +287,6 @@ mod wayland {
                 bus,
                 _launcher: launcher,
                 runtime,
-                fonts: font_directories(),
             })
         }
 
@@ -318,7 +295,6 @@ mod wayland {
             isolated(&mut command, &self.bus, self.compositor.runtime_dir());
             command
                 .env("WAYLAND_DISPLAY", self.compositor.display())
-                .env("AQUA_FONT_DIRS", &self.fonts)
                 .envs(env.iter().copied())
                 .stdin(Stdio::null());
             command
@@ -803,6 +779,53 @@ mod wayland {
             .unwrap_or_else(|| panic!("the {name} example is built next to {}", binary.display()))
     }
 
+    fn button_pixels(desktop: &Desktop, window: Rect) -> Vec<[u8; 4]> {
+        let shot = capture(&desktop.compositor, false).expect("sway captures the output");
+        (window.y..window.y + 40)
+            .flat_map(|y| (window.x..window.x + 160).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                shot.bgra_at(x as u32, y as u32)
+                    .expect("the button lies inside the output")
+            })
+            .collect()
+    }
+
+    fn text_renders_with_fonts_found_through_fontconfig_alone(desktop: &Desktop) {
+        let fixture = FontconfigFixture::new("host-fonts")
+            .expect("a scratch directory")
+            .prefer(Generic::SansSerif, &["Fixture Sans"]);
+        fixture
+            .install("nested/sans.ttf", &FixtureFont::new("Fixture Sans").ascii())
+            .expect("the fixture font is written");
+        let config = fixture.write_config().expect("the fontconfig file");
+        let config = config.to_string_lossy();
+        let elsewhere = fixture.root().join("nothing-here");
+        std::fs::create_dir_all(&elsewhere).expect("an empty data directory");
+        let elsewhere = elsewhere.to_string_lossy();
+        let mut app = desktop.spawn_test_app(&[
+            ("FONTCONFIG_FILE", config.as_ref()),
+            ("HOME", elsewhere.as_ref()),
+            ("XDG_DATA_HOME", elsewhere.as_ref()),
+            ("XDG_DATA_DIRS", elsewhere.as_ref()),
+        ]);
+        let (_, rect) = desktop.mapped(APP_ID, 1)[0];
+        let inked = within("the Press label to paint the fixture font", || {
+            let pixels = button_pixels(desktop, rect);
+            let ground = pixels[0];
+            let inked = pixels.iter().filter(|pixel| **pixel != ground).count();
+            (inked > 150).then_some(inked)
+        });
+        assert!(
+            inked < 160 * 40 / 2,
+            "only the label is inked: {inked} pixels"
+        );
+        desktop.kill(&format!("[app_id=\"^{APP_ID}$\"]"));
+        assert!(
+            app.exit().success(),
+            "the test app quits when its window closes"
+        );
+    }
+
     fn every_example_renders_takes_input_and_quits_cleanly(desktop: &Desktop) {
         let pointer = VirtualPointer::new(&desktop.compositor).expect("the virtual pointer binds");
         let mut keyboard = VirtualKeyboard::with_layout(&desktop.compositor, "us", "")
@@ -858,6 +881,10 @@ mod wayland {
             (
                 "smoke_mode_exits_after_the_requested_presented_frames",
                 smoke_mode_exits_after_the_requested_presented_frames,
+            ),
+            (
+                "text_renders_with_fonts_found_through_fontconfig_alone",
+                text_renders_with_fonts_found_through_fontconfig_alone,
             ),
             (
                 "every_example_renders_takes_input_and_quits_cleanly",

@@ -167,8 +167,10 @@ version = "0.1.0"
 name = "aqua-fonts-system"
 version = "0.1.0"
 dependencies = [
+ "libloading",
  "memmap2",
  "skrifa",
+ "thiserror",
 ]
 
 [[package]]

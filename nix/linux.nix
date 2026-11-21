@@ -10,6 +10,7 @@ let
     pkgs.wayland
     pkgs.libxkbcommon
     pkgs.dbus
+    pkgs.fontconfig.lib
     pkgs.zlib
     pkgs.stdenv.cc.cc.lib
   ];

@@ -399,11 +399,13 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "FaceBytes",
             "FaceFingerprint",
             "FontDatabase",
+            "Generic",
             "read_cache_file",
             "write_cache_file",
             "default_fallback_index_path",
             "system_font_directories",
             "weight_distance_order",
+            "testing",
         ],
     ),
     (

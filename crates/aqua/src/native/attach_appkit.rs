@@ -1,6 +1,8 @@
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
+use aqua_a11y_ax::{AxAdapter, WakeFn};
 use aqua_core::{ClickSettings, Oklch};
 use aqua_graph::Extent;
 use aqua_ime_appkit::AppKitIme;
@@ -12,7 +14,8 @@ use super::gpu;
 use super::inspector::HostInspector;
 use super::looping::Host;
 use super::platform::shell::{prefs, Window};
-use super::window_appkit::{AppKitWindow, InspectorSink};
+use super::window_appkit::{AppKitWindow, AxSink};
+use crate::inbox::AquaUserEvent;
 use crate::native_window::NativeWindow;
 use crate::runtime::Application;
 
@@ -56,14 +59,25 @@ impl<A: Application + 'static> Host<A> {
         options: &WindowOptions,
     ) {
         prefs::follow_changes(window.waker());
-        if let Some(inspector) = self.inspector.as_ref().map(HostInspector::handle) {
-            let now = self.aqua.clock();
-            if let Some(deadline) = self.app.prepare_accessibility(observed, now) {
-                self.aqua.scheduler.request_animation_deadline(id, deadline);
-            }
-            self.aqua
-                .attach_access(id, Box::new(InspectorSink { inspector }));
+        let inbox = self.aqua.inbox();
+        let wake: WakeFn = Arc::new(move || {
+            inbox.post(AquaUserEvent::A11yActions(id));
+        });
+        super::startup_mark("ax_begin");
+        let adapter = AxAdapter::attach(window, wake);
+        super::startup_mark("ax_done");
+        let now = self.aqua.clock();
+        if let Some(deadline) = self.app.prepare_accessibility(observed, now) {
+            self.aqua.scheduler.request_animation_deadline(id, deadline);
         }
+        self.aqua.attach_access(
+            id,
+            Box::new(AxSink {
+                adapter,
+                window,
+                inspector: self.inspector.as_ref().map(HostInspector::handle),
+            }),
+        );
         self.aqua.attach_ime(id, Box::new(AppKitIme::new(window)));
         super::startup_mark("window_shown");
         if let Err(error) = window.show() {

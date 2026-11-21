@@ -1,3 +1,4 @@
+use aqua_a11y_ax::{AxAdapter, Connection};
 use aqua_core::{ClickSettings, CursorIcon, Rect};
 use aqua_protocol::chrome::DragRegions;
 use aqua_protocol::monitor::DisplayInfo;
@@ -123,20 +124,43 @@ impl NativeWindow for AppKitWindow {
     }
 }
 
-pub struct InspectorSink {
-    pub inspector: Inspector,
+pub struct AxSink {
+    pub adapter: AxAdapter,
+    pub window: Window,
+    pub inspector: Option<Inspector>,
 }
 
-impl AccessSink for InspectorSink {
+impl AccessSink for AxSink {
     fn needs_snapshot(&self) -> bool {
-        true
+        self.inspector.is_some() || self.adapter.connection() == Connection::Connected
+    }
+
+    fn connection_epoch(&self) -> u64 {
+        self.adapter.epoch()
     }
 
     fn apply(&mut self, update: &AccessTreeUpdate) {
-        super::inspector::publish_tree(&self.inspector, update);
+        let started = std::time::Instant::now();
+        let _span = aqua_protocol::probe::span(aqua_protocol::probe::Phase::Build);
+        if let Some(inspector) = &self.inspector {
+            super::inspector::publish_tree(inspector, update);
+        }
+        self.adapter.set_window_title(&self.window.title());
+        self.adapter.apply(update);
+        crate::profile::note(|| {
+            format!(
+                "access_apply={}us nodes={}",
+                started.elapsed().as_micros(),
+                update.nodes.len()
+            )
+        });
     }
 
     fn drain_actions(&mut self) -> Vec<A11yActionRequest> {
-        Vec::new()
+        self.adapter.drain_actions()
+    }
+
+    fn window_focus(&mut self, focused: bool) {
+        self.adapter.focus(focused);
     }
 }

@@ -93,6 +93,7 @@ version = "0.1.0"
 dependencies = [
  "aqua-a11y",
  "aqua-a11y-atspi",
+ "aqua-a11y-ax",
  "aqua-a11y-uia",
  "aqua-core",
  "aqua-fonts-system",

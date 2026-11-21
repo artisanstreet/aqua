@@ -46,6 +46,7 @@ aqua-portal = { path = "../aqua-portal" }
 [target.'cfg(target_os = "macos")'.dependencies]
 aqua-ime-appkit = { path = "../aqua-ime-appkit" }
 aqua-shell-appkit = { path = "../aqua-shell-appkit" }
+aqua-a11y-ax = { path = "../aqua-a11y-ax" }
 aqua-gpu-metal = { path = "../aqua-gpu-metal" }
 
 [features]
@@ -83,6 +84,7 @@ rustix = { version = "1", features = ["process", "system"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 aqua-shell-appkit = { path = "../aqua-shell-appkit", features = ["testing"] }
+aqua-a11y-ax = { path = "../aqua-a11y-ax", features = ["testing"] }
 
 [[test]]
 name = "host_wayland"

@@ -18,6 +18,7 @@ mod macos {
     use aqua::mailbox::Mailbox;
     use aqua::runtime::{AppCtx, Application};
     use aqua::{px, Aqua, AquaConfig, Context, IntoView};
+    use aqua_a11y_ax::testing::Element;
     use aqua_core::{DisplayItem, InputEvent, Modifiers, Oklch, Rect};
     use aqua_protocol::{
         AquaWindowId, DialogKind, DialogOutcome, DialogSpec, Instant as AquaInstant,
@@ -61,12 +62,16 @@ mod macos {
         }
     }
 
-    const ALL: [Case; 20] = [
+    const ALL: [Case; 21] = [
         case(
             "a_real_app_shows_a_window_and_presents_frames",
             shows_and_presents,
         ),
         case("clicking_a_button_runs_its_handler", clicking),
+        case(
+            "a_screen_reader_reads_the_app_presses_its_button_and_sets_its_text",
+            screen_reader,
+        ),
         case(
             "typing_copying_and_pasting_in_a_field_shows_the_text_on_screen",
             typing,
@@ -772,6 +777,59 @@ mod macos {
         rendered(&window);
         click(at(&window, SIZE.1, (80.0, 20.0)));
         inspector.await_value("the button's handler", "draft!");
+        app.quits_cleanly();
+    }
+
+    fn screen_reader() {
+        if !available(Facility::WindowServer)
+            || !available(Facility::PostEvent)
+            || !aqua_a11y_ax::testing::available()
+        {
+            return;
+        }
+        let mut app = App::start(command("field", &[]), "field");
+        let reader = Element::application(app.pid());
+        let window = within("the window on the accessibility tree", || {
+            reader
+                .windows()
+                .into_iter()
+                .find(|window| window.title().as_deref() == Some("aqua field"))
+        });
+        let field = within("the text field to appear after the first query", || {
+            window.find("AXTextField", "draft")
+        });
+        let root = within("the root group", || {
+            window
+                .children()
+                .into_iter()
+                .find(|child| child.role().as_deref() == Some("AXGroup"))
+        });
+        assert_eq!(root.title().as_deref(), Some("aqua field"));
+        let button = within("the button", || {
+            root.descendants()
+                .into_iter()
+                .find(|element| element.role().as_deref() == Some("AXButton"))
+        });
+        println!("button {button:?}, field {field:?}");
+        let outer = window.frame().expect("the window has a frame");
+        let frame = field.frame().expect("the field has a frame");
+        assert!(outer.contains(frame), "{frame:?} lies inside {outer:?}");
+        button.press().expect("AXPress on the button succeeds");
+        within("the press to run the handler", || {
+            (field.value().as_deref() == Some("draft!")).then_some(())
+        });
+        field
+            .set_value("read aloud")
+            .expect("setting the field's AXValue succeeds");
+        within("the new value to reach the field", || {
+            (field.value().as_deref() == Some("read aloud")).then_some(())
+        });
+        field
+            .set_focused(true)
+            .expect("focusing the field succeeds");
+        within("the focused element to follow", || {
+            (reader.focused().as_ref() == Some(&field)).then_some(())
+        });
         app.quits_cleanly();
     }
 

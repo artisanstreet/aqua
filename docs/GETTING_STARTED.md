@@ -73,6 +73,24 @@ passthrough (the scheduler itself is tested in `aqua-platform`), window
 event → observed-state routing, input dispatch, and scene building without
 a window or GPU.
 
+macOS (Apple Silicon) has no native backend yet (record 14.MA). CI runs the
+workspace on a `macos-15` runner with the fallback shell, and
+`scripts/macos-env.sh` prints the toolchain and runner probe, writing
+`target/aqua-mac-artifacts/probe.json`. Without a Mac, check the Apple target
+from Linux; it compiles and lints but cannot link:
+
+```sh
+rustup target add aarch64-apple-darwin
+cargo clippy --workspace --all-targets --target aarch64-apple-darwin -- -D warnings
+```
+
+To run one test binary on the runner and keep its output and screen frames,
+dispatch the `macos-debug` job:
+
+```sh
+gh workflow run ci --ref <branch> -f filter='-p aqua --test host_native' -f capture=true
+```
+
 ## Write an app (canonical, builder-first)
 
 ```rust

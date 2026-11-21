@@ -1102,7 +1102,10 @@ pub fn select_cluster(
 #[cfg(all(test, windows))]
 pub(crate) const TEST_FONT_FILE: &str = r"C:\Windows\Fonts\arial.ttf";
 
-#[cfg(all(test, not(windows)))]
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) const TEST_FONT_FILE: &str = "/System/Library/Fonts/Supplemental/Arial.ttf";
+
+#[cfg(all(test, not(any(windows, target_os = "macos"))))]
 pub(crate) const TEST_FONT_FILE: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
 
 #[cfg(test)]

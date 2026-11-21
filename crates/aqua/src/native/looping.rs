@@ -60,7 +60,8 @@ fn render_when_covered() -> bool {
 }
 
 fn shell_options(options: &WindowOptions, aqua: &Aqua) -> ShellOptions {
-    let chrome = match options.effective_titlebar() {
+    let titlebar = options.effective_titlebar();
+    let chrome = match titlebar {
         Titlebar::Native => Chrome::Native,
         Titlebar::Overlay | Titlebar::Hidden => Chrome::Custom,
     };
@@ -76,6 +77,8 @@ fn shell_options(options: &WindowOptions, aqua: &Aqua) -> ShellOptions {
         position: None,
         kind: WindowKind::Normal,
         chrome,
+        titlebar_height: options.titlebar_height,
+        caption_buttons: !matches!(titlebar, Titlebar::Hidden),
         material: aqua.config().effective_material(aqua.preferences()),
         dark,
         topmost: false,

@@ -63,7 +63,7 @@ pub struct OffscreenBackend {
     last_scene_stats: SceneStats,
 }
 
-fn capabilities(info: &DeviceInfo) -> GpuCapabilities {
+pub(crate) fn capabilities(info: &DeviceInfo) -> GpuCapabilities {
     GpuCapabilities {
         backend: "metal".into(),
         adapter: info.name.clone(),

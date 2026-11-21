@@ -8,6 +8,7 @@ pub mod memo;
 pub mod pack;
 pub mod pool;
 pub mod sprite;
+pub mod window;
 
 #[cfg(target_os = "macos")]
 pub mod scene;

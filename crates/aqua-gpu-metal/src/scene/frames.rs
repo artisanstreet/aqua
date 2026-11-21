@@ -89,6 +89,13 @@ impl Frames {
         }
     }
 
+    pub fn wait_idle(&mut self) {
+        self.slots
+            .iter_mut()
+            .filter_map(|slot| slot.in_flight.take())
+            .for_each(|InFlight(command)| command.waitUntilCompleted());
+    }
+
     pub fn begin(&mut self, ring_bytes: u64) -> Result<Frame<'_>, Error> {
         self.device.check("frame begin")?;
         let index = self.next;
@@ -236,9 +243,6 @@ impl Frame<'_> {
 
 impl Drop for Frames {
     fn drop(&mut self) {
-        self.slots
-            .iter_mut()
-            .filter_map(|slot| slot.in_flight.take())
-            .for_each(|InFlight(command)| command.waitUntilCompleted());
+        self.wait_idle();
     }
 }

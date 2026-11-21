@@ -209,6 +209,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "pool",
             "sprite",
             "scene",
+            "window",
         ],
     ),
     (

@@ -84,6 +84,7 @@ dependencies = [
  "aqua-fonts-system",
  "aqua-gpu-d3d11",
  "aqua-gpu-d3d12",
+ "aqua-gpu-metal",
  "aqua-gpu-ref",
  "aqua-gpu-vulkan",
  "aqua-graph",
@@ -97,6 +98,7 @@ dependencies = [
  "aqua-runtime",
  "aqua-scene",
  "aqua-shell",
+ "aqua-shell-appkit",
  "aqua-shell-wayland",
  "aqua-shell-win32",
  "aqua-text",
@@ -218,11 +220,17 @@ dependencies = [
  "aqua-graph",
  "aqua-protocol",
  "aqua-shaders",
+ "aqua-shell-appkit",
  "aqua-verify",
+ "block2",
  "bytemuck",
+ "image",
  "objc2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation",
  "objc2-metal",
+ "objc2-quartz-core",
  "thiserror 2.0.21",
 ]
 
@@ -1789,6 +1797,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
 dependencies = [
  "bitflags",
+ "block2",
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
@@ -1803,6 +1812,7 @@ dependencies = [
  "bitflags",
  "objc2",
  "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation",
  "objc2-metal",
 ]

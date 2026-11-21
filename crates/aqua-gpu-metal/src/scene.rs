@@ -15,9 +15,13 @@ use aqua_graph::TextureHandle;
 pub use crate::hal::selection::AdapterPreference;
 pub use crate::hal::DeviceOptions;
 pub use formats::SurfaceFormat;
+pub(crate) use frames::Frames;
+pub(crate) use offscreen::capabilities;
 pub use offscreen::{OffscreenBackend, OffscreenOptions, HEAP_ALIGNMENT};
 pub use persistent::PersistentStats;
+pub(crate) use persistent::{staging_bytes, PersistentTextures};
 pub use pipeline::{Kind as PipelineKind, PipelineStats};
+pub(crate) use renderer::SceneRenderer;
 pub use renderer::{SceneOptions, SceneStats};
 
 #[derive(Debug, thiserror::Error)]

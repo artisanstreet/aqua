@@ -163,6 +163,12 @@ pub fn set_frame_size(window: Window, width: f64, height: f64) {
     }
 }
 
+pub fn set_shadow(window: Window, shadow: bool) {
+    if let Some(native) = crate::state::native(window.id()) {
+        native.setHasShadow(shadow);
+    }
+}
+
 pub fn current_cursor() -> Option<aqua_core::CursorIcon> {
     crate::cursor::current()
 }

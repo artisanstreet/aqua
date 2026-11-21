@@ -25,3 +25,7 @@ pub fn find_dxbc(name: &str) -> Option<&'static Blob> {
 pub fn find_spirv(name: &str) -> Option<&'static Blob> {
     SPIRV.iter().find(|blob| blob.name == name)
 }
+
+pub fn find_msl(name: &str) -> Option<&'static Blob> {
+    MSL.iter().find(|blob| blob.name == name)
+}

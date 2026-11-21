@@ -3,4 +3,10 @@ name = "aqua-shaders"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Aqua shader blobs: HLSL compiled at build time to signed DXIL (dxc, D3D12), DXBC SM 5.0 (fxc, D3D11) and SPIR-V (dxc, Vulkan)"
+description = "Aqua shader blobs: HLSL compiled at build time to signed DXIL (dxc, D3D12), DXBC SM 5.0 (fxc, D3D11), SPIR-V (dxc, Vulkan) and MSL (SPIR-V through SPIRV-Cross, Metal)"
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.build-dependencies]
+spirv-cross2 = { version = "0.7.2", default-features = false, features = ["msl"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+spirv-cross2 = { version = "0.7.2", default-features = false, features = ["msl"] }

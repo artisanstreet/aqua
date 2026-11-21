@@ -422,7 +422,14 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
     ),
     (
         "aqua-shaders",
-        &["Stage", "Blob", "find", "find_dxbc", "find_spirv"],
+        &[
+            "Stage",
+            "Blob",
+            "find",
+            "find_dxbc",
+            "find_spirv",
+            "find_msl",
+        ],
     ),
     (
         "aqua-oracle-dwrite",

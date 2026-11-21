@@ -217,7 +217,7 @@ impl Config<'_> {
             MATCH => u32::try_from(index).ok()? & 0xffff,
             _ => 0,
         };
-        Some(FaceRef {
+        Some(FaceRef::Indexed {
             path: path_of(file),
             index,
         })
@@ -243,7 +243,7 @@ impl Config<'_> {
             .patterns()
             .iter()
             .filter_map(|pattern| self.face(*pattern))
-            .map(|face| face.path)
+            .map(FaceRef::into_path)
             .collect();
         files.sort();
         files.dedup();

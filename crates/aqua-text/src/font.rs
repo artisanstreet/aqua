@@ -30,7 +30,7 @@ const EMOJI_FAMILIES: [&str; 4] = [
     "Twemoji Mozilla",
 ];
 
-const PLATFORM_FALLBACK_FAMILIES: [&str; 12] = [
+const PLATFORM_FALLBACK_FAMILIES: [&str; 18] = [
     "Segoe UI",
     "Segoe UI Symbol",
     "Segoe UI Historic",
@@ -42,6 +42,12 @@ const PLATFORM_FALLBACK_FAMILIES: [&str; 12] = [
     "Gadugi",
     "Noto Sans",
     "DejaVu Sans",
+    "Helvetica Neue",
+    "Hiragino Sans",
+    "PingFang SC",
+    "Apple SD Gothic Neo",
+    "Apple Symbols",
+    "Kohinoor Devanagari",
     "Arial Unicode MS",
 ];
 

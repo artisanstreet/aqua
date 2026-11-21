@@ -195,6 +195,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aqua-ime-wayland"
+version = "0.1.0"
+dependencies = [
+ "aqua-core",
+ "aqua-protocol",
+ "aqua-shell",
+ "aqua-shell-wayland",
+ "thiserror",
+]
+
+[[package]]
 name = "aqua-kernels"
 version = "0.1.0"
 

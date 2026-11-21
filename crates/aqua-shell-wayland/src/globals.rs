@@ -10,6 +10,7 @@ use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_man
 use wayland_client::protocol::wl_data_device_manager::WlDataDeviceManager;
 use wayland_protocols::wp::presentation_time::client::wp_presentation::{self, WpPresentation};
 use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_device_manager_v1::ZwpPrimarySelectionDeviceManagerV1;
+use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
 use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
 use wayland_protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1;
@@ -32,6 +33,7 @@ pub(crate) struct Globals {
     pub presentation: Option<WpPresentation>,
     pub data_device: Option<WlDataDeviceManager>,
     pub primary_selection: Option<ZwpPrimarySelectionDeviceManagerV1>,
+    pub text_input: Option<ZwpTextInputManagerV3>,
     pub seat: Option<(u32, WlSeat)>,
     pub hidden: Vec<String>,
 }
@@ -51,6 +53,7 @@ impl Globals {
             presentation: None,
             data_device: None,
             primary_selection: None,
+            text_input: None,
             seat: None,
             hidden,
         }
@@ -72,6 +75,7 @@ impl Shell {
             return;
         };
         self.transfer.attach(&self.globals, seat, qh);
+        self.text_input.attach(&self.globals, seat, qh);
     }
 
     fn global(
@@ -124,6 +128,10 @@ impl Shell {
                 globals.primary_selection = Some(registry.bind(name, 1, qh, ()));
                 self.attach_seat_devices(qh);
             }
+            "zwp_text_input_manager_v3" => {
+                globals.text_input = Some(registry.bind(name, 1, qh, ()));
+                self.attach_seat_devices(qh);
+            }
             "wl_output" => {
                 let proxy: WlOutput = registry.bind(name, version.min(4), qh, name);
                 let mut output = Output::new(name, proxy);
@@ -146,6 +154,7 @@ impl Shell {
             self.globals.seat = None;
             self.seat.release();
             self.transfer.release();
+            self.text_input.release();
         }
         if self.outputs.iter().any(|output| output.name == name) {
             self.outputs.retain(|output| output.name != name);
@@ -217,5 +226,6 @@ delegate_noop!(Shell: WpCursorShapeManagerV1);
 delegate_noop!(Shell: XdgActivationV1);
 delegate_noop!(Shell: WlDataDeviceManager);
 delegate_noop!(Shell: ZwpPrimarySelectionDeviceManagerV1);
+delegate_noop!(Shell: ZwpTextInputManagerV3);
 delegate_noop!(Shell: ZxdgOutputManagerV1);
 delegate_noop!(Shell: ignore wayland_client::protocol::wl_surface::WlSurface);

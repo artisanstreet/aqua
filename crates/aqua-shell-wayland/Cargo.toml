@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Aqua Wayland shell: explicit-time loop, xdg-shell windows, fractional scale, outputs, seat input through xkbcommon, cursors, client chrome, clipboard and primary selection, file drops"
+description = "Aqua Wayland shell: explicit-time loop, xdg-shell windows, fractional scale, outputs, seat input through xkbcommon, cursors, client chrome, clipboard and primary selection, file drops, text-input-v3 transport"
 
 [features]
 testing = [

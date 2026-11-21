@@ -422,6 +422,7 @@ impl Window {
     pub fn destroy(self) {
         let remaining = state::try_with(|shell| {
             shell.seat.forget(self.id);
+            shell.text_input.forget(self.id);
             shell.windows.remove(&self.id).map(|_| shell.windows.len())
         })
         .flatten();

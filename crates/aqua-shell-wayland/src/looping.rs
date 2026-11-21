@@ -94,6 +94,10 @@ pub fn set_waitables(fds: Vec<OwnedFd>) {
     LOOP.with_borrow_mut(|state| state.waitables = fds);
 }
 
+pub(crate) fn wake_turn() {
+    LOOP.with_borrow_mut(|state| state.queue.push_back(Queued::Wake));
+}
+
 pub(crate) fn emit(id: WindowId, event: ShellEvent) {
     LOOP.with_borrow_mut(|state| state.queue.push_back(Queued::Window(id, event)));
 }

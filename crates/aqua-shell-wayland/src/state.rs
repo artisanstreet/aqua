@@ -71,6 +71,7 @@ pub(crate) struct Shell {
     pub seat: Seat,
     pub transfer: crate::data_device::Transfer,
     pub drag: crate::drop::Drag,
+    pub text_input: crate::text_input::Transport,
     pub next_window: u64,
 }
 
@@ -116,6 +117,7 @@ pub(crate) fn connect(endpoint: Endpoint) -> Result<(), ShellError> {
         seat: Seat::default(),
         transfer: crate::data_device::Transfer::default(),
         drag: crate::drop::Drag::default(),
+        text_input: crate::text_input::Transport::default(),
         next_window: 1,
     };
     for _ in 0..2 {

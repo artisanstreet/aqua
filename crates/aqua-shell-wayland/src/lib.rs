@@ -49,6 +49,8 @@ mod shm;
 #[cfg(target_os = "linux")]
 mod state;
 #[cfg(target_os = "linux")]
+mod text_input;
+#[cfg(target_os = "linux")]
 mod toplevel;
 #[cfg(target_os = "linux")]
 mod unsupported;
@@ -65,6 +67,10 @@ pub use looping::{now, pump_sent_messages, quit, run, schedule, set_waitables, W
 pub use output::Monitor;
 #[cfg(target_os = "linux")]
 pub use scale::Scaling;
+#[cfg(target_os = "linux")]
+pub use text_input::{
+    CursorRect, Preedit, Surrounding, TextInput, TextInputBatch, TextInputEvent, TextInputState,
+};
 #[cfg(target_os = "linux")]
 pub use unsupported::Unsupported;
 #[cfg(target_os = "linux")]

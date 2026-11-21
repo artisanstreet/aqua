@@ -149,6 +149,8 @@ jobs:
           MTL_SHADER_VALIDATION: ${{ runner.os == 'macOS' && '1' || '' }}
           AQUA_REQUIRE_WAYLAND: ${{ runner.os == 'Linux' && '1' || '0' }}
           AQUA_REQUIRE_DBUS: ${{ runner.os == 'Linux' && '1' || '0' }}
+          AQUA_REQUIRE_APPKIT: ${{ runner.os == 'macOS' && '1' || '0' }}
+          AQUA_REQUIRE_POST_EVENT: ${{ runner.os == 'macOS' && '1' || '0' }}
         run: |
           if [ "$RUNNER_OS" != Windows ]; then
             exec cargo test --workspace --locked ${{ runner.os == 'macOS' && '--no-fail-fast' || '' }} -- --nocapture --test-threads=1
@@ -225,6 +227,8 @@ jobs:
           AQUA_REQUIRE_GPU: 1
           MTL_DEBUG_LAYER: 1
           MTL_SHADER_VALIDATION: 1
+          AQUA_REQUIRE_APPKIT: '1'
+          AQUA_REQUIRE_POST_EVENT: '1'
           FILTER: ${{ inputs.filter }}
           CAPTURE: ${{ inputs.capture }}
         run: |

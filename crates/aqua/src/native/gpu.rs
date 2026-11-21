@@ -1,3 +1,4 @@
+#[cfg(windows)]
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -8,15 +9,18 @@ use std::time::Duration;
 use std::time::Instant as WallInstant;
 
 use aqua_core::{Oklch, Rect};
-#[cfg(not(feature = "d3d12"))]
+#[cfg(all(windows, not(feature = "d3d12")))]
 use aqua_gpu_d3d11 as gpu;
-#[cfg(feature = "d3d12")]
+#[cfg(all(windows, feature = "d3d12"))]
 use aqua_gpu_d3d12 as gpu;
+#[cfg(target_os = "linux")]
+use aqua_gpu_vulkan as gpu;
 use aqua_graph::{Extent, FramePlan};
+#[cfg(windows)]
+use aqua_protocol::NativeSurface;
 use aqua_protocol::{
     Feedback, FrameId, FrameInputs, FrameReport, GpuBackend, GpuCapabilities, GpuError,
-    NativeSurface, PresentHint, PresentTimes, RecoveryReport, SurfaceId, SurfaceTarget,
-    UploadBatch, WindowId,
+    PresentHint, PresentTimes, RecoveryReport, SurfaceId, SurfaceTarget, UploadBatch, WindowId,
 };
 use aqua_runtime::RenderSide;
 use aqua_text::{SharedFonts, SharedRuns};
@@ -24,7 +28,9 @@ use gpu::hal::budget::Visibility;
 use gpu::window::{TextureRecovery, WindowBackend, WindowOptions};
 
 use crate::render::host::{DamageSlot, FrameTarget, GpuFrames, RenderStats, Repaint};
-use crate::render::link::{CompositionSink, InitFactory, RenderContext};
+#[cfg(windows)]
+use crate::render::link::CompositionSink;
+use crate::render::link::{InitFactory, RenderContext};
 use crate::render::lower::{Lowering, RecoverySignal};
 use crate::render::namespace::{namespace_plan, namespace_uploads, Namespaces};
 use crate::render::persist::{self, PipelineCacheSaver};
@@ -45,6 +51,7 @@ thread_local! {
     static HUB: RefCell<Weak<Hub>> = const { RefCell::new(Weak::new()) };
 }
 
+#[cfg(windows)]
 fn since_process_start() -> Option<Duration> {
     use windows::Win32::Foundation::FILETIME;
     use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
@@ -72,6 +79,19 @@ fn since_process_start() -> Option<Duration> {
         .checked_sub(since_epoch)
 }
 
+#[cfg(target_os = "linux")]
+fn since_process_start() -> Option<Duration> {
+    const CLOCK_TICKS_PER_SECOND: u64 = 100;
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    let fields: Vec<&str> = stat.get(stat.rfind(')')? + 2..)?.split(' ').collect();
+    let started_ticks: u64 = fields.get(19)?.parse().ok()?;
+    let uptime = std::fs::read_to_string("/proc/uptime").ok()?;
+    let uptime: f64 = uptime.split(' ').next()?.parse().ok()?;
+    Duration::from_secs_f64(uptime).checked_sub(Duration::from_millis(
+        started_ticks * 1000 / CLOCK_TICKS_PER_SECOND,
+    ))
+}
+
 static STARTUP_LINES: std::sync::Mutex<Vec<(f64, String)>> = std::sync::Mutex::new(Vec::new());
 
 fn process_ms() -> f64 {
@@ -92,7 +112,7 @@ fn flush_startup_lines() {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
     );
-    #[cfg(not(feature = "d3d12"))]
+    #[cfg(all(windows, not(feature = "d3d12")))]
     lines.extend(gpu::stages::drain());
     lines.sort_by(|a, b| a.0.total_cmp(&b.0));
     lines.iter().for_each(|(_, line)| eprintln!("{line}"));
@@ -123,7 +143,7 @@ fn stage_nth(label: &str, counter: &std::sync::atomic::AtomicU32, limit: u32) {
 
 fn window_options() -> WindowOptions {
     let options = WindowOptions::from_env();
-    #[cfg(not(feature = "d3d12"))]
+    #[cfg(all(windows, not(feature = "d3d12")))]
     let options = match std::env::var_os("AQUA_D3D11_PREVENT_THREADING") {
         None => WindowOptions {
             device: options.device.with_prevent_internal_threading(true),
@@ -134,9 +154,34 @@ fn window_options() -> WindowOptions {
     options
 }
 
+#[cfg(windows)]
 pub fn prewarm() {
     startup_mark("prewarm_start");
     WindowBackend::begin_early(window_options(), persist::load_pipeline_cache);
+}
+
+#[cfg(target_os = "linux")]
+pub fn prewarm() {
+    startup_mark("prewarm_start");
+}
+
+#[cfg(windows)]
+fn open_backend() -> Result<WindowBackend, String> {
+    match WindowBackend::take_early().and_then(Result::ok) {
+        Some(backend) => Ok(backend),
+        None => {
+            let cache = persist::load_pipeline_cache();
+            WindowBackend::with_pipeline_cache(window_options(), cache.as_deref())
+                .map_err(|e| e.to_string())
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn open_backend() -> Result<WindowBackend, String> {
+    let cache = persist::load_pipeline_cache();
+    WindowBackend::with_pipeline_cache(window_options(), cache.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
@@ -148,15 +193,7 @@ fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
     });
     startup_mark("hub_begin");
     let device_started = std::time::Instant::now();
-    let early = WindowBackend::take_early().and_then(Result::ok);
-    let mut backend = match early {
-        Some(backend) => backend,
-        None => {
-            let cache = persist::load_pipeline_cache();
-            WindowBackend::with_pipeline_cache(window_options(), cache.as_deref())
-                .map_err(|e| e.to_string())?
-        }
-    };
+    let mut backend = open_backend()?;
     if crate::profile::enabled() {
         record_startup(|at| {
             format!(
@@ -185,6 +222,12 @@ fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
     });
     HUB.with(|slot| *slot.borrow_mut() = Rc::downgrade(&hub));
     Ok(hub)
+}
+
+#[cfg(target_os = "linux")]
+struct PipelineCounts {
+    compiled: u32,
+    loaded: u32,
 }
 
 pub struct WindowHandle {
@@ -234,9 +277,12 @@ impl WindowHandle {
         if ledger {
             self.print_ledger("before-release");
         }
+        #[cfg(windows)]
         if let Err(error) = self.hub.backend.borrow_mut().trim(release) {
             eprintln!("aqua: idle release failed: {error}");
         }
+        #[cfg(target_os = "linux")]
+        self.hub.backend.borrow_mut().trim(release);
         self.report_memory();
         if ledger {
             self.print_ledger("after-release");
@@ -245,9 +291,12 @@ impl WindowHandle {
 
     fn print_ledger(&self, label: &str) {
         let backend = self.hub.backend.borrow();
+        #[cfg(windows)]
         let usage = backend
             .memory_breakdown()
             .map_or(0, |memory| memory.local_usage);
+        #[cfg(target_os = "linux")]
+        let usage = backend.memory_breakdown().local_usage;
         eprintln!(
             "aqua-ledger {label} dxgi_usage_mib={:.2} {}",
             usage as f64 / 1048576.0,
@@ -275,10 +324,19 @@ impl WindowHandle {
             return;
         }
         let backend = self.hub.backend.borrow();
+        #[cfg(windows)]
         let pipelines = backend.pipeline_stats().unwrap_or_default();
+        #[cfg(windows)]
         let resident = backend
             .persistent_stats()
             .map_or(0, |stats| stats.resident_bytes);
+        #[cfg(target_os = "linux")]
+        let pipelines = PipelineCounts {
+            compiled: backend.pipeline_stats().compiled,
+            loaded: 0,
+        };
+        #[cfg(target_os = "linux")]
+        let resident = backend.persistent_stats().resident_bytes;
         let (compiled, loaded, before) = self.profile_mark.get();
         self.profile_mark
             .set((pipelines.compiled, pipelines.loaded, resident));
@@ -299,11 +357,28 @@ impl WindowHandle {
                 .map(|pass| format!("{}={:.3}", pass.label, pass.duration.as_secs_f64() * 1000.0))
                 .collect();
             let phases = backend.phases();
-            let api = match cfg!(feature = "d3d12") {
-                true => "d3d12",
-                false => "d3d11",
-            };
-            format!(
+            #[cfg(target_os = "linux")]
+            {
+                format!(
+                "vulkan gpu_ms={:.3} passes_ms=[{}] slot_wait_us={} acquire_us={} resize_us={} late_pso={:?} window={:?}",
+                backend
+                    .gpu_frame_time()
+                    .map_or(0.0, |time| time.as_secs_f64() * 1000.0),
+                passes.join(","),
+                phases.slot_wait.as_micros(),
+                phases.acquire.as_micros(),
+                phases.resize.as_micros(),
+                backend.late_pipelines(),
+                backend.stats()
+            )
+            }
+            #[cfg(windows)]
+            {
+                let api = match cfg!(feature = "d3d12") {
+                    true => "d3d12",
+                    false => "d3d11",
+                };
+                format!(
                 "{api} gpu_ms={:.3} passes_ms=[{}] slot_wait_us={} reserve_us={} resize_us={} transients_recreated={} late_pso={:?} window={:?}",
                 backend
                     .gpu_frame_time()
@@ -316,6 +391,7 @@ impl WindowHandle {
                 backend.late_pipelines(),
                 backend.stats()
             )
+            }
         });
     }
 
@@ -332,12 +408,23 @@ impl WindowHandle {
             true => Visibility::Hidden,
             false => Visibility::Visible,
         };
-        match self.hub.backend.borrow_mut().set_visibility(visibility) {
-            Ok(trim) => trim.evict_idle_resources,
-            Err(error) => {
-                eprintln!("aqua: visibility change failed: {error}");
-                false
+        #[cfg(windows)]
+        {
+            match self.hub.backend.borrow_mut().set_visibility(visibility) {
+                Ok(trim) => trim.evict_idle_resources,
+                Err(error) => {
+                    eprintln!("aqua: visibility change failed: {error}");
+                    false
+                }
             }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.hub
+                .backend
+                .borrow_mut()
+                .set_visibility(visibility)
+                .evict_idle_resources
         }
     }
 
@@ -345,6 +432,7 @@ impl WindowHandle {
         self.hub.backend.borrow().repaint_bounds(surface, damage)
     }
 
+    #[cfg(windows)]
     fn service_budget(&self) -> bool {
         match self.hub.backend.borrow_mut().service_budget() {
             Ok(Some(status)) => status.applied.evict_idle_resources,
@@ -356,28 +444,57 @@ impl WindowHandle {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn service_budget(&self) -> bool {
+        let mut backend = self.hub.backend.borrow_mut();
+        backend.service_budget();
+        backend.memory_budget().is_some_and(|budget| {
+            gpu::hal::budget::pressure(budget) == gpu::hal::budget::Pressure::Hard
+        })
+    }
+
     fn finish_startup(&self) {
         self.hub.backend.borrow_mut().finish_startup();
     }
 
+    #[cfg(windows)]
     fn startup_pending(&self) -> bool {
         self.hub.backend.borrow().startup_pending()
     }
 
+    #[cfg(target_os = "linux")]
+    fn startup_pending(&self) -> bool {
+        false
+    }
+
+    #[cfg(windows)]
     fn startup_step(&self) {
         self.hub.backend.borrow_mut().startup_step();
     }
+
+    #[cfg(target_os = "linux")]
+    fn startup_step(&self) {}
 
     fn pipeline_cache(&self) -> Option<Vec<u8>> {
         self.hub.backend.borrow().pipeline_cache()
     }
 
+    #[cfg(windows)]
     fn settle_surfaces(&mut self) {
         if let Err(error) = self.hub.backend.borrow_mut().settle_surfaces() {
             eprintln!("aqua: swapchain settle failed: {error}");
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn settle_surfaces(&mut self) {}
+
+    #[cfg(target_os = "linux")]
+    fn settle_surface(&mut self, _surface: SurfaceId) -> bool {
+        false
+    }
+
+    #[cfg(windows)]
     fn settle_surface(&mut self, surface: SurfaceId) -> bool {
         #[cfg(not(feature = "d3d12"))]
         {
@@ -400,7 +517,11 @@ impl WindowHandle {
         if !crate::mem_probe::memory_report_enabled() {
             return;
         }
-        if let Ok(memory) = self.hub.backend.borrow().memory_breakdown() {
+        #[cfg(windows)]
+        let memory = self.hub.backend.borrow().memory_breakdown().ok();
+        #[cfg(target_os = "linux")]
+        let memory = Some(self.hub.backend.borrow().memory_breakdown());
+        if let Some(memory) = memory {
             eprintln!(
                 "aqua-gpu-memory: {memory:?} unattributed={} heap={:?}",
                 memory.unattributed(),
@@ -413,10 +534,17 @@ impl WindowHandle {
         }
     }
 
+    #[cfg(windows)]
     fn generation(&self) -> u32 {
         self.generation
     }
 
+    #[cfg(target_os = "linux")]
+    fn inject_removal(&self) {
+        self.hub.backend.borrow().inject_device_removal();
+    }
+
+    #[cfg(windows)]
     fn inject_removal(&self) {
         if let Err(error) = self.hub.backend.borrow().inject_device_removal() {
             eprintln!("aqua: device removal injection failed: {error}");
@@ -427,6 +555,7 @@ impl WindowHandle {
         Rc::strong_count(&self.hub)
     }
 
+    #[cfg(windows)]
     fn composition_content(&self, surface: SurfaceId) -> Result<windows::core::IUnknown, GpuError> {
         self.hub.backend.borrow().composition_content(surface)
     }
@@ -559,15 +688,19 @@ impl GpuBackend for WindowHandle {
     }
 }
 
+#[cfg(windows)]
 pub struct CompositionContent(pub windows::core::IUnknown);
 
+#[cfg(windows)]
 unsafe impl Send for CompositionContent {}
 
 struct WindowTarget {
     stats: Arc<RenderStats>,
     frames: GpuFrames<WindowHandle>,
     surface: SurfaceId,
+    #[cfg(windows)]
     composition: Option<CompositionSink>,
+    #[cfg(windows)]
     delivered: Option<u32>,
     announced: bool,
     viewport: Option<(aqua_core::Size, f32)>,
@@ -575,6 +708,20 @@ struct WindowTarget {
 }
 
 impl WindowTarget {
+    #[cfg(windows)]
+    fn composed(&self) -> bool {
+        self.composition.is_some()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn composed(&self) -> bool {
+        false
+    }
+
+    #[cfg(target_os = "linux")]
+    fn deliver_composition(&mut self) {}
+
+    #[cfg(windows)]
     fn deliver_composition(&mut self) {
         let Some(sink) = self.composition.as_ref() else {
             return;
@@ -611,7 +758,7 @@ impl FrameTarget for WindowTarget {
         }
         let feedback = self.frames.present(side, frame);
         if !cfg!(feature = "d3d12")
-            && self.composition.is_none()
+            && !self.composed()
             && self.viewport != side.viewport()
             && feedback
                 .iter()
@@ -687,6 +834,51 @@ impl Drop for WindowTarget {
     }
 }
 
+struct Wiring {
+    signal: RecoverySignal,
+    damage: DamageSlot,
+    fonts: SharedFonts,
+    runs: SharedRuns,
+    clear: Oklch,
+}
+
+fn window_frames(
+    wiring: Wiring,
+    handle: WindowHandle,
+    surface: SurfaceId,
+    extent: Extent,
+    externals: std::sync::mpsc::Receiver<crate::render::link::ExternalUpdate>,
+    stats: Arc<RenderStats>,
+) -> GpuFrames<WindowHandle> {
+    let Wiring {
+        signal,
+        damage,
+        fonts,
+        runs,
+        clear,
+    } = wiring;
+    let lowering = Lowering::new(fonts.clone(), runs.clone())
+        .with_clear(clear)
+        .with_recovery(signal);
+    let mut saver = PipelineCacheSaver::default();
+    GpuFrames::new(handle, surface, extent, lowering, externals, stats)
+        .with_hint(PresentHint::Vsync)
+        .with_damage(damage, runs)
+        .with_repaint_probe(|backend: &WindowHandle, surface, damage: &[Rect]| {
+            backend.repaint_bounds(surface, damage)
+        })
+        .with_idle_release(|backend: &mut WindowHandle| backend.release_idle())
+        .with_pressure(|backend: &mut WindowHandle| backend.service_budget())
+        .with_visibility(|backend: &mut WindowHandle, hidden| backend.set_hidden(hidden))
+        .with_maintenance(move |backend: &mut WindowHandle| {
+            backend.settle_surfaces();
+            saver.save(backend.pipeline_cache());
+            backend.report_memory();
+            persist::save_fallback_index(&fonts);
+        })
+}
+
+#[cfg(windows)]
 pub fn factory(
     window: WindowId,
     hwnd: isize,
@@ -724,26 +916,15 @@ pub fn factory(
                 crate::debug::watch(stats.clone(), hwnd);
                 crate::debug::window::open(fonts.clone(), runs.clone());
             }
-            let lowering = Lowering::new(fonts.clone(), runs.clone())
-                .with_clear(clear)
-                .with_recovery(signal);
-            let mut saver = PipelineCacheSaver::default();
             let shared_stats = stats.clone();
-            let frames = GpuFrames::new(handle, surface, extent, lowering, externals, stats)
-                .with_hint(PresentHint::Vsync)
-                .with_damage(damage, runs)
-                .with_repaint_probe(|backend: &WindowHandle, surface, damage: &[Rect]| {
-                    backend.repaint_bounds(surface, damage)
-                })
-                .with_idle_release(|backend: &mut WindowHandle| backend.release_idle())
-                .with_pressure(|backend: &mut WindowHandle| backend.service_budget())
-                .with_visibility(|backend: &mut WindowHandle, hidden| backend.set_hidden(hidden))
-                .with_maintenance(move |backend: &mut WindowHandle| {
-                    backend.settle_surfaces();
-                    saver.save(backend.pipeline_cache());
-                    backend.report_memory();
-                    persist::save_fallback_index(&fonts);
-                });
+            let wiring = Wiring {
+                signal,
+                damage,
+                fonts,
+                runs,
+                clear,
+            };
+            let frames = window_frames(wiring, handle, surface, extent, externals, stats);
             let mut target = WindowTarget {
                 stats: shared_stats,
                 frames,
@@ -760,6 +941,69 @@ pub fn factory(
     })
 }
 
+#[cfg(target_os = "linux")]
+pub fn factory(
+    window: WindowId,
+    lease: aqua_shell_wayland::SurfaceLease,
+    extent: Extent,
+    fonts: SharedFonts,
+    runs: SharedRuns,
+    clear: Oklch,
+) -> InitFactory {
+    use aqua_protocol::WaylandSurface;
+    use gpu::window::Alpha;
+    Box::new(move |context: RenderContext| {
+        let RenderContext {
+            externals, stats, ..
+        } = context;
+        Box::new(move || {
+            let hub = shared_hub(&fonts)?;
+            let signal = RecoverySignal::default();
+            let damage: DamageSlot = Rc::default();
+            let listener = signal.listener();
+            let handle = WindowHandle::join(hub.clone(), listener, damage.clone())?;
+            let alpha = match clear.alpha < 1.0 {
+                true => Alpha::Premultiplied,
+                false => Alpha::Opaque,
+            };
+            let target = WaylandSurface {
+                window,
+                display: lease.display_handle(),
+                surface: lease.surface_handle(),
+                extent,
+            };
+            let surface = hub
+                .backend
+                .borrow_mut()
+                .create_wayland_surface(target, alpha, Box::new(super::pacer::LeasePacer(lease)))
+                .map_err(|e| e.to_string())?;
+            startup_mark("surface_created");
+            if crate::debug::panel() {
+                crate::debug::watch(stats.clone(), window.raw() as isize);
+            }
+            let shared_stats = stats.clone();
+            let wiring = Wiring {
+                signal,
+                damage,
+                fonts,
+                runs,
+                clear,
+            };
+            let frames = window_frames(wiring, handle, surface, extent, externals, stats);
+            let target = WindowTarget {
+                stats: shared_stats,
+                frames,
+                surface,
+                announced: false,
+                viewport: None,
+                settle_at: None,
+            };
+            Ok(Box::new(target) as Box<dyn FrameTarget>)
+        })
+    })
+}
+
+#[cfg(windows)]
 #[must_use]
 pub(crate) fn refresh_of(hwnd: isize) -> Option<u64> {
     let interval = gpu::window::timing::monitor_interval(gpu::window::timing::monitor_of(hwnd));

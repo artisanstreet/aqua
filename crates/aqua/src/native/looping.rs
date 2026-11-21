@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+#[cfg(windows)]
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,10 +16,12 @@ use aqua_shell::{
 };
 
 use super::gpu;
+#[cfg(windows)]
 use super::hook::TsfHook;
 use super::inspector::HostInspector;
 use super::platform::shell::{self, dialogs::DialogJob, Window};
 use super::wakes::{self, WakeLedger};
+#[cfg(windows)]
 use super::window::Win32Window;
 use crate::coalesce::{merge, Coalescible, Held, Merge};
 use crate::runtime::{Application, Aqua, ExternalFileDrag};
@@ -36,6 +39,8 @@ pub(super) struct Host<A: Application> {
     occlusion: HashMap<AquaWindowId, Occlusion>,
     wakes: Option<WakeLedger>,
     file_drop_pending: Vec<AquaWindowId>,
+    #[cfg(target_os = "linux")]
+    pub(super) desktop: super::attach_wayland::Desktop,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -143,7 +148,10 @@ impl<A: Application + 'static> Host<A> {
             occluded: false,
             maximized: window.is_maximized(),
         };
+        #[cfg(windows)]
         let native: Rc<dyn crate::native_window::NativeWindow> = Rc::new(Win32Window { window });
+        #[cfg(target_os = "linux")]
+        let native = self.native_window(window);
         self.aqua.add_native_window(observed.clone(), native);
         self.shell.insert(id, window);
         self.file_drop_pending.push(id);
@@ -361,6 +369,18 @@ impl<A: Application + 'static> Host<A> {
     }
 }
 
+#[cfg(target_os = "linux")]
+impl<A: Application + 'static> Host<A> {
+    fn follow_preferences(&mut self) {
+        if !self.desktop.preferences_changed() {
+            return;
+        }
+        let ids: Vec<AquaWindowId> = self.shell.keys().copied().collect();
+        ids.into_iter()
+            .for_each(|id| Handler::window_event(self, id, ShellEvent::PreferencesChanged));
+    }
+}
+
 impl<A: Application + 'static> Handler for Host<A> {
     fn window_event(&mut self, id: aqua_protocol::WindowId, event: ShellEvent) {
         if !self.aqua.windows.contains_key(&id) {
@@ -441,6 +461,8 @@ impl<A: Application + 'static> Handler for Host<A> {
             ledger.woken();
         }
         self.flush_pending();
+        #[cfg(target_os = "linux")]
+        self.follow_preferences();
         self.aqua.pump_inbox(&mut self.app);
     }
 
@@ -504,6 +526,7 @@ impl<A: Application + 'static> Handler for Host<A> {
 }
 
 pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), String> {
+    #[cfg(windows)]
     if shell::dialogs::run_helper_if_requested() {
         return Ok(());
     }
@@ -515,6 +538,8 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
     let inbox = aqua.inbox();
     aqua.align_clock(shell::now());
     let options = aqua.config().window.clone();
+    #[cfg(target_os = "linux")]
+    let app_id = aqua.config().app_id.clone();
     let mut host = Host {
         aqua,
         app,
@@ -526,8 +551,11 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
         occlusion: HashMap::new(),
         wakes: wakes::enabled().then(|| WakeLedger::new(inbox)),
         file_drop_pending: Vec::new(),
+        #[cfg(target_os = "linux")]
+        desktop: super::attach_wayland::Desktop::new(app_id),
     };
     super::startup_mark("host_ready");
+    #[cfg(windows)]
     shell::set_message_hook(TsfHook::new());
     super::startup_mark("hook_set");
     if let Err(message) = host.create_window(options.clone()) {

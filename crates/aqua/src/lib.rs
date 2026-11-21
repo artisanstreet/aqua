@@ -78,6 +78,10 @@ pub mod prelude {
         CursorIcon, DisplayItem, ImeEvent, InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId,
         Oklch, Point, PointerButton, PointerEvent, Rect, Srgba8, TextRun,
     };
+    #[cfg(target_os = "linux")]
+    pub use aqua_portal::notifications::activation::{handle_launch, Activation, Launch};
+    #[cfg(target_os = "linux")]
+    pub use aqua_portal::notifications::NotificationCenter;
     pub use aqua_protocol::prefs::{
         PrefState, PreferenceSource, SystemPrefs as OsPreferences, TextScale,
     };

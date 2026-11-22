@@ -105,8 +105,8 @@ impl NativeWindow for AppKitWindow {
         })
     }
 
-    fn set_badge(&self, _badge: Option<TaskbarBadge>) -> Result<(), BadgeError> {
-        Err(BadgeError::Unsupported)
+    fn set_badge(&self, badge: Option<TaskbarBadge>) -> Result<(), BadgeError> {
+        aqua_shell_appkit::dock::set_badge(badge)
     }
 
     fn destroy(&self) {

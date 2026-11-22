@@ -90,6 +90,45 @@ fn a_stall_event_reads_as_low_memory_until_the_stall_has_been_quiet_for_two_wind
     watch_notification(None);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn an_injected_pressure_level_trims_once_and_ends_after_the_quiet_hold() {
+    let _serial = GLOBAL_SOURCES.lock().unwrap_or_else(|p| p.into_inner());
+    use aqua_shell_appkit::pressure::{Level, PressureSource};
+    use std::sync::mpsc::sync_channel;
+    use std::sync::Arc;
+    let (sender, events) = sync_channel(8);
+    let (source, injector) = PressureSource::injectable(Some(Arc::new(move || {
+        let _delivered = sender.try_send(());
+    })));
+    let inject = |level| {
+        injector.inject(level);
+        events
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the dispatch handler runs for the injected level");
+    };
+    simulate_low_memory(false);
+    let mut pressure = MemoryPressure::on(source);
+    let start = Instant::now();
+    let at = |seconds: u64| start + Duration::from_secs(seconds);
+    assert!(!pressure.rising_edge(at(0)));
+    inject(Level::Warning);
+    assert!(pressure.rising_edge(at(2)), "a warning trims");
+    assert!(
+        !pressure.rising_edge(at(4)),
+        "the warning holds without trimming again"
+    );
+    inject(Level::Normal);
+    assert!(
+        !pressure.rising_edge(at(6)),
+        "inside the quiet hold nothing trims"
+    );
+    assert!(!pressure.rising_edge(at(8)));
+    assert!(!pressure.rising_edge(at(10)));
+    inject(Level::Critical);
+    assert!(pressure.rising_edge(at(12)), "the next episode trims again");
+}
+
 #[test]
 fn low_available_memory_is_read_from_meminfo_below_five_percent() {
     use aqua::render::pressure::low_available;

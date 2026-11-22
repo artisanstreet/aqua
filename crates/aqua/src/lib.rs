@@ -101,6 +101,10 @@ pub mod prelude {
     };
     pub use aqua_shell::picker::{DialogCapability, DialogRequest, FileFilter};
     pub use aqua_shell::services::{Clipboard, ClipboardBackend};
+    #[cfg(target_os = "macos")]
+    pub use aqua_shell_appkit::notifications::activation::{handle_launch, Activation, Launch};
+    #[cfg(target_os = "macos")]
+    pub use aqua_shell_appkit::notifications::NotificationCenter;
     #[cfg(windows)]
     pub use aqua_shell_win32::notifications::activation::{handle_launch, Activation, Launch};
     #[cfg(windows)]

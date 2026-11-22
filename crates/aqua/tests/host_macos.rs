@@ -20,8 +20,8 @@ mod macos {
     use aqua::{px, Aqua, AquaConfig, Context, IntoView};
     use aqua_core::{DisplayItem, InputEvent, Modifiers, Oklch, Rect};
     use aqua_protocol::{
-        AquaWindowId, Instant as AquaInstant, ObservedWindowState, WindowEvent, WindowOptions,
-        WindowRequest,
+        AquaWindowId, DialogKind, DialogOutcome, DialogSpec, Instant as AquaInstant,
+        ObservedWindowState, RequestId, WindowEvent, WindowOptions, WindowRequest,
     };
     use aqua_scene::Scene;
     use aqua_shell_appkit::services::app_clipboard;
@@ -39,6 +39,7 @@ mod macos {
     const WINDOWS: &str = "AQUA_HOST_MACOS_WINDOWS";
     const VETO: &str = "AQUA_HOST_MACOS_VETO";
     const ANIMATE: &str = "AQUA_HOST_MACOS_ANIMATE";
+    const SAVE_NAME: &str = "aqua sheet draft.txt";
     const LIMIT: Duration = Duration::from_secs(15);
     const TICK: Duration = Duration::from_millis(20);
     const SIZE: (f64, f64) = (480.0, 320.0);
@@ -54,12 +55,13 @@ mod macos {
         match std::env::var(APP).as_deref() {
             Ok("probe") => probe(),
             Ok("field") => field(),
+            Ok("dialog") => dialog_app(),
             Ok(other) => panic!("no app mode {other}"),
             Err(_) => aqua_shell_appkit::testing::cases::main(&ALL),
         }
     }
 
-    const ALL: [Case; 19] = [
+    const ALL: [Case; 20] = [
         case(
             "a_real_app_shows_a_window_and_presents_frames",
             shows_and_presents,
@@ -83,6 +85,10 @@ mod macos {
         ),
         case("resizing_the_window_reflows_and_repaints", resizing),
         case("closing_can_be_vetoed", vetoing),
+        case(
+            "a_file_dialog_opens_as_a_sheet_and_returns_the_chosen_path",
+            dialog_sheet,
+        ),
         case("two_windows_render_independently", two_windows),
         case(
             "a_covered_window_stops_rendering_and_resumes_when_shown",
@@ -320,6 +326,111 @@ mod macos {
             eprintln!("host_macos: the field app failed: {error}");
             std::process::exit(1);
         }
+    }
+
+    struct Saver {
+        asked: bool,
+        sheet: Option<aqua_shell_appkit::testing::desktop::SheetAnswer>,
+    }
+
+    impl Application for Saver {
+        fn on_frame_completed(&mut self, ctx: &mut AppCtx, id: AquaWindowId, _sequence: u64) {
+            if self.asked {
+                return;
+            }
+            self.asked = true;
+            self.sheet = Some(aqua_shell_appkit::testing::desktop::accept_next_sheet());
+            ctx.dialog(
+                id,
+                DialogSpec {
+                    kind: DialogKind::SaveFile {
+                        suggested_name: SAVE_NAME.into(),
+                    },
+                    title: "Save the draft".into(),
+                    filters: Vec::new(),
+                },
+            );
+            report("asked");
+        }
+
+        fn on_dialog(
+            &mut self,
+            ctx: &mut AppCtx,
+            _id: AquaWindowId,
+            _request: RequestId,
+            outcome: DialogOutcome,
+        ) {
+            match outcome {
+                DialogOutcome::Chosen(paths) => report(&format!("chosen {}", paths.join("|"))),
+                other => report(&format!("dialog {other:?}")),
+            }
+            ctx.quit();
+        }
+
+        fn on_window_event(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _event: &WindowEvent) {}
+
+        fn on_input(&mut self, _ctx: &mut AppCtx, _id: AquaWindowId, _event: &InputEvent) {}
+
+        fn build_scene(
+            &mut self,
+            _window: &ObservedWindowState,
+            _now: AquaInstant,
+        ) -> Option<AquaInstant> {
+            None
+        }
+    }
+
+    fn dialog_app() {
+        let mut config = AquaConfig::default();
+        config.window.title = "aqua dialog".into();
+        config.window.inner_size = aqua_protocol::LogicalSize::new(SIZE.0, SIZE.1);
+        let result = Aqua::new(config).and_then(|aqua| {
+            aqua.run(Saver {
+                asked: false,
+                sheet: None,
+            })
+        });
+        if let Err(error) = result {
+            eprintln!("host_macos: the dialog app failed: {error}");
+            std::process::exit(1);
+        }
+    }
+
+    fn dialog_sheet() {
+        if !available(Facility::WindowServer) {
+            return;
+        }
+        let mut app = App::start(command("dialog", &[]), "dialog app");
+        app.lines()
+            .expect("the dialog request", |line| line == "asked");
+        let sheet = app
+            .lines()
+            .expect("the sheet", |line| line.starts_with("sheet "));
+        report(&sheet);
+        assert!(
+            sheet.contains("parent_title: \"aqua dialog\"") && sheet.contains("SavePanel"),
+            "the save panel runs as a sheet on the app's window: {sheet}"
+        );
+        let chosen = app.lines().expect("the chosen path", |line| {
+            line.starts_with("chosen ") || line.starts_with("dialog ")
+        });
+        report(&chosen);
+        let path = PathBuf::from(
+            chosen
+                .strip_prefix("chosen ")
+                .unwrap_or_else(|| panic!("accepting the sheet chooses a path: {chosen}")),
+        );
+        assert!(path.is_absolute(), "{chosen}");
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some(SAVE_NAME),
+            "the sheet returns the suggested name it was opened with"
+        );
+        let (status, stderr) = app.exit();
+        assert!(
+            status.success(),
+            "the dialog app exits cleanly: {status}\n{stderr}"
+        );
     }
 
     fn within<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {

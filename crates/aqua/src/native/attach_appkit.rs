@@ -1,7 +1,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use aqua_core::Oklch;
+use aqua_core::{ClickSettings, Oklch};
 use aqua_graph::Extent;
 use aqua_ime_appkit::AppKitIme;
 use aqua_protocol::prefs::SystemPrefs;
@@ -17,18 +17,18 @@ use crate::native_window::NativeWindow;
 use crate::runtime::Application;
 
 pub(super) struct Desktop {
-    seen: SystemPrefs,
+    seen: (SystemPrefs, ClickSettings),
 }
 
 impl Desktop {
     pub(super) fn new(_app_id: Option<AppId>) -> Desktop {
         Desktop {
-            seen: prefs::query(),
+            seen: (prefs::query(), prefs::click_settings()),
         }
     }
 
     pub(super) fn preferences_changed(&mut self) -> bool {
-        let now = prefs::query();
+        let now = (prefs::query(), prefs::click_settings());
         let changed = now != self.seen;
         self.seen = now;
         changed
@@ -55,6 +55,7 @@ impl<A: Application + 'static> Host<A> {
         observed: &ObservedWindowState,
         options: &WindowOptions,
     ) {
+        prefs::follow_changes(window.waker());
         if let Some(inspector) = self.inspector.as_ref().map(HostInspector::handle) {
             let now = self.aqua.clock();
             if let Some(deadline) = self.app.prepare_accessibility(observed, now) {

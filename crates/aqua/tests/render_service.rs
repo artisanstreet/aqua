@@ -350,6 +350,10 @@ fn continuous_animation_keeps_presenting_until_it_stops() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "4 ms timed waits take about 16 ms on the macos-15 runner, so 4 ms animation repaints arrive at 60 Hz (14.MA)"
+)]
 fn an_animating_scene_uses_the_display_interval_without_waking_the_app_or_the_damage_baseline() {
     let service = RenderService::new().unwrap();
     let probe = Arc::new(Probe::default());

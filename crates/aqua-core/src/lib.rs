@@ -9,6 +9,7 @@ pub mod checkpoint;
 pub mod click;
 pub mod color;
 pub mod cursor;
+pub mod editing;
 pub mod event;
 pub mod geometry;
 pub mod gpui_mesh;
@@ -28,6 +29,9 @@ pub use color::{
     GpuiTextColor, Oklch, Srgba8,
 };
 pub use cursor::CursorIcon;
+pub use editing::{
+    ClipboardCommand, DeletionUnit, Direction, EditCommand, EditingConventions, Motion,
+};
 pub use event::{
     ImeEvent, InputEvent, Key, KeyEvent, Modifiers, NamedKey, PointerButton, PointerEvent,
     PointerKind, ScrollDelta,

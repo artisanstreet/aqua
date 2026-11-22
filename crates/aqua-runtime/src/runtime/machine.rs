@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use aqua_core::{
-    CursorIcon, InputEvent as CoreInputEvent, NodeId, Point, PointerButton, Rect, Size,
+    ClipboardCommand, CursorIcon, InputEvent as CoreInputEvent, NodeId, Point, PointerButton, Rect,
+    Size,
 };
 use aqua_protocol::{
     AccessAction, AccessTreeUpdate, DialogOutcome, DialogSpec, DragRegions, FileDropEvent, FrameId,
@@ -139,29 +140,12 @@ fn pointer_position(event: &CoreInputEvent) -> Option<Point> {
     }
 }
 
-enum ClipboardIntent {
-    Copy,
-    Cut,
-    Paste,
-}
-
-fn clipboard_intent(event: &CoreInputEvent) -> Option<ClipboardIntent> {
-    use aqua_core::{Key, Modifiers, NamedKey};
-    let CoreInputEvent::KeyDown(key) = event else {
-        return None;
-    };
-    let control = key.modifiers == Modifiers::CONTROL
-        || key.modifiers == Modifiers::CONTROL.union(Modifiers::SHIFT);
-    let shift = key.modifiers == Modifiers::SHIFT;
-    let copy = control && matches!(key.key, Key::Char('c' | 'C') | Key::Named(NamedKey::Insert));
-    let cut = (control && matches!(key.key, Key::Char('x' | 'X')))
-        || (shift && key.key == Key::Named(NamedKey::Delete));
-    let paste = (control && matches!(key.key, Key::Char('v' | 'V')))
-        || (shift && key.key == Key::Named(NamedKey::Insert));
-    match (copy, cut, paste) {
-        (true, _, _) => Some(ClipboardIntent::Copy),
-        (_, true, _) => Some(ClipboardIntent::Cut),
-        (_, _, true) => Some(ClipboardIntent::Paste),
+fn clipboard_intent(
+    conventions: aqua_core::EditingConventions,
+    event: &CoreInputEvent,
+) -> Option<ClipboardCommand> {
+    match event {
+        CoreInputEvent::KeyDown(key) => conventions.clipboard_command(key),
         _ => None,
     }
 }
@@ -252,14 +236,14 @@ impl Runtime {
         if let Some(position) = pointer_position(event) {
             self.bridge.pointer = Some(position);
         }
-        let intent = clipboard_intent(event);
+        let intent = clipboard_intent(self.tree.editing_conventions(), event);
         let middle = match event {
             CoreInputEvent::PointerDown(pointer, PointerButton::Middle) => Some(pointer.position),
             _ => None,
         };
         let consumed = self.handle_input_with_default(event, |runtime| match intent {
-            Some(ClipboardIntent::Copy | ClipboardIntent::Cut) => {
-                let cut = matches!(intent, Some(ClipboardIntent::Cut));
+            Some(ClipboardCommand::Copy | ClipboardCommand::Cut) => {
+                let cut = matches!(intent, Some(ClipboardCommand::Cut));
                 let mut redraw = false;
                 if let Some(text) = runtime.selected_text() {
                     runtime
@@ -273,7 +257,7 @@ impl Runtime {
                 }
                 Some(redraw)
             }
-            Some(ClipboardIntent::Paste) => {
+            Some(ClipboardCommand::Paste) => {
                 let request = runtime.bridge.request();
                 runtime.bridge.pastes.insert(request);
                 runtime

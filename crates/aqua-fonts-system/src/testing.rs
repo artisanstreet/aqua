@@ -381,3 +381,73 @@ impl Drop for FontconfigFixture {
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
+
+#[cfg(target_os = "macos")]
+pub mod core_text {
+    use std::path::PathBuf;
+
+    use objc2_core_foundation::{CFRange, CFString};
+    use objc2_core_text::CTFontUIFontType;
+
+    use crate::coretext::{face_of, interface_font};
+    use crate::discovery::FaceRef;
+    use crate::{FaceInfo, FontDatabase, Source};
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct ChosenFace {
+        pub path: PathBuf,
+        pub post_script_name: String,
+    }
+
+    impl ChosenFace {
+        fn of(face: FaceRef) -> Option<ChosenFace> {
+            match face {
+                FaceRef::Named {
+                    path,
+                    post_script_name,
+                } => Some(ChosenFace {
+                    path,
+                    post_script_name,
+                }),
+                FaceRef::Indexed { .. } => None,
+            }
+        }
+
+        pub fn resolve<'a>(&self, database: &'a FontDatabase) -> Option<&'a FaceInfo> {
+            let in_file: Vec<&FaceInfo> = database
+                .faces()
+                .filter(|face| matches!(&face.source, Source::File(path) if *path == self.path))
+                .collect();
+            crate::locate(
+                &in_file,
+                &FaceRef::Named {
+                    path: self.path.clone(),
+                    post_script_name: self.post_script_name.clone(),
+                },
+            )
+        }
+    }
+
+    pub fn system_ui_font() -> Option<ChosenFace> {
+        interface_font(CTFontUIFontType::System)
+            .and_then(|font| face_of(&font))
+            .and_then(ChosenFace::of)
+    }
+
+    pub fn user_fixed_pitch_font() -> Option<ChosenFace> {
+        interface_font(CTFontUIFontType::UserFixedPitch)
+            .and_then(|font| face_of(&font))
+            .and_then(ChosenFace::of)
+    }
+
+    pub fn font_for(text: &str) -> Option<ChosenFace> {
+        let system = interface_font(CTFontUIFontType::System)?;
+        let string = CFString::from_str(text);
+        let range = CFRange {
+            location: 0,
+            length: text.encode_utf16().count() as isize,
+        };
+        let chosen = unsafe { system.for_string(&string, range) };
+        face_of(&chosen).and_then(ChosenFace::of)
+    }
+}

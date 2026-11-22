@@ -315,6 +315,8 @@ pub trait Application {
 
     fn on_click_settings(&mut self, _settings: aqua_core::ClickSettings) {}
 
+    fn on_editing_conventions(&mut self, _conventions: aqua_core::EditingConventions) {}
+
     fn on_caption_hover(
         &mut self,
         _ctx: &mut AppCtx,
@@ -606,7 +608,7 @@ pub struct Aqua {
     pub(crate) frames_presented: u64,
     frame_stats: Option<FrameStats>,
     input_latency: Option<crate::latency::InputLatency>,
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     pub(crate) smoke_deadline: Option<WallInstant>,
     epoch: WallInstant,
     pub(crate) wakeups: u64,
@@ -659,13 +661,13 @@ impl Aqua {
         if let Some(n) = smoke_frames {
             eprintln!("aqua: smoke mode — exiting after {n} presented frames");
         }
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
         let smoke_deadline = std::env::var("AQUA_SMOKE_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|&ms| ms > 0)
             .map(|ms| WallInstant::now() + Duration::from_millis(ms));
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
         if let Some(deadline) = smoke_deadline {
             eprintln!("aqua: time-bounded smoke — exiting at {deadline:?}");
         }
@@ -689,7 +691,7 @@ impl Aqua {
             window_requests: VecDeque::new(),
             dialogs: VecDeque::new(),
             next_request: 1,
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
             smoke_deadline,
             epoch: WallInstant::now(),
             wakeups: 0,
@@ -728,14 +730,14 @@ impl Aqua {
         })
     }
 
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     pub(crate) fn align_clock(&mut self, shell_now: Instant) {
         self.epoch = WallInstant::now()
             .checked_sub(shell_now.since_origin())
             .unwrap_or_else(WallInstant::now);
     }
 
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     pub(crate) fn mark_native_loop(&mut self) {
         self.native_loop = true;
     }
@@ -1168,7 +1170,7 @@ impl Aqua {
         id
     }
 
-    #[cfg(any(windows, target_os = "linux", test))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos", test))]
     pub(crate) fn add_native_window(
         &mut self,
         observed: ObservedWindowState,

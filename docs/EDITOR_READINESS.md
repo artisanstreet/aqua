@@ -43,6 +43,57 @@ Linux (M13) needs to know:
   sway and D-Bus, as `aqua/tests/host_wayland.rs` does, so they never reach the
   developer's desktop.
 
+## macOS status (2026-11-22)
+
+Aqua runs on macOS 14.0 or newer on Apple Silicon with AppKit and Metal
+(`../ARCHITECTURE.md` record 14.MA, M0 to M14; service table in
+[PLATFORM.md](PLATFORM.md)). Everything was proven on GitHub `macos-15`
+runners, not on a physical Mac. The Editor port to macOS (M15) needs to know:
+
+- Ship as an app bundle made by `scripts/macos-bundle.sh` (or an equivalent):
+  `Info.plist` with `CFBundleIdentifier` equal to `AquaConfig::app_id`,
+  `LSMinimumSystemVersion` 14.0 and `NSHighResolutionCapable`, and
+  `libdxcompiler.dylib` (thinned to arm64) and `libspirv-cross-c-shared.dylib`
+  in `Contents/Frameworks`. Without the two libraries the sky and every other
+  custom pass report `Unsupported`; no environment variable is needed when they
+  are bundled. The CI leg bundles `examples/macos_bundle.rs` and runs it from
+  the bundle to prove both.
+- Notifications work only from that bundle. Unbundled, `cargo run` included,
+  `NotificationCenter::new` returns `NotificationError::Unsupported`; a bundled
+  app is `Denied` until the user allows it. The bundle is signed ad hoc;
+  Developer ID signing, the hardened runtime and notarization are release work.
+- Use `Titlebar::Overlay`: the traffic lights are native and centred in
+  `titlebar_height`, so Editor-drawn caption buttons must be hidden on macOS.
+- Move Editor shortcuts to `aqua::keys::primary()`, so Ctrl on Windows and Linux
+  is Command on macOS. Text fields already follow Chrome on macOS (Option and
+  Command arrows, Command-A, -C, -V, -Z); word boundaries stay Blink's.
+- Aqua installs a standard app menu (About, Hide, Hide Others, Show All, Quit)
+  and an Edit menu, and turns Quit and Command-Q into a close request for every
+  window, which `can_close` may veto. Editor-specific menu items still need
+  adding.
+- `file_icon` works through `NSWorkspace`. `aqua::local_time` does not exist; the
+  Editor formats times itself.
+- Fonts come from Core Text; leave `AQUA_FONT_DIRS` unset. Caches live in
+  `~/Library/Caches/aqua` unless an absolute `XDG_CACHE_HOME` is set.
+- Materials other than solid fall back to an opaque frame (no
+  `NSVisualEffectView`), and pinch, magnify and scroll phases are not input
+  events; trackpad momentum arrives as ordinary scroll events.
+- Editor tests that start Aqua apps on macOS must be `harness = false` binaries
+  that run AppKit on the main thread with one child process per case, as
+  `aqua/tests/host_macos.rs` does, and should copy Aqua's `.cargo/config.toml`
+  `[env]` entries so they use the named test pasteboard.
+- A `macos-15` CI leg like Aqua's needs the pinned LunarG SDK for DXC and
+  SPIRV-Cross, `AQUA_REQUIRE_*` flags, and `activate(ignoringOtherApps:)`
+  semantics (Aqua already activates on launch).
+
+Not verifiable without a physical Mac, and therefore release qualification for
+the Editor: Retina rendering (the runner is 1x), ProMotion 120 Hz pacing (the
+runner reports no presentation times), real VoiceOver speech and rotor
+navigation, trackpad momentum and gesture feel, notification banners and
+actions, candidate windows of real input methods beyond Kotoeri's Romaji mode,
+appearance and reduce-motion changes made in System Settings, and Developer ID
+signing with notarization.
+
 Status, 2026-11-03: **ready to begin porting the entire Windows Editor app**. The target is
 starting the Windows port of the entire Editor through public Aqua APIs. It covers
 the shell and every Editor section, including rich blocks and native services.

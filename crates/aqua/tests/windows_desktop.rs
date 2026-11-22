@@ -2,7 +2,7 @@
 #[path = "support/wayland.rs"]
 mod wayland;
 
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 mod native {
 
     use aqua::mailbox::Mailbox;
@@ -273,6 +273,12 @@ mod native {
         let Some(_session) = super::wayland::session("^Aqua desktop") else {
             return;
         };
+        #[cfg(target_os = "macos")]
+        if !aqua_shell_appkit::testing::available(
+            aqua_shell_appkit::testing::Facility::WindowServer,
+        ) {
+            return;
+        }
         unsafe { std::env::set_var("AQUA_RENDER_WHEN_COVERED", "1") };
         let report = Rc::new(RefCell::new(Report::default()));
         let mut config = AquaConfig::default();
@@ -307,12 +313,12 @@ mod native {
             report.title_observed
         );
         println!(
-            "WINDOWS_DESKTOP_OK: worker wake, native resize, taskbar badges, two-window lifecycle, close veto, snapshot transition and text raster requests accepted"
+            "WINDOWS_DESKTOP_OK: worker wake, native resize, two-window lifecycle, close veto, snapshot transition, text raster and taskbar badge requests accepted"
         );
     }
 }
 
 fn main() {
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     native::run();
 }

@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use aqua_verify::metadata::workspace_root;
-use aqua_verify::policy::{REAL_SESSION_TOKENS, SESSION_ESCAPE_TOKENS, TEST_SESSION_DEAD_ENDS};
+use aqua_verify::policy::{
+    GENERAL_PASTEBOARD_TOKENS, REAL_SESSION_TOKENS, SESSION_ESCAPE_TOKENS, TEST_SESSION_DEAD_ENDS,
+};
 
 fn rust_files(dir: &Path) -> Vec<PathBuf> {
     let mut stack = vec![dir.to_path_buf()];
@@ -112,5 +114,68 @@ fn test_code_never_names_the_real_session_or_strips_the_dead_ends() {
         found.is_empty(),
         "sources that could reach the user's session:\n{}",
         found.join("\n")
+    );
+}
+
+fn is_test_source(path: &Path) -> bool {
+    path.components().any(|part| part.as_os_str() == "tests")
+        || path
+            .ancestors()
+            .any(|dir| dir.ends_with("aqua-shell-appkit/src/testing"))
+}
+
+#[test]
+fn no_test_source_names_the_general_pasteboard() {
+    let this = Path::new(file!())
+        .file_name()
+        .expect("this test file has a name");
+    let found: Vec<String> = rust_files(&workspace_root().join("crates"))
+        .into_iter()
+        .filter(|path| path.file_name() != Some(this) && is_test_source(path))
+        .flat_map(|path| {
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            GENERAL_PASTEBOARD_TOKENS
+                .iter()
+                .filter(|token| text.contains(**token))
+                .map(|token| format!("{} uses {token}", path.display()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(
+        found.is_empty(),
+        "test sources that could write to the user's clipboard:\n{}",
+        found.join("\n")
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_test_process_on_macos_caches_inside_the_workspace_not_the_users_library() {
+    let index = aqua_fonts_system::default_fallback_index_path()
+        .expect("a test process has an absolute cache directory");
+    let target = workspace_root().join("target").join("aqua-test-cache");
+    assert!(
+        index.starts_with(&target),
+        "the font fallback index of a test process is {}, outside {}",
+        index.display(),
+        target.display()
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_test_process_on_macos_copies_to_the_test_pasteboard_and_posts_no_notifications() {
+    use aqua_shell_appkit::notifications::Bundle;
+    use aqua_shell_appkit::services::PasteboardName;
+
+    assert_eq!(
+        PasteboardName::from_environment(),
+        PasteboardName::Named("org.aqua.tests.pasteboard".into()),
+        "a test's clipboard writes reach a private pasteboard, not the user's"
+    );
+    assert_eq!(
+        Bundle::of_this_process(),
+        Bundle::Missing,
+        "an unbundled test process gets NotificationError::Unsupported and never reaches the user's Notification Center"
     );
 }

@@ -67,6 +67,8 @@ pub struct WindowOptions {
     pub position: Option<(i32, i32)>,
     pub kind: WindowKind,
     pub chrome: Chrome,
+    pub titlebar_height: f64,
+    pub caption_buttons: bool,
     pub material: WindowMaterial,
     pub dark: bool,
     pub topmost: bool,
@@ -88,6 +90,8 @@ impl Default for WindowOptions {
             position: None,
             kind: WindowKind::Normal,
             chrome: Chrome::Native,
+            titlebar_height: 40.0,
+            caption_buttons: true,
             material: WindowMaterial::Solid,
             dark: false,
             topmost: false,
@@ -120,6 +124,7 @@ impl WindowOptions {
 pub enum ShellError {
     Win32(&'static str, i32),
     Wayland(&'static str, String),
+    AppKit(&'static str, String),
     ClipboardBusy,
     ClipboardUnavailable,
     LoopAlreadyRunning,
@@ -131,6 +136,7 @@ impl std::fmt::Display for ShellError {
         match self {
             ShellError::Win32(call, code) => write!(f, "{call} failed with {code:#x}"),
             ShellError::Wayland(request, reason) => write!(f, "{request} failed: {reason}"),
+            ShellError::AppKit(call, reason) => write!(f, "{call} failed: {reason}"),
             ShellError::ClipboardBusy => write!(f, "clipboard is held by another process"),
             ShellError::ClipboardUnavailable => write!(f, "clipboard has no unicode text"),
             ShellError::LoopAlreadyRunning => write!(f, "message loop already running"),

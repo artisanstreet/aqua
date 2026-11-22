@@ -8,6 +8,8 @@ use skrifa::raw::FileRef;
 use skrifa::string::StringId;
 use skrifa::{FontRef, MetadataProvider};
 
+#[cfg(target_os = "macos")]
+mod coretext;
 mod discovery;
 #[cfg(target_os = "linux")]
 mod fontconfig;
@@ -37,7 +39,7 @@ pub enum Generic {
     Emoji,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scope {
     Everything,
@@ -54,7 +56,7 @@ impl Generic {
         Generic::Emoji,
     ];
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn fallback_scope(self) -> Scope {
         match self {
             Generic::Emoji => Scope::Preferred,
@@ -167,21 +169,26 @@ pub fn write_cache_file(path: impl AsRef<Path>, bytes: &[u8]) -> std::io::Result
     std::fs::rename(&staging, path)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn default_fallback_index_path() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
     Some(base.join("aqua").join("font-fallback.index"))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn default_fallback_index_path() -> Option<PathBuf> {
     let absolute = |name: &str| {
         std::env::var_os(name)
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
     };
-    let base =
-        absolute("XDG_CACHE_HOME").or_else(|| absolute("HOME").map(|home| home.join(".cache")))?;
+    let user_cache = if cfg!(target_os = "macos") {
+        ["Library", "Caches"].iter().collect::<PathBuf>()
+    } else {
+        PathBuf::from(".cache")
+    };
+    let base = absolute("XDG_CACHE_HOME")
+        .or_else(|| absolute("HOME").map(|home| home.join(user_cache)))?;
     Some(base.join("aqua").join("font-fallback.index"))
 }
 
@@ -266,6 +273,39 @@ fn weight_rank(wanted: u16, candidate: u16) -> (u8, u16) {
     }
 }
 
+fn locate<'a>(in_file: &[&'a FaceInfo], face: &discovery::FaceRef) -> Option<&'a FaceInfo> {
+    match (face, in_file) {
+        (discovery::FaceRef::Indexed { index, .. }, faces) => {
+            faces.iter().find(|info| info.index == *index).copied()
+        }
+        (discovery::FaceRef::Named { .. }, [only]) => Some(*only),
+        (
+            discovery::FaceRef::Named {
+                post_script_name, ..
+            },
+            faces,
+        ) => {
+            let exact = faces
+                .iter()
+                .find(|info| info.post_script_name == *post_script_name);
+            let family = |name: &str| {
+                name.split_once('-')
+                    .map_or(name, |(family, _)| family)
+                    .to_owned()
+            };
+            let wanted = family(post_script_name);
+            let mut same_family = faces
+                .iter()
+                .filter(|info| family(&info.post_script_name) == wanted);
+            let only_one = match (same_family.next(), same_family.next()) {
+                (Some(only), None) => Some(only),
+                _ => None,
+            };
+            exact.or(only_one).copied()
+        }
+    }
+}
+
 impl FontDatabase {
     pub fn empty() -> Self {
         Self {
@@ -290,19 +330,16 @@ impl FontDatabase {
     }
 
     fn families_of(&self, faces: &[discovery::FaceRef]) -> Vec<String> {
-        let located: HashMap<(&Path, u32), &FaceInfo> = self
-            .faces()
-            .filter_map(|face| match &face.source {
-                Source::File(path) => Some(((path.as_path(), face.index), face)),
-                Source::Memory => None,
-            })
-            .collect();
+        let mut by_path: HashMap<&Path, Vec<&FaceInfo>> = HashMap::new();
+        for face in self.faces() {
+            if let Source::File(path) = &face.source {
+                by_path.entry(path.as_path()).or_default().push(face);
+            }
+        }
         let mut names: Vec<String> = Vec::new();
         for face in faces {
-            let Some(info) = located.get(&(face.path.as_path(), face.index)) else {
-                continue;
-            };
-            let Some(name) = info.families.first() else {
+            let in_file = by_path.get(face.path()).map_or(&[][..], Vec::as_slice);
+            let Some(name) = locate(in_file, face).and_then(|info| info.families.first()) else {
                 continue;
             };
             if !names.iter().any(|known| known.eq_ignore_ascii_case(name)) {

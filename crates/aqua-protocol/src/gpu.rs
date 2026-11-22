@@ -64,6 +64,7 @@ pub enum SurfaceTarget {
     Window(WindowId),
     Native(NativeSurface),
     Wayland(WaylandSurface),
+    Metal(MetalSurface),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,6 +79,13 @@ pub struct WaylandSurface {
     pub window: WindowId,
     pub display: u64,
     pub surface: u64,
+    pub extent: Extent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MetalSurface {
+    pub window: WindowId,
+    pub layer: u64,
     pub extent: Extent,
 }
 

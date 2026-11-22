@@ -3,9 +3,29 @@ use std::path::{Path, PathBuf};
 use crate::Generic;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FaceRef {
-    pub(crate) path: PathBuf,
-    pub(crate) index: u32,
+pub(crate) enum FaceRef {
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Indexed { path: PathBuf, index: u32 },
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Named {
+        path: PathBuf,
+        post_script_name: String,
+    },
+}
+
+impl FaceRef {
+    pub(crate) fn path(&self) -> &Path {
+        match self {
+            FaceRef::Indexed { path, .. } | FaceRef::Named { path, .. } => path,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn into_path(self) -> PathBuf {
+        match self {
+            FaceRef::Indexed { path, .. } | FaceRef::Named { path, .. } => path,
+        }
+    }
 }
 
 pub(crate) struct Discovery {
@@ -14,7 +34,7 @@ pub(crate) struct Discovery {
     pub(crate) sorted: Vec<(Generic, Vec<FaceRef>)>,
 }
 
-fn is_font_file(path: &Path) -> bool {
+pub(crate) fn is_font_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
@@ -43,7 +63,7 @@ fn flat_files(directory: &Path) -> Vec<PathBuf> {
     paths
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn nested_files(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     let mut files = Vec::new();
@@ -70,7 +90,7 @@ fn nested_files(roots: &[PathBuf]) -> Vec<PathBuf> {
     files
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn discover() -> Discovery {
     let windows = std::env::var_os("SystemRoot")
         .or_else(|| std::env::var_os("WINDIR"))
@@ -142,6 +162,59 @@ pub(crate) fn discover() -> Discovery {
             });
             let directories: Vec<PathBuf> =
                 xdg_directories().into_iter().chain(configured).collect();
+            Discovery {
+                files: nested_files(&directories),
+                directories,
+                sorted: Vec::new(),
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn apple_directories() -> Vec<PathBuf> {
+    let user = std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(|home| PathBuf::from(home).join("Library").join("Fonts"));
+    [
+        PathBuf::from("/System/Library/Fonts"),
+        PathBuf::from("/Library/Fonts"),
+    ]
+    .into_iter()
+    .chain(user)
+    .collect()
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn discover() -> Discovery {
+    use std::sync::Once;
+
+    static REPORTED: Once = Once::new();
+    let configured = configured_directories();
+    let directories: Vec<PathBuf> = apple_directories()
+        .into_iter()
+        .chain(configured.iter().cloned())
+        .collect();
+    match crate::coretext::snapshot() {
+        Ok(snapshot) => {
+            let listed: std::collections::HashSet<PathBuf> =
+                snapshot.files.iter().cloned().collect();
+            let mut files = snapshot.files;
+            files.extend(
+                nested_files(&configured)
+                    .into_iter()
+                    .filter(|path| !listed.contains(path)),
+            );
+            Discovery {
+                directories,
+                files,
+                sorted: snapshot.sorted,
+            }
+        }
+        Err(error) => {
+            REPORTED.call_once(|| {
+                eprintln!("aqua: Core Text is unavailable ({error}); scanning the macOS font directories instead");
+            });
             Discovery {
                 files: nested_files(&directories),
                 directories,

@@ -27,6 +27,7 @@ pub enum PreferenceSource {
     EnvOverride,
     WindowsSystem,
     Portal,
+    AppKit,
     Fallback,
 }
 

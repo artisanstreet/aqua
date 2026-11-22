@@ -591,6 +591,9 @@ impl Application for ManagedUiApp {
     fn on_click_settings(&mut self, settings: aqua_core::ClickSettings) {
         self.ui.on_click_settings(settings);
     }
+    fn on_editing_conventions(&mut self, conventions: aqua_core::EditingConventions) {
+        self.ui.on_editing_conventions(conventions);
+    }
     fn on_start(&mut self, ctx: &mut AppCtx, id: AquaWindowId) {
         ctx.bind_mailbox(id, &self.mailbox);
         self.ui.on_start(ctx, id);

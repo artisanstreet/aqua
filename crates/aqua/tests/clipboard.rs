@@ -1,7 +1,7 @@
 use aqua::{
     ui::Text,
     ui_app::{dispatch_clipboard, dispatch_input_with_clipboard_outcome, ClipboardOutcome},
-    UiApp,
+    Application, EditingConventions, UiApp,
 };
 use aqua_core::{InputEvent, Key, KeyEvent, Modifiers, NamedKey};
 use aqua_reactive::ReadSignal;
@@ -78,6 +78,43 @@ impl Clipboard for LockedClipboard {
     fn clear(&mut self) -> Result<(), ClipboardError> {
         Ok(())
     }
+}
+
+#[test]
+fn command_shortcuts_copy_cut_paste_and_undo_once_the_host_announces_mac_conventions() {
+    let (mut app, text) = field();
+    app.on_editing_conventions(EditingConventions::Mac);
+    let mut clipboard = MemoryClipboard::new();
+    let command = Modifiers::LOGO;
+    assert_eq!(
+        dispatch_clipboard(
+            &mut app,
+            &mut clipboard,
+            &shortcut(Key::Char('c'), Modifiers::CONTROL)
+        )
+        .unwrap(),
+        ClipboardOutcome::Unhandled
+    );
+    assert_eq!(
+        dispatch_clipboard(&mut app, &mut clipboard, &shortcut(Key::Char('x'), command)).unwrap(),
+        ClipboardOutcome::Handled { redraw: true }
+    );
+    app.sync().unwrap();
+    assert_eq!(text.get(), " world");
+    assert_eq!(clipboard.get_text().unwrap().as_deref(), Some("hello"));
+    clipboard.set_text("goodbye".into()).unwrap();
+    assert_eq!(
+        dispatch_clipboard(&mut app, &mut clipboard, &shortcut(Key::Char('v'), command)).unwrap(),
+        ClipboardOutcome::Handled { redraw: true }
+    );
+    app.sync().unwrap();
+    assert_eq!(text.get(), "goodbye world");
+    app.handle_input(&shortcut(Key::Char('z'), command));
+    app.sync().unwrap();
+    assert_eq!(text.get(), " world");
+    app.handle_input(&shortcut(Key::Char('z'), command.union(Modifiers::SHIFT)));
+    app.sync().unwrap();
+    assert_eq!(text.get(), "goodbye world");
 }
 
 #[test]

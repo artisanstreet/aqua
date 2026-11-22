@@ -13,6 +13,8 @@ use aqua_core::{Oklch, Rect};
 use aqua_gpu_d3d11 as gpu;
 #[cfg(all(windows, feature = "d3d12"))]
 use aqua_gpu_d3d12 as gpu;
+#[cfg(target_os = "macos")]
+use aqua_gpu_metal as gpu;
 #[cfg(target_os = "linux")]
 use aqua_gpu_vulkan as gpu;
 use aqua_graph::{Extent, FramePlan};
@@ -92,6 +94,11 @@ fn since_process_start() -> Option<Duration> {
     ))
 }
 
+#[cfg(target_os = "macos")]
+fn since_process_start() -> Option<Duration> {
+    aqua_shell_appkit::since_process_start()
+}
+
 static STARTUP_LINES: std::sync::Mutex<Vec<(f64, String)>> = std::sync::Mutex::new(Vec::new());
 
 fn process_ms() -> f64 {
@@ -160,7 +167,7 @@ pub fn prewarm() {
     WindowBackend::begin_early(window_options(), persist::load_pipeline_cache);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn prewarm() {
     startup_mark("prewarm_start");
 }
@@ -177,7 +184,7 @@ fn open_backend() -> Result<WindowBackend, String> {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn open_backend() -> Result<WindowBackend, String> {
     let cache = persist::load_pipeline_cache();
     WindowBackend::with_pipeline_cache(window_options(), cache.as_deref())
@@ -224,7 +231,7 @@ fn shared_hub(fonts: &SharedFonts) -> Result<Rc<Hub>, String> {
     Ok(hub)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 struct PipelineCounts {
     compiled: u32,
     loaded: u32,
@@ -281,7 +288,7 @@ impl WindowHandle {
         if let Err(error) = self.hub.backend.borrow_mut().trim(release) {
             eprintln!("aqua: idle release failed: {error}");
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.hub.backend.borrow_mut().trim(release);
         self.report_memory();
         if ledger {
@@ -295,7 +302,7 @@ impl WindowHandle {
         let usage = backend
             .memory_breakdown()
             .map_or(0, |memory| memory.local_usage);
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let usage = backend.memory_breakdown().local_usage;
         eprintln!(
             "aqua-ledger {label} dxgi_usage_mib={:.2} {}",
@@ -330,12 +337,12 @@ impl WindowHandle {
         let resident = backend
             .persistent_stats()
             .map_or(0, |stats| stats.resident_bytes);
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let pipelines = PipelineCounts {
             compiled: backend.pipeline_stats().compiled,
             loaded: 0,
         };
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let resident = backend.persistent_stats().resident_bytes;
         let (compiled, loaded, before) = self.profile_mark.get();
         self.profile_mark
@@ -351,12 +358,27 @@ impl WindowHandle {
         );
         count(Metric::AtlasGrowthBytes, resident.saturating_sub(before));
         crate::profile::note(|| {
+            #[cfg(not(target_os = "macos"))]
             let passes: Vec<String> = backend
                 .gpu_pass_times()
                 .iter()
                 .map(|pass| format!("{}={:.3}", pass.label, pass.duration.as_secs_f64() * 1000.0))
                 .collect();
             let phases = backend.phases();
+            #[cfg(target_os = "macos")]
+            {
+                format!(
+                "metal gpu_ms={:.3} slot_wait_us={} acquire_us={} resize_us={} late_pso={:?} window={:?}",
+                backend
+                    .gpu_frame_time()
+                    .map_or(0.0, |time| time.as_secs_f64() * 1000.0),
+                phases.slot_wait.as_micros(),
+                phases.acquire.as_micros(),
+                phases.resize.as_micros(),
+                backend.late_pipelines(),
+                backend.stats()
+            )
+            }
             #[cfg(target_os = "linux")]
             {
                 format!(
@@ -418,7 +440,7 @@ impl WindowHandle {
                 }
             }
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             self.hub
                 .backend
@@ -444,7 +466,7 @@ impl WindowHandle {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn service_budget(&self) -> bool {
         let mut backend = self.hub.backend.borrow_mut();
         backend.service_budget();
@@ -462,7 +484,7 @@ impl WindowHandle {
         self.hub.backend.borrow().startup_pending()
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn startup_pending(&self) -> bool {
         false
     }
@@ -472,7 +494,7 @@ impl WindowHandle {
         self.hub.backend.borrow_mut().startup_step();
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn startup_step(&self) {}
 
     fn pipeline_cache(&self) -> Option<Vec<u8>> {
@@ -486,12 +508,31 @@ impl WindowHandle {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn settle_surfaces(&mut self) {}
 
     #[cfg(target_os = "linux")]
     fn settle_surface(&mut self, _surface: SurfaceId) -> bool {
         false
+    }
+
+    #[cfg(target_os = "macos")]
+    fn settle_surface(&mut self, surface: SurfaceId) -> bool {
+        self.owed_frame_in(surface).is_some()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn owed_frame_in(&self, surface: SurfaceId) -> Option<Duration> {
+        self.hub
+            .backend
+            .borrow()
+            .owed_frame_in(surface)
+            .expect("invariant: a window target's surface lives as long as the target")
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn owed_frame_in(&self, _surface: SurfaceId) -> Option<Duration> {
+        None
     }
 
     #[cfg(windows)]
@@ -519,7 +560,7 @@ impl WindowHandle {
         }
         #[cfg(windows)]
         let memory = self.hub.backend.borrow().memory_breakdown().ok();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let memory = Some(self.hub.backend.borrow().memory_breakdown());
         if let Some(memory) = memory {
             eprintln!(
@@ -539,7 +580,7 @@ impl WindowHandle {
         self.generation
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn inject_removal(&self) {
         self.hub.backend.borrow().inject_device_removal();
     }
@@ -713,12 +754,12 @@ impl WindowTarget {
         self.composition.is_some()
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn composed(&self) -> bool {
         false
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn deliver_composition(&mut self) {}
 
     #[cfg(windows)]
@@ -801,8 +842,11 @@ impl FrameTarget for WindowTarget {
     }
 
     fn maintenance_in(&self) -> Option<Duration> {
-        self.settle_at
-            .map(|at| at.saturating_duration_since(WallInstant::now()))
+        let settle = self
+            .settle_at
+            .map(|at| at.saturating_duration_since(WallInstant::now()));
+        let owed = self.frames.backend().owed_frame_in(self.surface);
+        [settle, owed].into_iter().flatten().min()
     }
 
     fn maintenance(&mut self) -> bool {
@@ -892,6 +936,7 @@ pub fn factory(
             externals,
             stats,
             composition,
+            ..
         } = context;
         Box::new(move || {
             let hub = shared_hub(&fonts)?;
@@ -1010,4 +1055,75 @@ pub(crate) fn refresh_of(hwnd: isize) -> Option<u64> {
     u64::try_from(interval.as_nanos())
         .ok()
         .filter(|nanos| *nanos > 0)
+}
+
+#[cfg(target_os = "macos")]
+pub fn factory(
+    window: WindowId,
+    lease: aqua_shell_appkit::LayerLease,
+    extent: Extent,
+    fonts: SharedFonts,
+    runs: SharedRuns,
+    clear: Oklch,
+) -> InitFactory {
+    use gpu::window::{Alpha, LayerTarget};
+    Box::new(move |context: RenderContext| {
+        let RenderContext {
+            externals,
+            stats,
+            render,
+            ..
+        } = context;
+        Box::new(move || {
+            let hub = shared_hub(&fonts)?;
+            let signal = RecoverySignal::default();
+            let damage: DamageSlot = Rc::default();
+            let listener = signal.listener();
+            let handle = WindowHandle::join(hub.clone(), listener, damage.clone())?;
+            let alpha = match clear.alpha < 1.0 {
+                true => Alpha::Premultiplied,
+                false => Alpha::Opaque,
+            };
+            let target = LayerTarget {
+                window,
+                layer: lease.layer(),
+                extent,
+            };
+            let surface = hub
+                .backend
+                .borrow_mut()
+                .create_layer_surface(
+                    target,
+                    alpha,
+                    Box::new(super::pacer_appkit::LayerPacer(lease)),
+                )
+                .map_err(|e| e.to_string())?;
+            hub.backend
+                .borrow_mut()
+                .wake_when_presented(surface, render)
+                .map_err(|e| e.to_string())?;
+            startup_mark("surface_created");
+            if crate::debug::panel() {
+                crate::debug::watch(stats.clone(), window.raw() as isize);
+            }
+            let shared_stats = stats.clone();
+            let wiring = Wiring {
+                signal,
+                damage,
+                fonts,
+                runs,
+                clear,
+            };
+            let frames = window_frames(wiring, handle, surface, extent, externals, stats);
+            let target = WindowTarget {
+                stats: shared_stats,
+                frames,
+                surface,
+                announced: false,
+                viewport: None,
+                settle_at: None,
+            };
+            Ok(Box::new(target) as Box<dyn FrameTarget>)
+        })
+    })
 }

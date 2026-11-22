@@ -2,6 +2,22 @@ name: ci
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: cargo test arguments selecting one test binary and optionally a test name, e.g. -p aqua --test host_native
+        required: true
+        type: string
+      capture:
+        description: take a screencapture frame every second into the artifacts
+        required: false
+        default: false
+        type: boolean
+      repeat:
+        description: run the selected tests this many times and report how many runs passed
+        required: false
+        default: 1
+        type: number
 defaults:
   run:
     shell: bash
@@ -14,20 +30,23 @@ env:
   SCCACHE_S3_KEY_PREFIX: rust
   SCCACHE_S3_RW_MODE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && 'READ_WRITE' || 'READ_ONLY' }}
   SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
+  LUNARG_SDK: 1.4.363.1
+  LUNARG_SDK_SHA256: a65c707cf0a32bf8c2ca6b9af1985b7af61dbadfc19b352dae51a323f3a547a6
   AWS_ACCESS_KEY_ID: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID || secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY || secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
 jobs:
   check:
+    if: github.event_name != 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-gnu
+          targets: ${{ runner.os == 'Linux' && 'x86_64-pc-windows-gnu,aarch64-apple-darwin' || runner.os == 'Windows' && 'x86_64-pc-windows-gnu' || '' }}
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.19.0
@@ -59,6 +78,60 @@ jobs:
       - name: Linux toolchain probes (SPIR-V, lavapipe, headless sway)
         if: runner.os == 'Linux'
         run: scripts/linux-env.sh
+      - &lunarg-cache
+        name: restore the pinned LunarG SDK
+        if: runner.os == 'macOS'
+        id: lunarg
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/VulkanSDK/${{ env.LUNARG_SDK }}
+          key: lunarg-macos-${{ env.LUNARG_SDK }}
+      - &lunarg-install
+        name: install the pinned LunarG SDK (dxc, libdxcompiler, SPIRV-Cross)
+        if: runner.os == 'macOS' && steps.lunarg.outputs.cache-hit != 'true'
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/vulkansdk.zip" "https://sdk.lunarg.com/sdk/download/$LUNARG_SDK/mac/vulkansdk-macos-$LUNARG_SDK.zip"
+          echo "$LUNARG_SDK_SHA256  $RUNNER_TEMP/vulkansdk.zip" | shasum -a 256 --check
+          unzip -q "$RUNNER_TEMP/vulkansdk.zip" -d "$RUNNER_TEMP/vulkansdk"
+          sudo "$RUNNER_TEMP/vulkansdk/vulkansdk-macOS-$LUNARG_SDK.app/Contents/MacOS/vulkansdk-macOS-$LUNARG_SDK" \
+            --root "$HOME/VulkanSDK/$LUNARG_SDK" --accept-licenses --default-answer --confirm-command install copy_only=1
+          sudo chown -R "$(id -u):$(id -g)" "$HOME/VulkanSDK"
+      - &lunarg-save
+        name: save the pinned LunarG SDK
+        if: runner.os == 'macOS' && steps.lunarg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/VulkanSDK/${{ env.LUNARG_SDK }}
+          key: lunarg-macos-${{ env.LUNARG_SDK }}
+      - &lunarg-env
+        name: LunarG SDK environment
+        if: runner.os == 'macOS'
+        run: |
+          sdk="$HOME/VulkanSDK/$LUNARG_SDK/macOS"
+          ls "$sdk/bin" "$sdk/lib"
+          echo "$sdk/bin" >> "$GITHUB_PATH"
+          echo "AQUA_DXC_SPIRV=$sdk/bin/dxc" >> "$GITHUB_ENV"
+          echo "AQUA_DXCOMPILER=$sdk/lib/libdxcompiler.dylib" >> "$GITHUB_ENV"
+          spirv_cross_c=$(ls "$sdk"/lib/libspirv-cross-c-shared*.dylib 2>/dev/null | head -n1)
+          echo "AQUA_SPIRV_CROSS_C=${spirv_cross_c:-$sdk/lib/libspirv-cross-c-shared.dylib}" >> "$GITHUB_ENV"
+      - &macos-fonts
+        name: pinned DejaVu fonts (the faces fonts-dejavu-core gives the Linux leg)
+        if: runner.os == 'macOS'
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/dejavu.tar.bz2" https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.tar.bz2
+          echo "fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7  $RUNNER_TEMP/dejavu.tar.bz2" | shasum -a 256 --check
+          mkdir -p "$RUNNER_TEMP/fonts"
+          tar -xjf "$RUNNER_TEMP/dejavu.tar.bz2" -C "$RUNNER_TEMP/fonts" --strip-components 2 \
+            dejavu-fonts-ttf-2.37/ttf/DejaVuSans.ttf dejavu-fonts-ttf-2.37/ttf/DejaVuSans-Bold.ttf \
+            dejavu-fonts-ttf-2.37/ttf/DejaVuSansMono.ttf dejavu-fonts-ttf-2.37/ttf/DejaVuSansMono-Bold.ttf \
+            dejavu-fonts-ttf-2.37/ttf/DejaVuSerif.ttf dejavu-fonts-ttf-2.37/ttf/DejaVuSerif-Bold.ttf
+          ls "$RUNNER_TEMP/fonts"
+          echo "AQUA_FONT_DIRS=$RUNNER_TEMP/fonts" >> "$GITHUB_ENV"
+      - &macos-env
+        name: macOS probes (Metal, window server, TCC, input sources, toolchain)
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: scripts/macos-env.sh
       - name: fmt
         run: cargo fmt --check
       - name: fetch dependencies for every platform
@@ -76,12 +149,21 @@ jobs:
       - name: workspace tests
         env:
           CARGO_BUILD_JOBS: 2
-          AQUA_REQUIRE_GPU: ${{ runner.os == 'Linux' && '1' || '0' }}
+          AQUA_REQUIRE_GPU: ${{ runner.os != 'Windows' && '1' || '0' }}
+          MTL_DEBUG_LAYER: ${{ runner.os == 'macOS' && '1' || '' }}
+          MTL_SHADER_VALIDATION: ${{ runner.os == 'macOS' && '1' || '' }}
           AQUA_REQUIRE_WAYLAND: ${{ runner.os == 'Linux' && '1' || '0' }}
           AQUA_REQUIRE_DBUS: ${{ runner.os == 'Linux' && '1' || '0' }}
+          AQUA_REQUIRE_APPKIT: ${{ runner.os == 'macOS' && '1' || '0' }}
+          AQUA_REQUIRE_POST_EVENT: ${{ runner.os == 'macOS' && '1' || '0' }}
+          AQUA_REQUIRE_SCREEN_CAPTURE: ${{ runner.os == 'macOS' && '1' || '0' }}
+          AQUA_REQUIRE_MAC_IME: ${{ runner.os == 'macOS' && '1' || '0' }}
+          AQUA_REQUIRE_DXCOMPILER: ${{ runner.os == 'macOS' && '1' || '0' }}
+          AQUA_REQUIRE_SPIRV_CROSS: ${{ runner.os == 'macOS' && '1' || '0' }}
+          AQUA_REQUIRE_AX: ${{ runner.os == 'macOS' && '1' || '0' }}
         run: |
           if [ "$RUNNER_OS" != Windows ]; then
-            exec cargo test --workspace --locked -- --nocapture --test-threads=1
+            exec cargo test --workspace --locked ${{ runner.os == 'macOS' && '--no-fail-fast' || '' }} -- --nocapture --test-threads=1
           fi
           stop="$RUNNER_TEMP/test-watchdog.stop"
           pwsh -NoProfile -File .github/scripts/test-watchdog.ps1 \
@@ -96,6 +178,34 @@ jobs:
           touch "$stop"
           wait "$watchdog" || true
           exit "$status"
+      - name: bundle an example and run it from the app bundle
+        if: runner.os == 'macOS'
+        env:
+          AQUA_REQUIRE_APPKIT: '1'
+          AQUA_REQUIRE_POST_EVENT: '1'
+          AQUA_REQUIRE_SCREEN_CAPTURE: '1'
+        run: |
+          licenses=()
+          while IFS= read -r license; do
+            echo "license $license"
+            licenses+=(--license "$license")
+          done < <(find "$HOME/VulkanSDK/$LUNARG_SDK" -maxdepth 2 -type f \( -iname '*license*' -o -iname '*licence*' \) | sort)
+          cargo build --locked -p aqua --example macos_bundle
+          scripts/macos-bundle.sh --executable target/debug/examples/macos_bundle \
+            --app-id org.aqua.examples.bundle --name "Aqua Bundle" --out "$RUNNER_TEMP/bundle" \
+            --dxcompiler "$AQUA_DXCOMPILER" --spirv-cross "$AQUA_SPIRV_CROSS_C" "${licenses[@]}"
+          find "$RUNNER_TEMP/bundle" -maxdepth 4 | sort
+          AQUA_MAC_BUNDLE="$RUNNER_TEMP/bundle/Aqua Bundle.app" \
+            cargo test --locked -p aqua --test host_macos bundled_app_draws -- --nocapture
+      - &macos-artifacts
+        name: upload macOS probe artifacts
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aqua-mac-artifacts-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/aqua-mac-artifacts
+          if-no-files-found: warn
+          retention-days: 14
       - name: upload hung test dumps
         if: always() && runner.os == 'Windows'
         uses: actions/upload-artifact@v4
@@ -108,10 +218,70 @@ jobs:
         env:
           CARGO_BUILD_JOBS: 2
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: apple target clippy (whole workspace, all targets)
+        if: runner.os == 'Linux'
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: cargo clippy --workspace --all-targets --locked --target aarch64-apple-darwin -- -D warnings
       - name: windows cross-check (whole workspace, all targets)
+        if: runner.os != 'macOS'
         env:
           AQUA_SHADERS_SKIP: ${{ runner.os == 'Linux' && '1' || '0' }}
         run: cargo check --workspace --all-targets --target x86_64-pc-windows-gnu
       - name: sccache stats
         if: always() && env.RUSTC_WRAPPER != ''
         run: '"$SCCACHE_PATH" --show-stats'
+  macos-debug:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.19.0
+      - name: Compile through sccache
+        if: env.AWS_ACCESS_KEY_ID != ''
+        run: echo "RUSTC_WRAPPER=$SCCACHE_PATH" >> "$GITHUB_ENV"
+      - *lunarg-cache
+      - *lunarg-install
+      - *lunarg-save
+      - *lunarg-env
+      - *macos-fonts
+      - *macos-env
+      - name: one test binary
+        env:
+          CARGO_BUILD_JOBS: 3
+          AQUA_REQUIRE_GPU: 1
+          MTL_DEBUG_LAYER: 1
+          MTL_SHADER_VALIDATION: 1
+          AQUA_REQUIRE_APPKIT: '1'
+          AQUA_REQUIRE_POST_EVENT: '1'
+          AQUA_REQUIRE_SCREEN_CAPTURE: '1'
+          AQUA_REQUIRE_MAC_IME: '1'
+          AQUA_REQUIRE_DXCOMPILER: '1'
+          AQUA_REQUIRE_SPIRV_CROSS: '1'
+          AQUA_REQUIRE_AX: '1'
+          FILTER: ${{ inputs.filter }}
+          CAPTURE: ${{ inputs.capture }}
+          REPEAT: ${{ inputs.repeat }}
+        run: |
+          frames="$GITHUB_WORKSPACE/target/aqua-mac-artifacts/frames"
+          mkdir -p "$frames"
+          read -r -a selection <<<"$FILTER"
+          cargo test --locked "${selection[@]}" --no-run
+          if [ "$CAPTURE" = true ]; then
+            while :; do screencapture -x "$frames/$(date +%H%M%S).png"; sleep 1; done &
+            capture=$!
+          fi
+          failed=0
+          for run in $(seq "$REPEAT"); do
+            echo "::group::run $run of $REPEAT"
+            cargo test --locked "${selection[@]}" -- --nocapture --test-threads=1 || failed=$((failed + 1))
+            echo "::endgroup::"
+          done
+          if [ -n "${capture:-}" ]; then kill "$capture"; fi
+          echo "$((REPEAT - failed)) of $REPEAT runs passed"
+          [ "$failed" -eq 0 ]
+      - *macos-artifacts

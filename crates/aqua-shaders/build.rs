@@ -5,6 +5,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "msl/map.rs"]
+#[allow(dead_code)]
+mod map;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "msl/translate.rs"]
+mod translate;
+
 struct Entry {
     file: &'static str,
     entry: &'static str,
@@ -331,24 +339,67 @@ fn run_all(jobs: &[Job], hlsl: &Path, toolchain: &Toolchain) {
     }
 }
 
-fn table(generated: &mut String, name: &str, jobs: &[Job], wanted: impl Fn(Bytecode) -> bool) {
+fn table<'a>(
+    generated: &mut String,
+    name: &str,
+    blobs: impl Iterator<Item = (&'a Job<'a>, PathBuf)>,
+) {
     writeln!(generated, "pub static {name}: &[Blob] = &[").unwrap();
-    for job in jobs.iter().filter(|job| wanted(job.bytecode)) {
+    for (job, path) in blobs {
         writeln!(
             generated,
             "    Blob {{ name: \"{}\", stage: Stage::{}, bytes: include_bytes!(\"{}\") }},",
             job.name,
             stage(job.entry.entry),
-            job.output.display().to_string().replace('\\', "/")
+            path.display().to_string().replace('\\', "/")
         )
         .unwrap();
     }
     generated.push_str("];\n");
 }
 
+fn compiled<'a>(
+    jobs: &'a [Job<'a>],
+    wanted: impl Fn(Bytecode) -> bool,
+) -> impl Iterator<Item = (&'a Job<'a>, PathBuf)> {
+    jobs.iter()
+        .filter(move |job| wanted(job.bytecode))
+        .map(|job| (job, job.output.clone()))
+}
+
+fn metal_source(job: &Job) -> PathBuf {
+    job.output.with_extension("metal")
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn translate_all(jobs: &[Job]) {
+    let failures: Vec<String> = jobs
+        .iter()
+        .filter_map(|job| {
+            let bytes = fs::read(&job.output).expect("the SPIR-V blob was just written");
+            match translate::translate(&translate::words(&bytes)) {
+                Ok(source) => {
+                    fs::write(metal_source(job), source).expect("MSL source written");
+                    None
+                }
+                Err(error) => Some(format!("SPIRV-Cross failed for {}: {error}", job.name)),
+            }
+        })
+        .collect();
+    if !failures.is_empty() {
+        panic!("{}", failures.join("\n"));
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn translate_all(_jobs: &[Job]) {
+    panic!("MSL is translated with SPIRV-Cross, which aqua-shaders builds only on Linux and macOS hosts");
+}
+
 enum Mode {
     Windows,
     Spirv,
+    Metal,
     Skip,
 }
 
@@ -356,7 +407,7 @@ fn mode() -> Mode {
     let target = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let skip_requested = env::var_os("AQUA_SHADERS_SKIP").is_some_and(|value| value == "1");
     match (target.as_str(), skip_requested) {
-        ("windows" | "linux", true) => {
+        ("windows" | "linux" | "macos", true) => {
             println!(
                 "cargo:warning=AQUA_SHADERS_SKIP=1: shader tables are empty, the GPU backends will fail at runtime"
             );
@@ -364,21 +415,35 @@ fn mode() -> Mode {
         }
         ("windows", false) => Mode::Windows,
         ("linux", false) => Mode::Spirv,
+        ("macos", false) => Mode::Metal,
         _ => Mode::Skip,
     }
 }
 
-fn write_tables(out: &Path, jobs: &[Job]) {
+fn write_tables(out: &Path, jobs: &[Job], metal: bool) {
     let mut generated = String::new();
-    table(&mut generated, "BLOBS", jobs, |bytecode| {
-        matches!(bytecode, Bytecode::Dxil { .. })
-    });
-    table(&mut generated, "DXBC", jobs, |bytecode| {
-        bytecode == Bytecode::Dxbc
-    });
-    table(&mut generated, "SPIRV", jobs, |bytecode| {
-        bytecode == Bytecode::Spirv
-    });
+    table(
+        &mut generated,
+        "BLOBS",
+        compiled(jobs, |bytecode| matches!(bytecode, Bytecode::Dxil { .. })),
+    );
+    table(
+        &mut generated,
+        "DXBC",
+        compiled(jobs, |bytecode| bytecode == Bytecode::Dxbc),
+    );
+    table(
+        &mut generated,
+        "SPIRV",
+        compiled(jobs, |bytecode| bytecode == Bytecode::Spirv),
+    );
+    table(
+        &mut generated,
+        "MSL",
+        jobs.iter()
+            .filter(|job| metal && job.bytecode == Bytecode::Spirv)
+            .map(|job| (job, metal_source(job))),
+    );
     fs::write(out.join("blobs.rs"), generated).unwrap();
 }
 
@@ -432,13 +497,16 @@ fn main() {
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     println!("cargo:rerun-if-changed=hlsl");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=msl");
     println!("cargo:rerun-if-env-changed=AQUA_DXC");
     println!("cargo:rerun-if-env-changed=AQUA_FXC");
     println!("cargo:rerun-if-env-changed=AQUA_DXC_SPIRV");
     println!("cargo:rerun-if-env-changed=AQUA_SHADERS_SKIP");
-    let (toolchain, jobs) = match mode() {
+    let mode = mode();
+    let metal = matches!(mode, Mode::Metal);
+    let (toolchain, jobs) = match mode {
         Mode::Skip => {
-            write_tables(&out, &[]);
+            write_tables(&out, &[], false);
             return;
         }
         Mode::Windows => {
@@ -449,16 +517,20 @@ fn main() {
             );
             (Toolchain::Windows { dxc, fxc }, windows_jobs(&out))
         }
-        Mode::Spirv => {
+        Mode::Spirv | Mode::Metal => {
             let dxc = locate_spirv().expect(
-                "dxc with SPIR-V codegen not found: set AQUA_DXC_SPIRV (nix-shell nix/linux.nix exports it) or AQUA_SHADERS_SKIP=1",
+                "dxc with SPIR-V codegen not found: set AQUA_DXC_SPIRV (nix-shell nix/linux.nix and the LunarG SDK on macOS provide it) or AQUA_SHADERS_SKIP=1",
             );
             (Toolchain::Spirv { dxc }, spirv_jobs(&out))
         }
     };
     jobs.iter().for_each(|job| {
         let _ = fs::remove_file(&job.output);
+        let _ = fs::remove_file(metal_source(job));
     });
     run_all(&jobs, &hlsl, &toolchain);
-    write_tables(&out, &jobs);
+    if metal {
+        translate_all(&jobs);
+    }
+    write_tables(&out, &jobs, metal);
 }

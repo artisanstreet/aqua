@@ -4,7 +4,8 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use aqua_core::{
-    InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Point, PointerButton, Rect,
+    Direction, EditCommand, InputEvent, Key, KeyEvent, Modifiers, Motion, NamedKey, NodeId, Point,
+    PointerButton, Rect,
 };
 use aqua_text::{
     document::{
@@ -269,6 +270,15 @@ impl TextInteraction {
 impl Runtime {
     pub fn drag_snapshot(&self) -> Option<aqua_ui::input::DragSnapshot> {
         self.tree.drag_snapshot()
+    }
+
+    #[must_use]
+    pub fn editing_conventions(&self) -> aqua_core::EditingConventions {
+        self.tree.editing_conventions()
+    }
+
+    pub fn set_editing_conventions(&mut self, conventions: aqua_core::EditingConventions) {
+        self.tree.set_editing_conventions(conventions);
     }
 
     pub fn set_click_settings(&mut self, settings: aqua_core::ClickSettings) {
@@ -1221,10 +1231,9 @@ impl Runtime {
                     return true;
                 }
                 self.interaction.goal_x = None;
-                if key.modifiers.contains(Modifiers::CONTROL)
-                    && !key.modifiers.contains(Modifiers::ALT)
-                    && !key.modifiers.contains(Modifiers::LOGO)
-                    && key.key == Key::Char('a')
+                if key.key == Key::Char('a')
+                    && self.tree.editing_conventions().edit_command(key)
+                        == Some(EditCommand::SelectAll)
                     && self.editable_target().is_none()
                 {
                     return self.select_document();
@@ -1951,26 +1960,18 @@ impl Runtime {
     }
 
     fn navigate_text(&mut self, key: &KeyEvent) -> bool {
-        if key.modifiers.contains(Modifiers::ALT) || key.modifiers.contains(Modifiers::LOGO) {
-            return false;
-        }
-        let Key::Named(
-            named @ (NamedKey::Left
-            | NamedKey::Right
-            | NamedKey::Up
-            | NamedKey::Down
-            | NamedKey::PageUp
-            | NamedKey::PageDown
-            | NamedKey::Home
-            | NamedKey::End),
-        ) = key.key
+        let Some(EditCommand::Move {
+            motion,
+            direction,
+            extend,
+        }) = self.tree.editing_conventions().edit_command(key)
         else {
             return false;
         };
-        let paragraph = key.modifiers.contains(Modifiers::CONTROL);
-        if paragraph && !matches!(named, NamedKey::Up | NamedKey::Down) {
+        let Some(motion) = VisualMotion::of(motion) else {
             return false;
-        }
+        };
+        let backward = direction == Direction::Backward;
         let Some(node) = self.editable_target() else {
             return false;
         };
@@ -1982,7 +1983,7 @@ impl Runtime {
         let TextBacking::Editable(editor) = &text.backing else {
             return false;
         };
-        if external_text_input && matches!(named, NamedKey::PageUp | NamedKey::PageDown) {
+        if external_text_input && motion == VisualMotion::Page {
             return false;
         }
         if editor.is_composing() && !external_text_input {
@@ -2002,10 +2003,7 @@ impl Runtime {
         } else {
             editor.caret_position()
         };
-        if matches!(named, NamedKey::Left | NamedKey::Right)
-            && !selection.is_caret()
-            && !key.modifiers.contains(Modifiers::SHIFT)
-        {
+        if motion == VisualMotion::Character && !selection.is_caret() && !extend {
             return false;
         }
         let Some(entry) = self.text_runs.get(&node) else {
@@ -2024,38 +2022,31 @@ impl Runtime {
             .goal_x
             .filter(|(owner, _)| *owner == node)
             .map_or(caret.x, |(_, x)| x);
-        let up = matches!(named, NamedKey::Up | NamedKey::PageUp);
-        let target = match named {
-            NamedKey::Left | NamedKey::Right => {
-                layout.horizontal_position(position, named == NamedKey::Left)
-            }
-            NamedKey::Up | NamedKey::Down if paragraph => {
-                layout.paragraph_position(position, up, goal_x)
-            }
-            NamedKey::Home | NamedKey::End => {
-                layout.line_boundary_position(position, named == NamedKey::End)
-            }
-            NamedKey::PageUp | NamedKey::PageDown => {
+        let up = backward;
+        let target = match motion {
+            VisualMotion::Character => layout.horizontal_position(position, backward),
+            VisualMotion::Paragraph => layout.paragraph_position(position, up, goal_x),
+            VisualMotion::LineBoundary => layout.line_boundary_position(position, !backward),
+            VisualMotion::Page => {
                 let distance =
                     self.text_rect(node).map_or(self.viewport.h, |rect| rect.h) * self.scale;
                 let y = caret.y_top + caret.height * 0.5 + if up { -distance } else { distance };
                 layout.hit_position(goal_x, y)
             }
-            _ => layout.vertical_position(position, up, goal_x),
+            VisualMotion::Line => layout.vertical_position(position, up, goal_x),
         };
         drop(guard);
         let Some(target) = target else {
             return false;
         };
-        let extend = key.modifiers.contains(Modifiers::SHIFT);
-        let motion = match named {
-            NamedKey::Left => Some(aqua_ui::input::TextMotion::Left),
-            NamedKey::Right => Some(aqua_ui::input::TextMotion::Right),
-            NamedKey::Home => Some(aqua_ui::input::TextMotion::LineStart),
-            NamedKey::End => Some(aqua_ui::input::TextMotion::LineEnd),
-            _ => None,
+        let horizontal = match (motion, backward) {
+            (VisualMotion::Character, true) => Some(aqua_ui::input::TextMotion::Left),
+            (VisualMotion::Character, false) => Some(aqua_ui::input::TextMotion::Right),
+            (VisualMotion::LineBoundary, true) => Some(aqua_ui::input::TextMotion::LineStart),
+            (VisualMotion::LineBoundary, false) => Some(aqua_ui::input::TextMotion::LineEnd),
+            (VisualMotion::Line | VisualMotion::Paragraph | VisualMotion::Page, _) => None,
         };
-        if let (true, Some(motion)) = (external_text_input, motion) {
+        if let (true, Some(motion)) = (external_text_input, horizontal) {
             self.interaction.goal_x = None;
             let host = &self.host;
             aqua_ui::input::route_text_motion(
@@ -2105,11 +2096,33 @@ impl Runtime {
                 editor.move_caret_position(target, true);
             }
         });
-        self.interaction.goal_x = (!matches!(
-            named,
-            NamedKey::Left | NamedKey::Right | NamedKey::Home | NamedKey::End
-        ))
+        self.interaction.goal_x = matches!(
+            motion,
+            VisualMotion::Line | VisualMotion::Paragraph | VisualMotion::Page
+        )
         .then_some((node, goal_x));
         true
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VisualMotion {
+    Character,
+    Line,
+    Paragraph,
+    LineBoundary,
+    Page,
+}
+
+impl VisualMotion {
+    fn of(motion: Motion) -> Option<Self> {
+        match motion {
+            Motion::Character => Some(Self::Character),
+            Motion::Line => Some(Self::Line),
+            Motion::Paragraph => Some(Self::Paragraph),
+            Motion::LineBoundary => Some(Self::LineBoundary),
+            Motion::Page => Some(Self::Page),
+            Motion::Word | Motion::Document => None,
+        }
     }
 }

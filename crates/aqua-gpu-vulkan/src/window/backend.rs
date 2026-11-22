@@ -857,6 +857,9 @@ impl GpuBackend for WindowBackend {
             SurfaceTarget::Wayland(_) => Err(GpuError::Unsupported(
                 "a Wayland surface without its pacer: use WindowBackend::create_wayland_surface",
             )),
+            SurfaceTarget::Metal(_) => {
+                Err(GpuError::Unsupported("Metal layers need aqua-gpu-metal"))
+            }
             SurfaceTarget::Native(_) | SurfaceTarget::Window(_) => Err(GpuError::Unsupported(
                 "non-Wayland window surfaces on the Vulkan backend",
             )),

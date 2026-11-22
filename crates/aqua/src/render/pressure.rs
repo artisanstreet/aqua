@@ -54,6 +54,10 @@ pub struct MemoryPressure {
     source: linux::Source,
     #[cfg(target_os = "linux")]
     strain: Strain,
+    #[cfg(target_os = "macos")]
+    source: aqua_shell_appkit::pressure::PressureSource,
+    #[cfg(target_os = "macos")]
+    strain: Strain,
 }
 
 #[cfg(target_os = "linux")]
@@ -178,6 +182,7 @@ fn signalled(handle: windows::Win32::Foundation::HANDLE) -> bool {
 }
 
 impl MemoryPressure {
+    #[cfg(not(target_os = "macos"))]
     pub fn new() -> Self {
         Self {
             last_poll: None,
@@ -187,6 +192,21 @@ impl MemoryPressure {
             #[cfg(target_os = "linux")]
             source: linux::open_source(),
             #[cfg(target_os = "linux")]
+            strain: Strain::Calm,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn new() -> Self {
+        Self::on(aqua_shell_appkit::pressure::PressureSource::system(None))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn on(source: aqua_shell_appkit::pressure::PressureSource) -> Self {
+        Self {
+            last_poll: None,
+            low: false,
+            source,
             strain: Strain::Calm,
         }
     }
@@ -213,7 +233,13 @@ impl MemoryPressure {
         SIMULATED.load(Ordering::Acquire) || self.strain.low()
     }
 
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    fn sample(&mut self, now: Instant) -> bool {
+        self.strain = self.strain.observe(now, self.source.take_elevated());
+        SIMULATED.load(Ordering::Acquire) || self.strain.low()
+    }
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     fn sample(&mut self, _now: Instant) -> bool {
         SIMULATED.load(Ordering::Acquire)
     }

@@ -1,7 +1,7 @@
 use crate::tree::{ActionEvent, ActionKind, NodeKind, UiTree};
 use aqua_core::{
-    ImeEvent, InputEvent, Key, KeyEvent, Modifiers, NamedKey, NodeId, Point, PointerButton, Rect,
-    ScrollDelta,
+    DeletionUnit, Direction, EditCommand, ImeEvent, InputEvent, Key, KeyEvent, Modifiers, Motion,
+    NamedKey, NodeId, Point, PointerButton, Rect, ScrollDelta,
 };
 
 #[must_use]
@@ -528,93 +528,12 @@ pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
                         return false;
                     }
                 }
-                key => {
-                    let extend = event.modifiers.contains(Modifiers::SHIFT);
-                    let control = event.modifiers.contains(Modifiers::CONTROL);
-                    let alt = event.modifiers.contains(Modifiers::ALT);
-                    if alt || event.modifiers.contains(Modifiers::LOGO) {
+                _ => {
+                    let Some(command) = tree.editing_conventions().edit_command(event) else {
                         return false;
-                    }
+                    };
                     let result = tree
-                        .edit_editor(id, |ed| {
-                            Some(match key {
-                                Key::Named(NamedKey::Backspace) => {
-                                    if control {
-                                        ed.delete_word_backward()
-                                    } else {
-                                        ed.delete_backward()
-                                    }
-                                }
-                                Key::Named(NamedKey::Delete) => {
-                                    if control {
-                                        ed.delete_word_forward()
-                                    } else {
-                                        ed.delete_forward()
-                                    }
-                                }
-                                Key::Named(NamedKey::Left) => {
-                                    if control {
-                                        ed.move_word_left(extend);
-                                    } else {
-                                        ed.move_left(extend);
-                                    }
-                                    false
-                                }
-                                Key::Named(NamedKey::Right) => {
-                                    if control {
-                                        ed.move_word_right(extend);
-                                    } else {
-                                        ed.move_right(extend);
-                                    }
-                                    false
-                                }
-                                Key::Named(NamedKey::Up) => {
-                                    if control {
-                                        ed.move_paragraph(false, extend);
-                                    } else {
-                                        ed.move_vertical(true, extend);
-                                    }
-                                    false
-                                }
-                                Key::Named(NamedKey::Down) => {
-                                    if control {
-                                        ed.move_paragraph(true, extend);
-                                    } else {
-                                        ed.move_vertical(false, extend);
-                                    }
-                                    false
-                                }
-                                Key::Named(NamedKey::Home) => {
-                                    if control {
-                                        ed.move_to_start(extend);
-                                    } else {
-                                        ed.move_line_boundary(false, extend);
-                                    }
-                                    false
-                                }
-                                Key::Named(NamedKey::End) => {
-                                    if control {
-                                        ed.move_to_end(extend);
-                                    } else {
-                                        ed.move_line_boundary(true, extend);
-                                    }
-                                    false
-                                }
-                                Key::Char('a' | 'A') if control => {
-                                    ed.select_all();
-                                    false
-                                }
-                                Key::Char('z' | 'Z') if control => {
-                                    if extend {
-                                        ed.redo()
-                                    } else {
-                                        ed.undo()
-                                    }
-                                }
-                                Key::Char('y' | 'Y') if control => ed.redo(),
-                                _ => return None,
-                            })
-                        })
+                        .edit_editor(id, |editor| apply_edit(editor, command))
                         .flatten();
                     let Some(changed) = result else {
                         return false;
@@ -639,6 +558,44 @@ pub fn dispatch_key(tree: &mut UiTree, event: &KeyEvent) -> bool {
             true
         }
     }
+}
+
+fn apply_edit(editor: &mut aqua_text::TextEditor, command: EditCommand) -> Option<bool> {
+    let backward = |direction: Direction| direction == Direction::Backward;
+    Some(match command {
+        EditCommand::Move {
+            motion,
+            direction,
+            extend,
+        } => {
+            match (motion, backward(direction)) {
+                (Motion::Character, true) => editor.move_left(extend),
+                (Motion::Character, false) => editor.move_right(extend),
+                (Motion::Word, true) => editor.move_word_left(extend),
+                (Motion::Word, false) => editor.move_word_right(extend),
+                (Motion::Line, up) => editor.move_vertical(up, extend),
+                (Motion::Paragraph, up) => editor.move_paragraph(!up, extend),
+                (Motion::LineBoundary, start) => editor.move_line_boundary(!start, extend),
+                (Motion::Document, true) => editor.move_to_start(extend),
+                (Motion::Document, false) => editor.move_to_end(extend),
+                (Motion::Page, _) => return None,
+            }
+            false
+        }
+        EditCommand::Delete { unit, direction } => match (unit, backward(direction)) {
+            (DeletionUnit::Character, true) => editor.delete_backward(),
+            (DeletionUnit::Character, false) => editor.delete_forward(),
+            (DeletionUnit::Word, true) => editor.delete_word_backward(),
+            (DeletionUnit::Word, false) => editor.delete_word_forward(),
+            (DeletionUnit::LineBoundary, start) => editor.delete_to_line_boundary(!start),
+        },
+        EditCommand::SelectAll => {
+            editor.select_all();
+            false
+        }
+        EditCommand::Undo => editor.undo(),
+        EditCommand::Redo => editor.redo(),
+    })
 }
 
 fn activatable_ancestor(tree: &UiTree, mut id: NodeId) -> Option<NodeId> {

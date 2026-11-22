@@ -5,7 +5,10 @@ use aqua_core::Oklch;
 use aqua_gpu_vulkan::scene::{OffscreenBackend, OffscreenOptions, SurfaceFormat};
 use aqua_gpu_vulkan::window::Alpha;
 use aqua_graph::{Extent, FramePlan};
-use aqua_protocol::{FrameInputs, GpuBackend, GpuReadback, PresentHint, SurfaceTarget};
+use aqua_protocol::{
+    FrameInputs, GpuBackend, GpuError, GpuReadback, MetalSurface, PresentHint, SurfaceTarget,
+    WindowId,
+};
 use aqua_shell_wayland::testing::capture;
 
 use super::support::{
@@ -200,4 +203,27 @@ fn a_transparent_window_composites_premultiplied_alpha_over_the_window_below() {
         gpu.assert_clean();
         Flow::Done
     });
+}
+
+#[test]
+fn a_metal_layer_target_is_refused_as_unsupported() {
+    let Some(gpu) = RenderThread::start() else {
+        return;
+    };
+    let target = SurfaceTarget::Metal(MetalSurface {
+        window: WindowId::new(1).expect("window ids start at one"),
+        layer: 1,
+        extent: Extent::new(8, 8),
+    });
+    let refused = Err(GpuError::Unsupported("Metal layers need aqua-gpu-metal"));
+    assert_eq!(
+        gpu.run(move |backend| backend.create_surface(target)),
+        refused
+    );
+    let mut offscreen = OffscreenBackend::new(OffscreenOptions {
+        device: device_options(),
+        ..OffscreenOptions::default()
+    })
+    .expect("the offscreen backend starts where the window one does");
+    assert_eq!(offscreen.create_surface(target), refused);
 }

@@ -1,5 +1,6 @@
 pub use aqua_core::{
-    ColorProfile, GpuiBackground, GpuiGradientColorSpace, GpuiGradientStop, GpuiHsla, GpuiTextColor,
+    ColorProfile, EditingConventions, GpuiBackground, GpuiGradientColorSpace, GpuiGradientStop,
+    GpuiHsla, GpuiTextColor,
 };
 pub mod app;
 pub mod coalesce;
@@ -9,6 +10,7 @@ pub mod error;
 pub mod factory;
 pub mod images;
 pub mod inbox;
+pub mod keys;
 pub mod latency;
 pub mod mailbox;
 pub mod mem_probe;
@@ -99,6 +101,10 @@ pub mod prelude {
     };
     pub use aqua_shell::picker::{DialogCapability, DialogRequest, FileFilter};
     pub use aqua_shell::services::{Clipboard, ClipboardBackend};
+    #[cfg(target_os = "macos")]
+    pub use aqua_shell_appkit::notifications::activation::{handle_launch, Activation, Launch};
+    #[cfg(target_os = "macos")]
+    pub use aqua_shell_appkit::notifications::NotificationCenter;
     #[cfg(windows)]
     pub use aqua_shell_win32::notifications::activation::{handle_launch, Activation, Launch};
     #[cfg(windows)]

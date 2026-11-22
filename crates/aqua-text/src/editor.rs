@@ -407,16 +407,26 @@ impl TextEditor {
         self.delete_word(false)
     }
 
+    pub fn delete_to_line_boundary(&mut self, end: bool) -> bool {
+        self.delete_toward(|editor, at| editor.line_boundary(at, end))
+    }
+
     fn delete_word(&mut self, backward: bool) -> bool {
+        self.delete_toward(|editor, at| {
+            if backward {
+                editor.model.prev_word(at)
+            } else {
+                editor.model.next_word(at)
+            }
+        })
+    }
+
+    fn delete_toward(&mut self, target: impl FnOnce(&Self, usize) -> usize) -> bool {
         self.cancel_composition();
         let before = self.selection;
         if self.selection.is_caret() {
             let at = self.selection.caret;
-            let target = if backward {
-                self.model.prev_word(at)
-            } else {
-                self.model.next_word(at)
-            };
+            let target = target(self, at);
             if target == at {
                 return false;
             }
@@ -431,14 +441,17 @@ impl TextEditor {
 
     pub fn move_line_boundary(&mut self, end: bool, extend: bool) {
         self.cancel_composition();
-        let at = self.selection.caret;
+        let target = self.line_boundary(self.selection.caret, end);
+        self.move_caret_to(target, extend);
+    }
+
+    fn line_boundary(&self, at: usize, end: bool) -> usize {
         let text = self.text();
-        let target = if end {
+        if end {
             text[at..].find('\n').map_or(text.len(), |i| at + i)
         } else {
             text[..at].rfind('\n').map_or(0, |i| i + 1)
-        };
-        self.move_caret_to(target, extend);
+        }
     }
 
     pub fn move_paragraph(&mut self, down: bool, extend: bool) {

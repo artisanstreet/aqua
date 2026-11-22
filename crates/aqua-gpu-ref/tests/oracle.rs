@@ -102,3 +102,21 @@ fn wayland_surface_targets_are_rejected_by_backends_without_wayland_support() {
         Err(aqua_protocol::GpuError::Unsupported(_))
     ));
 }
+
+#[test]
+fn a_metal_layer_target_is_refused_as_unsupported() {
+    let target = SurfaceTarget::Metal(aqua_protocol::MetalSurface {
+        window: aqua_protocol::WindowId::new(1).unwrap(),
+        layer: 1,
+        extent: Extent {
+            width: 8,
+            height: 8,
+        },
+    });
+    assert_eq!(
+        RefBackend::new().create_surface(target),
+        Err(aqua_protocol::GpuError::Unsupported(
+            "Metal layers need aqua-gpu-metal"
+        ))
+    );
+}

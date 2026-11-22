@@ -1,11 +1,14 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aqua::profile::recorder::{Recorder, Role};
 use aqua::profile::report::{spike_line, Config};
 use aqua_protocol::probe::{Event, Metric, Phase};
 
 fn busy(millis: u64) {
-    std::thread::sleep(Duration::from_millis(millis));
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(millis) {
+        std::hint::spin_loop();
+    }
 }
 
 #[test]

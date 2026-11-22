@@ -3,8 +3,8 @@
 ## Prerequisites
 
 - Rust 1.95+ (workspace minimum; host runs 1.98.1).
-- Windows, or Linux with a Wayland compositor (X11 is not supported), for
-  windowed runs. Model and layout tests need no display; GPU pixel tests
+- Windows, Linux with a Wayland compositor (X11 is not supported), or macOS
+  14.0 or newer on Apple Silicon, for windowed runs. Model and layout tests need no display; GPU pixel tests
   require a usable adapter (software Vulkan is sufficient).
 
 ## Run the examples
@@ -72,6 +72,48 @@ This runs the facade's headless suite: config validation, scheduler
 passthrough (the scheduler itself is tested in `aqua-platform`), window
 event → observed-state routing, input dispatch, and scene building without
 a window or GPU.
+
+macOS (Apple Silicon, macOS 14.0 or newer) runs on AppKit and Metal (record
+14.MA). On a Mac, install Xcode and the LunarG Vulkan SDK 1.4.363.1 (for
+`dxc`, `libdxcompiler.dylib` and the SPIRV-Cross C library), export
+`AQUA_DXC_SPIRV`, `AQUA_DXCOMPILER` and `AQUA_SPIRV_CROSS_C` as
+`.github/workflows/ci.yml` does, and run the tests single-threaded, because
+AppKit tests own the main thread and the screen:
+
+```sh
+scripts/macos-env.sh
+cargo test --workspace -- --test-threads=1
+cargo run -p aqua --example todo
+```
+
+Without a Mac, check and lint the Apple target from Linux (it cannot link
+there), inside `nix-shell nix/linux.nix` so the shader build finds DXC:
+
+```sh
+rustup target add aarch64-apple-darwin
+cargo clippy --workspace --all-targets --target aarch64-apple-darwin -- -D warnings
+```
+
+Everything Mac-only then runs on GitHub's `macos-15` runners: the check matrix
+runs the whole workspace there on every push, then bundles
+`examples/macos_bundle.rs` with `scripts/macos-bundle.sh` and runs it from the
+bundle. To run one test binary there, optionally several times, and keep its
+output, probe artifacts and screen frames, dispatch the `macos-debug` job (mac
+minutes cost ten times Linux minutes, so prefer it to a full push):
+
+```sh
+gh workflow run ci --ref <branch> -f filter='-p aqua --test host_macos resizing' -f repeat=10 -f capture=true
+```
+
+To package an app:
+
+```sh
+cargo build --release -p aqua --example macos_bundle
+scripts/macos-bundle.sh --executable target/release/examples/macos_bundle \
+  --app-id org.aqua.examples.bundle --name "Aqua Bundle" --out target/bundle \
+  --dxcompiler "$AQUA_DXCOMPILER" --spirv-cross "$AQUA_SPIRV_CROSS_C" \
+  --license <each license file of the shipped libraries>
+```
 
 ## Write an app (canonical, builder-first)
 

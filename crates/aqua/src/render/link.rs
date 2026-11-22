@@ -38,6 +38,7 @@ pub struct RenderContext {
     pub externals: Receiver<ExternalUpdate>,
     pub stats: Arc<RenderStats>,
     pub composition: CompositionSink,
+    pub render: Notify,
 }
 
 pub type InitFactory = Box<dyn FnOnce(RenderContext) -> TargetInit + Send>;
@@ -66,12 +67,13 @@ impl RenderLink {
     ) -> Self {
         let (externals, receiver) = channel();
         let stats = Arc::new(RenderStats::default());
+        let handle = service.handle();
         let init = factory(RenderContext {
             externals: receiver,
             stats: stats.clone(),
             composition,
+            render: handle.notifier(),
         });
-        let handle = service.handle();
         let (commands, command_rx) = channel_with_notify(RING_CAPACITY, handle.notifier());
         let (event_tx, events) = channel_with_notify(RING_CAPACITY, wake);
         let slot = handle.add(NewSlot {

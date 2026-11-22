@@ -472,6 +472,9 @@ impl GpuBackend for OffscreenBackend {
             SurfaceTarget::Window(_) | SurfaceTarget::Native(_) | SurfaceTarget::Wayland(_) => Err(
                 GpuError::Unsupported("window surfaces on the offscreen backend"),
             ),
+            SurfaceTarget::Metal(_) => {
+                Err(GpuError::Unsupported("Metal layers need aqua-gpu-metal"))
+            }
         }
     }
 

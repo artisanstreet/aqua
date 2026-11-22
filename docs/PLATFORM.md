@@ -100,8 +100,8 @@ popup menus are implemented by `aqua-ui`; native file drops include their
 actual client coordinates. The facade drains bounded worker mailboxes and
 applies window commands, per-window frame targets and live vsync changes.
 
-macOS `NSVisualEffectView` and a software-rendering fallback policy remain
-outside the Windows qualification. Native UIA tests establish API behavior;
+A software-rendering fallback policy remains outside the Windows
+qualification; macOS materials fall back to solid (record 14.MA, MD9). Native UIA tests establish API behavior;
 screen-reader speech quality and physical CJK candidate-window placement
 remain release qualification tasks.
 
@@ -134,6 +134,40 @@ bus, accessibility bus, runtime directory and Wayland display at dead ends and
 the cache directory at `target/aqua-test-cache`, and
 `aqua-verify/tests/isolation.rs` enforces that. Wayland tests run against a
 private headless sway and a private D-Bus daemon (`docs/GETTING_STARTED.md`).
+
+## macOS (AppKit and Metal)
+
+macOS runs on Apple Silicon only (`aarch64-apple-darwin`), macOS 14.0 or newer.
+The details and evidence are in `ARCHITECTURE.md` record 14.MA; everything
+Mac-only is proven on GitHub `macos-15` runners. In short:
+
+| Service | macOS implementation | When it is missing |
+|---|---|---|
+| Windows, input, chrome, cursors | `aqua-shell-appkit`: NSWindow and NSView with an explicit-time loop, backing scale and occlusion, keyboard through `UCKeyTranslate`, precise and line scrolling, `NSCursor`, `Titlebar::Overlay` with the native traffic lights | `native::run` returns `ShellError::AppKit` without a window server session |
+| Rendering | `aqua-gpu-metal`, MSL built from the shared HLSL through SPIRV-Cross; custom passes through `libdxcompiler.dylib` and `libspirv-cross-c-shared.dylib` in the bundle's `Contents/Frameworks`, beside the executable, or in `AQUA_DXCOMPILER` and `AQUA_SPIRV_CROSS_C` | custom passes report `Unsupported("custom passes")` with one `aqua:` line naming every path tried |
+| Clipboard, file drops | `NSPasteboard` (text, PNG and TIFF images, file URLs); file URL drags with view-local positions | none; tests use a private named pasteboard |
+| Text input | `aqua-ime-appkit` over `NSTextInputClient`: marked text, commit, cancel, reconversion by the input method | none |
+| Fonts | Core Text: available face files and the system UI font's cascade per generic family, read through skrifa | a walk of `/System/Library/Fonts`, `/Library/Fonts` and `~/Library/Fonts`, reported with one `aqua:` line |
+| Preferences | `NSWorkspace` reduce motion, reduce transparency and increase contrast, the effective appearance, followed live | the defaults |
+| Open, reveal, file icons | `NSWorkspace` `openURL:`, `activateFileViewerSelectingURLs:` and `iconForFile:` | `OpenError::Desktop` when the workspace refuses; `file_icon` returns `None` for a missing path |
+| File dialogs | `NSOpenPanel` and `NSSavePanel` as sheets on the parent window; cancelling returns no paths | `ShellError::Dialog` when the panel cannot be shown or ends without a result |
+| Notifications | `UNUserNotificationCenter`, only inside an app bundle with a `CFBundleIdentifier` (`scripts/macos-bundle.sh`) | `NotificationError::Unsupported` when unbundled, `cargo run` included; nothing shows until the user allows it |
+| Dock badge | `NSDockTile` badge label (`1` to `9`, then `9+`) | none |
+| Accessibility | `aqua-a11y-ax` (NSAccessibility through `accesskit_macos`), fed from the shared bridge | no screen-reader tree |
+| Memory pressure | a dispatch memory-pressure source (warning, critical) driving the low-memory trim | none; the kernel only notifies processes above about 10 MB of footprint, which every real app is |
+| Caches | an absolute `$XDG_CACHE_HOME/aqua` (else `~/Library/Caches/aqua`): font fallback index and `pipelines-metal.cache` | caches are not persisted |
+
+Not provided on macOS: window materials other than solid fall back to an opaque
+frame (no `NSVisualEffectView`), pinch, magnify and scroll phases are not input
+events (momentum arrives as ordinary scroll events), `aqua::local_time` does not
+exist, and setting the inner size of a full-screen window is `Unsupported`.
+
+Tests never reach the user's session: `.cargo/config.toml` forces the named
+test pasteboard (`AQUA_MAC_PASTEBOARD`) and the workspace cache directory, test
+processes are unbundled so notifications are `Unsupported`, and
+`aqua-verify/tests/isolation.rs` asserts all three on macOS. AppKit tests are
+`harness = false` binaries with one child process per case, because AppKit
+needs the process main thread.
 
 ## Validation
 

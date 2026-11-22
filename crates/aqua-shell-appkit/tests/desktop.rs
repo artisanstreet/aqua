@@ -22,7 +22,10 @@ mod cases {
     };
     use aqua_shell_appkit::open::{OpenError, OpenTarget, Workspace};
     use aqua_shell_appkit::pressure::{Level, PressureSource};
-    use aqua_shell_appkit::testing::desktop::{default_application_for, running, terminate};
+    use aqua_shell_appkit::testing::desktop::{
+        ballast_above, default_application_for, footprint_bytes, running, terminate,
+        PRESSURE_NOTE_FLOOR,
+    };
     use aqua_shell_appkit::{dock, icon};
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
@@ -59,7 +62,7 @@ mod cases {
             bundled_app,
         ),
         case(
-            "a_simulated_warning_reaches_the_dispatch_source_and_normal_follows",
+            "a_simulated_warning_reaches_an_app_sized_process_and_normal_follows",
             simulated_pressure,
         ),
         case(
@@ -386,6 +389,13 @@ mod cases {
             println!("SKIP-NO-SUDO: memory_pressure -S needs passwordless sudo");
             return;
         }
+        let ballast = ballast_above(PRESSURE_NOTE_FLOOR);
+        let footprint = footprint_bytes();
+        println!(
+            "footprint {} MB with {} MB ballast",
+            footprint >> 20,
+            ballast.len() >> 20
+        );
         let (events, wake) = woken();
         let source = PressureSource::system(Some(wake));
         let simulator = std::thread::spawn(|| simulate("warn"));
@@ -393,12 +403,11 @@ mod cases {
         simulator
             .join()
             .expect("memory_pressure simulates a warning and resets it");
-        if !warned {
-            println!(
-                "SKIP-NO-PRESSURE-NOTE: the kernel sent this process no note for the simulated warning within {ANSWER_LIMIT:?}"
-            );
-            return;
-        }
+        assert!(
+            warned,
+            "a {} MB process hears the simulated warning within {ANSWER_LIMIT:?}",
+            footprint >> 20
+        );
         assert!(
             until_level(&source, &events, Level::Normal),
             "the dispatch source reports the reset to normal"

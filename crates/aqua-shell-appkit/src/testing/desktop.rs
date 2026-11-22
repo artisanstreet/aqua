@@ -116,3 +116,27 @@ pub fn accept_next_sheet() -> SheetAnswer {
         _observer: observer,
     }
 }
+
+pub const PRESSURE_NOTE_FLOOR: u64 = 10 * 1024 * 1024;
+
+pub fn footprint_bytes() -> u64 {
+    let mut info = std::mem::MaybeUninit::<libc::rusage_info_v2>::zeroed();
+    let status = unsafe {
+        libc::proc_pid_rusage(
+            std::process::id() as libc::c_int,
+            libc::RUSAGE_INFO_V2,
+            info.as_mut_ptr().cast(),
+        )
+    };
+    assert_eq!(status, 0, "proc_pid_rusage reads this process's own usage");
+    unsafe { info.assume_init() }.ri_phys_footprint
+}
+
+pub fn ballast_above(floor: u64) -> Vec<u8> {
+    let page = 16 * 1024;
+    let missing = floor.saturating_sub(footprint_bytes()) as usize + 16 * 1024 * 1024;
+    let mut ballast = vec![0u8; missing];
+    ballast.iter_mut().step_by(page).for_each(|byte| *byte = 1);
+    std::hint::black_box(&ballast);
+    ballast
+}

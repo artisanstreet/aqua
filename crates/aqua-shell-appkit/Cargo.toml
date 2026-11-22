@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Aqua AppKit shell: explicit-time run loop, NSWindow/NSView windows, backing scale, screens, occlusion, keyboard, mouse and scroll input, cursors, overlay chrome with traffic lights, layer leases, pasteboard, file drops, NSTextInputClient routing, workspace, preferences, file panels, dock badge, user notifications, memory pressure"
 
 [features]
-testing = []
+testing = ["dep:libc"]
 
 [dependencies]
 aqua-core = { path = "../aqua-core" }
@@ -18,6 +18,7 @@ thiserror = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
 block2 = "0.6.2"
+libc = { version = "0.2", optional = true }
 url = "2"
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "block2"] }
 image = { version = "0.25", default-features = false, features = ["png"] }

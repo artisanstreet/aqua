@@ -9,10 +9,8 @@ description = "Aqua UI Automation provider: AccessKit's Windows adapter fed from
 [dependencies]
 aqua-core = { path = "../aqua-core" }
 aqua-protocol = { path = "../aqua-protocol" }
+aqua-a11y = { path = "../aqua-a11y" }
 accesskit = "0.25"
-
-[dev-dependencies]
-serde_json = "1"
 
 [target.'cfg(windows)'.dependencies]
 accesskit_windows = "0.35"

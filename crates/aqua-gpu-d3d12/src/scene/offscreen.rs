@@ -469,9 +469,9 @@ impl GpuBackend for OffscreenBackend {
                 self.surfaces.insert(id, resources);
                 Ok(id)
             }
-            SurfaceTarget::Window(_) | SurfaceTarget::Native(_) => Err(GpuError::Unsupported(
-                "window surfaces on the offscreen backend",
-            )),
+            SurfaceTarget::Window(_) | SurfaceTarget::Native(_) | SurfaceTarget::Wayland(_) => Err(
+                GpuError::Unsupported("window surfaces on the offscreen backend"),
+            ),
         }
     }
 

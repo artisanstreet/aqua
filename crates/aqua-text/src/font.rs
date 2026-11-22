@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use aqua_fonts_system::{FaceBytes, FontDatabase, Query, Stretch, Style, Weight, ID};
+use aqua_fonts_system::{FaceBytes, FontDatabase, Generic, Query, Stretch, Style, Weight, ID};
 use skrifa::raw::TableProvider;
 use skrifa::MetadataProvider;
 use unicode_segmentation::UnicodeSegmentation;
@@ -592,13 +592,23 @@ impl FontManager {
         if let Some(found) = self.family_cache.get(&key) {
             return *found;
         }
+        let built_in: &[&str] = match family {
+            FontFamily::Named(_) => &[],
+            FontFamily::SansSerif => &SANS_FAMILIES,
+            FontFamily::Serif => &SERIF_FAMILIES,
+            FontFamily::Monospace => &MONOSPACE_FAMILIES,
+            FontFamily::Cursive => &CURSIVE_FAMILIES,
+            FontFamily::Fantasy => &FANTASY_FAMILIES,
+        };
         let names: Vec<&str> = match family {
             FontFamily::Named(name) => vec![name.as_str()],
-            FontFamily::SansSerif => SANS_FAMILIES.to_vec(),
-            FontFamily::Serif => SERIF_FAMILIES.to_vec(),
-            FontFamily::Monospace => MONOSPACE_FAMILIES.to_vec(),
-            FontFamily::Cursive => CURSIVE_FAMILIES.to_vec(),
-            FontFamily::Fantasy => FANTASY_FAMILIES.to_vec(),
+            generic => self
+                .database
+                .configured_families(generic_of(generic))
+                .iter()
+                .map(String::as_str)
+                .chain(built_in.iter().copied())
+                .collect(),
         };
         let found = names
             .into_iter()
@@ -640,7 +650,7 @@ impl FontManager {
         let mut jobs: Vec<PrewarmJob> = Vec::new();
         for style in styles {
             let mut ids: Vec<ID> = self.primary_id(style).into_iter().collect();
-            for name in Self::fallback_names(style) {
+            for name in self.fallback_names(style) {
                 ids.extend(self.query_name(&name, style.weight.0, style.stretch, style.slant));
             }
             for id in ids {
@@ -764,7 +774,7 @@ impl FontManager {
         candidates
     }
 
-    fn fallback_names(style: &TextStyle) -> Vec<String> {
+    fn fallback_names(&self, style: &TextStyle) -> Vec<String> {
         let mut names: Vec<String> = style
             .families
             .iter()
@@ -775,7 +785,18 @@ impl FontManager {
             })
             .collect();
         if style.families.len() <= 1 {
+            let generic = style
+                .families
+                .first()
+                .map_or(Generic::SansSerif, generic_of);
+            names.extend(
+                self.database
+                    .configured_families(Generic::Emoji)
+                    .iter()
+                    .cloned(),
+            );
             names.extend(EMOJI_FAMILIES.iter().map(|name| (*name).to_owned()));
+            names.extend(self.database.configured_families(generic).iter().cloned());
             names.extend(
                 PLATFORM_FALLBACK_FAMILIES
                     .iter()
@@ -786,7 +807,7 @@ impl FontManager {
     }
 
     fn build_fallback_candidates(&mut self, style: &TextStyle) -> Vec<Arc<FontEntry>> {
-        let names = Self::fallback_names(style);
+        let names = self.fallback_names(style);
         let mut candidates: Vec<Arc<FontEntry>> = Vec::new();
         for name in names {
             let Some(id) = self.query_name(&name, style.weight.0, style.stretch, style.slant)
@@ -976,6 +997,16 @@ impl FontManager {
             self.formation_cache.insert(key, result);
         }
         result
+    }
+}
+
+fn generic_of(family: &FontFamily) -> Generic {
+    match family {
+        FontFamily::Named(_) | FontFamily::SansSerif => Generic::SansSerif,
+        FontFamily::Serif => Generic::Serif,
+        FontFamily::Monospace => Generic::Monospace,
+        FontFamily::Cursive => Generic::Cursive,
+        FontFamily::Fantasy => Generic::Fantasy,
     }
 }
 

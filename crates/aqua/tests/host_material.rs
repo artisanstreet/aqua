@@ -355,5 +355,5 @@ fn main() {
     #[cfg(windows)]
     native::run();
     #[cfg(not(windows))]
-    eprintln!("host_material: skipped; requires Windows");
+    eprintln!("host_material: skipped; Windows only: measures DWM system backdrop materials, which Wayland has no protocol for");
 }

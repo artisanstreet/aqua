@@ -8,7 +8,7 @@ use aqua_protocol::{
 };
 use aqua_reactive::{DepTuple, Runtime as ReactiveRuntime, Scope};
 use aqua_runtime::Runtime;
-use aqua_shell_win32::services::{Clipboard, ClipboardError};
+use aqua_shell::services::{Clipboard, ClipboardError};
 use aqua_ui::element::Element;
 
 use crate::runtime::{AppCtx, Application, Aqua};

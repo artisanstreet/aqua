@@ -1,0 +1,19 @@
+[package]
+name = "aqua-ime-wayland"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Aqua text-input-v3 IME adapter: UTF-16 document windows mapped to UTF-8 surrounding text, composition, commit and cancel without double insertion"
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+aqua-protocol = { path = "../aqua-protocol" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aqua-shell-wayland = { path = "../aqua-shell-wayland" }
+thiserror = "2"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+aqua-shell = { path = "../aqua-shell" }
+aqua-shell-wayland = { path = "../aqua-shell-wayland", features = ["testing"] }

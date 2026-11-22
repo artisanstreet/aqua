@@ -610,5 +610,5 @@ fn main() {
     #[cfg(windows)]
     native::run();
     #[cfg(not(windows))]
-    eprintln!("host_swapchain: skipped; requires Windows");
+    eprintln!("host_swapchain: skipped; Windows only: captures the swapchain through PrintWindow");
 }

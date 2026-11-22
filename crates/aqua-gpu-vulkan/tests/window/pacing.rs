@@ -1,0 +1,101 @@
+use std::time::{Duration, Instant};
+
+use aqua_gpu_vulkan::window::pacing::{FrameSlot, FrameWait, Pacer, Presentation, Slot, Wait};
+use aqua_protocol::PresentHint;
+
+const INTERVAL: Duration = Duration::from_micros(16_667);
+
+fn shown(at_micros: u64) -> Presentation {
+    Presentation::Shown {
+        at: Some(aqua_protocol::Instant::ZERO + Duration::from_micros(at_micros)),
+        refresh: Some(INTERVAL),
+    }
+}
+
+#[test]
+fn a_fresh_surface_renders_without_waiting() {
+    let slot = FrameSlot::default();
+    assert_eq!(
+        slot.plan(Instant::now(), PresentHint::Vsync, INTERVAL),
+        Wait::None
+    );
+}
+
+#[test]
+fn after_a_present_vsync_waits_at_most_two_intervals_for_the_frame_callback() {
+    let start = Instant::now();
+    let mut slot = FrameSlot::default();
+    slot.presented(start);
+    assert_eq!(
+        slot.plan(start, PresentHint::Vsync, INTERVAL),
+        Wait::For(INTERVAL * 2)
+    );
+    assert_eq!(
+        slot.plan(start + INTERVAL, PresentHint::Vsync, INTERVAL),
+        Wait::For(INTERVAL)
+    );
+    assert_eq!(
+        slot.plan(start + INTERVAL * 3, PresentHint::Vsync, INTERVAL),
+        Wait::For(Duration::ZERO)
+    );
+}
+
+#[test]
+fn an_immediate_present_only_polls_for_the_frame_callback() {
+    let start = Instant::now();
+    let mut slot = FrameSlot::default();
+    slot.presented(start);
+    assert_eq!(
+        slot.plan(start, PresentHint::Immediate, INTERVAL),
+        Wait::Poll
+    );
+    slot.resolve(start, FrameWait::TimedOut, INTERVAL);
+    assert!(matches!(slot.slot(), Slot::Pending { .. }));
+}
+
+#[test]
+fn a_callback_that_misses_the_bound_starves_the_surface_until_one_arrives() {
+    let start = Instant::now();
+    let mut slot = FrameSlot::default();
+    slot.presented(start);
+    slot.resolve(start + INTERVAL, FrameWait::TimedOut, INTERVAL);
+    assert!(
+        matches!(slot.slot(), Slot::Pending { .. }),
+        "an early timeout is not starvation"
+    );
+    slot.resolve(start + INTERVAL * 2, FrameWait::TimedOut, INTERVAL);
+    assert_eq!(slot.slot(), Slot::Starved);
+    for frame in 3..10 {
+        let now = start + INTERVAL * frame;
+        assert_eq!(
+            slot.plan(now, PresentHint::Vsync, INTERVAL),
+            Wait::Poll,
+            "a starved surface never waits again"
+        );
+        slot.presented(now);
+        slot.resolve(now, FrameWait::TimedOut, INTERVAL);
+        assert_eq!(slot.slot(), Slot::Starved);
+    }
+    slot.resolve(start + INTERVAL * 11, FrameWait::Ready, INTERVAL);
+    assert_eq!(slot.slot(), Slot::Free);
+}
+
+#[test]
+fn presentation_feedback_sets_the_interval_and_counts_missed_vblanks() {
+    let mut pacer = Pacer::default();
+    assert_eq!(pacer.interval(None), Duration::from_nanos(16_666_667));
+    assert_eq!(
+        pacer.interval(Some(Duration::from_millis(8))),
+        Duration::from_millis(8)
+    );
+    [0, 16_667, 33_334, 83_335]
+        .into_iter()
+        .for_each(|at| pacer.observe(shown(at)));
+    pacer.observe(Presentation::Discarded);
+    let report = pacer.report();
+    assert_eq!(report.interval, INTERVAL);
+    assert_eq!(report.frames, 4);
+    assert_eq!(report.discarded, 1);
+    assert_eq!(report.missed, 2, "the 50 ms gap skipped two vblanks");
+    assert_eq!(report.worst, Duration::from_micros(50_001));
+}

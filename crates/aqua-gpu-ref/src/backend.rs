@@ -95,7 +95,7 @@ impl GpuBackend for RefBackend {
                 );
                 Ok(id)
             }
-            SurfaceTarget::Window(_) | SurfaceTarget::Native(_) => {
+            SurfaceTarget::Window(_) | SurfaceTarget::Native(_) | SurfaceTarget::Wayland(_) => {
                 Err(GpuError::Unsupported("window surfaces"))
             }
         }

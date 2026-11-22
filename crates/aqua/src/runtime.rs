@@ -21,11 +21,12 @@ use aqua_protocol::{
 use aqua_reactive::{FlushReport, Runtime as ReactiveRuntime};
 use aqua_runtime::Scheduler;
 use aqua_scene::Scene;
-use aqua_shell_win32::capability::query_preferences;
-use aqua_shell_win32::services::{app_clipboard, Clipboard, ClipboardBackend};
+use aqua_shell::services::{Clipboard, ClipboardBackend};
 
 use crate::config::AquaConfig;
 use crate::inbox::{AquaUserEvent, Inbox};
+use crate::native::platform::shell::capability::query_preferences;
+use crate::native::platform::shell::services::app_clipboard;
 use crate::native_window::NativeWindow;
 use crate::render::host::Clock;
 use crate::render::link::{CompositionSink, ExternalUpdate, InitFactory, RenderLink};
@@ -45,6 +46,7 @@ pub trait AccessSink {
     }
     fn apply(&mut self, update: &AccessTreeUpdate);
     fn drain_actions(&mut self) -> Vec<A11yActionRequest>;
+    fn window_focus(&mut self, _focused: bool) {}
 }
 
 pub trait ImeSink {
@@ -595,6 +597,7 @@ pub struct Aqua {
     runs: aqua_text::SharedRuns,
     pub(crate) prefs: OsPreferences,
     clipboard: Box<dyn Clipboard>,
+    primary: crate::paste::PrimarySelection,
     pub(crate) window_requests: VecDeque<WindowRequest>,
     pub(crate) dialogs: VecDeque<(AquaWindowId, RequestId, DialogSpec)>,
     next_request: u64,
@@ -603,7 +606,7 @@ pub struct Aqua {
     pub(crate) frames_presented: u64,
     frame_stats: Option<FrameStats>,
     input_latency: Option<crate::latency::InputLatency>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) smoke_deadline: Option<WallInstant>,
     epoch: WallInstant,
     pub(crate) wakeups: u64,
@@ -646,6 +649,7 @@ impl Aqua {
             eprintln!("aqua: reduced-motion motion policy requested");
         }
         let (clipboard, clipboard_backend) = app_clipboard();
+        let primary = crate::paste::PrimarySelection::platform();
         crate::native::startup_mark("clipboard_ready");
         eprintln!("aqua: clipboard backend: {clipboard_backend:?}");
         let smoke_frames = std::env::var("AQUA_SMOKE_FRAMES")
@@ -655,13 +659,13 @@ impl Aqua {
         if let Some(n) = smoke_frames {
             eprintln!("aqua: smoke mode — exiting after {n} presented frames");
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         let smoke_deadline = std::env::var("AQUA_SMOKE_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|&ms| ms > 0)
             .map(|ms| WallInstant::now() + Duration::from_millis(ms));
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if let Some(deadline) = smoke_deadline {
             eprintln!("aqua: time-bounded smoke — exiting at {deadline:?}");
         }
@@ -680,11 +684,12 @@ impl Aqua {
             runs: aqua_text::SharedRuns::new(),
             prefs,
             clipboard,
+            primary,
             clipboard_backend,
             window_requests: VecDeque::new(),
             dialogs: VecDeque::new(),
             next_request: 1,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             smoke_deadline,
             epoch: WallInstant::now(),
             wakeups: 0,
@@ -723,14 +728,14 @@ impl Aqua {
         })
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) fn align_clock(&mut self, shell_now: Instant) {
         self.epoch = WallInstant::now()
             .checked_sub(shell_now.since_origin())
             .unwrap_or_else(WallInstant::now);
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) fn mark_native_loop(&mut self) {
         self.native_loop = true;
     }
@@ -854,6 +859,10 @@ impl Aqua {
                         &mut *self.clipboard,
                         request,
                     )));
+                }
+                ShellCommand::PrimarySelectionWrite { text } => self.primary.write(text),
+                ShellCommand::PrimarySelectionRead { request } => {
+                    feedback.push(RuntimeInput::Shell(self.primary.read(request)));
                 }
                 ShellCommand::Dialog { request, spec } => {
                     self.dialogs.push_back((id, request, spec));
@@ -992,6 +1001,12 @@ impl Aqua {
             .ok_or(WindowError::UnknownWindow(id))?
             .native
             .clone();
+        if let Some(reason) = native
+            .as_ref()
+            .and_then(|native| native.unsupported(request))
+        {
+            return Err(WindowError::Unsupported(reason));
+        }
         match request {
             WindowRequest::Close(_) => {
                 if self.with_ctx(|ctx| app.can_close(ctx, id)) {
@@ -1153,7 +1168,7 @@ impl Aqua {
         id
     }
 
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     pub(crate) fn add_native_window(
         &mut self,
         observed: ObservedWindowState,
@@ -1394,6 +1409,9 @@ impl Aqua {
             WindowEvent::Focused(_, f) => {
                 if let Some(rec) = self.windows.get_mut(&id) {
                     rec.observed.focused = *f;
+                    if let Some(sink) = rec.access.as_mut() {
+                        sink.window_focus(*f);
+                    }
                     if !f {
                         rec.buttons = 0;
                         rec.modifiers = CoreModifiers::NONE;
@@ -2552,9 +2570,24 @@ mod tests {
     #[derive(Default)]
     struct Calls(RefCell<Vec<String>>);
 
-    struct FakeWindow(Rc<Calls>);
+    #[derive(Clone, Copy)]
+    enum Placement {
+        Free,
+        ByCompositor,
+    }
+
+    struct FakeWindow(Rc<Calls>, Placement);
 
     impl NativeWindow for FakeWindow {
+        fn unsupported(&self, request: &WindowRequest) -> Option<&'static str> {
+            match (self.1, request) {
+                (
+                    Placement::ByCompositor,
+                    WindowRequest::SetOuterPosition(..) | WindowRequest::Center(_),
+                ) => Some("global window position"),
+                _ => None,
+            }
+        }
         fn scale(&self) -> f64 {
             1.0
         }
@@ -2627,6 +2660,7 @@ mod tests {
     struct Scripted {
         outputs: VecDeque<RuntimeOutput>,
         fed: Vec<RuntimeInput>,
+        errors: Vec<WindowError>,
     }
 
     impl Application for Scripted {
@@ -2640,6 +2674,9 @@ mod tests {
         }
         fn take_output(&mut self, _id: AquaWindowId) -> RuntimeOutput {
             self.outputs.pop_front().unwrap_or_default()
+        }
+        fn on_window_request_error(&mut self, _request: &WindowRequest, error: &WindowError) {
+            self.errors.push(error.clone());
         }
     }
 
@@ -2664,7 +2701,7 @@ mod tests {
                 occluded: false,
                 maximized: false,
             },
-            Rc::new(FakeWindow(calls.clone())),
+            Rc::new(FakeWindow(calls.clone(), Placement::Free)),
         );
         let window = aqua_protocol::WindowId::new(id.raw()).unwrap();
         let mut app = Scripted {
@@ -2690,6 +2727,7 @@ mod tests {
                 ..RuntimeOutput::default()
             }]),
             fed: Vec::new(),
+            errors: Vec::new(),
         };
         aqua.flush_output(&mut app, id);
         assert_eq!(calls.0.borrow().as_slice(), ["cursor:Pointer"]);
@@ -2704,5 +2742,50 @@ mod tests {
         let creates = aqua.dispatch_window_requests(&mut app);
         assert!(creates.is_empty());
         assert!(calls.0.borrow().iter().any(|call| call == "title:renamed"));
+    }
+
+    #[test]
+    fn positioning_a_window_on_a_backend_that_cannot_reports_unsupported_to_the_app() {
+        let mut aqua = Aqua::new(AquaConfig {
+            headless: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let id = aqua.alloc_id();
+        let calls = Rc::new(Calls::default());
+        aqua.add_native_window(
+            ObservedWindowState {
+                id,
+                title: "placed".into(),
+                inner_size: LogicalSize::new(800.0, 600.0),
+                scale_factor: 1.0,
+                focused: true,
+                visible: true,
+                occluded: false,
+                maximized: false,
+            },
+            Rc::new(FakeWindow(calls.clone(), Placement::ByCompositor)),
+        );
+        let mut app = Scripted {
+            outputs: VecDeque::new(),
+            fed: Vec::new(),
+            errors: Vec::new(),
+        };
+        for request in [
+            WindowRequest::SetOuterPosition(id, aqua_protocol::PhysicalPosition { x: 40, y: 30 }),
+            WindowRequest::Center(id),
+            WindowRequest::SetTitle(id, "still titled".into()),
+        ] {
+            aqua.window_requests.push_back(request);
+        }
+        aqua.dispatch_window_requests(&mut app);
+        assert_eq!(
+            app.errors,
+            [
+                WindowError::Unsupported("global window position"),
+                WindowError::Unsupported("global window position"),
+            ]
+        );
+        assert_eq!(calls.0.borrow().as_slice(), ["title:still titled"]);
     }
 }

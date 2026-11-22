@@ -23,3 +23,8 @@ unicode-segmentation = "1.12"
 
 [dev-dependencies]
 harfrust = "0.12"
+aqua-fonts-system = { path = "../aqua-fonts-system", features = ["testing"] }
+
+[[test]]
+name = "system_fonts"
+harness = false

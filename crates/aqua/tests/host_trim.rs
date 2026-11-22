@@ -298,5 +298,5 @@ fn main() {
     #[cfg(windows)]
     native::run();
     #[cfg(not(windows))]
-    eprintln!("host_trim: skipped; requires Windows");
+    eprintln!("host_trim: skipped; Windows only: signals the Win32 memory resource notification and raises a topmost window to occlude");
 }

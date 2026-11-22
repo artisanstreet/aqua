@@ -1,0 +1,163 @@
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use accesskit::TreeUpdate;
+use aqua_protocol::{A11yActionRequest, AccessTreeUpdate};
+
+use crate::tree::A11yTree;
+
+pub type WakeFn = Arc<dyn Fn() + Send + Sync>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Connection {
+    #[default]
+    Dormant,
+    Connected,
+}
+
+#[derive(Default)]
+struct Shared {
+    connection: Connection,
+    epoch: u64,
+    actions: VecDeque<A11yActionRequest>,
+    tree: A11yTree,
+    last_update: Option<AccessTreeUpdate>,
+    published: HashMap<accesskit::NodeId, accesskit::Node>,
+}
+
+pub struct A11yBridge {
+    shared: Mutex<Shared>,
+    waker: WakeFn,
+}
+
+impl A11yBridge {
+    pub fn new(waker: WakeFn) -> Arc<Self> {
+        Arc::new(Self {
+            shared: Mutex::new(Shared::default()),
+            waker,
+        })
+    }
+
+    fn shared(&self) -> MutexGuard<'_, Shared> {
+        self.shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub fn connection(&self) -> Connection {
+        self.shared().connection
+    }
+
+    pub fn epoch(&self) -> u64 {
+        self.shared().epoch
+    }
+
+    pub fn connect(&self) {
+        {
+            let mut shared = self.shared();
+            shared.connection = Connection::Connected;
+            shared.epoch += 1;
+            shared.last_update = None;
+            shared.published.clear();
+        }
+        (self.waker)();
+    }
+
+    pub fn deactivate(&self) {
+        {
+            let mut shared = self.shared();
+            shared.connection = Connection::Dormant;
+            shared.last_update = None;
+            shared.published.clear();
+        }
+        (self.waker)();
+    }
+
+    pub fn snapshot(&self, update: &AccessTreeUpdate) -> Option<TreeUpdate> {
+        let mut shared = self.shared();
+        match shared.connection {
+            Connection::Dormant => None,
+            Connection::Connected => {
+                if shared.last_update.as_ref() == Some(update) {
+                    return None;
+                }
+                let mut snapshot = shared.tree.build(update.root, update.focus, &update.nodes);
+                let live: HashSet<_> = snapshot.nodes.iter().map(|(id, _)| *id).collect();
+                shared.published.retain(|id, _| live.contains(id));
+                snapshot
+                    .nodes
+                    .retain(|(id, node)| shared.published.get(id) != Some(node));
+                for (id, node) in &snapshot.nodes {
+                    shared.published.insert(*id, node.clone());
+                }
+                shared.last_update = Some(update.clone());
+                Some(snapshot)
+            }
+        }
+    }
+
+    pub fn native_action(&self, request: &accesskit::ActionRequest) {
+        let translated = self.shared().tree.translate(request);
+        if let Some(translated) = translated {
+            self.push_action(translated);
+        }
+    }
+
+    pub fn push_action(&self, request: A11yActionRequest) {
+        self.shared().actions.push_back(request);
+        (self.waker)();
+    }
+
+    pub fn drain_actions(&self) -> Vec<A11yActionRequest> {
+        self.shared().actions.drain(..).collect()
+    }
+}
+
+pub struct BridgeActivationHandler {
+    bridge: Arc<A11yBridge>,
+}
+
+impl BridgeActivationHandler {
+    pub fn new(bridge: Arc<A11yBridge>) -> Self {
+        Self { bridge }
+    }
+}
+
+impl accesskit::ActivationHandler for BridgeActivationHandler {
+    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+        self.bridge.connect();
+        None
+    }
+}
+
+pub struct BridgeDeactivationHandler {
+    bridge: Arc<A11yBridge>,
+}
+
+impl BridgeDeactivationHandler {
+    pub fn new(bridge: Arc<A11yBridge>) -> Self {
+        Self { bridge }
+    }
+}
+
+impl accesskit::DeactivationHandler for BridgeDeactivationHandler {
+    fn deactivate_accessibility(&mut self) {
+        self.bridge.deactivate();
+    }
+}
+
+pub struct BridgeActionHandler {
+    bridge: Arc<A11yBridge>,
+}
+
+impl BridgeActionHandler {
+    pub fn new(bridge: Arc<A11yBridge>) -> Self {
+        Self { bridge }
+    }
+}
+
+impl accesskit::ActionHandler for BridgeActionHandler {
+    fn do_action(&mut self, request: accesskit::ActionRequest) {
+        self.bridge.native_action(&request);
+    }
+}

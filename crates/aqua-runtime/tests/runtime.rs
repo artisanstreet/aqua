@@ -397,6 +397,143 @@ fn clipboard_shortcuts_become_shell_commands() {
     assert_eq!(ime_text.as_deref(), Some("new"));
 }
 
+fn release(at: Point, button: PointerButton) -> InputEvent {
+    InputEvent::PointerUp(pointer(at, 0), button)
+}
+
+fn primary_writes(output: &RuntimeOutput) -> Vec<String> {
+    output
+        .shell
+        .iter()
+        .filter_map(|command| match command {
+            ShellCommand::PrimarySelectionWrite { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn primary_read(output: &RuntimeOutput) -> Option<RequestId> {
+    output.shell.iter().find_map(|command| match command {
+        ShellCommand::PrimarySelectionRead { request } => Some(*request),
+        _ => None,
+    })
+}
+
+fn document_text(output: &RuntimeOutput) -> Option<String> {
+    output.ime.iter().find_map(|command| match command {
+        ImeCommand::Update(document) => Some(document.text.clone()),
+        _ => None,
+    })
+}
+
+fn focused_field() -> Runtime {
+    let mut runtime = mounted();
+    runtime.step(resized_input());
+    runtime.step(frame_input(0.0));
+    runtime.step(shell_input(press(Point::new(10.0, 10.0))));
+    runtime.step(shell_input(release(
+        Point::new(10.0, 10.0),
+        PointerButton::Primary,
+    )));
+    runtime.step(frame_input(0.1));
+    runtime
+}
+
+#[test]
+fn selecting_text_offers_it_as_the_primary_selection_once_per_selection() {
+    let mut runtime = focused_field();
+    let selected = runtime.step(shell_input(key(Key::Char('a'), Modifiers::CONTROL)));
+    assert_eq!(primary_writes(&selected), vec!["draft".to_string()]);
+    let again = runtime.step(shell_input(InputEvent::ModifiersChanged(
+        Modifiers::CONTROL,
+    )));
+    assert!(
+        primary_writes(&again).is_empty(),
+        "an unchanged selection is not offered again"
+    );
+    let collapsed = runtime.step(shell_input(key(
+        Key::Named(aqua_core::NamedKey::Right),
+        Modifiers::NONE,
+    )));
+    assert!(
+        primary_writes(&collapsed).is_empty(),
+        "collapsing the selection keeps the last primary selection"
+    );
+}
+
+#[test]
+fn a_drag_selection_reaches_the_primary_selection_only_when_the_button_is_released() {
+    let mut runtime = focused_field();
+    let start = Point::new(1.0, 10.0);
+    let end = Point::new(199.0, 10.0);
+    let pressed = runtime.step(shell_input(press(start)));
+    let dragged = runtime.step(shell_input(InputEvent::PointerMove(pointer(end, 1))));
+    assert!(primary_writes(&pressed).is_empty() && primary_writes(&dragged).is_empty());
+    let released = runtime.step(shell_input(release(end, PointerButton::Primary)));
+    assert_eq!(primary_writes(&released), vec!["draft".to_string()]);
+}
+
+#[test]
+fn a_middle_click_pastes_the_primary_selection_where_it_lands() {
+    let mut runtime = focused_field();
+    let end = Point::new(199.0, 10.0);
+    let clicked = runtime.step(shell_input(InputEvent::PointerDown(
+        pointer(end, 4),
+        PointerButton::Middle,
+    )));
+    let request = primary_read(&clicked).expect("a middle click asks for the primary selection");
+    let pasted = runtime.step(RuntimeInput::Shell(ShellEvent::Clipboard {
+        request,
+        text: Some(" X".to_string()),
+        image: None,
+        paths: Vec::new(),
+    }));
+    assert!(requested(&pasted).contains(FrameReason::INPUT));
+    let start = Point::new(1.0, 10.0);
+    let clicked = runtime.step(shell_input(InputEvent::PointerDown(
+        pointer(start, 4),
+        PointerButton::Middle,
+    )));
+    let request = primary_read(&clicked).expect("a second middle click asks again");
+    runtime.step(RuntimeInput::Shell(ShellEvent::Clipboard {
+        request,
+        text: Some("Y ".to_string()),
+        image: None,
+        paths: Vec::new(),
+    }));
+    assert_eq!(
+        document_text(&runtime.step(frame_input(0.2))).as_deref(),
+        Some("Y draft X")
+    );
+}
+
+#[test]
+fn a_middle_click_with_no_primary_selection_changes_nothing() {
+    let mut runtime = focused_field();
+    let clicked = runtime.step(shell_input(InputEvent::PointerDown(
+        pointer(Point::new(199.0, 10.0), 4),
+        PointerButton::Middle,
+    )));
+    let request = primary_read(&clicked).expect("a middle click asks for the primary selection");
+    let answered = runtime.step(RuntimeInput::Shell(ShellEvent::Clipboard {
+        request,
+        text: None,
+        image: None,
+        paths: Vec::new(),
+    }));
+    assert!(!requested(&answered).contains(FrameReason::INPUT));
+    assert_eq!(document_text(&runtime.step(frame_input(0.2))), None);
+    let outside = runtime.step(shell_input(InputEvent::PointerDown(
+        pointer(Point::new(300.0, 200.0), 4),
+        PointerButton::Middle,
+    )));
+    assert_eq!(
+        primary_read(&outside),
+        None,
+        "only text fields take a middle-click paste"
+    );
+}
+
 #[test]
 fn frame_wake_follows_motion_in_protocol_time() {
     let mut runtime = mounted();

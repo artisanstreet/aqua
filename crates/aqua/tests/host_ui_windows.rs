@@ -205,5 +205,5 @@ fn main() {
     #[cfg(windows)]
     native::run();
     #[cfg(not(windows))]
-    eprintln!("host_ui_windows: skipped; requires Windows");
+    eprintln!("host_ui_windows: skipped; Windows only: reads per-window trees through a UIA client; aqua-a11y-atspi covers the AT-SPI tree");
 }

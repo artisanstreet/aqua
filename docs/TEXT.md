@@ -3,7 +3,8 @@
 Owner: text agent. Crates: `aqua-text`, `aqua-fonts-system`,
 `aqua-oracle-dwrite`. API version: **1** (`aqua_text::AQUA_TEXT_API_VERSION`).
 The stack is specified in `ARCHITECTURE.md` section 8; this file documents the
-crate surface and the measured behaviour. Windows only.
+crate surface and the measured behaviour. Windows and Linux; Linux discovery
+goes through fontconfig (`ARCHITECTURE.md` record 14.LW, M12).
 
 `aqua-text` has no window, GPU or platform dependency. It depends on
 HarfRust (shaping), skrifa (outlines, color, bitmap strikes), zeno (exact-area
@@ -16,7 +17,7 @@ resampling, font matching) also run under `aqua-cargo test`.
 
 | Stage | Module | Notes |
 |---|---|---|
-| Discovery | `aqua-fonts-system` | Scans `%SystemRoot%\Fonts` and `%LOCALAPPDATA%\Microsoft\Windows\Fonts` for `.ttf/.otf/.ttc/.otc`, memory-maps each file once (the only `unsafe` in the text stack, in `memmap2::Mmap::map`) and reads family names (typographic and legacy, English first), PostScript name, weight, stretch and style from `name`, `OS/2` and `post` through skrifa. Matching is CSS font matching (stretch, then style order, then the weight search order). No fontdb. |
+| Discovery | `aqua-fonts-system` | Scans `%SystemRoot%\Fonts` and `%LOCALAPPDATA%\Microsoft\Windows\Fonts` (on Linux, the face files fontconfig lists, with each generic family's fontconfig order kept for matching and fallback) for `.ttf/.otf/.ttc/.otc`, memory-maps each file once (the only `unsafe` in the text stack, in `memmap2::Mmap::map`) and reads family names (typographic and legacy, English first), PostScript name, weight, stretch and style from `name`, `OS/2` and `post` through skrifa. Matching is CSS font matching (stretch, then style order, then the weight search order). No fontdb. |
 | Shaping | `shape.rs` | HarfRust per run; spans split at font, bidi level and script; `ShapedParagraph` is the tier-1 cache. Synthetic bold widens each non-zero advance by the stroke width, `embolden_width(size)` = em/24, as FreeType does. |
 | Breaking | `lines.rs` | Tier 2: wrap points per width; never re-shapes (`reshape_count`). |
 | Rasterization | `raster.rs`, `strike.rs` | See below. |

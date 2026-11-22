@@ -9,13 +9,10 @@ description = "Aqua Win32 shell: per-monitor DPI v2 windows, explicit-time messa
 [dependencies]
 aqua-core = { path = "../aqua-core" }
 aqua-protocol = { path = "../aqua-protocol" }
+aqua-shell = { path = "../aqua-shell" }
 raw-window-handle = "0.6"
 rfd = "0.17"
 arboard = "3"
-url = "2"
-percent-encoding = "2"
-dunce = "1"
-xmlwriter = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.62.2"
@@ -76,8 +73,6 @@ windows = { version = "0.62.2", features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 
-[dev-dependencies]
-roxmltree = "0.21"
 
 [[test]]
 name = "native_dialog"

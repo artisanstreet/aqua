@@ -3,9 +3,9 @@
 ## Prerequisites
 
 - Rust 1.95+ (workspace minimum; host runs 1.98.1).
-- Windows, or Linux with WSLg/X11 or Wayland, for windowed runs. Model and
-  layout tests need no display; GPU pixel tests require a usable adapter
-  (software Vulkan is sufficient).
+- Windows, or Linux with a Wayland compositor (X11 is not supported), for
+  windowed runs. Model and layout tests need no display; GPU pixel tests
+  require a usable adapter (software Vulkan is sufficient).
 
 ## Run the examples
 
@@ -44,11 +44,16 @@ AQUA_SMOKE_FRAMES=120 cargo run -p aqua --example showcase
 For a first native-window check, `AQUA_SMOKE_FRAMES=1` proves window +
 present work end to end.
 
-On WSLg hosts with no `DISPLAY` in the environment but sockets present:
+On Linux, `.cargo/config.toml` points `DBUS_SESSION_BUS_ADDRESS`,
+`AT_SPI_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY` and `DISPLAY` at
+dead ends for every process cargo starts, so no test can reach the session
+bus or the desktop. A windowed run therefore starts the built binary
+directly, in the real session (on WSLg the compositor socket is
+`/run/user/<uid>/wayland-0`):
 
 ```sh
-DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1001 \
-  AQUA_SMOKE_MS=2000 cargo run -p aqua --example showcase
+cargo build -p aqua --example showcase
+AQUA_SMOKE_MS=2000 target/debug/examples/showcase
 ```
 
 The runtime prints the smoke budget, presents that many frames, then exits

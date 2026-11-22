@@ -30,6 +30,7 @@ pub use gpu::{
     DeviceStatus, FeatureTier, Features, FrameInputs, FrameReport, GpuBackend, GpuCapabilities,
     GpuError, GpuReadback, NativeSurface, PresentHint, PresentTimes, RecoveryReport, SurfaceId,
     SurfacePixels, SurfaceTarget, TextureOp, TextureRegion, TextureUpload, UploadBatch,
+    WaylandSurface,
 };
 pub use ime::{
     ImeBackend, ImeBounds, ImeCommand, ImeDocument, ImeEvent, ImeGeometry, ImeHit, ImeLine,

@@ -85,3 +85,20 @@ fn reference_matches_itself_on_every_case() {
         assert_eq!(comparison.interior_max, 0);
     }
 }
+
+#[test]
+fn wayland_surface_targets_are_rejected_by_backends_without_wayland_support() {
+    let target = SurfaceTarget::Wayland(aqua_protocol::WaylandSurface {
+        window: aqua_protocol::WindowId::new(1).unwrap(),
+        display: 1,
+        surface: 2,
+        extent: Extent {
+            width: 8,
+            height: 8,
+        },
+    });
+    assert!(matches!(
+        RefBackend::new().create_surface(target),
+        Err(aqua_protocol::GpuError::Unsupported(_))
+    ));
+}

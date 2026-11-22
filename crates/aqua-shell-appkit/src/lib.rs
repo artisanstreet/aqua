@@ -10,6 +10,20 @@ pub mod model;
 #[cfg(target_os = "macos")]
 pub mod capability;
 #[cfg(target_os = "macos")]
+pub mod dialogs;
+#[cfg(target_os = "macos")]
+pub mod dock;
+#[cfg(target_os = "macos")]
+pub mod icon;
+#[cfg(target_os = "macos")]
+pub mod notifications;
+#[cfg(target_os = "macos")]
+pub mod open;
+#[cfg(target_os = "macos")]
+pub mod prefs;
+#[cfg(target_os = "macos")]
+pub mod pressure;
+#[cfg(target_os = "macos")]
 pub mod services;
 #[cfg(all(target_os = "macos", feature = "testing"))]
 pub mod testing;

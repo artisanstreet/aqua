@@ -9,5 +9,5 @@ pub fn material_capability(requested: WindowMaterial) -> MaterialCapability {
 }
 
 pub fn query_preferences() -> SystemPrefs {
-    aqua_shell::fallback::capability::query_preferences()
+    crate::prefs::query()
 }

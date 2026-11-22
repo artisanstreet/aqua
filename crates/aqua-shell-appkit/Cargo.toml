@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Aqua AppKit shell: explicit-time run loop, NSWindow/NSView windows, backing scale, screens, occlusion, keyboard, mouse and scroll input, cursors, overlay chrome with traffic lights, layer leases, pasteboard, file drops, NSTextInputClient routing"
+description = "Aqua AppKit shell: explicit-time run loop, NSWindow/NSView windows, backing scale, screens, occlusion, keyboard, mouse and scroll input, cursors, overlay chrome with traffic lights, layer leases, pasteboard, file drops, NSTextInputClient routing, workspace, preferences, file panels, dock badge, user notifications, memory pressure"
 
 [features]
 testing = []
@@ -18,22 +18,31 @@ thiserror = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
 block2 = "0.6.2"
+url = "2"
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "block2"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
   "std",
+  "block2",
   "NSArray",
   "NSAttributedString",
+  "NSBundle",
   "NSData",
   "NSDate",
   "NSDictionary",
+  "NSDistributedNotificationCenter",
   "NSEnumerator",
+  "NSError",
   "NSGeometry",
+  "NSKeyValueObserving",
   "NSNotification",
   "NSObjCRuntime",
   "NSObject",
+  "NSOperation",
   "NSProcessInfo",
   "NSRange",
   "NSRunLoop",
+  "NSSet",
   "NSString",
   "NSThread",
   "NSURL",
@@ -45,6 +54,8 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "objc2-core-foundation",
   "objc2-core-graphics",
   "objc2-quartz-core",
+  "block2",
+  "NSAccessibility",
   "NSAccessibilityProtocols",
   "NSAppearance",
   "NSApplication",
@@ -54,6 +65,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "NSColor",
   "NSControl",
   "NSCursor",
+  "NSDockTile",
   "NSDragging",
   "NSDraggingItem",
   "NSDraggingSession",
@@ -64,15 +76,19 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "NSImageRep",
   "NSMenu",
   "NSMenuItem",
+  "NSOpenPanel",
+  "NSPanel",
   "NSPasteboard",
   "NSResponder",
   "NSRunningApplication",
+  "NSSavePanel",
   "NSScreen",
   "NSTextInputClient",
   "NSTextInputContext",
   "NSTrackingArea",
   "NSView",
   "NSWindow",
+  "NSWorkspace",
 ] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
   "std",
@@ -96,6 +112,20 @@ objc2-core-graphics = { version = "0.3.2", default-features = false, features = 
   "CGRemoteOperation",
   "CGSession",
   "CGWindow",
+] }
+
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "block2",
+  "UNError",
+  "UNNotification",
+  "UNNotificationAction",
+  "UNNotificationCategory",
+  "UNNotificationContent",
+  "UNNotificationRequest",
+  "UNNotificationResponse",
+  "UNNotificationTrigger",
+  "UNUserNotificationCenter",
 ] }
 
 [dev-dependencies]
@@ -144,4 +174,11 @@ harness = false
 
 [[test]]
 name = "drop"
+
+[[test]]
+name = "prefs"
+harness = false
+
+[[test]]
+name = "desktop"
 harness = false

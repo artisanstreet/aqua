@@ -23,3 +23,21 @@ pub fn options(title: &str, logical: (f64, f64)) -> WindowOptions {
         ..WindowOptions::default()
     }
 }
+
+pub fn wait_for(limit: std::time::Duration, mut done: impl FnMut() -> bool + 'static) -> bool {
+    let reached = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = reached.clone();
+    let started = std::time::Instant::now();
+    drive(
+        limit + std::time::Duration::from_secs(5),
+        move |_, _| match (done(), started.elapsed() >= limit) {
+            (true, _) => {
+                flag.set(true);
+                Flow::Done
+            }
+            (false, true) => Flow::Done,
+            (false, false) => Flow::Wait(POLL),
+        },
+    );
+    reached.get()
+}

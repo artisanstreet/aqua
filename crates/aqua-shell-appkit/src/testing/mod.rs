@@ -1,5 +1,6 @@
 pub mod capture;
 pub mod cases;
+pub mod desktop;
 pub mod drag;
 pub mod inject;
 pub mod input_source;

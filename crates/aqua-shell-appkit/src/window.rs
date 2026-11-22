@@ -9,7 +9,7 @@ use crate::text_input::{ScreenRect, TextInputClient};
 use crate::unsupported::Unsupported;
 use crate::view::AquaView;
 use crate::window_class::{occlusion_of, AquaWindow, WindowDelegate};
-use aqua_core::{ClickSettings, CursorIcon, Point};
+use aqua_core::{ClickSettings, CursorIcon};
 use aqua_protocol::{DragRegions, MaterialCapability, WindowId, WindowMaterial};
 use aqua_shell::{Chrome, ShellError, ShellEvent, WindowKind, WindowOptions};
 use objc2::rc::Retained;
@@ -17,7 +17,7 @@ use objc2::runtime::ProtocolObject;
 use objc2::AnyThread;
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-    NSColor, NSEvent, NSPasteboardTypeFileURL, NSTrackingArea, NSTrackingAreaOptions,
+    NSColor, NSPasteboardTypeFileURL, NSTrackingArea, NSTrackingAreaOptions,
     NSWindowCollectionBehavior, NSWindowLevel, NSWindowOrderingMode, NSWindowStyleMask,
     NSWindowTabbingMode, NSWindowTitleVisibility,
 };
@@ -355,8 +355,7 @@ impl Window {
     }
 
     pub fn click_settings(self) -> ClickSettings {
-        let interval = Duration::from_secs_f64(NSEvent::doubleClickInterval().max(0.0));
-        ClickSettings::new(interval, Point::new(5.0, 5.0)).unwrap_or_default()
+        crate::prefs::click_settings()
     }
 
     pub fn set_title(self, title: &str) {

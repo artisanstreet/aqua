@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
+use aqua_graph::Extent;
 use aqua_protocol::PresentHint;
 
 const WINDOW: usize = 240;
@@ -56,6 +57,36 @@ pub enum Screen {
     #[default]
     Current,
     Behind,
+    Unsettled {
+        since: std::time::Instant,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InFlight {
+    Nothing,
+    Matching,
+    Resized,
+}
+
+impl InFlight {
+    pub fn of(in_flight: impl IntoIterator<Item = Extent>, current: Extent) -> Self {
+        in_flight
+            .into_iter()
+            .fold(InFlight::Nothing, |state, extent| {
+                match (state, extent == current) {
+                    (InFlight::Resized, _) | (_, false) => InFlight::Resized,
+                    (InFlight::Nothing | InFlight::Matching, true) => InFlight::Matching,
+                }
+            })
+    }
+
+    pub fn screen_after_present(self, now: std::time::Instant) -> Screen {
+        match self {
+            InFlight::Resized => Screen::Unsettled { since: now },
+            InFlight::Nothing | InFlight::Matching => Screen::Current,
+        }
+    }
 }
 
 pub fn starvation_bound(interval: Duration) -> Duration {
@@ -103,16 +134,18 @@ impl FrameSlot {
     pub fn owed_frame_in(
         &self,
         screen: Screen,
-        outstanding: u32,
+        in_flight: InFlight,
         covered: bool,
         now: std::time::Instant,
         interval: Duration,
     ) -> Option<Duration> {
-        match (screen, covered, outstanding, self.slot) {
-            (Screen::Current, ..) | (Screen::Behind, true, ..) => None,
-            (Screen::Behind, false, 0, _) | (Screen::Behind, false, _, Slot::Starved) => {
-                Some(Duration::ZERO)
+        match (screen, covered, in_flight, self.slot) {
+            (Screen::Current, ..) | (_, true, ..) => None,
+            (Screen::Unsettled { since }, false, ..) => {
+                Some((since + starvation_bound(interval)).saturating_duration_since(now))
             }
+            (Screen::Behind, false, InFlight::Nothing, _)
+            | (Screen::Behind, false, _, Slot::Starved) => Some(Duration::ZERO),
             (Screen::Behind, false, _, Slot::Pending { since }) => {
                 Some((since + starvation_bound(interval)).saturating_duration_since(now))
             }

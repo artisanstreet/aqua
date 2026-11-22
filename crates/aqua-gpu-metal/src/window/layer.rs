@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::ptr::NonNull;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
@@ -11,7 +12,7 @@ use objc2_core_graphics::{kCGColorSpaceSRGB, CGColorSpace};
 use objc2_metal::{MTLDevice, MTLDrawable, MTLPixelFormat, MTLTexture};
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer, CATransaction};
 
-use super::pacing::{FrameWait, Screen};
+use super::pacing::{FrameWait, InFlight, Screen};
 use crate::hal::View;
 
 pub const FORMAT: MTLPixelFormat = MTLPixelFormat::BGRA8Unorm;
@@ -25,7 +26,7 @@ pub enum Alpha {
 
 #[derive(Default)]
 struct Pending {
-    outstanding: u32,
+    in_flight: VecDeque<Extent>,
     shown: Vec<f64>,
     screen: Screen,
 }
@@ -46,22 +47,27 @@ impl Feedback {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn presenting(&self) {
-        self.lock().outstanding += 1;
+    fn presenting(&self, extent: Extent) {
+        self.lock().in_flight.push_back(extent);
     }
 
     fn presented(&self, media_seconds: f64) {
         let mut pending = self.lock();
-        pending.outstanding = pending.outstanding.checked_sub(1).expect(
+        pending.in_flight.pop_front().expect(
             "invariant: a presented handler fires once for each drawable this surface presented",
         );
         pending.shown.push(media_seconds);
         let screen = pending.screen;
         drop(pending);
         self.changed.notify_all();
-        if let (Screen::Behind, Some(wake)) = (screen, self.wake.get()) {
-            wake();
+        match (screen, self.wake.get()) {
+            (Screen::Behind | Screen::Unsettled { .. }, Some(wake)) => wake(),
+            (Screen::Current, _) | (_, None) => {}
         }
+    }
+
+    pub fn in_flight(&self, current: Extent) -> InFlight {
+        InFlight::of(self.lock().in_flight.iter().copied(), current)
     }
 
     pub fn screen(&self) -> Screen {
@@ -77,18 +83,18 @@ impl Feedback {
     }
 
     pub fn outstanding(&self) -> u32 {
-        self.lock().outstanding
+        self.lock().in_flight.len() as u32
     }
 
     pub fn wait(&self, timeout: Duration) -> FrameWait {
         let pending = self.lock();
         let (pending, _) = self
             .changed
-            .wait_timeout_while(pending, timeout, |pending| pending.outstanding > 0)
+            .wait_timeout_while(pending, timeout, |pending| !pending.in_flight.is_empty())
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        match pending.outstanding {
-            0 => FrameWait::Ready,
-            _ => FrameWait::TimedOut,
+        match pending.in_flight.is_empty() {
+            true => FrameWait::Ready,
+            false => FrameWait::TimedOut,
         }
     }
 
@@ -218,7 +224,7 @@ impl Layer {
         let handler = RcBlock::new(move |shown: NonNull<ProtocolObject<dyn MTLDrawable>>| {
             feedback.presented(unsafe { shown.as_ref() }.presentedTime());
         });
-        self.feedback.presenting();
+        self.feedback.presenting(drawable.extent());
         unsafe { drawable.raw.addPresentedHandler(RcBlock::as_ptr(&handler)) };
     }
 }

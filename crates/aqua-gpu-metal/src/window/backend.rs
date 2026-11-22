@@ -14,7 +14,9 @@ use objc2_metal::MTLCommandBuffer;
 use objc2_quartz_core::CAMetalLayer;
 
 use super::layer::{Alpha, Drawable, Layer, PresentedWake};
-use super::pacing::{presentation, FrameSlot, PaceReport, Pacer, Screen, Slot, SurfacePacer, Wait};
+use super::pacing::{
+    presentation, FrameSlot, InFlight, PaceReport, Pacer, Screen, Slot, SurfacePacer, Wait,
+};
 use crate::hal::budget::{pressure, trim_for, MemoryBudget, Pressure, Trim, Visibility};
 use crate::hal::{Device, DeviceOptions};
 use crate::scene::{
@@ -197,6 +199,10 @@ impl WindowSurface {
         self.observe_presentations();
     }
 
+    fn in_flight(&self) -> InFlight {
+        self.layer.feedback().in_flight(self.layer.extent())
+    }
+
     fn drawable_free(&self) -> bool {
         self.layer.feedback().outstanding() == 0
             || (self.slot.slot() == Slot::Starved && !self.pacer.covered())
@@ -287,10 +293,9 @@ impl WindowBackend {
             .surfaces
             .get(&surface)
             .ok_or(GpuError::UnknownSurface(surface))?;
-        let feedback = entry.layer.feedback();
         Ok(entry.slot.owed_frame_in(
-            feedback.screen(),
-            feedback.outstanding(),
+            entry.layer.feedback().screen(),
+            entry.in_flight(),
             entry.pacer.covered(),
             Instant::now(),
             entry.interval(),
@@ -572,11 +577,16 @@ impl WindowBackend {
                     .device
                     .command_buffer(PRESENT_LABEL)
                     .map_err(device_error)?;
+                let in_flight = entry.in_flight();
                 entry.layer.watch(&drawable);
                 command.presentDrawable(drawable.as_drawable());
                 command.commit();
-                entry.layer.feedback().set_screen(Screen::Current);
-                entry.slot.presented(Instant::now());
+                let now = Instant::now();
+                entry
+                    .layer
+                    .feedback()
+                    .set_screen(in_flight.screen_after_present(now));
+                entry.slot.presented(now);
                 self.stats.presents += 1;
                 self.phases.present = started.elapsed();
             }

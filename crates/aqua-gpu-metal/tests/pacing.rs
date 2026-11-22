@@ -1,8 +1,10 @@
 use std::time::{Duration, Instant};
 
 use aqua_gpu_metal::window::pacing::{
-    presentation, FrameSlot, FrameWait, Pacer, Presentation, Screen, Slot, SurfacePacer, Wait,
+    presentation, FrameSlot, FrameWait, InFlight, Pacer, Presentation, Screen, Slot, SurfacePacer,
+    Wait,
 };
+use aqua_graph::Extent;
 use aqua_protocol::PresentHint;
 
 const INTERVAL: Duration = Duration::from_micros(16_667);
@@ -142,26 +144,86 @@ fn a_frame_dropped_behind_an_in_flight_present_is_due_when_its_drawable_returns(
     let start = Instant::now();
     let mut slot = FrameSlot::default();
     slot.presented(start);
-    let owed = |slot: &FrameSlot, outstanding, now| {
-        slot.owed_frame_in(Screen::Behind, outstanding, false, now, INTERVAL)
+    let owed = |slot: &FrameSlot, in_flight, now| {
+        slot.owed_frame_in(Screen::Behind, in_flight, false, now, INTERVAL)
     };
     assert_eq!(
-        owed(&slot, 1, start),
+        owed(&slot, InFlight::Matching, start),
         Some(INTERVAL * 2),
         "with the present still in flight the owed frame waits at most for starvation"
     );
-    assert_eq!(owed(&slot, 1, start + INTERVAL), Some(INTERVAL));
     assert_eq!(
-        owed(&slot, 0, start + INTERVAL),
+        owed(&slot, InFlight::Matching, start + INTERVAL),
+        Some(INTERVAL)
+    );
+    assert_eq!(
+        owed(&slot, InFlight::Nothing, start + INTERVAL),
         Some(Duration::ZERO),
         "the returned drawable makes it due at once"
     );
     slot.resolve(start + INTERVAL * 2, FrameWait::TimedOut, INTERVAL);
     assert_eq!(slot.slot(), Slot::Starved);
     assert_eq!(
-        owed(&slot, 1, start + INTERVAL * 2),
+        owed(&slot, InFlight::Matching, start + INTERVAL * 2),
         Some(Duration::ZERO),
         "a starved slot may draw the owed frame without the drawable"
+    );
+}
+
+#[test]
+fn a_present_behind_a_drawable_of_another_size_is_drawn_again_once_it_settles() {
+    let old = Extent {
+        width: 500,
+        height: 333,
+    };
+    let new = Extent {
+        width: 600,
+        height: 400,
+    };
+    assert_eq!(InFlight::of([], new), InFlight::Nothing);
+    assert_eq!(InFlight::of([new, new], new), InFlight::Matching);
+    assert_eq!(InFlight::of([old, new], new), InFlight::Resized);
+    let start = Instant::now();
+    let mut slot = FrameSlot::default();
+    slot.presented(start);
+    slot.resolve(start + INTERVAL * 2, FrameWait::TimedOut, INTERVAL);
+    let presented = start + INTERVAL * 60;
+    slot.presented(presented);
+    assert_eq!(
+        slot.slot(),
+        Slot::Starved,
+        "an old-size frame presented after a long wait leaves the slot starved"
+    );
+    let screen = InFlight::of([old], new).screen_after_present(presented);
+    assert_eq!(
+        screen,
+        Screen::Unsettled { since: presented },
+        "a new-size drawable presented behind an old-size one can leave the old image on screen"
+    );
+    let owed =
+        |in_flight, now, covered| slot.owed_frame_in(screen, in_flight, covered, now, INTERVAL);
+    assert_eq!(
+        owed(InFlight::of([old, new], new), presented, false),
+        Some(INTERVAL * 2),
+        "the unsettled screen is drawn again one starvation bound later, not at once"
+    );
+    assert_eq!(
+        owed(InFlight::of([new], new), presented + INTERVAL * 2, false),
+        Some(Duration::ZERO)
+    );
+    assert_eq!(
+        owed(
+            InFlight::of([old, new], new),
+            presented + INTERVAL * 2,
+            true
+        ),
+        None,
+        "a covered window redraws when it is uncovered"
+    );
+    assert_eq!(
+        InFlight::of([new], new).screen_after_present(presented + INTERVAL * 2),
+        Screen::Current,
+        "a present with only its own size in flight settles the screen"
     );
 }
 
@@ -171,11 +233,11 @@ fn a_screen_showing_the_latest_frame_or_covered_owes_no_redraw() {
     let mut slot = FrameSlot::default();
     slot.presented(start);
     assert_eq!(
-        slot.owed_frame_in(Screen::Current, 0, false, start, INTERVAL),
+        slot.owed_frame_in(Screen::Current, InFlight::Nothing, false, start, INTERVAL),
         None
     );
     assert_eq!(
-        slot.owed_frame_in(Screen::Behind, 0, true, start, INTERVAL),
+        slot.owed_frame_in(Screen::Behind, InFlight::Nothing, true, start, INTERVAL),
         None,
         "a covered window redraws when it is uncovered, not before"
     );

@@ -51,6 +51,13 @@ pub enum Wait {
     For(Duration),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Screen {
+    #[default]
+    Current,
+    Behind,
+}
+
 pub fn starvation_bound(interval: Duration) -> Duration {
     interval * 2
 }
@@ -91,6 +98,26 @@ impl FrameSlot {
             }
             (slot, FrameWait::TimedOut) => slot,
         };
+    }
+
+    pub fn owed_frame_in(
+        &self,
+        screen: Screen,
+        outstanding: u32,
+        covered: bool,
+        now: std::time::Instant,
+        interval: Duration,
+    ) -> Option<Duration> {
+        match (screen, covered, outstanding, self.slot) {
+            (Screen::Current, ..) | (Screen::Behind, true, ..) => None,
+            (Screen::Behind, false, 0, _) | (Screen::Behind, false, _, Slot::Starved) => {
+                Some(Duration::ZERO)
+            }
+            (Screen::Behind, false, _, Slot::Pending { since }) => {
+                Some((since + starvation_bound(interval)).saturating_duration_since(now))
+            }
+            (Screen::Behind, false, _, Slot::Free) => Some(starvation_bound(interval)),
+        }
     }
 
     pub fn presented(&mut self, now: std::time::Instant) {

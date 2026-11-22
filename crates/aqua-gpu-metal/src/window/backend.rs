@@ -13,8 +13,8 @@ use objc2::rc::Retained;
 use objc2_metal::MTLCommandBuffer;
 use objc2_quartz_core::CAMetalLayer;
 
-use super::layer::{Alpha, Drawable, Layer};
-use super::pacing::{presentation, FrameSlot, PaceReport, Pacer, Slot, SurfacePacer, Wait};
+use super::layer::{Alpha, Drawable, Layer, PresentedWake};
+use super::pacing::{presentation, FrameSlot, PaceReport, Pacer, Screen, Slot, SurfacePacer, Wait};
 use crate::hal::budget::{pressure, trim_for, MemoryBudget, Pressure, Trim, Visibility};
 use crate::hal::{Device, DeviceOptions};
 use crate::scene::{
@@ -282,6 +282,38 @@ impl WindowBackend {
         Ok(id)
     }
 
+    pub fn owed_frame_in(&self, surface: SurfaceId) -> Result<Option<Duration>, GpuError> {
+        let entry = self
+            .surfaces
+            .get(&surface)
+            .ok_or(GpuError::UnknownSurface(surface))?;
+        let feedback = entry.layer.feedback();
+        Ok(entry.slot.owed_frame_in(
+            feedback.screen(),
+            feedback.outstanding(),
+            entry.pacer.covered(),
+            Instant::now(),
+            entry.interval(),
+        ))
+    }
+
+    pub fn wake_when_presented(
+        &mut self,
+        surface: SurfaceId,
+        wake: PresentedWake,
+    ) -> Result<(), GpuError> {
+        let entry = self
+            .surfaces
+            .get(&surface)
+            .ok_or(GpuError::UnknownSurface(surface))?;
+        assert!(
+            entry.layer.feedback().wake_with(wake),
+            "invariant: surface {} gets one presentation wake",
+            surface.0
+        );
+        Ok(())
+    }
+
     pub fn set_recovery_listener(&mut self, listener: Box<dyn FnMut(RecoveryNotice)>) {
         self.listener = Some(listener);
     }
@@ -543,11 +575,12 @@ impl WindowBackend {
                 entry.layer.watch(&drawable);
                 command.presentDrawable(drawable.as_drawable());
                 command.commit();
+                entry.layer.feedback().set_screen(Screen::Current);
                 entry.slot.presented(Instant::now());
                 self.stats.presents += 1;
                 self.phases.present = started.elapsed();
             }
-            FrameState::Unavailable => {}
+            FrameState::Unavailable => entry.layer.feedback().set_screen(Screen::Behind),
             unexecuted @ (FrameState::Idle | FrameState::Acquired(_)) => {
                 entry.frame = unexecuted;
                 return Err(GpuError::DeviceFailure(

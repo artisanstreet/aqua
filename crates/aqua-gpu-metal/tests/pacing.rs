@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use aqua_gpu_metal::window::pacing::{
-    presentation, FrameSlot, FrameWait, Pacer, Presentation, Slot, SurfacePacer, Wait,
+    presentation, FrameSlot, FrameWait, Pacer, Presentation, Screen, Slot, SurfacePacer, Wait,
 };
 use aqua_protocol::PresentHint;
 
@@ -134,5 +134,49 @@ fn a_drawable_with_no_presented_time_counts_as_discarded() {
     assert_eq!(
         report.last_shown,
         Some(aqua_protocol::Instant::from_nanos(1_033_334_000))
+    );
+}
+
+#[test]
+fn a_frame_dropped_behind_an_in_flight_present_is_due_when_its_drawable_returns() {
+    let start = Instant::now();
+    let mut slot = FrameSlot::default();
+    slot.presented(start);
+    let owed = |slot: &FrameSlot, outstanding, now| {
+        slot.owed_frame_in(Screen::Behind, outstanding, false, now, INTERVAL)
+    };
+    assert_eq!(
+        owed(&slot, 1, start),
+        Some(INTERVAL * 2),
+        "with the present still in flight the owed frame waits at most for starvation"
+    );
+    assert_eq!(owed(&slot, 1, start + INTERVAL), Some(INTERVAL));
+    assert_eq!(
+        owed(&slot, 0, start + INTERVAL),
+        Some(Duration::ZERO),
+        "the returned drawable makes it due at once"
+    );
+    slot.resolve(start + INTERVAL * 2, FrameWait::TimedOut, INTERVAL);
+    assert_eq!(slot.slot(), Slot::Starved);
+    assert_eq!(
+        owed(&slot, 1, start + INTERVAL * 2),
+        Some(Duration::ZERO),
+        "a starved slot may draw the owed frame without the drawable"
+    );
+}
+
+#[test]
+fn a_screen_showing_the_latest_frame_or_covered_owes_no_redraw() {
+    let start = Instant::now();
+    let mut slot = FrameSlot::default();
+    slot.presented(start);
+    assert_eq!(
+        slot.owed_frame_in(Screen::Current, 0, false, start, INTERVAL),
+        None
+    );
+    assert_eq!(
+        slot.owed_frame_in(Screen::Behind, 0, true, start, INTERVAL),
+        None,
+        "a covered window redraws when it is uncovered, not before"
     );
 }

@@ -511,9 +511,28 @@ impl WindowHandle {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn settle_surfaces(&mut self) {}
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     fn settle_surface(&mut self, _surface: SurfaceId) -> bool {
         false
+    }
+
+    #[cfg(target_os = "macos")]
+    fn settle_surface(&mut self, surface: SurfaceId) -> bool {
+        self.owed_frame_in(surface).is_some()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn owed_frame_in(&self, surface: SurfaceId) -> Option<Duration> {
+        self.hub
+            .backend
+            .borrow()
+            .owed_frame_in(surface)
+            .expect("invariant: a window target's surface lives as long as the target")
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn owed_frame_in(&self, _surface: SurfaceId) -> Option<Duration> {
+        None
     }
 
     #[cfg(windows)]
@@ -823,8 +842,11 @@ impl FrameTarget for WindowTarget {
     }
 
     fn maintenance_in(&self) -> Option<Duration> {
-        self.settle_at
-            .map(|at| at.saturating_duration_since(WallInstant::now()))
+        let settle = self
+            .settle_at
+            .map(|at| at.saturating_duration_since(WallInstant::now()));
+        let owed = self.frames.backend().owed_frame_in(self.surface);
+        [settle, owed].into_iter().flatten().min()
     }
 
     fn maintenance(&mut self) -> bool {
@@ -914,6 +936,7 @@ pub fn factory(
             externals,
             stats,
             composition,
+            ..
         } = context;
         Box::new(move || {
             let hub = shared_hub(&fonts)?;
@@ -1046,7 +1069,10 @@ pub fn factory(
     use gpu::window::{Alpha, LayerTarget};
     Box::new(move |context: RenderContext| {
         let RenderContext {
-            externals, stats, ..
+            externals,
+            stats,
+            render,
+            ..
         } = context;
         Box::new(move || {
             let hub = shared_hub(&fonts)?;
@@ -1071,6 +1097,10 @@ pub fn factory(
                     alpha,
                     Box::new(super::pacer_appkit::LayerPacer(lease)),
                 )
+                .map_err(|e| e.to_string())?;
+            hub.backend
+                .borrow_mut()
+                .wake_when_presented(surface, render)
                 .map_err(|e| e.to_string())?;
             startup_mark("surface_created");
             if crate::debug::panel() {

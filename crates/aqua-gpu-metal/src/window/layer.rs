@@ -1,5 +1,5 @@
 use std::ptr::NonNull;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use aqua_graph::Extent;
@@ -11,7 +11,7 @@ use objc2_core_graphics::{kCGColorSpaceSRGB, CGColorSpace};
 use objc2_metal::{MTLDevice, MTLDrawable, MTLPixelFormat, MTLTexture};
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer, CATransaction};
 
-use super::pacing::FrameWait;
+use super::pacing::{FrameWait, Screen};
 use crate::hal::View;
 
 pub const FORMAT: MTLPixelFormat = MTLPixelFormat::BGRA8Unorm;
@@ -27,12 +27,16 @@ pub enum Alpha {
 struct Pending {
     outstanding: u32,
     shown: Vec<f64>,
+    screen: Screen,
 }
+
+pub type PresentedWake = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Default)]
 pub struct Feedback {
     pending: Mutex<Pending>,
     changed: Condvar,
+    wake: OnceLock<PresentedWake>,
 }
 
 impl Feedback {
@@ -52,8 +56,24 @@ impl Feedback {
             "invariant: a presented handler fires once for each drawable this surface presented",
         );
         pending.shown.push(media_seconds);
+        let screen = pending.screen;
         drop(pending);
         self.changed.notify_all();
+        if let (Screen::Behind, Some(wake)) = (screen, self.wake.get()) {
+            wake();
+        }
+    }
+
+    pub fn screen(&self) -> Screen {
+        self.lock().screen
+    }
+
+    pub fn set_screen(&self, screen: Screen) {
+        self.lock().screen = screen;
+    }
+
+    pub fn wake_with(&self, wake: PresentedWake) -> bool {
+        self.wake.set(wake).is_ok()
     }
 
     pub fn outstanding(&self) -> u32 {

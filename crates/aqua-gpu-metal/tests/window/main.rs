@@ -28,7 +28,7 @@ fn main() {
 mod cases {
     use super::support::{case, Case};
 
-    pub const ALL: [Case; 10] = [
+    pub const ALL: [Case; 11] = [
         case(
             "the_presented_drawable_equals_the_offscreen_render",
             super::present::drawable_equals_offscreen,
@@ -48,6 +48,10 @@ mod cases {
         case(
             "a_resize_storm_never_presents_a_stretched_or_stale_size",
             super::resize::resize_storm,
+        ),
+        case(
+            "a_resize_during_a_present_is_drawn_once_the_screen_returns_the_drawable",
+            super::resize::resize_during_a_present,
         ),
         case(
             "presentation_feedback_reports_the_display_interval",

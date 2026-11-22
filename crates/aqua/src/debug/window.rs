@@ -146,6 +146,7 @@ fn run(fonts: SharedFonts, runs: SharedRuns) {
             externals: receiver,
             stats: Arc::new(RenderStats::default()),
             composition: Arc::new(|_| {}),
+            render: Arc::new(|| {}),
         },
     );
     let mut target = match init() {

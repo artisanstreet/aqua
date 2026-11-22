@@ -11,4 +11,4 @@ pub use backend::{
     WindowOptions, WindowStats,
 };
 #[cfg(target_os = "macos")]
-pub use layer::Alpha;
+pub use layer::{Alpha, PresentedWake};

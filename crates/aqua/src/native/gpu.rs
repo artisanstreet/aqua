@@ -96,7 +96,7 @@ fn since_process_start() -> Option<Duration> {
 
 #[cfg(target_os = "macos")]
 fn since_process_start() -> Option<Duration> {
-    None
+    aqua_shell_appkit::since_process_start()
 }
 
 static STARTUP_LINES: std::sync::Mutex<Vec<(f64, String)>> = std::sync::Mutex::new(Vec::new());

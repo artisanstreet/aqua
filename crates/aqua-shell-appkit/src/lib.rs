@@ -68,7 +68,7 @@ mod window_class;
 #[cfg(target_os = "macos")]
 pub use access::AccessHooks;
 #[cfg(target_os = "macos")]
-pub use clock::{from_media_time, now};
+pub use clock::{from_media_time, now, since_process_start};
 #[cfg(target_os = "macos")]
 pub use lease::{LayerGeometry, LayerLease};
 #[cfg(target_os = "macos")]

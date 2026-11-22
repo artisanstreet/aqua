@@ -1,5 +1,6 @@
 use aqua_protocol::Instant;
 use std::sync::OnceLock;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -50,4 +51,26 @@ pub fn now() -> Instant {
 pub fn from_media_time(seconds: f64) -> Instant {
     let nanos = (seconds.max(0.0) * 1e9).round() as u64;
     Instant::from_nanos(nanos.saturating_sub(clock().origin))
+}
+
+pub fn since_process_start() -> Option<Duration> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let written = unsafe {
+        libc::proc_pidinfo(
+            std::process::id() as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    (written == size).then_some(())?;
+    let info = unsafe { info.assume_init() };
+    let started =
+        Duration::from_secs(info.pbi_start_tvsec) + Duration::from_micros(info.pbi_start_tvusec);
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .checked_sub(started)
 }

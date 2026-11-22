@@ -375,6 +375,7 @@ pub const ADAPTER_ROOT_ITEMS: &[(&str, &[&str])] = &[
             "AccessHooks",
             "from_media_time",
             "now",
+            "since_process_start",
             "LayerGeometry",
             "LayerLease",
             "pump_sent_messages",

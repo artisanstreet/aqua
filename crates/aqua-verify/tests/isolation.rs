@@ -147,3 +147,35 @@ fn no_test_source_names_the_general_pasteboard() {
         found.join("\n")
     );
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_test_process_on_macos_caches_inside_the_workspace_not_the_users_library() {
+    let index = aqua_fonts_system::default_fallback_index_path()
+        .expect("a test process has an absolute cache directory");
+    let target = workspace_root().join("target").join("aqua-test-cache");
+    assert!(
+        index.starts_with(&target),
+        "the font fallback index of a test process is {}, outside {}",
+        index.display(),
+        target.display()
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_test_process_on_macos_copies_to_the_test_pasteboard_and_posts_no_notifications() {
+    use aqua_shell_appkit::notifications::Bundle;
+    use aqua_shell_appkit::services::PasteboardName;
+
+    assert_eq!(
+        PasteboardName::from_environment(),
+        PasteboardName::Named("org.aqua.tests.pasteboard".into()),
+        "a test's clipboard writes reach a private pasteboard, not the user's"
+    );
+    assert_eq!(
+        Bundle::of_this_process(),
+        Bundle::Missing,
+        "an unbundled test process gets NotificationError::Unsupported and never reaches the user's Notification Center"
+    );
+}

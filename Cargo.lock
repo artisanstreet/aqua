@@ -594,6 +594,7 @@ version = "0.1.0"
 dependencies = [
  "aqua",
  "aqua-core",
+ "aqua-fonts-system",
  "aqua-gpu-d3d11",
  "aqua-gpu-d3d12",
  "aqua-gpu-ref",
@@ -605,6 +606,7 @@ dependencies = [
  "aqua-protocol",
  "aqua-runtime",
  "aqua-scene",
+ "aqua-shell-appkit",
  "aqua-text",
  "aqua-transport",
  "aqua-ui",

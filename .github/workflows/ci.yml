@@ -13,6 +13,11 @@ on:
         required: false
         default: false
         type: boolean
+      repeat:
+        description: run the selected tests this many times and report how many runs passed
+        required: false
+        default: 1
+        type: number
 defaults:
   run:
     shell: bash
@@ -241,6 +246,7 @@ jobs:
           AQUA_REQUIRE_AX: '1'
           FILTER: ${{ inputs.filter }}
           CAPTURE: ${{ inputs.capture }}
+          REPEAT: ${{ inputs.repeat }}
         run: |
           frames="$GITHUB_WORKSPACE/target/aqua-mac-artifacts/frames"
           mkdir -p "$frames"
@@ -250,8 +256,13 @@ jobs:
             while :; do screencapture -x "$frames/$(date +%H%M%S).png"; sleep 1; done &
             capture=$!
           fi
-          status=0
-          cargo test --locked "${selection[@]}" -- --nocapture --test-threads=1 || status=$?
+          failed=0
+          for run in $(seq "$REPEAT"); do
+            echo "::group::run $run of $REPEAT"
+            cargo test --locked "${selection[@]}" -- --nocapture --test-threads=1 || failed=$((failed + 1))
+            echo "::endgroup::"
+          done
           if [ -n "${capture:-}" ]; then kill "$capture"; fi
-          exit "$status"
+          echo "$((REPEAT - failed)) of $REPEAT runs passed"
+          [ "$failed" -eq 0 ]
       - *macos-artifacts

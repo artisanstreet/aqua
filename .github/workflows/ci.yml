@@ -178,6 +178,25 @@ jobs:
           touch "$stop"
           wait "$watchdog" || true
           exit "$status"
+      - name: bundle an example and run it from the app bundle
+        if: runner.os == 'macOS'
+        env:
+          AQUA_REQUIRE_APPKIT: '1'
+          AQUA_REQUIRE_POST_EVENT: '1'
+          AQUA_REQUIRE_SCREEN_CAPTURE: '1'
+        run: |
+          licenses=()
+          while IFS= read -r license; do
+            echo "license $license"
+            licenses+=(--license "$license")
+          done < <(find "$HOME/VulkanSDK/$LUNARG_SDK" -maxdepth 2 -type f \( -iname '*license*' -o -iname '*licence*' \) | sort)
+          cargo build --locked -p aqua --example macos_bundle
+          scripts/macos-bundle.sh --executable target/debug/examples/macos_bundle \
+            --app-id org.aqua.examples.bundle --name "Aqua Bundle" --out "$RUNNER_TEMP/bundle" \
+            --dxcompiler "$AQUA_DXCOMPILER" --spirv-cross "$AQUA_SPIRV_CROSS_C" "${licenses[@]}"
+          find "$RUNNER_TEMP/bundle" -maxdepth 4 | sort
+          AQUA_MAC_BUNDLE="$RUNNER_TEMP/bundle/Aqua Bundle.app" \
+            cargo test --locked -p aqua --test host_macos bundled_app_draws -- --nocapture
       - &macos-artifacts
         name: upload macOS probe artifacts
         if: always() && runner.os == 'macOS'

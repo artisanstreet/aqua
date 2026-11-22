@@ -40,6 +40,7 @@ mod macos {
     const WINDOWS: &str = "AQUA_HOST_MACOS_WINDOWS";
     const VETO: &str = "AQUA_HOST_MACOS_VETO";
     const ANIMATE: &str = "AQUA_HOST_MACOS_ANIMATE";
+    const BUNDLE: &str = "AQUA_MAC_BUNDLE";
     const SAVE_NAME: &str = "aqua sheet draft.txt";
     const LIMIT: Duration = Duration::from_secs(15);
     const TICK: Duration = Duration::from_millis(20);
@@ -62,7 +63,7 @@ mod macos {
         }
     }
 
-    const ALL: [Case; 21] = [
+    const ALL: [Case; 22] = [
         case(
             "a_real_app_shows_a_window_and_presents_frames",
             shows_and_presents,
@@ -131,6 +132,10 @@ mod macos {
         case(
             "the_windows_input_smoke_example_renders_takes_input_and_quits_cleanly",
             windows_input_smoke,
+        ),
+        case(
+            "a_bundled_app_draws_runtime_shaders_from_its_frameworks_and_reaches_notifications",
+            bundled_example,
         ),
     ];
 
@@ -1184,5 +1189,30 @@ mod macos {
 
     fn windows_input_smoke() {
         exercise("windows_input_smoke", 1, &[]);
+    }
+
+    fn bundled_example() {
+        let Some(bundle) = std::env::var_os(BUNDLE).map(PathBuf::from) else {
+            println!("SKIP-NO-BUNDLE: {BUNDLE} names no app made by scripts/macos-bundle.sh");
+            return;
+        };
+        if !capturing() || !available(Facility::PostEvent) {
+            return;
+        }
+        let mut program = Command::new(bundle.join("Contents/MacOS/macos_bundle"));
+        program
+            .env_remove("AQUA_DXCOMPILER")
+            .env_remove("AQUA_SPIRV_CROSS_C");
+        let mut app = App::start(program, "bundled example");
+        let outcome = app.lines().expect("its notification outcome", |line| {
+            line.starts_with("notifications ")
+        });
+        assert!(
+            outcome.starts_with("notifications reached the user notification center"),
+            "a bundled app reaches UNUserNotificationCenter: {outcome}"
+        );
+        let window = app.windows(1).remove(0);
+        shows(&window, 200.0, (160.0, 100.0), [255, 0, 255]);
+        app.quits_cleanly();
     }
 }

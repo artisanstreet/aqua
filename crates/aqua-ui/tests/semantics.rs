@@ -121,6 +121,26 @@ mod scoped {
     }
 
     #[test]
+    fn tab_from_focus_left_behind_a_modal_enters_the_modal() {
+        let runtime = Runtime::new();
+        let mut tree = UiTree::new();
+        let mut view = View::new(runtime.create_scope(), tree.command_sink());
+        render(&mut view, &mut tree, page(false));
+        let workspace = named(&tree.emit_semantics(), "Workspace").unwrap().node;
+
+        for (step, expected) in [
+            (focus_next as fn(&mut UiTree) -> _, "Query"),
+            (focus_prev, "Result"),
+        ] {
+            render(&mut view, &mut tree, page(false));
+            assert!(tree.set_focused(Some(workspace)));
+            render(&mut view, &mut tree, page(true));
+            let target = named(&tree.emit_semantics(), expected).unwrap().node;
+            assert_eq!(step(&mut tree), Some(target));
+        }
+    }
+
+    #[test]
     fn content_metadata_reaches_the_semantic_tree() {
         let runtime = Runtime::new();
         let mut tree = UiTree::new();

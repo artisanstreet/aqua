@@ -87,18 +87,20 @@ pub fn focusable_nodes(tree: &UiTree) -> Vec<NodeId> {
     nodes.into_iter().map(|(id, _, _)| id).collect()
 }
 
+fn focus_position(tree: &UiTree, order: &[NodeId]) -> Option<usize> {
+    let focused = tree.focused()?;
+    order.iter().position(|node| *node == focused)
+}
+
 pub fn focus_next(tree: &mut UiTree) -> Option<NodeId> {
     let order = focusable_nodes(tree);
     if order.is_empty() {
         tree.set_focused(None);
         return None;
     }
-    let next = match tree.focused() {
+    let next = match focus_position(tree, &order) {
         None => order[0],
-        Some(cur) => {
-            let pos = order.iter().position(|n| *n == cur).unwrap_or(usize::MAX);
-            order[(pos + 1) % order.len()]
-        }
+        Some(pos) => order[(pos + 1) % order.len()],
     };
     tree.set_focused(Some(next));
     Some(next)
@@ -110,12 +112,9 @@ pub fn focus_prev(tree: &mut UiTree) -> Option<NodeId> {
         tree.set_focused(None);
         return None;
     }
-    let prev = match tree.focused() {
+    let prev = match focus_position(tree, &order) {
         None => order[order.len() - 1],
-        Some(cur) => {
-            let pos = order.iter().position(|n| *n == cur).unwrap_or(0);
-            order[(pos + order.len() - 1) % order.len()]
-        }
+        Some(pos) => order[(pos + order.len() - 1) % order.len()],
     };
     tree.set_focused(Some(prev));
     Some(prev)

@@ -495,3 +495,24 @@ fn retiring_changing_paths_keeps_unrelated_scene_spans_reusable() {
         cached.span_replays()
     );
 }
+
+#[test]
+fn rows_culled_from_a_nested_span_keep_the_outer_replay_in_bounds() {
+    let mut rig = nested(150);
+    let mut cached = lowering();
+    for step in 0..12 {
+        let row = NodeIdOf::row(&rig.scene, 140);
+        rig.scene.update(
+            row,
+            quad(rect(10.0, TOP + 140.0 * 12.0, 120.0, 10.0), step as u8),
+        );
+        let replayed = frame(&mut cached, &rig.scene, 1.0);
+        same(&format!("step {step}"), &replayed, &fresh(&rig.scene, 1.0));
+    }
+}
+
+impl NodeIdOf {
+    fn row(scene: &Scene, row: usize) -> NodeId {
+        scene.ordered().nth(3 + row).map(|(id, _)| id).unwrap()
+    }
+}

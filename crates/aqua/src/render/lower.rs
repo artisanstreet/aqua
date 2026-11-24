@@ -318,6 +318,34 @@ struct Recording {
     stamp: span::Stamp,
 }
 
+impl Recording {
+    fn seal_nested(&mut self, items: usize, before: u32, after: u32) {
+        let first = self
+            .starts
+            .len()
+            .checked_sub(items)
+            .expect("invariant: a nested span's items are noted in every enclosing recording");
+        for (offset, start) in self.starts[first..].iter_mut().enumerate() {
+            *start = match offset {
+                0 => before,
+                _ => after,
+            };
+        }
+        let last = self.starts.len() - 1;
+        let interior = match self.matching[first] as usize == last {
+            true => first + 1..last,
+            false => first..last + 1,
+        };
+        self.contexts[interior.clone()].fill(None);
+        for at in interior {
+            let partner = std::mem::replace(&mut self.matching[at], span::NONE);
+            if partner != span::NONE {
+                self.matching[partner as usize] = span::NONE;
+            }
+        }
+    }
+}
+
 struct Walk {
     recordings: Vec<Recording>,
     closed: bool,
@@ -1584,7 +1612,17 @@ impl Lowering {
                 .collect();
         }
         let region = walk.clips.last().copied();
-        span::replay(&mut walk.out, &full, 0.0, 0.0, region);
+        let culled = span::replay(&mut walk.out, &full, 0.0, 0.0, region);
+        if culled > 0 {
+            let after = walk.out.len() as u32;
+            for outer in walk.recordings.iter_mut() {
+                outer.seal_nested(
+                    close + 1 - recording.open,
+                    recording.out_start as u32,
+                    after,
+                );
+            }
+        }
         if !clean {
             self.spans.remove(recording.id);
             return;

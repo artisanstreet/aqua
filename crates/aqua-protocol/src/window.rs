@@ -188,6 +188,7 @@ pub enum WindowEvent {
     Focused(AquaWindowId, bool),
     Occluded(AquaWindowId, bool),
     ThemeChanged(AquaWindowId, ThemePreference),
+    DisplayChanged(AquaWindowId, crate::monitor::DisplayInfo),
     RedrawRequested(AquaWindowId),
     Destroyed(AquaWindowId),
 }

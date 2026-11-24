@@ -474,6 +474,7 @@ pub fn frame_reason(event: &WindowEvent) -> Option<FrameReason> {
         WindowEvent::ThemeChanged(..) => Some(FrameReason::MATERIAL),
         WindowEvent::Occluded(_, false) => Some(FrameReason::EXPOSE),
         WindowEvent::Occluded(_, true)
+        | WindowEvent::DisplayChanged(..)
         | WindowEvent::CloseRequested(_)
         | WindowEvent::Destroyed(_) => None,
     }
@@ -1435,6 +1436,7 @@ impl Aqua {
                 self.prefs.theme = *theme;
             }
             WindowEvent::CloseRequested(_)
+            | WindowEvent::DisplayChanged(..)
             | WindowEvent::Destroyed(_)
             | WindowEvent::RedrawRequested(_) => {}
         }

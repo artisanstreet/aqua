@@ -41,6 +41,7 @@ pub(super) struct Host<A: Application> {
     pending: Option<Held>,
     resizes: HashMap<AquaWindowId, (u32, u32)>,
     occlusion: HashMap<AquaWindowId, Occlusion>,
+    displays: HashMap<AquaWindowId, aqua_protocol::monitor::DisplayInfo>,
     wakes: Option<WakeLedger>,
     file_drop_pending: Vec<AquaWindowId>,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -101,6 +102,7 @@ fn message_label(event: &ShellEvent) -> &'static str {
         ShellEvent::Resized { .. } => "resized",
         ShellEvent::Moved { .. } => "moved",
         ShellEvent::ScaleChanged { .. } => "scale",
+        ShellEvent::DisplayChanged => "display",
         ShellEvent::CloseRequested => "close",
         ShellEvent::Focused(_) => "focus",
         ShellEvent::Minimized(_) => "minimized",
@@ -280,6 +282,21 @@ impl<A: Application + 'static> Host<A> {
         self.reap_closed();
     }
 
+    fn observe_display(&mut self, id: AquaWindowId) {
+        let display = self
+            .aqua
+            .windows
+            .get(&id)
+            .and_then(|record| record.native.as_ref())
+            .and_then(|native| native.display());
+        if let Some(display) = display
+            && self.displays.get(&id) != Some(&display)
+        {
+            self.displays.insert(id, display.clone());
+            self.window_event(id, WindowEvent::DisplayChanged(id, display));
+        }
+    }
+
     fn file_drag(&mut self, id: AquaWindowId, drag: FileDrag, scale: f64) {
         let _ = scale;
         let event = match &drag {
@@ -409,6 +426,7 @@ impl<A: Application + 'static> Handler for Host<A> {
             ShellEvent::Resized { .. }
                 | ShellEvent::Maximized(_)
                 | ShellEvent::Moved { .. }
+                | ShellEvent::DisplayChanged
                 | ShellEvent::Redraw
                 | ShellEvent::Covered(_)
                 | ShellEvent::Minimized(_)
@@ -421,14 +439,18 @@ impl<A: Application + 'static> Handler for Host<A> {
         match event {
             ShellEvent::Resized { width, height } if width > 0 && height > 0 => {
                 self.resizes.insert(id, (width, height));
+                self.observe_display(id);
             }
             ShellEvent::Resized { .. } => {}
             ShellEvent::ScaleChanged { scale } => {
                 self.window_event(id, WindowEvent::ScaleChanged(id, scale));
+                self.observe_display(id);
             }
+            ShellEvent::Moved { .. } | ShellEvent::DisplayChanged => self.observe_display(id),
             ShellEvent::CloseRequested => self.window_event(id, WindowEvent::CloseRequested(id)),
             ShellEvent::Destroyed => {
                 self.occlusion.remove(&id);
+                self.displays.remove(&id);
                 self.resizes.remove(&id);
                 self.window_event(id, WindowEvent::Destroyed(id))
             }
@@ -455,10 +477,7 @@ impl<A: Application + 'static> Handler for Host<A> {
                 self.window_event(id, WindowEvent::ThemeChanged(id, scheme));
             }
             ShellEvent::Redraw => self.aqua.scheduler.request_frame(id, FrameReason::EXPLICIT),
-            ShellEvent::Moved { .. }
-            | ShellEvent::PointerEntered
-            | ShellEvent::PointerLeft
-            | ShellEvent::RawMouse { .. } => {}
+            ShellEvent::PointerEntered | ShellEvent::PointerLeft | ShellEvent::RawMouse { .. } => {}
             ShellEvent::CaptionHover(control) => self.caption_hover(id, control),
         }
     }
@@ -556,6 +575,7 @@ pub fn run<A: Application + 'static>(mut aqua: Aqua, app: A) -> Result<(), Strin
         pending: None,
         resizes: HashMap::new(),
         occlusion: HashMap::new(),
+        displays: HashMap::new(),
         wakes: wakes::enabled().then(|| WakeLedger::new(inbox)),
         file_drop_pending: Vec::new(),
         #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -19,6 +19,7 @@ fn window_geometry_fits_work_area_at_monitor_scale_and_preserves_negative_origin
             h: 1040.0,
         },
         scale_factor: 2.0,
+        refresh: None,
     };
     let fitted = display
         .fit_window(

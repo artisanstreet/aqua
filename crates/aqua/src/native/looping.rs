@@ -167,6 +167,7 @@ impl<A: Application + 'static> Host<A> {
         self.rebind_waker();
         self.attach(id, window, &observed, &options);
         self.aqua.dispatch_start(&mut self.app, id);
+        self.observe_display(id);
         super::startup_mark("app_started");
         self.aqua.scheduler.request_frame(id, FrameReason::EXPOSE);
         Ok(id)

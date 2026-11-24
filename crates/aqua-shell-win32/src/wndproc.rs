@@ -591,6 +591,11 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRES
             }
             Some(LRESULT(0))
         }
+        WM_DISPLAYCHANGE => {
+            crate::window::forget_refresh_rates();
+            state::emit(raw, ShellEvent::DisplayChanged);
+            None
+        }
         WM_SETTINGCHANGE | WM_THEMECHANGED | WM_DWMCOMPOSITIONCHANGED | WM_SYSCOLORCHANGE => {
             state::emit(raw, ShellEvent::PreferencesChanged);
             None

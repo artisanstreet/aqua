@@ -7,6 +7,7 @@ pub struct DisplayInfo {
     pub physical_bounds: Rect,
     pub physical_work_area: Rect,
     pub scale_factor: f64,
+    pub refresh: Option<std::time::Duration>,
 }
 
 impl DisplayInfo {

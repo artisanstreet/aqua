@@ -24,6 +24,7 @@ pub enum ShellEvent {
     Resized { width: u32, height: u32 },
     Moved { x: i32, y: i32 },
     ScaleChanged { scale: f64 },
+    DisplayChanged,
     CloseRequested,
     Focused(bool),
     Minimized(bool),

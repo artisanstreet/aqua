@@ -273,6 +273,7 @@ pub(crate) fn rescale(shell: &mut Shell, id: WindowId) {
 
 pub(crate) fn outputs_changed(shell: &mut Shell, id: WindowId) {
     rescale(shell, id);
+    emit(id, ShellEvent::DisplayChanged);
 }
 
 fn configured(shell: &mut Shell, id: WindowId, serial: u32) {

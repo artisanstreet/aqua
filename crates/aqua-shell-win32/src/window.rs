@@ -11,8 +11,9 @@ use std::sync::Once;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HINSTANCE, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
-    GetDC, GetMonitorInfoW, MonitorFromWindow, ReleaseDC, SetDIBitsToDevice, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    EnumDisplaySettingsW, GetDC, GetMonitorInfoW, MonitorFromWindow, ReleaseDC, SetDIBitsToDevice,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DEVMODEW, DIB_RGB_COLORS, ENUM_CURRENT_SETTINGS,
+    HMONITOR, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{
@@ -56,6 +57,34 @@ pub struct Monitor {
     pub bounds: (i32, i32, i32, i32),
     pub work_area: (i32, i32, i32, i32),
     pub scale: f64,
+    pub refresh: Option<std::time::Duration>,
+}
+
+thread_local! {
+    static REFRESH: std::cell::RefCell<std::collections::HashMap<isize, Option<std::time::Duration>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+pub(crate) fn forget_refresh_rates() {
+    REFRESH.with(|known| known.borrow_mut().clear());
+}
+
+fn refresh_of(monitor: HMONITOR, device: &[u16; 32]) -> Option<std::time::Duration> {
+    let key = monitor.0 as isize;
+    if let Some(known) = REFRESH.with(|known| known.borrow().get(&key).copied()) {
+        return known;
+    }
+    let mut mode = DEVMODEW {
+        dmSize: std::mem::size_of::<DEVMODEW>() as u16,
+        ..Default::default()
+    };
+    let read =
+        unsafe { EnumDisplaySettingsW(PCWSTR(device.as_ptr()), ENUM_CURRENT_SETTINGS, &mut mode) }
+            .as_bool();
+    let refresh = (read && mode.dmDisplayFrequency > 1)
+        .then(|| std::time::Duration::from_secs_f64(1.0 / f64::from(mode.dmDisplayFrequency)));
+    REFRESH.with(|known| known.borrow_mut().insert(key, refresh));
+    refresh
 }
 
 fn style_for(options: &WindowOptions) -> WINDOW_STYLE {
@@ -266,13 +295,17 @@ impl Window {
 
     pub fn monitor(self) -> Option<Monitor> {
         let monitor = unsafe { MonitorFromWindow(self.hwnd(), MONITOR_DEFAULTTONEAREST) };
-        let mut info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        let mut extended = MONITORINFOEXW {
+            monitorInfo: MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFOEXW>() as u32,
+                ..Default::default()
+            },
             ..Default::default()
         };
-        unsafe { GetMonitorInfoW(monitor, &mut info) }
+        unsafe { GetMonitorInfoW(monitor, &mut extended as *mut _ as *mut MONITORINFO) }
             .as_bool()
             .then(|| {
+                let info = extended.monitorInfo;
                 let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
                 let _ =
                     unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
@@ -281,6 +314,7 @@ impl Window {
                     bounds: tuple(info.rcMonitor),
                     work_area: tuple(info.rcWork),
                     scale: f64::from(dpi_x.max(96)) / 96.0,
+                    refresh: refresh_of(monitor, &extended.szDevice),
                 }
             })
     }

@@ -134,6 +134,7 @@ impl NativeWindow for WaylandWindow {
             physical_bounds: rect_of(monitor.bounds),
             physical_work_area: rect_of(monitor.work_area),
             scale_factor: monitor.scale,
+            refresh: monitor.refresh,
         })
     }
 
